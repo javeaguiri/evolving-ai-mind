@@ -1,0 +1,15 @@
+{
+  "routes": [
+    {
+      "src": "/slackbot/(.*)",
+      "dest": "/api/slackbot/index.js"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}

@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+*.log
+.env
+.DS_Store
+
+# Builds
+dist/
+build/
+*.min.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.vercel
+.env*.local

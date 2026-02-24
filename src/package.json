@@ -1,0 +1,12 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "@azure/msal-node": "1.18.4",
+    "@perplexity-ai/perplexity_ai": "^0.25.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
