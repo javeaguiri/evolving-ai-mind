@@ -6,11 +6,10 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET
 });
 
-app.command('/ping', async ({ command, ack, client }) => {
+app.command('/ping', ({ command, ack, client }) => {
   console.log('🔥 /ping RECEIVED!', command.text);
-  
-  // 1. Pass FULL Bolt context to ping.js
-  await pingCommand({ command, ack, client });
+  // NO AWAIT - Let Bolt ACK middleware run first, THEN pass context
+  pingCommand({ command, ack, client });
 });
 
 export default async function handler(req, res) {
