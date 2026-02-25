@@ -1,16 +1,16 @@
-export const pingCommand = async ({ command, ack, client }) => {
-  // Bolt context is now FULLY available
-  await ack(); 
+export const pingCommand = async ({ command, client }) => {
+  // NO ack() call here - Bolt middleware handles it
   
   const count = Math.min(parseInt(command.text) || 1, 10);
   
+  // Immediate ephemeral response
   await client.chat.postEphemeral({
     channel: command.channel_id,
     user: command.user_id,
     text: `🧪 Processing *${count}* fortunes... (~${count*2}s)`
   });
 
-  // Async background processing
+  // Background fortune processing
   (async () => {
     try {
       const fortunes = [];
