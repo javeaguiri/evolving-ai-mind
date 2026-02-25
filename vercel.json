@@ -7,8 +7,20 @@
   ],
   "routes": [
     {
-      "src": "/api/slackbot/(.*)",
+      "src": "/api/slackbot",         
       "dest": "/src/api/slackbot/index.js"
+    },
+    {
+      "src": "/api/slackbot/(.*)", 
+      "dest": "/src/api/slackbot/index.js"
+    },
+    {
+      "src": "/api/process/(.*)",
+      "dest": "/src/api/process/index.js"
+    },
+    {
+      "src": "/api/service/(.*)",
+      "dest": "/src/api/service/index.js"
     },
     {
       "src": "/(.*)",

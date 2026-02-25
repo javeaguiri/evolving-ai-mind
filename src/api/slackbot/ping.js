@@ -1,68 +1,41 @@
-// src/api/slackbot/ping.js - ESM Slack command handler
-import axios from 'axios';
-
-export const pingHandler = async ({ command, ack, client }) => {
-  await ack(); // Acknowledge immediately
-
-  const channelId = command.channel_id;
-  const userId = command.user_id;
-  const text = command.text?.trim() || '';
+export const pingCommand = async ({ command, ack, client }) => {
+  // Bolt context is now FULLY available
+  await ack(); 
   
-  // Parse number of pings (1-10, default 3)
-  const numPings = parseInt(text.match(/(\d+)/)?.[1] || '3');
-  const count = Math.max(1, Math.min(10, numPings));
-
-  // Initial ephemeral message
+  const count = Math.min(parseInt(command.text) || 1, 10);
+  
   await client.chat.postEphemeral({
-    channel: channelId,
-    user: userId,
-    text: `🧪 Pinging LLM ${count} times...`
+    channel: command.channel_id,
+    user: command.user_id,
+    text: `🧪 Processing *${count}* fortunes... (~${count*2}s)`
   });
 
-  // Parent message for thread
-  const parent = await client.chat.postMessage({
-    channel: channelId,
-    text: `🧪 Connection test for <@${userId}>: ${count} pings + fortunes...`
-  });
-
-  const threadTs = parent.ts;
-
-  // Ping loop
-  for (let i = 1; i <= count; i++) {
+  // Async background processing
+  (async () => {
     try {
-      const start = Date.now();
+      const fortunes = [];
+      for(let i = 0; i < count; i++) {
+        const res = await fetch('https://second-brain-api-woad.vercel.app/api/process/ping');
+        if (res.ok) fortunes.push(await res.json());
+      }
       
-      // Call process/ping endpoint
-      const pingResult = await axios.post(
-        `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'}/api/process/ping`,
-        { ping: i, total: count },
-        { 
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.API_KEY 
-          },
-          timeout: 10000
-        }
-      );
-
-      const { status, fortune } = pingResult.data;
-
       await client.chat.postMessage({
-        channel: channelId,
-        thread_ts: threadTs,
-        text: `🔢 Ping #${i}/${count}: *${status}*\n🥠 *${fortune}*`
+        channel: command.channel_id,
+        thread_ts: command.ts,
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: `🤖 *${count} fortunes for <@${command.user_id}>!*` } },
+          ...fortunes.map((f, i) => ({
+            type: "section", 
+            text: { type: "mrkdwn", text: `✨ *Fortune ${i+1}*\n\`${f.content}\`` }
+          }))
+        ]
       });
-
     } catch (error) {
-      console.error(`Ping #${i} failed:`, error.message);
       await client.chat.postMessage({
-        channel: channelId,
-        thread_ts: threadTs,
-        text: `❌ Ping #${i}/${count}: *Failed* - ${error.message}`
+        channel: command.channel_id,
+        thread_ts: command.ts,
+        text: `❌ Error: ${error.message}`
       });
     }
-
-    // Delay between pings
-    if (i < count) await new Promise(r => setTimeout(r, 1500));
-  }
+  })();
 };

@@ -1,20 +1,19 @@
-// src/api/process/ping.js - ESM fortune cookie endpoint
+// src/api/process/ping.js - Single fortune GET endpoint
 export default async function handler(req, res) {
   const API_KEY = process.env.API_KEY;
-  const LLM_API_KEY = process.env.LLM_API_KEY; // LLM (perplexity) API key
+  const LLM_API_KEY = process.env.LLM_API_KEY;
 
-  // Security check
+  // Security check (keep for other APIs)
   if (req.headers["x-api-key"] !== API_KEY) {
     return res.status(401).json({ error: "Invalid API key" });
   }
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed. Use POST." });
+  // Accept GET (for slackbot) OR POST
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed. Use GET/POST." });
   }
 
   try {
-    const { ping, total } = req.body || {};
-    
     // Perplexity fortune cookie
     const response = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
@@ -25,8 +24,8 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: "sonar",
         messages: [
-          { role: "system", content: "You are a friendly AI fortune cookie generator. Respond with ONE short, wise fortune cookie message only." },
-          { role: "user", content: "Give me one short and randomized wise fortune cookie message." }
+          { role: "system", content: "You are a friendly AI fortune cookie generator. Respond with ONE short, wise fortune cookie message only (10-15 words max). No quotes, no explanation." },
+          { role: "user", content: "Give me one short, randomized wise fortune cookie message." }
         ],
         max_tokens: 50,
         temperature: 0.8
@@ -41,19 +40,16 @@ export default async function handler(req, res) {
     const data = await response.json();
     const fortune = data?.choices?.[0]?.message?.content?.trim() || "Your future shines bright! 🌟";
 
+    // SLACK-FRIENDLY FORMAT
     res.status(200).json({
-      status: "OK",
-      ping: ping || 1,
-      total: total || 1,
-      fortune,
-      source: "Perplexity API"
+      content: fortune  // ← Exactly what slackbot expects
     });
 
   } catch (err) {
     console.error("Ping process error:", err);
     res.status(500).json({ 
-      error: "Ping failed", 
-      details: err.message 
+      error: "Fortune generation failed", 
+      content: "The oracle is taking a break. Try again!" 
     });
   }
 }
