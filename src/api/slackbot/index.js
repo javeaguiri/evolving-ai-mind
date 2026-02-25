@@ -1,4 +1,4 @@
-// Slackbot Bolt routing layer for Vercel serverless functions
+// src/api/slackbot/index.js - ESM (matches "type": "module")
 import { App, ExpressReceiver } from '@slack/bolt';
 import { pingHandler } from './ping.js';
 import { secondBrainHandler } from './second-brain.js';
@@ -12,8 +12,7 @@ const app = new App({
   receiver 
 });
 
-// Routes
 app.command('/ping', pingHandler);
 app.command('/second-brain', secondBrainHandler);
 
-export default receiver.app;
+export default receiver.app;  // ESM export

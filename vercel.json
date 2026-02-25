@@ -1,16 +1,18 @@
 {
+  "builds": [
+    {
+      "src": "src/api/**/*.js",
+      "use": "@vercel/node"
+    }
+  ],
   "routes": [
     {
       "src": "/api/slackbot/(.*)",
-      "dest": "/api/slackbot/index.js"
+      "dest": "/src/api/slackbot/index.js"
     },
     {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
+      "src": "/(.*)",
+      "dest": "/src/api/404.js"
     }
-  ],
-  "env": {
-    "NODE_ENV": "production"
-  }
+  ]
 }
-

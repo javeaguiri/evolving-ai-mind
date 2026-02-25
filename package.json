@@ -1,8 +1,28 @@
 {
+  "name": "evolving-mind-ai",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
   "dependencies": {
     "@azure/msal-node": "^3.8.8",
     "@perplexity-ai/perplexity_ai": "^0.26.0",
     "@slack/bolt": "^4.6.0",
-    "axios": "^1.13.5"
-  }
+    "axios": "^1.13.5",
+    "express": "^5.2.1"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javeaguiri/evolving-ai-mind.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/javeaguiri/evolving-ai-mind/issues"
+  },
+  "homepage": "https://github.com/javeaguiri/evolving-ai-mind#readme"
 }
