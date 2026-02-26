@@ -23,6 +23,10 @@
       "dest": "/src/api/service/index.js"
     },
     {
+      "src": "/api/proc-test",
+      "dest": "/src/api/process/proc-test.js"
+    },
+    {
       "src": "/(.*)",
       "dest": "/src/api/404.js"
     }
