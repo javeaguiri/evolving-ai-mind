@@ -22,14 +22,10 @@ export default async function handler(req, res) {
         console.log("🔄 Calling proc-test...");
         
         const response = await fetch('https://second-brain-api-woad.vercel.app/api/process/proc-test', {
-          method: 'POST',
+          method: 'GET',
           headers: { 
             'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ 
-            prompt: "Generate one fortune cookie message",
-            max_tokens: 50 
-          })
+          }
         });
         
         const data = await response.json();
