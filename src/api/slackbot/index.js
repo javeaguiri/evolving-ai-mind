@@ -13,7 +13,7 @@ app.command('/ping', async (fullContext) => {
   try {
     const { ack } = fullContext;
     console.log('✅ ACK FOUND:', typeof ack);
-    await ack(':wave: pong');
+    await ack(':wave: new pong message');
   } catch (error) {
     console.error('❌ ACK FAILED:', error.message);
     
