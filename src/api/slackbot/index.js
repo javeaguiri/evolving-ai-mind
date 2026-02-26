@@ -1,30 +1,42 @@
-import { App } from '@slack/bolt';
-
-const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  // ✅ FIX TIMEOUTS
-  processBeforeResponse: true,
-  unhandledRequestTimeoutMillis: 5000,
-  unhandledRequestHandler: () => {}
-});
-
-app.command('/ping', async ({ command, client }) => {
-  console.log('Ping from:', command.user_id);
-  
-  // Direct ephemeral - works immediately
-  await client.chat.postEphemeral({
-    channel: command.channel_id,
-    user: command.user_id,
-    text: `:wave: Great Day! Count: ${command.text || 1}`
-  });
-});
-
 export default async function handler(req, res) {
-  console.log('🚀 Slackbot HIT!');
-  if (req.method === 'POST') {
-    await app.processEvent(req, res);
+  console.log("🚀 Slackbot HIT!");
+  
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
+  }
+
+  const body = req.body;
+  
+  if (body.command === '/ping') {
+    const count = body.text || 1;
+    
+    // Immediate 200 OK response (no timeout)
+    res.status(200).json({ 
+      response_type: 'ephemeral',
+      text: `:wave: pong! Count: ${count} (check back in 10s...)`
+    });
+    
+    // Async follow-up after 10s delay (proves background processing works)
+    (async () => {
+      await new Promise(resolve => setTimeout(resolve, 10000)); // 10s delay
+      
+      console.log("⏰ 10s DELAY COMPLETE - Sending follow-up");
+      
+      // Use response_url for guaranteed delivery (stores for 30min)
+      await fetch(body.response_url, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: `⏰ *DELAY SUCCESS!* Fortune: "Your async code works perfectly! 🎉" (after 10s)`
+        })
+      });
+    })();
+    
   } else {
-    res.status(405).send('Method Not Allowed');
+    res.status(404).json({ error: 'Command not found' });
   }
 }
