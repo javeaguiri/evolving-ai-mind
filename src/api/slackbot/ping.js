@@ -1,10 +1,8 @@
 export const pingCommand = async ({ command, client }) => {
-  // NO ack() call here - Bolt middleware handles it
-  
   const count = Math.min(parseInt(command.text) || 1, 10);
   const channel = command.channel_id;  // ✅ from slash command payload
   const user = command.user_id;        // ✅ from slash command payload
-  
+
   // 1. Validate channel exists and bot can access it
   try {
     await client.conversations.info({ channel });
@@ -38,7 +36,6 @@ export const pingCommand = async ({ command, client }) => {
       
       await client.chat.postMessage({
         channel,
-        thread_ts: undefined, // Slash commands don't have parent ts
         blocks: [
           { 
             type: "section", 
