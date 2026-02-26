@@ -5,9 +5,8 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET
 });
 
-app.command("/ping", async (args) => {
-  const { ack } = args;  // ✅ Full args → destructure ack
-  await ack(":wave: pong");
+app.command("/ping", (req, ctx) => {
+  return ctx.ack(":wave: pong");
 });
 
 export default async function handler(req, res) {
