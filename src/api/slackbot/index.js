@@ -16,7 +16,7 @@ app.command('/ping', async ({ command, client }) => {
   await client.chat.postEphemeral({
     channel: command.channel_id,
     user: command.user_id,
-    text: `:wave: pong! Count: ${command.text || 1}`
+    text: `:wave: Great Day! Count: ${command.text || 1}`
   });
 });
 
