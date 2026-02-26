@@ -1,5 +1,4 @@
 import { App } from '@slack/bolt';
-import { VercelRequest, VercelResponse } from '@vercel/node';
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -12,7 +11,6 @@ app.command("/ping", async ({ command, ack }) => {
 
 export default async function handler(req, res) {
   console.log("🚀 Slackbot HIT!");
-  
   if (req.method === 'POST') {
     await app.processEvent(req, res);
   } else {
