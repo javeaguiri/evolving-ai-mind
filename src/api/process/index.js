@@ -1,12 +1,19 @@
-import pingHandler from './ping.js';
+import { App } from '@slack/bolt';
+import { VercelRequest, VercelResponse } from '@vercel/node';
+
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  signingSecret: process.env.SLACK_SIGNING_SECRET
+});
+
+app.command("/ping", async ({ command, ack }) => {
+  await ack(":wave: pong");
+});
 
 export default async function handler(req, res) {
-  const path = req.url.split('/').slice(-1)[0] || 'ping'; // /api/process/ping → "ping"
-
-  switch (path) {
-    case 'ping':
-      return pingHandler(req, res);
-    default:
-      res.status(404).json({ error: `Process "${path}" not found` });
+  if (req.method === 'POST') {
+    await app.processEvent(req, res);
+  } else {
+    res.status(405).send('Method Not Allowed');
   }
 }
