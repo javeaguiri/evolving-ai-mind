@@ -1,19 +1,9 @@
-import { App } from '@slack/bolt';
-
-const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET
-});
-
-app.command("/ping", async ({ ack }) => {
-  await ack(":wave: pong");
-});
-
 export default async function handler(req, res) {
-  console.log("🚀 Slackbot HIT!");
-  if (req.method === 'POST') {
-    await app.processEvent(req, res);
-  } else {
-    res.status(405).send('Method Not Allowed');
+  if (req.method !== 'POST') return res.status(405).end();
+  
+  const body = req.body;
+  if (body.command === '/ping') {
+    return res.json({ text: ':wave: pong' });
   }
+  res.status(404).end();
 }
