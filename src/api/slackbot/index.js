@@ -5,31 +5,31 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET
 });
 
-// Manual command listener - bypass Bolt middleware ack requirement
 app.command('/ping', async ({ command, client }) => {
-  console.log('Ping from:', command.user_id, 'text:', command.text);
+  console.log('Ping from:', command.user_id);
   
-  // Direct ephemeral response (no ack needed)
-  await client.chat.postEphemeral({
-    channel: command.channel_id,
-    user: command.user_id,
-    text: ':wave: postEphemeral with ÍD ' + (channel.channel_id || none) + ' User ' + (command.user || none) + ' user pong! Count: ' + (command.text || 1)
-  });
+  try {
+    // Direct ephemeral - no ack() needed
+    await client.chat.postEphemeral({
+      channel: command.channel_id,  // C0AEJ87JSKF
+      user: command.user_id,        // U0AD8M05TLP
+      text: `:wave: pong! Count: ${command.text || 1}`
+    });
+  } catch (error) {
+    console.error('Ephemeral failed:', error.code);
+    // Fallback: use response_url
+    await fetch(command.response_url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: ':wave: pong!' })
+    });
+  }
 });
 
 export default async function handler(req, res) {
   console.log('🚀 Slackbot HIT!');
-  
   if (req.method === 'POST') {
-    try {
-      await app.processEvent(req, res);
-    } catch (error) {
-      console.error('Bolt error:', error);
-      // Manual fallback response
-      if (!res.headersSent) {
-        res.status(200).json({ text: 'pong!' });
-      }
-    }
+    await app.processEvent(req, res);
   } else {
     res.status(405).send('Method Not Allowed');
   }
