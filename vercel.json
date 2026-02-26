@@ -15,16 +15,16 @@
       "dest": "/src/api/slackbot/index.js"
     },
     {
+      "src": "/api/process/proc-test",
+      "dest": "/src/api/process/proc-test.js"
+    },
+    {
       "src": "/api/process/(.*)",
       "dest": "/src/api/process/index.js"
     },
     {
       "src": "/api/service/(.*)",
       "dest": "/src/api/service/index.js"
-    },
-    {
-      "src": "/api/proc-test",
-      "dest": "/src/api/process/proc-test.js"
     },
     {
       "src": "/(.*)",
