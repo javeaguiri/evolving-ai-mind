@@ -19,9 +19,9 @@ export default async function handler(req, res) {
     // Async call to /api/process/proc-test (reliable, no timeout issues)
     (async () => {
       try {
-        console.log("🔄 Calling /api/process/proc-test...");
+        console.log("🔄 Calling proc-test...");
         
-        const response = await fetch(`${process.env.VERCEL_URL}/api/process/proc-test`, {
+        const response = await fetch('https://second-brain-api-woad.vercel.app/api/process/proc-test', {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
