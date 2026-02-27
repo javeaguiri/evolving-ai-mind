@@ -22,7 +22,7 @@ export default async function handler(req, res) {
         console.log("📤 Sending follow-up test message...");
 
         // Simple 2s delay just so you can see it's separate
-        await new Promise(resolve => setTimeout(resolve, 2000));
+ //       await new Promise(resolve => setTimeout(resolve, 2000));
 
         await fetch(body.response_url, {
           method: 'POST',
