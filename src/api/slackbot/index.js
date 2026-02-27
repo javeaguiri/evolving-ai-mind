@@ -20,7 +20,6 @@ export default async function handler(req, res) {
     (async () => {
       try {
         
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay
         console.log("📤 Sending follow-up via chat.postEphemeral...");
         
         const response = await fetch('https://slack.com/api/chat.postEphemeral', {
