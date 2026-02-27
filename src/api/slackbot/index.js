@@ -19,9 +19,9 @@ export default async function handler(req, res) {
     // Async test message via chat.postEphemeral (RELIABLE)
     (async () => {
       try {
-        console.log("📤 Sending follow-up via chat.postEphemeral...");
         
         await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay
+        console.log("📤 Sending follow-up via chat.postEphemeral...");
         
         const response = await fetch('https://slack.com/api/chat.postEphemeral', {
           method: 'POST',
