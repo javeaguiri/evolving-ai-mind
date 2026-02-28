@@ -199,6 +199,169 @@ evolving-mind-ai/
 ├── package.json                          # NPM-Deps: @slack/bolt + runtime deps
 └── README.md                             # SETUP-Guide: Deployment instructions
 ```
+
+🧪 Scaffolding Test Components (Ping Flows)
+Purpose: Development diagnostics + production troubleshooting. These ping endpoints isolate integration points between layers (Slack, Lambda, SQS, LLM, PostgreSQL). Always available for manual testing via Slack commands and curl.
+
+Diagnostic Matrix:
+
+Test	Slack Cmd	curl Cmd	Validates
+Slackbot	/ping-api	N/A	Slack → Lambda wiring
+LLM	/ping-llm	POST /proc/ping-llm	PROC + LLM
+SQS Orchestration	/ping-sqs	N/A	PROC → SQS → SERV → PROC → Slack
+PostgreSQL	N/A	GET /serv/ping-db	SERV + PostgreSQL
+1. Slack → Slackbot Lambda Only (/ping-api)
+Validates: Slack slash command config + Slackbot Lambda (no PROC/SQS/LLM/DB).
+
+Slack Command: /ping-api
+
+Implementation: src/ui/slackbot/ping.js
+
+javascript
+export const handler = async (event) => {
+  const { text = 'pong', channel_id, user_id } = JSON.parse(event.body || '{}');
+  const correlationId = crypto.randomUUID();
+  
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      response_type: 'in_channel',
+      text: `🤖 **pong-api** from slackbot <@${user_id}><br/>correlationId: ${correlationId}`,
+      thread_ts: event.body?.thread_ts
+    })
+  };
+};
+Expected Slack Response:
+
+text
+🤖 pong-api from slackbot @user
+correlationId: abc123-def456
+Troubleshooting: If this fails → Slack app config or Slackbot Lambda issue.
+
+2. HTTP → PROC Ping (LLM Fortune Cookie) (POST /api/v1/proc/ping-llm)
+Validates: PROC Lambda + LLM provider (no Slack/SQS/DB). Perfect for curl from terminal/CI.
+
+curl Test:
+
+bash
+curl -X POST https://api.example.com/api/v1/proc/ping-llm \
+  -H "Content-Type: application/json" \
+  -H "X-Correlation-Id: test-123" \
+  -d '{"test":"ping"}'
+Implementation: src/proc/ping-llm.js (single handler for both curl + Slack)
+
+javascript
+import OpenAI from 'openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export const handler = async (event) => {
+  const payload = parseUnifiedPayload(event);
+  const correlationId = payload.correlationId || crypto.randomUUID();
+  
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Fortune cookie about evolving-mind-ai + AWS Lambda' }]
+  });
+  
+  const response = {
+    success: true,
+    message: completion.choices[0].message.content,
+    model: completion.choices[0].message.model,
+    correlationId
+  };
+  
+  return formatResponse(payload.source, response);
+};
+Expected JSON Response:
+
+json
+{
+  "success": true,
+  "message": "Your AWS Lambda workflows will evolve smarter than you expect! 🍪",
+  "model": "gpt-4o-mini",
+  "correlationId": "abc123"
+}
+Troubleshooting: If this fails → LLM API key, PROC Lambda, or API Gateway issue.
+
+3. Slack → PROC Ping (LLM E2E) (/ping-llm)
+Validates: Slack → Slackbot → PROC → LLM → Slack full pipeline.
+
+Slack Command: /ping-llm
+
+Slackbot Forwarding: src/ui/slackbot/commands.js
+
+javascript
+app.command('/ping-llm', async ({command, ack, respond}) => {
+  await ack('⏳ Testing LLM integration…');
+  
+  const result = await invokeLambda('PROC-PingLLM', {
+    source: 'slack',
+    slackPayload: command,
+    correlationId: crypto.randomUUID()
+  });
+  
+  await respond({
+    response_type: 'in_channel',
+    text: `🔮 **LLM pong-llm**<br/>${result.message}<br/>model: ${result.model}<br/>ID: ${result.correlationId}`
+  });
+});
+Expected Slack Response:
+
+text
+🔮 LLM pong-llm
+"Your Lambda functions will achieve enlightenment! 🍪"
+model: gpt-4o-mini
+ID: abc123
+Troubleshooting: If /ping-api works but this fails → PROC routing or LLM issue.
+
+4. Slack → PROC Ping with SQS (/ping-sqs)
+Validates: Slack → PROC → SQS → SERV → PROC → Slack orchestration pipeline.
+
+Slack Command: /ping-sqs
+
+Implementation Flow:
+
+UI-SlackBot: ACK + forward to PROC-PingSQS
+
+PROC-PingSQS: Queue test message to SYS-SQS-Workflow
+
+SERV-PingSQS (SQS-triggered): Process → queue completion
+
+UI-SlackCallbackListener (SQS-triggered): Post result to Slack thread
+
+Expected Slack Flow:
+
+text
+⏳ ping-sqs started… (immediate ACK)
+
+[30s later in same thread]
+📬 ping-sqs complete!
+✅ 2 SQS hops, workflowId: abc123
+Troubleshooting: If /ping-llm works but this fails → SQS IAM, queue config, or orchestration issue.
+
+Unified Payload Parser (Shared Across All Pings)
+javascript
+// src/shared/ping-utils.js
+export function parseUnifiedPayload(event) {
+  if (event.httpMethod) {  // API Gateway
+    return {
+      source: 'http',
+      payload: JSON.parse(event.body || '{}'),
+      correlationId: event.headers['X-Correlation-Id'] || crypto.randomUUID()
+    };
+  }
+  if (event.slackPayload) {  // Slackbot forwarded
+    return {
+      source: 'slack',
+      payload: event.slackPayload,
+      correlationId: event.correlationId || crypto.randomUUID()
+    };
+  }
+  throw new Error('Unknown event source');
+}
+
 ✅ Success Metrics
  <100K tokens/month
 
