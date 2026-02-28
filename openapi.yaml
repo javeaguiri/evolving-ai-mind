@@ -1,0 +1,385 @@
+# 📋 evolving-mind-ai OpenAPI 3.1 + Postman Collection YAML
+# Purpose: Complete API specification + testing suite for REST + Slack endpoints
+# Usage: 
+# 1. Import into Postman: File → Import → Paste YAML
+# 2. Postman auto-generates requests for all endpoints
+# 3. Run automated tests with environment variables
+# 4. Generate client SDKs: `oas-cli generate`
+
+openapi: 3.1.0
+info:
+  title: evolving-mind-ai API
+  description: |
+    Self-evolving cognitive automation system using AWS Lambda + PostgreSQL + SQS.
+    
+    **Layers:**
+    - UI: Slackbot + REST API Gateway
+    - PROC: Workflow orchestration + LLM integration  
+    - SERV: PostgreSQL CRUD + JSON entity operations
+    - PGC: PostgreSQL config schema (EntitySchema, WorkflowDef)
+    - PGD: PostgreSQL domain data tables
+    
+    **Authentication:** API Key (x-api-key header) during development
+  version: 1.0.0
+  contact:
+    name: evolving-mind-ai
+    url: https://github.com/yourorg/evolving-mind-ai
+servers:
+  - url: https://api.example.com/api/v1
+    description: Production API Gateway
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas:
+    UnifiedPayload:
+      type: object
+      required: [source, payload, correlationId]
+      properties:
+        source:
+          type: string
+          enum: [slack, http, sqs]
+          description: Entry point (Slack command, REST, SQS trigger)
+        payload:
+          type: object
+          description: Business payload
+        correlationId:
+          type: string
+          description: Request tracing ID
+        slackChannel:
+          type: string
+          description: Slack channel_id (slack source only)
+    
+    WorkflowStep:
+      type: object
+      required: [stepName, handler, nextStep]
+      properties:
+        stepName:
+          type: string
+          example: "checkRecipe"
+        handler:
+          type: string
+          example: "SERV-Query"
+        nextStep:
+          type: string
+          example: "checkInventory"
+    
+    EntitySchema:
+      type: object
+      properties:
+        entity_name:
+          type: string
+          example: "Inventory"
+        tables:
+          type: array
+          items:
+            type: string
+          example: ["PGD-Inventory", "PGD-Locations"]
+        json_structure:
+          type: object
+          description: JSON aggregation template
+        relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              from_table:
+                type: string
+              to_table:
+                type: string
+              join_condition:
+                type: string
+    
+    PingResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        correlationId:
+          type: string
+
+paths:
+  # 🧪 SCAFFOLDING / PING ENDPOINTS (Development + Prod Troubleshooting)
+  
+  # Slackbot Layer - Pure Lambda test (no downstream)
+  /ping-api:
+    post:
+      summary: Slackbot Lambda wiring test
+      description: Validates Slack → Lambda only. No PROC/SQS/LLM/DB calls.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  example: "test"
+      responses:
+        '200':
+          description: Immediate pong response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+      x-slack-command: "/ping-api"
+  
+  # PROC Layer - LLM Fortune Cookie
+  /proc/ping-llm:
+    post:
+      summary: PROC + LLM integration test
+      description: Single handler for both curl + Slack forwarding. Validates LLM connectivity.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnifiedPayload'
+      responses:
+        '200':
+          description: Fortune cookie from LLM
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+      x-slack-command: "/ping-llm"
+  
+  # SERV Layer - PostgreSQL connectivity
+  /serv/ping-db:
+    get:
+      summary: SERV + PostgreSQL health check
+      description: Validates Lambda → RDS PostgreSQL connection + basic query.
+      responses:
+        '200':
+          description: PostgreSQL version + timestamp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+  
+  # SQS Orchestration Test (Slack → PROC → SQS → SERV → PROC → Slack)
+  /proc/ping-sqs:
+    post:
+      summary: Full SQS workflow orchestration test
+      description: Validates complete pipeline. **Async response via Slack callback**.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnifiedPayload'
+      responses:
+        '202':
+          description: Workflow started (check Slack thread)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflowId:
+                    type: string
+      x-slack-command: "/ping-sqs"
+  
+  # 🏗️ CORE WORKFLOW ENDPOINTS
+  
+  # Process Layer - Execute stored workflows
+  /proc/run-flow:
+    post:
+      summary: Execute workflow from PGC-WorkflowDef
+      description: `/run-flow groceries:check-low` → fetches workflow → SQS orchestration.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflow:
+                  type: string
+                  example: "groceries.check_low_stock"
+                params:
+                  type: object
+                  example: {"category": "pantry"}
+      responses:
+        '202':
+          description: Workflow queued
+        '404':
+          description: Unknown workflow
+      x-slack-command: "/run-flow {{workflow}}"
+  
+  # Process Layer - LLM Domain Creation
+  /proc/schema-create:
+    post:
+      summary: LLM-powered domain creation
+      description: `/create-domain inventory` → LLM generates DDL → CREATE PGD table + PGC metadata.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain:
+                  type: string
+                  example: "inventory"
+                description:
+                  type: string
+      responses:
+        '202':
+          description: Schema workflow started
+      x-slack-command: "/create-domain {{domain}}"
+  
+  # Service Layer - Generic CRUD
+  /serv/table/{table}/{action}:
+    post:
+      summary: Generic table CRUD
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "PGD-Groceries"
+        - name: action
+          in: path
+          required: true  
+          schema:
+            type: string
+            enum: [insert, update, delete]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: CRUD result
+  
+  # Service Layer - JSON Entity Operations
+  /serv/entity/{action}:
+    post:
+      summary: Complete entity with relationships (JSON aggregation)
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [get, insert, update, delete]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entity:
+                  type: string
+                  example: "Recipe"
+                id:
+                  type: string
+      responses:
+        '200':
+          description: Complete JSON entity spanning multiple tables
+  
+  # Service Layer - Parameterized Queries
+  /serv/query:
+    post:
+      summary: Complex SELECT with filters/views
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                table:
+                  type: string
+                filters:
+                  type: object
+                limit:
+                  type: integer
+      responses:
+        '200':
+          description: Query results
+  
+  # Service Layer - Schema Operations
+  /serv/schema/createTable:
+    post:
+      summary: DDL execution from LLM
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tableName:
+                  type: string
+                  example: "PGD-Inventory"
+                columns:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      type:
+                        type: string
+      responses:
+        '201':
+          description: Table created
+
+# Postman Collection Environment Variables
+x-postman-collection:
+  variable:
+    - key: api_base_url
+      value: https://api.example.com/api/v1
+      description: API Gateway base URL
+    - key: x_api_key
+      value: dev-key-123456
+      description: API key header
+    - key: correlation_id
+      value: "{{$guid}}"
+      description: Auto-generated request ID
+  request:
+    - /ping-api:
+        method: POST
+        header:
+          - "Content-Type: application/json"
+          - "X-Correlation-Id: {{$guid}}"
+        body: '{"text": "test"}'
+        test:
+          - pm.test("Status 200", () => pm.response.to.have.status(200));
+    - /proc/ping-llm:
+        method: POST  
+        header:
+          - "Content-Type: application/json"
+          - "X-Correlation-Id: {{$guid}}"
+          - "x-api-key: {{x_api_key}}"
+        body: '{"source": "http", "payload": {"test": "ping"}}'
+        test:
+          - pm.test("LLM responds", () => pm.expect(pm.response.json().success).to.eql(true));
+    - /serv/ping-db:
+        method: GET
+        header:
+          - "x-api-key: {{x_api_key}}"
+        test:
+          - pm.test("PostgreSQL connected", () => pm.expect(pm.response.json().postgresVersion).to.exist);
+
+# Testing Instructions
+x-testing:
+  smoke-test-sequence:
+    - "POST /ping-api → immediate pong"
+    - "POST /proc/ping-llm → fortune cookie" 
+    - "GET /serv/ping-db → PostgreSQL version"
+    - "POST /proc/ping-sqs → SQS orchestration (async)"
+  troubleshooting:
+    - "If /ping-api fails → Slack app config issue"
+    - "If /proc/ping-llm fails → LLM API key or PROC Lambda"
+    - "If /serv/ping-db fails → PostgreSQL connectivity/VPC"
