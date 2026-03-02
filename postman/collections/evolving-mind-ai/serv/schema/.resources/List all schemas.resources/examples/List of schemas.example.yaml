@@ -18,21 +18,21 @@ response:
     Content-Type: application/json
     x-correlation-id: ""
   body:
-    type: json
+    type: text
     content: |-
       [
         {
-          "name": "string",
+          "name": "<string>",
           "tables": [
-            "string",
-            "string"
+            "<string>",
+            "<string>"
           ]
         },
         {
-          "name": "string",
+          "name": "<string>",
           "tables": [
-            "string",
-            "string"
+            "<string>",
+            "<string>"
           ]
         }
       ]

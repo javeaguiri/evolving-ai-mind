@@ -36,7 +36,7 @@ paths:
                 text:
                   type: string
             example:
-              text: "Hello from Postman"
+              text: "Hello World from Postman"
       responses:
         '200':
           description: Pong response
@@ -97,14 +97,54 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
+              required:
+                - sqlentity_name
+                - primary_table
+                - json_structure
+                - field_definitions
               properties:
-                name:
+                sqlentity_name:
                   type: string
+                  description: Unique name of the entity schema (primary key)
                 tables:
                   type: array
+                  description: Associated tables used by the entity
                   items:
                     type: string
+                  example: ["PGD-Inventory", "PGD-Locations"]
+                primary_table:
+                  type: string
+                  description: The main table associated with this entity
+                  example: PGD-Inventory
+                json_structure:
+                  type: object
+                  description: Entity JSON structure template
+                  example:
+                    entityTemplate:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                field_definitions:
+                  type: object
+                  description: Field-level definitions and validation rules
+                  example:
+                    item:
+                      type: text
+                      required: true
+                    quantity:
+                      type: integer
+                      required: false
+                relationships:
+                  type: object
+                  description: Relationship and foreign key mappings
+                  example:
+                    location:
+                      foreign_table: PGD-Locations
+                      local_key: location_id
+                      foreign_key: id
       responses:
         '201':
           description: Schema created

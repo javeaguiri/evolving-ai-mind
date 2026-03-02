@@ -9,3 +9,7 @@ workflows:
       collection: ..\postman\collections\Evolving Mind AI
       options:
         syncExamples: false
+    - spec: ..\postman\specs\evolving-mind-ai\openapi.yaml
+      collection: ..\postman\collections\evolving-mind-ai
+      options:
+        syncExamples: false

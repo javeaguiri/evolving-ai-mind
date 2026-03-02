@@ -34,7 +34,7 @@ response:
     Content-Type: application/json
     x-correlation-id: ""
   body:
-    type: json
+    type: text
     content: |-
       {
         "name": "string",

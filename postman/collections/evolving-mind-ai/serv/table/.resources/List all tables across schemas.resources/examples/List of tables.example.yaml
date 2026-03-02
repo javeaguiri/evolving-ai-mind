@@ -20,16 +20,16 @@ response:
     Content-Type: application/json
     x-correlation-id: ""
   body:
-    type: json
+    type: text
     content: |-
       [
         {
-          "name": "string",
-          "schema": "string"
+          "name": "<string>",
+          "schema": "<string>"
         },
         {
-          "name": "string",
-          "schema": "string"
+          "name": "<string>",
+          "schema": "<string>"
         }
       ]
 order: 1000

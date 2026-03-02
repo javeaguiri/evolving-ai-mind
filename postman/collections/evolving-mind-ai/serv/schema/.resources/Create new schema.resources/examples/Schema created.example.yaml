@@ -14,11 +14,15 @@ request:
     type: json
     content: |-
       {
-        "name": "string",
+        "sqlentity_name": "<string>",
+        "primary_table": "<string>",
+        "json_structure": {},
+        "field_definitions": {},
         "tables": [
           "string",
           "string"
-        ]
+        ],
+        "relationships": {}
       }
 response:
   statusCode: 201
@@ -27,7 +31,7 @@ response:
     Content-Type: application/json
     x-correlation-id: ""
   body:
-    type: json
+    type: text
     content: |-
       {
         "name": "string",
