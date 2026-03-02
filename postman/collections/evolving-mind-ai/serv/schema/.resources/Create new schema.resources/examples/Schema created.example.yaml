@@ -1,0 +1,36 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/schema
+  method: POST
+  headers:
+    - key: x-correlation-id
+      value: string
+      description: Correlation ID for request tracing
+    - key: Content-Type
+      value: application/json
+    - key: Accept
+      value: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "tables": [
+          "string",
+          "string"
+        ]
+      }
+response:
+  statusCode: 201
+  statusText: Created
+  headers:
+    Content-Type: application/json
+    x-correlation-id: ""
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "id": "string"
+      }
+order: 1000

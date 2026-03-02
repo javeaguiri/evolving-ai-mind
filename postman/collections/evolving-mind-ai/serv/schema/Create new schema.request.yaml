@@ -1,0 +1,23 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/schema
+method: POST
+headers:
+  - key: x-correlation-id
+    value: string
+    description: Correlation ID for request tracing
+  - key: Content-Type
+    value: application/json
+  - key: Accept
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "string",
+      "tables": [
+        "string",
+        "string"
+      ]
+    }
+examples: ./.resources/Create new schema.resources/examples
+order: 2000

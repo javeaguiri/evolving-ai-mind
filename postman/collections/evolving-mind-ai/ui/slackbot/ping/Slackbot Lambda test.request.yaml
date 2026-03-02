@@ -1,0 +1,19 @@
+$kind: http-request
+url: http://{{baseUrl}}/ui/slackbot/ping
+method: POST
+headers:
+  - key: x-correlation-id
+    value: string
+    description: Correlation ID for request tracing
+  - key: Content-Type
+    value: application/json
+  - key: Accept
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "text": "Hello from Postman"
+    }
+examples: ./.resources/Slackbot Lambda test.resources/examples
+order: 1000

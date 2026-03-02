@@ -1,0 +1,16 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/schema/:schemaName
+method: GET
+headers:
+  - key: x-correlation-id
+    value: string
+    description: Correlation ID for request tracing
+  - key: Accept
+    value: application/json
+pathVariables:
+  schemaName: string
+body:
+  type: text
+  content: ""
+examples: ./.resources/Get schema details.resources/examples
+order: 1000

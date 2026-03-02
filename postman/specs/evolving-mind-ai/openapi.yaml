@@ -1,0 +1,380 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: evolving-mind-ai
+  version: 1.0.0
+  description: API for Slackbot Lambda testing
+servers:
+  - url: https://evolving-mind-api.amazon.com/
+    description: Development server
+components:
+  headers:
+    x-correlation-id:
+      schema:
+        type: string
+      description: Unique request identifier for tracing (REQUIRED - caller must provide)
+      required: true
+paths:
+  /ui/slackbot/ping:
+    post:
+      summary: Slackbot Lambda test
+      operationId: pingSlackbot
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+            example:
+              text: "Hello from Postman"
+      responses:
+        '200':
+          description: Pong response
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text:
+                    type: string
+              example:
+                text: "pong"
+
+  /serv/schema:
+    get:
+      summary: List all schemas
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '200':
+          description: List of schemas
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    tables:
+                      type: array
+                      items:
+                        type: string
+    post:
+      summary: Create new schema
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                tables:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Schema created
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  id:
+                    type: string
+
+  /serv/schema/{schemaName}:
+    get:
+      summary: Get schema details
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '200':
+          description: Schema details
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  tables:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        columns:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                              type:
+                                type: string
+    put:
+      summary: Update schema
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tables:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Schema updated successfully
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  tables:
+                    type: array
+                    items:
+                      type: string
+
+    delete:
+      summary: Delete schema
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '204':
+          description: Schema deleted
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+
+  /serv/table:
+    get:
+      summary: List all tables across schemas
+      parameters:
+        - name: schema
+          in: query
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '200':
+          description: List of tables
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    schema:
+                      type: string
+    post:
+      summary: Create new table
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, schema, columns]
+              properties:
+                name:
+                  type: string
+                schema:
+                  type: string
+                columns:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, type]
+                    properties:
+                      name:
+                        type: string
+                      type:
+                        type: string
+      responses:
+        '201':
+          description: Table created
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  schema:
+                    type: string
+                  id:
+                    type: string
+
+  /serv/table/{schema}/{tableName}:
+    get:
+      summary: Get table details
+      parameters:
+        - name: schema
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '200':
+          description: Table details
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  schema:
+                    type: string
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        type:
+                          type: string
+    delete:
+      summary: Delete table
+      parameters:
+        - name: schema
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tableName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '204':
+          description: Table deleted
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'

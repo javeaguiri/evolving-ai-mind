@@ -1,0 +1,23 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/table/:schema/:tableName
+  method: DELETE
+  headers:
+    - key: x-correlation-id
+      value: string
+      description: Correlation ID for request tracing
+  pathVariables:
+    schema: string
+    tableName: string
+  body:
+    type: text
+    content: ""
+response:
+  statusCode: 204
+  statusText: No Content
+  headers:
+    x-correlation-id: ""
+  body:
+    type: text
+    content: ""
+order: 1000

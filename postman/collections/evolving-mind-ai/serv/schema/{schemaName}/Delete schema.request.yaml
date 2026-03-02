@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/schema/:schemaName
+method: DELETE
+headers:
+  - key: x-correlation-id
+    value: string
+    description: Correlation ID for request tracing
+pathVariables:
+  schemaName: string
+body:
+  type: text
+  content: ""
+examples: ./.resources/Delete schema.resources/examples
+order: 3000
