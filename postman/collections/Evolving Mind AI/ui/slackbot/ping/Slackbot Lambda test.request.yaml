@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseUrl}}/ui/slackbot/ping
+method: POST
+headers:
+  Content-Type: application/json
+  Accept: application/json
+body:
+  type: json
+  content: |-
+    {
+      "text": "Hello from Postman"
+    }
+examples: ./.resources/Slackbot Lambda test.resources/examples
+order: 1000

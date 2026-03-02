@@ -1,0 +1,51 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/schema/:schemaName
+  method: GET
+  headers:
+    Accept: application/json
+  pathVariables:
+    schemaName: string
+  body:
+    type: text
+    content: ""
+response:
+  statusCode: 200
+  statusText: OK
+  headers:
+    Content-Type: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "tables": [
+          {
+            "name": "string",
+            "columns": [
+              {
+                "name": "string",
+                "type": "string"
+              },
+              {
+                "name": "string",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "string",
+            "columns": [
+              {
+                "name": "string",
+                "type": "string"
+              },
+              {
+                "name": "string",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      }
+order: 1000

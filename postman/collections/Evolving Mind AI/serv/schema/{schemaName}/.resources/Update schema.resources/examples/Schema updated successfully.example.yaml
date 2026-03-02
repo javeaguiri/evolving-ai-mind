@@ -1,0 +1,34 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/schema/:schemaName
+  method: PUT
+  headers:
+    Content-Type: application/json
+    Accept: application/json
+  pathVariables:
+    schemaName: string
+  body:
+    type: json
+    content: |-
+      {
+        "tables": [
+          "string",
+          "string"
+        ]
+      }
+response:
+  statusCode: 200
+  statusText: OK
+  headers:
+    Content-Type: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "tables": [
+          "string",
+          "string"
+        ]
+      }
+order: 1000

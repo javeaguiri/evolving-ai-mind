@@ -1,0 +1,25 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/table
+method: POST
+headers:
+  Content-Type: application/json
+  Accept: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "string",
+      "schema": "string",
+      "columns": [
+        {
+          "name": "string",
+          "type": "string"
+        },
+        {
+          "name": "string",
+          "type": "string"
+        }
+      ]
+    }
+examples: ./.resources/Create new table.resources/examples
+order: 2000

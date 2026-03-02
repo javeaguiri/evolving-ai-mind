@@ -1,0 +1,18 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/schema
+method: POST
+headers:
+  Content-Type: application/json
+  Accept: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "string",
+      "tables": [
+        "string",
+        "string"
+      ]
+    }
+examples: ./.resources/Create new schema.resources/examples
+order: 2000

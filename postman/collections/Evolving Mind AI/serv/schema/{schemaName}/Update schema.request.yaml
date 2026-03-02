@@ -1,0 +1,19 @@
+$kind: http-request
+url: http://{{baseUrl}}/serv/schema/:schemaName
+method: PUT
+headers:
+  Content-Type: application/json
+  Accept: application/json
+pathVariables:
+  schemaName: string
+body:
+  type: json
+  content: |-
+    {
+      "tables": [
+        "string",
+        "string"
+      ]
+    }
+examples: ./.resources/Update schema.resources/examples
+order: 2000

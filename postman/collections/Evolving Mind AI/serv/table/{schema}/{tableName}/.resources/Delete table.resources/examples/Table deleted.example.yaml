@@ -1,0 +1,17 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/table/:schema/:tableName
+  method: DELETE
+  pathVariables:
+    schema: string
+    tableName: string
+  body:
+    type: text
+    content: ""
+response:
+  statusCode: 204
+  statusText: No Content
+  body:
+    type: text
+    content: ""
+order: 1000

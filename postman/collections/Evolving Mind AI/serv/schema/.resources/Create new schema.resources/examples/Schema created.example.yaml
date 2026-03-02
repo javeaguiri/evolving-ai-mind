@@ -1,0 +1,30 @@
+$kind: http-example
+request:
+  url: http://{{baseUrl}}/serv/schema
+  method: POST
+  headers:
+    Content-Type: application/json
+    Accept: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "tables": [
+          "string",
+          "string"
+        ]
+      }
+response:
+  statusCode: 201
+  statusText: Created
+  headers:
+    Content-Type: application/json
+  body:
+    type: json
+    content: |-
+      {
+        "name": "string",
+        "id": "string"
+      }
+order: 1000
