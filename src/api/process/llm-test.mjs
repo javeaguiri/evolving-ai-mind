@@ -1,11 +1,13 @@
+// llm-test.mjs - simple Perplexity LLM test endpoint (JSON response)
+
 import Perplexity from '@perplexity-ai/perplexity_ai';
 
 export default async function handler(req, res) {
   const API_KEY = process.env.API_KEY;
-  const LLM_API_KEY = process.env.LLM_API_KEY; // LLM (perplexity) API key
+  const LLM_API_KEY = process.env.LLM_API_KEY; // Perplexity API key
 
   // Security check
-  if (req.headers["x-api-key"] !== API_KEY) {
+  if (!API_KEY || req.headers["x-api-key"] !== API_KEY) {
     return res.status(401).json({ error: "Invalid API key" });
   }
 
@@ -20,13 +22,19 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${LLM_API_KEY}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "sonar",   
+        model: "sonar",
         messages: [
-          { role: "system", content: "You are a friendly AI fortune cookie generator." },
-          { role: "user", content: "Give me one short and randomized wise fortune cookie message." }
+          {
+            role: "system",
+            content: "You are a friendly AI fortune cookie generator.",
+          },
+          {
+            role: "user",
+            content: "Give me one short and randomized wise fortune cookie message.",
+          },
         ],
         max_tokens: 50,
       }),
@@ -38,17 +46,21 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
-    const fortune = data?.choices?.[0]?.message?.content?.trim() || "Your future is unclear—try again. 🌙";
+    const fortune =
+      data?.choices?.[0]?.message?.content?.trim() ||
+      "Your future is unclear—try again. 🌙";
 
-    // Return the result
+    // Plain JSON response (not Slack‑formatted)
     res.status(200).json({
       status: "OK",
       fortune,
-      source: "Perplexity API"
+      source: "Perplexity API",
     });
-
   } catch (err) {
-    console.error("Proc-test error:", err);
-    res.status(500).json({ error: "Failed to fetch from LLM", details: err.message });
+    console.error("llm-test error:", err);
+    res.status(500).json({
+      error: "Failed to fetch from LLM",
+      details: err.message,
+    });
   }
 }
