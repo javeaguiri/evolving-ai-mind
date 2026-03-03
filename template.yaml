@@ -1,11 +1,21 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Password for the PostgreSQL user
+  YourKeyNameParameter:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the bastion.
+    
 Resources:
   # --- EXISTING IAM ROLE ---
   LambdaExecutionRoleImported:
     Type: AWS::IAM::Role
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain # Fixed: Added to clear W3011
     Properties:
       RoleName: LambdaExecutionRole
       AssumeRolePolicyDocument:
@@ -17,54 +27,49 @@ Resources:
             Action: sts:AssumeRole
 
   # --- EXISTING SQS QUEUES ---
-  # Main Queues
   SchemaQueue:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain # Fixed: Added to clear W3011
     Properties:
       QueueName: SYSSQSSchema
 
   SlackResultsQueue:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSlackResults
 
   WorkflowQueue:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSWorkflow
 
-  # Dead Letter Queues
   SchemaDLQ:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSchemaDLQ
 
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSlackResultsDLQ
 
   WorkflowDLQ:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSWorkflowDLQ
 
-  # --- NEW INFRASTRUCTURE ---
-  # VPC, RDS, and NAT Gateway resources go here (from previous steps)
-Parameters:
-  DBPassword:
-    Type: String
-    NoEcho: true
-    Description: Password for the PostgreSQL user
-
-Resources:
-  # 1. NETWORKING: The VPC
+  # --- NETWORKING: The VPC ---
   EvoMindVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -75,12 +80,12 @@ Resources:
         - Key: Name
           Value: evo-mind-vpc
 
-  PublicSubnet: # Changed from PrivateSubnet
+  PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref EvoMindVPC
       CidrBlock: 10.0.1.0/24
-      MapPublicIpOnLaunch: true # Allows Lambda to reach Slack for free
+      MapPublicIpOnLaunch: true 
       AvailabilityZone: !Select [0, !GetAZs '']
 
   InternetGateway:
@@ -110,12 +115,13 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
-  # 2. SECURITY GROUPS
+  # --- SECURITY GROUPS ---
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow Lambda to reach RDS
       VpcId: !Ref EvoMindVPC
+
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -125,28 +131,49 @@ Resources:
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
-          SourceSecurityGroupId: !Ref LambdaSecurityGroup # The bridge
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup 
 
-  # 3. DATABASE: PostgreSQL 15.x
+  # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
     Properties:
       Engine: postgres
-      EngineVersion: "15.5" # Latest stable 15.x
-      DBInstanceClass: db.t3.small # Free tier eligible (t3 is newer than eb)
+      EngineVersion: "16.6" 
+      DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
       DBName: evo_mind
       MasterUsername: lambda_user
       MasterUserPassword: !Ref DBPassword
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
-      PubliclyAccessible: false # Best practice
+      PubliclyAccessible: false 
       AllocatedStorage: '20'
 
-  # 4. LAMBDA FUNCTION
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.nano # Smallest/Cheapest possible
+      ImageId: ami-0ccabb5f82d4c9af5 # Standard Amazon Linux 2023 in us-east-2
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      KeyName: !Ref YourKeyNameParameter # You need to create a Key Pair in EC2 Console
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH from my Home IP
+      VpcId: !Ref EvoMindVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # CHANGE THIS to your specific IP for safety!  
+          
+  # --- LAMBDA FUNCTIONS ---
   MyFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: nodejs18.x
+      Runtime: nodejs22.x # Fixed: Upgraded from deprecated 18.x
       Handler: handler.handler
       CodeUri: ./
       Role: arn:aws:iam::383941187976:role/LambdaExecutionRole
@@ -166,12 +193,12 @@ Resources:
           DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
           SLACK_WEBHOOK_URL: "your_webhook_here"
           
- # --- LAMBDA FUNCTION ---
   ProcStepOrchestrator:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs22.x # Fixed: Upgraded from deprecated 18.x
       Handler: handler.handler
-      Runtime: nodejs18.x
+      CodeUri: ./
       Role: !GetAtt LambdaExecutionRoleImported.Arn
       VpcConfig:
         SecurityGroupIds:
@@ -183,3 +210,11 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt WorkflowQueue.Arn
+
+Outputs:
+  RDSEndpoint:
+    Description: "PostgreSQL Endpoint for Excel connection"
+    Value: !GetAtt EvoMindDB.Endpoint.Address
+  ApiUrl:
+    Description: "URL for API Gateway"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/execute"
