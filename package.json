@@ -1,28 +1,16 @@
 {
   "name": "evolving-mind-ai",
   "version": "1.0.0",
-  "description": "",
   "type": "module",
-  "main": "index.js",
+  "main": "index.mjs",
   "dependencies": {
-    "@azure/msal-node": "^3.8.8",
-    "@perplexity-ai/perplexity_ai": "^0.26.0",
-    "@slack/bolt": "^4.6.0",
-    "axios": "^1.13.5",
-    "express": "^5.2.1"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/javeaguiri/evolving-ai-mind.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/javeaguiri/evolving-ai-mind/issues"
-  },
-  "homepage": "https://github.com/javeaguiri/evolving-ai-mind#readme"
+    "@aws-sdk/client-sqs": "^3.1000.0",
+    "@aws-sdk/client-lambda": "^3.1000.0",
+    "@aws-sdk/client-dynamodb": "^3.1000.0",
+    "@aws-sdk/client-secrets-manager": "^3.1000.0",
+    "@aws-sdk/client-ssm": "^3.1000.0",
+    "axios": "^1.8.0",
+    "uuid": "^11.0.0",
+    "pg": "^8.13.0"
+  }
 }
