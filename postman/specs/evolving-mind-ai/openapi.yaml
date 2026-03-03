@@ -53,6 +53,90 @@ paths:
               example:
                 text: "pong"
 
+  /proc/workflow:
+    post:
+      summary: Start new workflow (user schema/workflow creation)
+      operationId: startWorkflow
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowId, steps, userId]
+              properties:
+                workflowId:
+                  type: string
+                  description: Unique identifier for the workflow
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    required: [stepType, pgdFunction]
+                    properties:
+                      stepType:
+                        type: string
+                        enum: ["inventory-adjust", "recipe-process"]
+                        description: Type of workflow step
+                      pgdFunction:
+                        type: string
+                        description: Stored new Function() code for PGD execution
+                      serviceCall:
+                        type: object
+                        properties:
+                          url:
+                            type: string
+                          method:
+                            type: string
+                            enum: [GET, POST, PUT, DELETE]
+                          payload:
+                            type: object
+                userId:
+                  type: string
+                  description: User identifier for workflow ownership
+              example:
+                workflowId: "inv-2026-03-03-001"
+                userId: "user123"
+                steps:
+                  - stepType: "inventory-adjust"
+                    pgdFunction: "async function(items){for(const item of items){await db.query('UPDATE inventory SET quantity=quantity+$1 WHERE name=$2',[item.qty,item.name]);}}"
+                    serviceCall:
+                      url: "/serv/schema/inventory"
+                      method: "POST"
+                      payload: { name: "inventory", tables: ["items"] }
+      responses:
+        '200':
+          description: Workflow started successfully
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  workflowId:
+                    type: string
+                  message:
+                    type: string
+              example:
+                success: true
+                workflowId: "inv-2026-03-03-001"
+                message: "Workflow published to SYS-SQS-Workflow"
+        '400':
+          description: Invalid request
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
   /serv/schema:
     get:
       summary: List all schemas
