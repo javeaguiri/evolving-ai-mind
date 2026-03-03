@@ -2,9 +2,184 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
+  # --- EXISTING IAM ROLE ---
+  LambdaExecutionRoleImported:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      RoleName: LambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  # --- EXISTING SQS QUEUES ---
+  # Main Queues
+  SchemaQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSSchema
+
+  SlackResultsQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSSlackResults
+
+  WorkflowQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSWorkflow
+
+  # Dead Letter Queues
+  SchemaDLQ:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSSchemaDLQ
+
+  SlackResultsDLQ:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSSlackResultsDLQ
+
+  WorkflowDLQ:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    Properties:
+      QueueName: SYSSQSWorkflowDLQ
+
+  # --- NEW INFRASTRUCTURE ---
+  # VPC, RDS, and NAT Gateway resources go here (from previous steps)
+Parameters:
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Password for the PostgreSQL user
+
+Resources:
+  # 1. NETWORKING: The VPC
+  EvoMindVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: evo-mind-vpc
+
+  PublicSubnet: # Changed from PrivateSubnet
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref EvoMindVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true # Allows Lambda to reach Slack for free
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref EvoMindVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EvoMindVPC
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # 2. SECURITY GROUPS
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Lambda to reach RDS
+      VpcId: !Ref EvoMindVPC
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL traffic
+      VpcId: !Ref EvoMindVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup # The bridge
+
+  # 3. DATABASE: PostgreSQL 15.x
+  EvoMindDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      EngineVersion: "15.5" # Latest stable 15.x
+      DBInstanceClass: db.t3.small # Free tier eligible (t3 is newer than eb)
+      DBName: evo_mind
+      MasterUsername: lambda_user
+      MasterUserPassword: !Ref DBPassword
+      VPCSecurityGroups:
+        - !GetAtt RDSSecurityGroup.GroupId
+      PubliclyAccessible: false # Best practice
+      AllocatedStorage: '20'
+
+  # 4. LAMBDA FUNCTION
   MyFunction:
     Type: AWS::Serverless::Function
     Properties:
       Runtime: nodejs18.x
       Handler: handler.handler
       CodeUri: ./
+      Role: arn:aws:iam::383941187976:role/LambdaExecutionRole
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PublicSubnet
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /execute
+            Method: post
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
+          SLACK_WEBHOOK_URL: "your_webhook_here"
+          
+ # --- LAMBDA FUNCTION ---
+  ProcStepOrchestrator:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.handler
+      Runtime: nodejs18.x
+      Role: !GetAtt LambdaExecutionRoleImported.Arn
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PublicSubnet
+      Events:
+        WorkflowTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt WorkflowQueue.Arn

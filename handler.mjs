@@ -1,18 +1,30 @@
-// handler.mjs - Lambda entry point for both /api/process/* and /api/slackbot/*
-
+// handler.mjs
 import processRouter from "./src/api/process/index.mjs";
 import slackbotRouter from "./src/api/slackbot/index.mjs";
 
-export async function handler(req, res) {
-  const url = req.url; // or your Lambda event → req adapter
-
-  if (url.startsWith("/api/process/")) {
-    return processRouter(req, res);
+export async function handler(event) {
+  // 1. Detect SQS Trigger (ProcStepOrchestrator)
+  if (event.Records && event.Records[0].eventSource === 'aws:sqs') {
+    console.log("Processing SQS Message...");
+    // SQS logic usually goes to your processRouter
+    return await processRouter(event); 
   }
 
-  if (url.startsWith("/api/slackbot/")) {
-    return slackbotRouter(req, res);
+  // 2. Detect API Gateway Trigger (MyFunction)
+  if (event.httpMethod || event.requestContext) {
+    const path = event.path || event.requestContext.http.path;
+    
+    if (path.startsWith("/api/process/")) {
+      return await processRouter(event);
+    }
+
+    if (path.startsWith("/api/slackbot/")) {
+      return await slackbotRouter(event);
+    }
   }
 
-  return res.status(404).json({ error: "Not found" });
+  return {
+    statusCode: 404,
+    body: JSON.stringify({ error: "Route not found", event: event })
+  };
 }

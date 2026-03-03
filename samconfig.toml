@@ -1,0 +1,18 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "evo-mind-dev"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+parameter_overrides = "Stage=dev DBInstanceClass=db.t3.micro"
+
+[prod.deploy.parameters]
+stack_name = "evo-mind-dev"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+parameter_overrides = "Stage=prod DBInstanceClass=db.t3.small"
+
