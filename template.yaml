@@ -12,10 +12,8 @@ Parameters:
     
 Resources:
   # --- EXISTING IAM ROLE ---
-  LambdaExecutionRoleImported:
+  LambdaExecutionRole:
     Type: AWS::IAM::Role
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain # Fixed: Added to clear W3011
     Properties:
       RoleName: LambdaExecutionRole
       AssumeRolePolicyDocument:
@@ -25,50 +23,52 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole 
+        
+  EvoMindDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnets for EvoMind RDS"
+      SubnetIds:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
 
   # --- EXISTING SQS QUEUES ---
+  
   SchemaQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain # Fixed: Added to clear W3011
     Properties:
-      QueueName: SYSSQSSchema
+      QueueName: SYSSQSSchema  # This gives it the concise name you want
+      # DeletionPolicy is 'Delete' by default now, so it won't "ghost" anymore
 
   SlackResultsQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSlackResults
 
   WorkflowQueue:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSWorkflow
-
+      
   SchemaDLQ:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSchemaDLQ
 
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSSlackResultsDLQ
 
   WorkflowDLQ:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
     Properties:
       QueueName: SYSSQSWorkflowDLQ
-
+    
   # --- NETWORKING: The VPC ---
   EvoMindVPC:
     Type: AWS::EC2::VPC
@@ -87,7 +87,14 @@ Resources:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true 
       AvailabilityZone: !Select [0, !GetAZs '']
-
+      
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref EvoMindVPC
+      CidrBlock: 10.0.2.0/24 # Different range
+      MapPublicIpOnLaunch: true 
+      AvailabilityZone: !Select [1, !GetAZs ''] # Different zone
   InternetGateway:
     Type: AWS::EC2::InternetGateway
 
@@ -121,6 +128,11 @@ Resources:
     Properties:
       GroupDescription: Allow Lambda to reach RDS
       VpcId: !Ref EvoMindVPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0 # Better: Restrict this to your DB Subnet CIDR later
 
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -142,7 +154,8 @@ Resources:
       DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
       DBName: evo_mind
       MasterUsername: lambda_user
-      MasterUserPassword: !Ref DBPassword
+      MasterUserPassword: '{{resolve:secretsmanager:my-db-secret:SecretString:password}}'
+      DBSubnetGroupName: !Ref EvoMindDBSubnetGroup
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
       PubliclyAccessible: false 
@@ -173,15 +186,16 @@ Resources:
   MyFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: nodejs22.x # Fixed: Upgraded from deprecated 18.x
+      Runtime: nodejs22.x
       Handler: handler.handler
       CodeUri: ./
-      Role: arn:aws:iam::383941187976:role/LambdaExecutionRole
+      Role: !GetAtt LambdaExecutionRole.Arn
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
         SubnetIds:
           - !Ref PublicSubnet
+          - !Ref PublicSubnet2
       Events:
         ApiEvent:
           Type: Api
@@ -191,26 +205,31 @@ Resources:
       Environment:
         Variables:
           DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
-          SLACK_WEBHOOK_URL: "your_webhook_here"
+          SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/FillinDetailsLater"
           
   ProcStepOrchestrator:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: nodejs22.x # Fixed: Upgraded from deprecated 18.x
+      Runtime: nodejs22.x
       Handler: handler.handler
       CodeUri: ./
-      Role: !GetAtt LambdaExecutionRoleImported.Arn
+      Role: !GetAtt LambdaExecutionRole.Arn
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
         SubnetIds:
           - !Ref PublicSubnet
+          - !Ref PublicSubnet2
       Events:
         WorkflowTrigger:
           Type: SQS
           Properties:
             Queue: !GetAtt WorkflowQueue.Arn
-
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
+          SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/FillinDetailsLater"
+          
 Outputs:
   RDSEndpoint:
     Description: "PostgreSQL Endpoint for Excel connection"
