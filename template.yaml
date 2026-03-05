@@ -107,7 +107,10 @@ Resources:
           
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-
+    Properties:
+      Tags:
+        - Key: Name
+          Value: SYSIGWEvoMind
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
