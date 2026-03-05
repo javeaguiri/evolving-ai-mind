@@ -121,6 +121,9 @@ Resources:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref EvoMindVPC
+      Tags:
+        - Key: Name
+          Value: SYSRTBPublic
 
   DefaultRoute:
     Type: AWS::EC2::Route
@@ -136,9 +139,11 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
 
   # --- SECURITY GROUPS ---
+# --- SECURITY GROUPS ---
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      # DO NOT add GroupName here (to avoid the Replacement crash)
       GroupDescription: Allow Lambda to reach RDS
       VpcId: !Ref EvoMindVPC
       SecurityGroupEgress:
