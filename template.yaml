@@ -35,6 +35,7 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: "Subnets for EvoMind RDS"
+      DBSubnetGroupName: SYSSBNEvoMind  # This is the "Pretty" Name
       SubnetIds:
         - !Ref PublicSubnet
         - !Ref PublicSubnet2
@@ -147,6 +148,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow PostgreSQL traffic
+      GroupName: SYSSGRRDS  # This is the "Pretty" Name
       VpcId: !Ref EvoMindVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -188,6 +190,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow SSH from my Home IP
+      GroupName: BSTSecGroup  # Match your manual change here
       VpcId: !Ref EvoMindVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
