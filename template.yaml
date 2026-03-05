@@ -9,6 +9,9 @@ Parameters:
   YourKeyNameParameter:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Name of an existing EC2 KeyPair to enable SSH access to the bastion.
+  SlackWebhookParam:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /myapp/slack-webhook # Added the dash to match the console
     
 Resources:
   # --- EXISTING IAM ROLE ---
@@ -87,7 +90,9 @@ Resources:
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: true 
       AvailabilityZone: !Select [0, !GetAZs '']
-      
+      Tags:
+        - Key: Name
+          Value: SYSSubnetPublic      
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -95,6 +100,10 @@ Resources:
       CidrBlock: 10.0.2.0/24 # Different range
       MapPublicIpOnLaunch: true 
       AvailabilityZone: !Select [1, !GetAZs ''] # Different zone
+      Tags:
+        - Key: Name
+          Value: SYSSubnetPublic2
+          
   InternetGateway:
     Type: AWS::EC2::InternetGateway
 
@@ -152,9 +161,10 @@ Resources:
       Engine: postgres
       EngineVersion: "16.6" 
       DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
+      DBInstanceIdentifier: SYSRDSEvoMind # This is the "Pretty" name
       DBName: evo_mind
       MasterUsername: lambda_user
-      MasterUserPassword: '{{resolve:secretsmanager:my-db-secret:SecretString:password}}'
+      MasterUserPassword: !Ref DBPassword
       DBSubnetGroupName: !Ref EvoMindDBSubnetGroup
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
@@ -170,7 +180,10 @@ Resources:
       SecurityGroupIds:
         - !Ref BastionSecurityGroup
       KeyName: !Ref YourKeyNameParameter # You need to create a Key Pair in EC2 Console
-
+      Tags:
+        - Key: Name
+          Value: SYSBSTHost # This will fill in the "Name" column in the EC2 Console
+          
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -188,6 +201,7 @@ Resources:
     Properties:
       Runtime: nodejs22.x
       Handler: handler.handler
+      FunctionName: SYSLMBExecute # "Pretty" name
       CodeUri: ./
       Role: !GetAtt LambdaExecutionRole.Arn
       VpcConfig:
@@ -205,13 +219,14 @@ Resources:
       Environment:
         Variables:
           DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
-          SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/FillinDetailsLater"
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
           
   ProcStepOrchestrator:
     Type: AWS::Serverless::Function
     Properties:
       Runtime: nodejs22.x
       Handler: handler.handler
+      FunctionName: SYSLMBOrchestrator # "Pretty" name
       CodeUri: ./
       Role: !GetAtt LambdaExecutionRole.Arn
       VpcConfig:
@@ -228,8 +243,7 @@ Resources:
       Environment:
         Variables:
           DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
-          SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/FillinDetailsLater"
-          
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
 Outputs:
   RDSEndpoint:
     Description: "PostgreSQL Endpoint for Excel connection"
