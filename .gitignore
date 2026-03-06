@@ -4,6 +4,11 @@ node_modules/
 .env
 .DS_Store
 
+.aws-sam/
+samconfig.toml
+# If you have private environment variables
+.env
+
 # Builds
 dist/
 build/

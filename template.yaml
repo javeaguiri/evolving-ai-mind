@@ -156,7 +156,10 @@ Resources:
           FromPort: 5432
           ToPort: 5432
           CidrIp: 0.0.0.0/0 # Better: Restrict this to your DB Subnet CIDR later
-
+      Tags:
+        - Key: Name
+          Value: SYSLambSecGroup
+          
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -219,6 +222,9 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0 # CHANGE THIS to your specific IP for safety!  
+      Tags:
+        - Key: Name
+          Value: SYSBSTSecGroup
           
   # --- LAMBDA FUNCTIONS ---
   MyFunction:
