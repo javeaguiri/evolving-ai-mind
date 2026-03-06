@@ -12,6 +12,14 @@ Parameters:
   SlackWebhookParam:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /myapp/slack-webhook # Added the dash to match the console
+  DBUser:
+    Type: String
+    Default: "lambda_user"
+    Description: "Master username for PostgreSQL"
+  DBName:
+    Type: String
+    Default: "evo_mind"
+    Description: "The name of the initial database created"    
     
 Resources:
   # --- EXISTING IAM ROLE ---
@@ -180,6 +188,15 @@ Resources:
       Tags:
         - Key: Name
           Value: SYSSGRRDS
+          
+  RDSPostgresIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RDSSecurityGroup  
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: 0.0.0.0/0 # Allows the public Lambda to reach the DB
 
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
@@ -187,10 +204,11 @@ Resources:
     Properties:
       Engine: postgres
       EngineVersion: "16.6" 
+      PubliclyAccessible: true
       DBInstanceClass: db.t4g.micro # Changed for lower cost/free tier
       DBInstanceIdentifier: SYSRDSEvoMind # This is the "Pretty" name
-      DBName: evo_mind
-      MasterUsername: lambda_user
+      DBName: !Ref DBName
+      MasterUsername: !Ref DBUser 
       MasterUserPassword: !Ref DBPassword
       DBSubnetGroupName: !Ref EvoMindDBSubnetGroup
       VPCSecurityGroups:
@@ -243,8 +261,12 @@ Resources:
             Method: post
       Environment:
         Variables:
-          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
           SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
+          DB_NAME: !Ref DBName 
+          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
+          DB_USER: !Ref DBUser  
+          DB_PASSWORD: !Ref DBPassword
+
           
   ProcStepOrchestrator:
     Type: AWS::Serverless::Function
@@ -261,8 +283,12 @@ Resources:
             Queue: !GetAtt WorkflowQueue.Arn
       Environment:
         Variables:
-          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
           SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
+          DB_NAME: !Ref DBName 
+          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
+          DB_USER: !Ref DBUser  
+          DB_PASSWORD: !Ref DBPassword
+
 Outputs:
   RDSEndpoint:
     Description: "PostgreSQL Endpoint for Excel connection"
