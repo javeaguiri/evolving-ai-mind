@@ -138,7 +138,12 @@ Resources:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
-  # --- SECURITY GROUPS ---
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+      
 # --- SECURITY GROUPS ---
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -159,10 +164,19 @@ Resources:
       GroupName: SYSSGRRDS  # This is the "Pretty" Name
       VpcId: !Ref EvoMindVPC
       SecurityGroupIngress:
+        # 1. Keep the existing Lambda access
         - IpProtocol: tcp
           FromPort: 5432
           ToPort: 5432
           SourceSecurityGroupId: !Ref LambdaSecurityGroup 
+        # 2. ADD THIS: Allow the Bastion (for your Excel connection)
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BastionSecurityGroup 
+      Tags:
+        - Key: Name
+          Value: SYSSGRRDS
 
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
@@ -215,12 +229,6 @@ Resources:
       FunctionName: SYSLMBExecute # "Pretty" name
       CodeUri: ./
       Role: !GetAtt LambdaExecutionRole.Arn
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PublicSubnet
-          - !Ref PublicSubnet2
       Events:
         ApiEvent:
           Type: Api
@@ -240,12 +248,6 @@ Resources:
       FunctionName: SYSLMBOrchestrator # "Pretty" name
       CodeUri: ./
       Role: !GetAtt LambdaExecutionRole.Arn
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PublicSubnet
-          - !Ref PublicSubnet2
       Events:
         WorkflowTrigger:
           Type: SQS
