@@ -1,0 +1,5 @@
+name: AWS No Auth
+values:
+  - key: baseUrl
+    value: ''
+    enabled: true
