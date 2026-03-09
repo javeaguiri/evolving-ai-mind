@@ -1,12 +1,18 @@
 openapi: 3.1.0
-jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
   title: evolving-mind-ai
-  version: 1.0.0
-  description: API for Slackbot Lambda testing
+  version: 3.2.0
+  description: API for evolving-mind-ai — ping scaffolding phase
 servers:
-  - url: https://evolving-mind-api.amazon.com/
-    description: Development server
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com/Prod
+    description: AWS API Gateway (SAM deployed)
+    variables:
+      apiId:
+        default: REPLACE_AFTER_FIRST_DEPLOY
+      region:
+        default: us-east-1
+  - url: http://localhost:3000
+    description: SAM local (sam local start-api)
 components:
   headers:
     x-correlation-id:
@@ -15,10 +21,15 @@ components:
       description: Unique request identifier for tracing (REQUIRED - caller must provide)
       required: true
 paths:
-  /ui/slackbot/ping:
+
+  # ---------------------------------------------------------------------------
+  # UI / SLACK LAYER  →  Lambda: SlackbotFunction
+  # ---------------------------------------------------------------------------
+
+  /api/v1/ui/slack/ping-api:
     post:
-      summary: Slackbot Lambda test
-      operationId: pingSlackbot
+      summary: ping-api — Slackbot Lambda only (no downstream calls)
+      operationId: pingApi
       parameters:
         - name: x-correlation-id
           in: header
@@ -39,7 +50,7 @@ paths:
               text: "Hello from Postman"
       responses:
         '200':
-          description: Pong response
+          description: Immediate pong — validates Slack slash command wiring only
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
@@ -48,14 +59,118 @@ paths:
               schema:
                 type: object
                 properties:
-                  text:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  correlationId:
                     type: string
               example:
-                text: "pong"
+                success: true
+                message: "🤖 pong-api"
+                correlationId: "abc123"
 
-  /serv/schema:
+  /api/v1/ui/slack/ping-sqs:
+    post:
+      summary: ping-sqs — Full SQS pipeline (Slack → PROC → SQS → SERV → SQS → Slack)
+      operationId: pingSqs
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+      responses:
+        '200':
+          description: Immediate ACK — final result delivered via Slack thread ~30s later
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  correlationId:
+                    type: string
+              example:
+                success: true
+                message: "⏳ ping-sqs started — watch this thread"
+                correlationId: "abc123"
+
+  # ---------------------------------------------------------------------------
+  # PROC LAYER  →  Lambda: ProcFunction
+  # ---------------------------------------------------------------------------
+
+  /api/v1/proc/ping-llm:
+    post:
+      summary: ping-llm — PROC Lambda + LLM (no Slack/SQS/DB)
+      operationId: pingLlm
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+            example:
+              text: "ping"
+      responses:
+        '200':
+          description: LLM fortune cookie — validates ProcFunction + LLM API key
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  model:
+                    type: string
+                  correlationId:
+                    type: string
+              example:
+                success: true
+                message: "Your Lambda workflows will evolve! 🍪"
+                model: "gpt-4o-mini"
+                correlationId: "abc123"
+
+  # ---------------------------------------------------------------------------
+  # SERV LAYER  →  Lambda: ServFunction
+  # ---------------------------------------------------------------------------
+
+  /api/v1/serv/ping-db:
     get:
-      summary: List all schemas
+      summary: ping-db — SERV Lambda + PostgreSQL health check
+      operationId: pingDb
       parameters:
         - name: x-correlation-id
           in: header
@@ -65,25 +180,44 @@ paths:
           description: Correlation ID for request tracing
       responses:
         '200':
-          description: List of schemas
+          description: DB reachable — validates ServFunction + Postgres connectivity
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    tables:
-                      type: array
-                      items:
-                        type: string
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  postgresVersion:
+                    type: string
+                  correlationId:
+                    type: string
+              example:
+                success: true
+                postgresVersion: "PostgreSQL 16.6"
+                correlationId: "abc123"
+
+  /api/v1/serv/schema:
+    get:
+      summary: List all schemas [STUB — Phase 2]
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      responses:
+        '501':
+          description: Not yet implemented
+          headers:
+            x-correlation-id:
+              $ref: '#/components/headers/x-correlation-id'
     post:
-      summary: Create new schema
+      summary: Create new schema [STUB — Phase 2]
       parameters:
         - name: x-correlation-id
           in: header
@@ -106,24 +240,15 @@ paths:
                   items:
                     type: string
       responses:
-        '201':
-          description: Schema created
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  id:
-                    type: string
 
-  /serv/schema/{schemaName}:
+  /api/v1/serv/schema/{schemaName}:
     get:
-      summary: Get schema details
+      summary: Get schema details [STUB — Phase 2]
       parameters:
         - name: schemaName
           in: path
@@ -137,36 +262,13 @@ paths:
             type: string
           description: Correlation ID for request tracing
       responses:
-        '200':
-          description: Schema details
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  tables:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                        columns:
-                          type: array
-                          items:
-                            type: object
-                            properties:
-                              name:
-                                type: string
-                              type:
-                                type: string
     put:
-      summary: Update schema
+      summary: Update schema [STUB — Phase 2]
       parameters:
         - name: schemaName
           in: path
@@ -191,25 +293,13 @@ paths:
                   items:
                     type: string
       responses:
-        '200':
-          description: Schema updated successfully
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  tables:
-                    type: array
-                    items:
-                      type: string
-
     delete:
-      summary: Delete schema
+      summary: Delete schema [STUB — Phase 2]
       parameters:
         - name: schemaName
           in: path
@@ -223,15 +313,15 @@ paths:
             type: string
           description: Correlation ID for request tracing
       responses:
-        '204':
-          description: Schema deleted
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
 
-  /serv/table:
+  /api/v1/serv/table:
     get:
-      summary: List all tables across schemas
+      summary: List all tables [STUB — Phase 2]
       parameters:
         - name: schema
           in: query
@@ -244,24 +334,13 @@ paths:
             type: string
           description: Correlation ID for request tracing
       responses:
-        '200':
-          description: List of tables
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    name:
-                      type: string
-                    schema:
-                      type: string
     post:
-      summary: Create new table
+      summary: Create new table [STUB — Phase 2]
       parameters:
         - name: x-correlation-id
           in: header
@@ -292,26 +371,15 @@ paths:
                       type:
                         type: string
       responses:
-        '201':
-          description: Table created
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  schema:
-                    type: string
-                  id:
-                    type: string
 
-  /serv/table/{schema}/{tableName}:
+  /api/v1/serv/table/{schema}/{tableName}:
     get:
-      summary: Get table details
+      summary: Get table details [STUB — Phase 2]
       parameters:
         - name: schema
           in: path
@@ -330,31 +398,13 @@ paths:
             type: string
           description: Correlation ID for request tracing
       responses:
-        '200':
-          description: Table details
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name:
-                    type: string
-                  schema:
-                    type: string
-                  columns:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name:
-                          type: string
-                        type:
-                          type: string
     delete:
-      summary: Delete table
+      summary: Delete table [STUB — Phase 2]
       parameters:
         - name: schema
           in: path
@@ -373,8 +423,8 @@ paths:
             type: string
           description: Correlation ID for request tracing
       responses:
-        '204':
-          description: Table deleted
+        '501':
+          description: Not yet implemented
           headers:
             x-correlation-id:
               $ref: '#/components/headers/x-correlation-id'
