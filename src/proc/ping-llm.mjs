@@ -1,68 +1,73 @@
-// src/api/process/ping.mjs - Single fortune GET/POST endpoint for AWS Lambda
+// src/proc/ping-llm.mjs
+// Handles POST /api/v1/proc/ping-llm
+//
+// Validates: ProcFunction Lambda + Perplexity LLM API.
+// No Slack, SQS, or DB calls.
+// Safe to invoke directly via curl or from Slack /ping-llm command.
+// If this fails → LLM_API_KEY in SSM, ProcFunction config, or API Gateway issue.
+//
+// Preserves the Perplexity sonar + fetch pattern from the original ping.mjs.
 
-export default async function handler(req, res) {
-  const API_KEY = process.env.API_KEY;
-  const LLM_API_KEY = process.env.LLM_API_KEY;
+import { ok, err } from '../../shared/ping-utils.mjs';
 
-  // Security check (rely on API key header)
-  if (!API_KEY || req.headers["x-api-key"] !== API_KEY) {
-    return res.status(401).json({ error: "Invalid API key" });
+const PERPLEXITY_URL = 'https://api.perplexity.ai/chat/completions';
+
+/**
+ * @param {ReturnType<import('../../shared/ping-utils.mjs').parseEvent>} req
+ */
+export async function handle(req) {
+  const llmKey = process.env.LLM_API_KEY;
+
+  if (!llmKey) {
+    console.error('ping-llm: LLM_API_KEY env var not set');
+    return err(500, 'LLM_API_KEY not configured', req.correlationId);
   }
 
-  // Accept GET (for Slackbot) OR POST
-  if (req.method !== "GET" && req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed. Use GET/POST." });
-  }
+  console.info('ping-llm', { correlationId: req.correlationId });
 
   try {
-    // Perplexity fortune cookie
-    const response = await fetch("https://api.perplexity.ai/chat/completions", {
-      method: "POST",
+    const response = await fetch(PERPLEXITY_URL, {
+      method: 'POST',
       headers: {
-        "Authorization": `Bearer ${LLM_API_KEY}`,
-        "Content-Type": "application/json",
+        'Authorization': `Bearer ${llmKey}`,
+        'Content-Type':  'application/json',
       },
       body: JSON.stringify({
-        model: "sonar",
+        model: 'sonar',
         messages: [
           {
-            role: "system",
-            content:
-              "You are a friendly AI fortune cookie generator. Respond with ONE short, wise fortune cookie message only (10-15 words max). No quotes, no explanation.",
+            role:    'system',
+            content: 'You are a friendly AI fortune cookie generator. Respond with ONE short, wise fortune cookie message only (10-15 words max). No quotes, no explanation.',
           },
           {
-            role: "user",
-            content: "Give me one short, randomized wise fortune cookie message.",
+            role:    'user',
+            content: 'Give me one short, randomized wise fortune cookie message about serverless computing or AI.',
           },
         ],
-        max_tokens: 50,
+        max_tokens:  50,
         temperature: 0.8,
       }),
     });
 
     if (!response.ok) {
-      const errMsg = await response.text();
-      throw new Error(`Perplexity API error: ${response.status} - ${errMsg}`);
+      const body = await response.text();
+      throw new Error(`Perplexity ${response.status}: ${body}`);
     }
 
-    const data = await response.json();
-    const fortune =
-      data?.choices?.[0]?.message?.content?.trim() ||
-      "Your future shines bright! 🌟";
+    const data    = await response.json();
+    const fortune = data?.choices?.[0]?.message?.content?.trim()
+                 || 'Your serverless functions will achieve enlightenment. 🍪';
 
-    // SLACK‑FRIENDLY FORMAT
-    res.status(200).json({
-      content: fortune, // ← Exactly what Slackbot expects
-    });
-  } catch (err) {
-    console.error("Ping process error:", err);
-    res.status(500).json({
-      error: "Fortune generation failed",
-      content: "The oracle is taking a break. Try again!",
-    });
+    return ok({
+      success:       true,
+      message:       fortune,
+      model:         data?.model || 'sonar',
+      correlationId: req.correlationId,
+      timestamp:     new Date().toISOString(),
+    }, req.correlationId);
+
+  } catch (error) {
+    console.error('ping-llm error:', error.message);
+    return err(500, `LLM call failed: ${error.message}`, req.correlationId);
   }
 }
-
-// If you wire this as a top‑level Lambda handler (e.g. via a wrapper like `handler.mjs`),
-// this named export can be referenced as:
-// export { handler as default };

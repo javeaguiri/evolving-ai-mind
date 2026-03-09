@@ -1,16 +1,27 @@
-// /api/slackbot/index.mjs - router for Slackbot endpoints
+// src/ui/slackbot/handler.mjs
+// Lambda entry point for the UI / Slackbot layer.
+// Owns: /api/v1/ui/slack/{proxy+}
+//
+// Sub-route switching lives here — NOT in template.yaml.
+// Add a new case for each new Slack command.
 
-import pingHandler from "../slackbot/ping.mjs";
+import { parseEvent, err } from '../../shared/ping-utils.mjs';
+import { handle as pingApi  } from './ping.mjs';
 
-export default async function handler(req, res) {
-  // You can route multiple Slack endpoints here later.
-  // Example: /api/slackbot/ping
-  const path = req.url.split("/").slice(-1)[0] || "ping";
+/**
+ * AWS Lambda handler — called by API Gateway for every
+ * /api/v1/ui/slack/* request.
+ */
+export async function handler(event) {
+  const req = parseEvent(event);
 
-  switch (path) {
-    case "ping":
-      return pingHandler(req, res);
+  switch (req.route) {
+    case 'ping-api':
+      return pingApi(req);
+
+    // ping-sqs will be added here in the next step (requires SQS wiring)
+
     default:
-      return res.status(404).json({ error: `Slackbot endpoint "${path}" not found` });
+      return err(404, `Slackbot route "${req.route}" not found`, req.correlationId);
   }
 }

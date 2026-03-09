@@ -20,7 +20,7 @@ Globals:
       Variables:
         LOG_LEVEL: info
         # -- LLM --------------------------------------------------------------
-        OPENAI_API_KEY: !Sub '{{resolve:ssm:/evolving-mind-ai/openai-api-key}}'
+        LLM_API_KEY: !Sub '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'        
         # -- Postgres ---------------------------------------------------------
         PGC_DATABASE_URL: !Sub '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
         PGD_DATABASE_URL: !Sub '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
