@@ -153,6 +153,21 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
       
 # --- SECURITY GROUPS ---
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH from my Home IP
+      GroupName: BSTSecGroup  # Match your manual change here
+      VpcId: !Ref EvoMindVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # CHANGE THIS to your specific IP for safety!  
+      Tags:
+        - Key: Name
+          Value: SYSBSTSecGroup
+
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -229,65 +244,7 @@ Resources:
         - Key: Name
           Value: SYSBSTHost # This will fill in the "Name" column in the EC2 Console
           
-  BastionSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow SSH from my Home IP
-      GroupName: BSTSecGroup  # Match your manual change here
-      VpcId: !Ref EvoMindVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0 # CHANGE THIS to your specific IP for safety!  
-      Tags:
-        - Key: Name
-          Value: SYSBSTSecGroup
-          
-  # --- LAMBDA FUNCTIONS ---
-  MyFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Runtime: nodejs22.x
-      Handler: handler.handler
-      FunctionName: SYSLMBExecute # "Pretty" name
-      CodeUri: ./
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Events:
-        ApiEvent:
-          Type: Api
-          Properties:
-            Path: /execute
-            Method: post
-      Environment:
-        Variables:
-          SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
-          DB_NAME: !Ref DBName 
-          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
-          DB_USER: !Ref DBUser  
-          DB_PASSWORD: !Ref DBPassword
 
-          
-  ProcStepOrchestrator:
-    Type: AWS::Serverless::Function
-    Properties:
-      Runtime: nodejs22.x
-      Handler: handler.handler
-      FunctionName: SYSLMBOrchestrator # "Pretty" name
-      CodeUri: ./
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Events:
-        WorkflowTrigger:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt WorkflowQueue.Arn
-      Environment:
-        Variables:
-          SLACK_WEBHOOK_URL: !Ref SlackWebhookParam
-          DB_NAME: !Ref DBName 
-          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
-          DB_USER: !Ref DBUser  
-          DB_PASSWORD: !Ref DBPassword
 
 Outputs:
   RDSEndpoint:
