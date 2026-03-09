@@ -1,6 +1,46 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
+Description: >
+  evolving-mind-ai v3.2
+  Per-function Lambda routing — ping scaffolding phase.
+  Each layer (UI/Slackbot, PROC, SERV, Callback) is its own Lambda.
+  Routes are owned by this template; no path-switching in application code.
+  
+# -----------------------------------------------------------------------------
+# Global defaults applied to every Function unless overridden
+# -----------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]          # Graviton2 — ~20% cheaper than x86
+    MemorySize: 256
+    Timeout: 29                     # API GW hard limit is 30 s
+    Environment:
+      Variables:
+        LOG_LEVEL: info
+        # -- LLM --------------------------------------------------------------
+        OPENAI_API_KEY: !Sub '{{resolve:ssm:/evolving-mind-ai/openai-api-key}}'
+        # -- Postgres ---------------------------------------------------------
+        PGC_DATABASE_URL: !Sub '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
+        PGD_DATABASE_URL: !Sub '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
+        # -- Slack -------------------------------------------------------------
+        SLACK_BOT_TOKEN:    !Sub '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
+        SLACK_SIGNING_SECRET: !Sub '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
+        # -- SQS (populated via !Ref after queue resources are declared) -------
+        SQS_WORKFLOW_URL:       !Ref WorkflowQueue
+        SQS_SLACK_RESULTS_URL:  !Ref SlackResultsQueue
+  Api:
+    # Every API response gets CORS headers — safe for future REST client
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Correlation-Id,Authorization'"
+      AllowOrigin: "'*'" 
+      
+
+# -----------------------------------------------------------------------------
+# Parameters
+# -----------------------------------------------------------------------------
 Parameters:
   DBPassword:
     Type: String
@@ -21,6 +61,10 @@ Parameters:
     Default: "evo_mind"
     Description: "The name of the initial database created"    
     
+
+# -----------------------------------------------------------------------------
+# Resources
+# -----------------------------------------------------------------------------
 Resources:
   # --- EXISTING IAM ROLE ---
   LambdaExecutionRole:
@@ -38,50 +82,52 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole 
-        
-  EvoMindDBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: "Subnets for EvoMind RDS"
-      DBSubnetGroupName: SYSSBNEvoMind  # This is the "Pretty" Name
-      SubnetIds:
-        - !Ref PublicSubnet
-        - !Ref PublicSubnet2
 
-  # --- EXISTING SQS QUEUES ---
-  
+  # --- SQS QUEUES ---
   SchemaQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSSchema  # This gives it the concise name you want
       # DeletionPolicy is 'Delete' by default now, so it won't "ghost" anymore
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SchemaDLQ.Arn
+        maxReceiveCount: 3
 
   SlackResultsQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSSlackResults
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SlackResultsDLQ.Arn
+        maxReceiveCount: 3
 
   WorkflowQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSWorkflow
-      
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
+        maxReceiveCount: 3
+
   SchemaDLQ:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSSchemaDLQ
+      MessageRetentionPeriod: 1209600
 
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSSlackResultsDLQ
+      MessageRetentionPeriod: 1209600
 
   WorkflowDLQ:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSWorkflowDLQ
-    
-  # --- NETWORKING: The VPC ---
+      MessageRetentionPeriod: 1209600
+
+  # --- NETWORKING ---
   EvoMindVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -91,7 +137,7 @@ Resources:
       Tags:
         - Key: Name
           Value: evo-mind-vpc
-
+          
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -102,6 +148,7 @@ Resources:
       Tags:
         - Key: Name
           Value: SYSSubnetPublic      
+          
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -113,6 +160,16 @@ Resources:
         - Key: Name
           Value: SYSSubnetPublic2
           
+  # --- DATABASE ---
+  EvoMindDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnets for EvoMind RDS"
+      DBSubnetGroupName: SYSSBNEvoMind
+      SubnetIds:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+                   
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
@@ -153,21 +210,6 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
       
 # --- SECURITY GROUPS ---
-  BastionSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow SSH from my Home IP
-      GroupName: BSTSecGroup  # Match your manual change here
-      VpcId: !Ref EvoMindVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
-          CidrIp: 0.0.0.0/0 # CHANGE THIS to your specific IP for safety!  
-      Tags:
-        - Key: Name
-          Value: SYSBSTSecGroup
-
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -182,6 +224,21 @@ Resources:
       Tags:
         - Key: Name
           Value: SYSLambSecGroup
+          
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: BSTSecGroup
+      GroupDescription: Allow SSH from my Home IP
+      VpcId: !Ref EvoMindVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0   # TODO: Restrict to your IP before going beyond prototype
+      Tags:
+        - Key: Name
+          Value: SYSBSTSecGroup
           
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -212,7 +269,6 @@ Resources:
       FromPort: 5432
       ToPort: 5432
       CidrIp: 0.0.0.0/0 # Allows the public Lambda to reach the DB
-
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
@@ -243,13 +299,197 @@ Resources:
       Tags:
         - Key: Name
           Value: SYSBSTHost # This will fill in the "Name" column in the EC2 Console
-          
 
+  # ===========================================================================
+  # LAMBDA 1 — UI / Slackbot
+  # Owns:  /api/v1/ui/slack/{proxy+}
+  # Pings: POST /api/v1/ui/slack/ping-api
+  #        POST /api/v1/ui/slack/ping-sqs
+  # ===========================================================================
+  SlackbotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: evolving-mind-ai-slackbot
+      Description: 'UI layer — Slack slash commands and interactive callbacks'
+      Handler: src/ui/slackbot/handler.handler
+      Events:
+        # Catch-all for all slackbot sub-routes.
+        # The handler file does lightweight sub-path switching
+        # (ping-api, ping-sqs, future commands) within a single layer.
+        SlackbotProxy:
+          Type: Api
+          Properties:
+            Path: /api/v1/ui/slack/{proxy+}
+            Method: ANY
+    Metadata:
+      # ESM support: SAM wraps .mjs files transparently when package.json
+      # has "type": "module". Explicit esbuild config not required for ping phase.
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Format: esm
+        EntryPoints:
+          - src/ui/slackbot/handler.mjs
 
+  # ===========================================================================
+  # LAMBDA 2 — PROC (Process Orchestration)
+  # Owns:  /api/v1/proc/{proxy+}
+  # Pings: POST /api/v1/proc/ping-llm
+  # ===========================================================================
+  ProcFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: evolving-mind-ai-proc
+      Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
+      Handler: src/proc/handler.handler
+      # PROC needs permission to invoke other Lambdas and write to SQS
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt WorkflowQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SlackResultsQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:evolving-mind-ai-*'
+      Events:
+        ProcProxy:
+          Type: Api
+          Properties:
+            Path: /api/v1/proc/{proxy+}
+            Method: ANY
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Format: esm
+        EntryPoints:
+          - src/proc/handler.mjs
+
+  # ===========================================================================
+  # LAMBDA 3 — SERV (Service / JSON CRUD)
+  # Owns:  /api/v1/serv/{proxy+}
+  # Pings: GET /api/v1/serv/ping-db
+  # ===========================================================================
+  ServFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: evolving-mind-ai-serv
+      Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
+      Handler: src/serv/handler.handler
+      Events:
+        ServProxy:
+          Type: Api
+          Properties:
+            Path: /api/v1/serv/{proxy+}
+            Method: ANY
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Format: esm
+        EntryPoints:
+          - src/serv/handler.mjs
+
+  # ===========================================================================
+  # LAMBDA 4 — Slack Callback Listener  (SQS-triggered, no HTTP events)
+  # Polls SYS-SQS-SlackResults → posts threaded replies to Slack
+  # ===========================================================================
+  SlackCallbackListenerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: evolving-mind-ai-slack-callback-listener
+      Description: 'Consumes SQS SlackResults and posts threaded Slack messages'
+      Handler: src/ui/slackbot/callback.handler
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt SlackResultsQueue.QueueName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt SlackResultsDLQ.QueueName     # FIX 3: was SlackErrorsQueue (undefined)
+      Events:
+        SlackResultsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SlackResultsQueue.Arn
+            BatchSize: 1             # Process one result at a time for clean threading
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2022
+        Format: esm
+        EntryPoints:
+          - src/ui/slackbot/callback.mjs
+
+  # ===========================================================================
+  # LAMBDA 5 — PROC Step Orchestrator (SQS-triggered)
+  # TODO (Phase 2): Update Handler to src/proc/step-orchestrator.handler
+  #                 once src/proc/step-orchestrator.mjs is written.
+  #                 Currently points to legacy handler.mjs — not called during
+  #                 scaffolding phase, safe to leave as placeholder.
+  # ===========================================================================
+  ProcStepOrchestrator:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs22.x
+      Handler: handler.handler
+      FunctionName: SYSLMBOrchestrator # "Pretty" name
+      CodeUri: ./
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        WorkflowTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt WorkflowQueue.Arn
+      Environment:
+        Variables:
+          DB_NAME: !Ref DBName 
+          DB_HOST: !GetAtt EvoMindDB.Endpoint.Address
+          DB_USER: !Ref DBUser  
+          DB_PASSWORD: !Ref DBPassword
+
+# -----------------------------------------------------------------------------
+# Outputs — merged into single block             FIX 2: duplicate Outputs removed
+# -----------------------------------------------------------------------------
 Outputs:
+
+  ApiBaseUrl:
+    Description: 'API Gateway base URL — append /api/v1/{layer}/{route}'
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiBaseUrl'
+
   RDSEndpoint:
-    Description: "PostgreSQL Endpoint for Excel connection"
+    Description: 'PostgreSQL endpoint for direct connections (bastion / Excel)'
     Value: !GetAtt EvoMindDB.Endpoint.Address
-  ApiUrl:
-    Description: "URL for API Gateway"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/execute"
+
+  SlackbotFunctionArn:
+    Value: !GetAtt SlackbotFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SlackbotFunctionArn'
+
+  ProcFunctionArn:
+    Value: !GetAtt ProcFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProcFunctionArn'
+
+  ServFunctionArn:
+    Value: !GetAtt ServFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ServFunctionArn'
+
+  WorkflowQueueUrl:
+    Value: !Ref WorkflowQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-WorkflowQueueUrl'
+
+  SlackResultsQueueUrl:
+    Value: !Ref SlackResultsQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-SlackResultsQueueUrl'
+ 
