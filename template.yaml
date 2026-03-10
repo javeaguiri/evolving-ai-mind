@@ -473,7 +473,7 @@ Resources:
       BuildProperties:
         Minify: false
         Target: es2022
-       Format: esm
+        Format: esm
         OutExtension:
           - .js=.mjs
         EntryPoints:
