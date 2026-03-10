@@ -39,10 +39,6 @@ async function checkDb(connectionString, label) {
  * @param {ReturnType<import('../../shared/ping-utils.mjs').parseEvent>} req
  */
 export async function handle(req) {
- 
-  // DEBUG — remove after confirming connection string is correct	
-  console.log('PGC_DATABASE_URL:', process.env.PGC_DATABASE_URL?.substring(0, 30) + '...');
-  console.log('PGD_DATABASE_URL:', process.env.PGD_DATABASE_URL?.substring(0, 30) + '...');
   
   console.info('ping-db', { correlationId: req.correlationId });
 
