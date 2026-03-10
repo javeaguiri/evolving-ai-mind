@@ -274,7 +274,6 @@ Resources:
       DBSubnetGroupName: !Ref EvoMindDBSubnetGroup
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
-      PubliclyAccessible: false 
       AllocatedStorage: '20'
 
   BastionHost:
