@@ -311,7 +311,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-slackbot
       Description: 'UI layer — Slack slash commands and interactive callbacks'
-      Handler: src/ui/slackbot/handler.handler
+      Handler: handler.handler
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching
@@ -329,6 +329,8 @@ Resources:
         Minify: false
         Target: es2022
         Format: esm
+        OutExtension:
+          - .js=.mjs
         EntryPoints:
           - src/ui/slackbot/handler.mjs
 
@@ -342,7 +344,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-proc
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
-      Handler: src/proc/handler.handler
+      Handler: handler.handler
       # PROC needs permission to invoke other Lambdas and write to SQS
       Policies:
         - SQSSendMessagePolicy:
@@ -365,6 +367,8 @@ Resources:
         Minify: false
         Target: es2022
         Format: esm
+        OutExtension:
+          - .js=.mjs
         EntryPoints:
           - src/proc/handler.mjs
 
@@ -378,7 +382,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-serv
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
-      Handler: src/serv/handler.handler
+      Handler: handler.handler
       Events:
         ServProxy:
           Type: Api
@@ -391,6 +395,8 @@ Resources:
         Minify: false
         Target: es2022
         Format: esm
+        OutExtension:
+          - .js=.mjs 
         EntryPoints:
           - src/serv/handler.mjs
 
@@ -403,7 +409,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-slack-callback-listener
       Description: 'Consumes SQS SlackResults and posts threaded Slack messages'
-      Handler: src/ui/slackbot/callback.handler
+      Handler: handler.handlerr
       Policies:
         - SQSPollerPolicy:
             QueueName: !GetAtt SlackResultsQueue.QueueName
@@ -423,6 +429,8 @@ Resources:
         Minify: false
         Target: es2022
         Format: esm
+        OutExtension:
+          - .js=.mjs
         EntryPoints:
           - src/ui/slackbot/callback.mjs
 
