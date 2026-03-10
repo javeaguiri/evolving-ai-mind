@@ -399,6 +399,8 @@ Resources:
           - .js=.mjs 
         EntryPoints:
           - src/serv/handler.mjs
+        External:
+          - pg
 
   # ===========================================================================
   # LAMBDA 4 — Slack Callback Listener  (SQS-triggered, no HTTP events)
