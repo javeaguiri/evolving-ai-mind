@@ -402,7 +402,7 @@ Resources:
         External:
           - pg
         NodeModules:
-         - pg
+          - pg
 
   # ===========================================================================
   # LAMBDA 4 — Slack Callback Listener  (SQS-triggered, no HTTP events)
