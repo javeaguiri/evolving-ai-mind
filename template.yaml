@@ -347,16 +347,6 @@ Resources:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
-      # PROC needs permission to invoke other Lambdas and write to SQS
-      Policies:
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt WorkflowQueue.QueueName
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt SlackResultsQueue.QueueName
-        - Statement:
-            - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:evolving-mind-ai-*'
       Events:
         ProcProxy:
           Type: Api
@@ -426,11 +416,6 @@ Resources:
         Variables:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
-      Policies:
-        - SQSPollerPolicy:
-            QueueName: !GetAtt SlackResultsQueue.QueueName
-        - SQSSendMessagePolicy:
-            QueueName: !GetAtt SlackResultsDLQ.QueueName     # FIX 3: was SlackErrorsQueue (undefined)
       Events:
         SlackResultsTrigger:
           Type: SQS
