@@ -7,7 +7,7 @@
 // If this fails → DB connection string in SSM, VPC/security group,
 // or ServFunction config issue.
 
-import { ok, err } from '../../shared/ping-utils.mjs';
+import { ok, err } from '../shared/ping-utils.mjs';
 import pg from 'pg';
 
 const { Client } = pg;

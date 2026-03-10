@@ -8,7 +8,7 @@
 //
 // Preserves the Perplexity sonar + fetch pattern from the original ping.mjs.
 
-import { ok, err } from '../../shared/ping-utils.mjs';
+import { ok, err } from '../shared/ping-utils.mjs';
 
 const PERPLEXITY_URL = 'https://api.perplexity.ai/chat/completions';
 
