@@ -383,7 +383,7 @@ Resources:
       FunctionName: evolving-mind-ai-serv
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
       Handler: handler.handler
-      CodeUri: src/serv/
+      CodeUri: ./
       Events:
         ServProxy:
           Type: Api
@@ -399,9 +399,9 @@ Resources:
         OutExtension:
           - .js=.mjs 
         EntryPoints:
-          - handler.mjs
-        External:
-          - pg
+          - src/serv/handler.mjs
+        Banner:
+          - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
 
   # ===========================================================================
   # LAMBDA 4 — Slack Callback Listener  (SQS-triggered, no HTTP events)
