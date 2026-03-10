@@ -19,15 +19,6 @@ Globals:
     Environment:
       Variables:
         LOG_LEVEL: info
-        # -- LLM --------------------------------------------------------------
-        LLM_API_KEY:      '{{resolve:sam:/evolving-mind-ai/llm-api-key}}'        
-        # -- Postgres ---------------------------------------------------------
-        PGC_DATABASE_URL: '{{resolve:sam:/evolving-mind-ai/pgc-database-url}}'
-        PGD_DATABASE_URL: '{{resolve:sam:/evolving-mind-ai/pgd-database-url}}'
-        # -- Slack -------------------------------------------------------------
-        SLACK_BOT_TOKEN:  '{{resolve:sam:/evolving-mind-ai/slack-bot-token}}'
-        SLACK_SIGNING_SECRET: '{{resolve:sam:/evolving-mind-ai/slack-signing-secret}}'
-        # -- SQS (populated via !Ref after queue resources are declared) -------
         SQS_WORKFLOW_URL:       !Ref WorkflowQueue
         SQS_SLACK_RESULTS_URL:  !Ref SlackResultsQueue
   Api:
@@ -37,7 +28,6 @@ Globals:
       AllowHeaders: "'Content-Type,X-Correlation-Id,Authorization'"
       AllowOrigin: "'*'" 
       
-
 # -----------------------------------------------------------------------------
 # Parameters
 # -----------------------------------------------------------------------------
@@ -312,6 +302,10 @@ Resources:
       FunctionName: evolving-mind-ai-slackbot
       Description: 'UI layer — Slack slash commands and interactive callbacks'
       Handler: handler.handler
+      Environment:
+        Variables:
+          SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
+          SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching
@@ -345,6 +339,11 @@ Resources:
       FunctionName: evolving-mind-ai-proc
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
       Handler: handler.handler
+      Environment:
+        Variables:
+          LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
+          SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       # PROC needs permission to invoke other Lambdas and write to SQS
       Policies:
         - SQSSendMessagePolicy:
@@ -383,7 +382,10 @@ Resources:
       FunctionName: evolving-mind-ai-serv
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
       Handler: handler.handler
-      CodeUri: ./
+      Environment:
+        Variables:
+          PGC_DATABASE_URL:     '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
+          PGD_DATABASE_URL:     '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
       Events:
         ServProxy:
           Type: Api
@@ -413,6 +415,10 @@ Resources:
       FunctionName: evolving-mind-ai-slack-callback-listener
       Description: 'Consumes SQS SlackResults and posts threaded Slack messages'
       Handler: handler.handlerr
+      Environment:
+        Variables:
+          SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
+          SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       Policies:
         - SQSPollerPolicy:
             QueueName: !GetAtt SlackResultsQueue.QueueName
