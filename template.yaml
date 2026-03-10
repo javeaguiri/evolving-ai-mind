@@ -383,6 +383,7 @@ Resources:
       FunctionName: evolving-mind-ai-serv
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
       Handler: handler.handler
+      CodeUri: src/serv/
       Events:
         ServProxy:
           Type: Api
@@ -398,10 +399,8 @@ Resources:
         OutExtension:
           - .js=.mjs 
         EntryPoints:
-          - src/serv/handler.mjs
+          - handler.mjs
         External:
-          - pg
-        NodeModules:
           - pg
 
   # ===========================================================================

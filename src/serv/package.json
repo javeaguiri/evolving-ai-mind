@@ -1,0 +1,8 @@
+{
+  "name": "evolving-mind-ai-serv",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}
