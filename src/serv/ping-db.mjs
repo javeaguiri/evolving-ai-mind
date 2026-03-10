@@ -17,7 +17,13 @@ const { Client } = pg;
  * Returns { reachable, version } — never throws.
  */
 async function checkDb(connectionString, label) {
-  const client = new Client({ connectionString, connectionTimeoutMillis: 5000 });
+  const client = new Client({
+    connectionString,
+    connectionTimeoutMillis: 5000,
+    ssl: {
+      rejectUnauthorized: false   // accepts RDS self-signed cert
+    }
+  });
   try {
     await client.connect();
     const result = await client.query('SELECT version()');
