@@ -300,6 +300,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-slackbot
       Description: 'UI layer — Slack slash commands and interactive callbacks'
+      Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
       Environment:
         Variables:
@@ -339,6 +340,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-proc
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
+      Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
       Environment:
         Variables:
@@ -384,6 +386,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-serv
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
+      Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
       Environment:
         Variables:
@@ -417,6 +420,7 @@ Resources:
     Properties:
       FunctionName: evolving-mind-ai-slack-callback-listener
       Description: 'Consumes SQS SlackResults and posts threaded Slack messages'
+      Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handlerr
       Environment:
         Variables:
