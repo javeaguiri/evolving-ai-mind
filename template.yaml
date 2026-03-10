@@ -83,6 +83,13 @@ Resources:
                   - !GetAtt WorkflowQueue.Arn
                   - !GetAtt SlackResultsQueue.Arn
                   - !GetAtt SchemaQueue.Arn
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:evolving-mind-ai-*'
 
   # --- SQS QUEUES ---
   SchemaQueue:
@@ -317,6 +324,7 @@ Resources:
         Variables:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
+          PROC_FUNCTION_NAME:   !Ref ProcFunction
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching

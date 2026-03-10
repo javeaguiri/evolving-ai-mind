@@ -6,8 +6,9 @@
 // Add a new case for each new Slack command.
 
 import { parseEvent, err } from '../../shared/ping-utils.mjs';
-import { handle as pingApi } from './ping.mjs';
-import { handle as pingSqs } from './ping-sqs.mjs';
+import { handle as pingApi  } from './ping.mjs';
+import { handle as pingSqs  } from './ping-sqs.mjs';
+import { handle as pingLlm  } from './ping-llm.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway for every
@@ -19,6 +20,7 @@ export async function handler(event) {
   switch (req.route) {
     case 'ping-api': return pingApi(req);
     case 'ping-sqs': return pingSqs(req);
+    case 'ping-llm': return pingLlm(req);
 
     // Future routes:
     // case 'commands': return commands(req);
