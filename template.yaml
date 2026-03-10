@@ -422,7 +422,7 @@ Resources:
       FunctionName: evolving-mind-ai-slack-callback-listener
       Description: 'Consumes SQS SlackResults and posts threaded Slack messages'
       Role: !GetAtt LambdaExecutionRole.Arn
-      Handler: handler.handlerr
+      Handler: callback.handler
       Environment:
         Variables:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
