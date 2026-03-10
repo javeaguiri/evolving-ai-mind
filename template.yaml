@@ -72,6 +72,17 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole 
+      Policies:
+        - PolicyName: SQSSendMessagePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  - !GetAtt WorkflowQueue.Arn
+                  - !GetAtt SlackResultsQueue.Arn
+                  - !GetAtt SchemaQueue.Arn
 
   # --- SQS QUEUES ---
   SchemaQueue:
