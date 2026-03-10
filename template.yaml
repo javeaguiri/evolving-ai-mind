@@ -20,13 +20,13 @@ Globals:
       Variables:
         LOG_LEVEL: info
         # -- LLM --------------------------------------------------------------
-        LLM_API_KEY: !Sub '{{resolve:ssm-secure:/evolving-mind-ai/llm-api-key}}'        
+        LLM_API_KEY: !Sub '{{resolve:sam:/evolving-mind-ai/llm-api-key}}'        
         # -- Postgres ---------------------------------------------------------
-        PGC_DATABASE_URL: !Sub '{{resolve:ssm-secure:/evolving-mind-ai/pgc-database-url}}'
-        PGD_DATABASE_URL: !Sub '{{resolve:ssm-secure:/evolving-mind-ai/pgd-database-url}}'
+        PGC_DATABASE_URL: !Sub '{{resolve:sam:/evolving-mind-ai/pgc-database-url}}'
+        PGD_DATABASE_URL: !Sub '{{resolve:sam:/evolving-mind-ai/pgd-database-url}}'
         # -- Slack -------------------------------------------------------------
-        SLACK_BOT_TOKEN:    !Sub '{{resolve:ssm-secure:/evolving-mind-ai/slack-bot-token}}'
-        SLACK_SIGNING_SECRET: !Sub '{{resolve:ssm-secure:/evolving-mind-ai/slack-signing-secret}}'
+        SLACK_BOT_TOKEN:    !Sub '{{resolve:sam:/evolving-mind-ai/slack-bot-token}}'
+        SLACK_SIGNING_SECRET: !Sub '{{resolve:sam:/evolving-mind-ai/slack-signing-secret}}'
         # -- SQS (populated via !Ref after queue resources are declared) -------
         SQS_WORKFLOW_URL:       !Ref WorkflowQueue
         SQS_SLACK_RESULTS_URL:  !Ref SlackResultsQueue
