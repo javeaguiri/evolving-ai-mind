@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
 // src/shared/ping-utils.mjs
 // Shared utilities for all Lambda handlers.
 // Parses the incoming API Gateway event into a normalised payload,

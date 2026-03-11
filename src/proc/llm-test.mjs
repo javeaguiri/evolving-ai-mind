@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
 // llm-test.mjs - simple Perplexity LLM test endpoint (JSON response)
 
 import Perplexity from '@perplexity-ai/perplexity_ai';
