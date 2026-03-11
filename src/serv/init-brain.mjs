@@ -20,8 +20,8 @@ import PGC_Schema       from './templates/pgc/PGC_Schema.json'       with { type
 import PGC_TableMap     from './templates/pgc/PGC_TableMap.json'     with { type: 'json' };
 import PGC_EntitySchema from './templates/pgc/PGC_EntitySchema.json' with { type: 'json' };
 import PGC_DomainHelp   from './templates/pgc/PGC_DomainHelp.json'   with { type: 'json' };
-import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'   with { type: 'json' };
-import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json' with { type: 'json' };
+import seedSchema       from './templates/pgc/seeds/PGC_Schema.json'   with { type: 'json' };
+import seedTableMap     from './templates/pgc/seeds/PGC_TableMap.json' with { type: 'json' };
 
 const { Client } = pg;
 
