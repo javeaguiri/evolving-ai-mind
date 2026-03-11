@@ -47,6 +47,9 @@ async function processRecord(record) {
         await postPingSqsResult(message);
         break;
 
+      case 'PING_E2E_RESULT':
+        await postPingE2eResult(message);
+        break;
       // Future result types added here:
       // case 'FLOW_RESULT': await postFlowResult(message); break;
 
@@ -95,6 +98,34 @@ async function postPingSqsResult(message) {
 
   console.info('callback: Slack message posted', {
     channel:   slackChannel,
+    workflowId: message.workflowId,
+  });
+}
+
+async function postPingE2eResult(message) {
+  const { slackChannel, slackThreadTs, result } = message;
+  await slack.chat.postMessage({
+    channel:   slackChannel,
+    thread_ts: slackThreadTs || undefined,
+    text:      result.message,
+    blocks: [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: result.message },
+      },
+      {
+        type: 'context',
+        elements: [
+          {
+            type: 'mrkdwn',
+            text: `workflowId: ${result.workflowId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
+          },
+        ],
+      },
+    ],
+  });
+  console.info('callback: ping-e2e Slack message posted', {
+    channel:    slackChannel,
     workflowId: message.workflowId,
   });
 }

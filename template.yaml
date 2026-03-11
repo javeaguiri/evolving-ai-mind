@@ -482,6 +482,7 @@ Resources:
       Environment:
         Variables:
           SQS_SLACK_RESULTS_URL: !Ref SlackResultsQueue
+          SERV_FUNCTION_NAME:    !Ref ServFunction 
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

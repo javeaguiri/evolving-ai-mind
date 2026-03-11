@@ -4,14 +4,16 @@
 // src/proc/step-orchestrator.mjs
 // SQS-triggered Lambda — consumes SYSSQSWorkflow messages.
 // For ping-sqs: receives hop 1, sends hop 2 to SYSSQSSlackResults.
+// For ping-e2e: receives hop 1, invokes ServFunction (ping-db), sends result to SYSSQSSlackResults.
 // For future workflows: routes to the appropriate workflow executor.
 //
 // This is the PROC layer's async backbone — every workflow step
 // passes through here.
-
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { LambdaClient, InvokeCommand }   from '@aws-sdk/client-lambda';
 
 const sqs = new SQSClient({});
+const lambda = new LambdaClient({});
 
 export async function handler(event) {
   const results = [];
@@ -57,7 +59,9 @@ async function processRecord(record) {
       case 'PING_SQS':
         await handlePingSqs(message);
         break;
-
+      case 'PING_E2E':
+        await handlePingE2e(message);
+        break;
       // Future workflow types added here:
       // case 'RUN_FLOW': await handleRunFlow(message); break;
 
@@ -98,6 +102,45 @@ async function handlePingSqs(message) {
       },
     }),
   }));
-
   console.info('ping-sqs hop 2 enqueued', { workflowId: message.workflowId });
+}
+
+async function handlePingE2e(message) {
+  // Invoke ServFunction synchronously — ping-db returns RDS version string
+  const invokeResp = await lambda.send(new InvokeCommand({
+    FunctionName:   process.env.SERV_FUNCTION_NAME,
+    InvocationType: 'RequestResponse',
+    Payload:        JSON.stringify({
+      httpMethod: 'GET',
+      path:       '/api/v1/serv/ping-db',
+      pathParameters: { proxy: 'ping-db' },
+      headers:    {},
+      body:       null,
+    }),
+  }));
+
+  const body    = JSON.parse(Buffer.from(invokeResp.Payload).toString());
+  const payload = JSON.parse(body.body);
+
+  // payload.pgc.version is the full version string from RDS
+  const version = payload?.pgc?.version ?? payload?.pgd?.version ?? 'unknown';
+
+  await sqs.send(new SendMessageCommand({
+    QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
+    MessageBody: JSON.stringify({
+      type:          'PING_E2E_RESULT',
+      workflowId:    message.workflowId,
+      slackChannel:  message.slackChannel,
+      slackUser:     message.slackUser,
+      slackThreadTs: message.slackThreadTs,
+      result: {
+        success:        true,
+        message:        `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
+        workflowId:     message.workflowId,
+        enqueuedAt:     message.enqueuedAt,
+        completedAt:    new Date().toISOString(),
+      },
+    }),
+  }));
+  console.info('ping-e2e result enqueued', { workflowId: message.workflowId, version });
 }
