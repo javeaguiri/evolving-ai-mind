@@ -5,13 +5,16 @@
 // Handles POST /api/v1/ui/slack/ping-sqs
 //
 // Validates: SlackbotFunction → SQS → ProcStepOrchestrator → SQS → SlackCallbackListener → Slack
-// Response:  Immediate ACK to Slack, threaded reply arrives ~5-10s later.
+// Response:  Immediate ACK posted via chat.postMessage (returns ts for threading).
+//            Threaded reply arrives ~5-10s later.
 // If this fails after ping-api passes → SQS IAM, queue config, or orchestrator issue.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { ok, err } from '../../shared/ping-utils.mjs';
+import { WebClient } from '@slack/web-api';
+import { err } from '../../shared/ping-utils.mjs';
 
 const sqs = new SQSClient({});
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 export async function handle(req) {
   if (req.method !== 'POST') {
@@ -21,9 +24,22 @@ export async function handle(req) {
   const workflowId  = req.correlationId;
   const slackUser   = req.body?.user_id    || 'unknown';
   const slackChannel = req.body?.channel_id || 'unknown';
-  const threadTs    = req.body?.thread_ts  || null;
 
-  console.info('ping-sqs enqueue', { workflowId, slackUser, slackChannel });
+  console.info('ping-sqs start', { workflowId, slackUser, slackChannel });
+
+  // Post ACK via chat.postMessage so Slack returns a ts we can thread against.
+  // Slash commands give us no thread_ts — this message becomes the thread root.
+  let ackTs;
+  try {
+    const ack = await slack.chat.postMessage({
+      channel: slackChannel,
+      text:    '⏳ ping-sqs started — watch this thread for results',
+    });
+    ackTs = ack.ts;
+  } catch (error) {
+    console.error('ping-sqs: Slack ACK failed', error.message);
+    return err(500, `Slack ACK failed: ${error.message}`, req.correlationId);
+  }
 
   try {
     await sqs.send(new SendMessageCommand({
@@ -33,7 +49,7 @@ export async function handle(req) {
         workflowId,
         slackChannel,
         slackUser,
-        slackThreadTs: threadTs,
+        slackThreadTs: ackTs,   // callback threads reply to this message
         hop:           1,
         enqueuedAt:    new Date().toISOString(),
       }),
@@ -43,12 +59,7 @@ export async function handle(req) {
     return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
   }
 
-  // Immediate ACK — Slack requires response within 3 seconds
-  return ok({
-    success:       true,
-    message:       '⏳ ping-sqs started — watch this thread for results',
-    workflowId,
-    correlationId: req.correlationId,
-    timestamp:     new Date().toISOString(),
-  }, req.correlationId);
+  // Return empty 200 — Slack requires a response within 3s but we've already
+  // posted the visible ACK above, so no body is needed here.
+  return { statusCode: 200, body: '' };
 }
