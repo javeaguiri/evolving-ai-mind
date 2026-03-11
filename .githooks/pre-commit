@@ -1,0 +1,22 @@
+#!/bin/sh
+# Enforce AGPL v3 copyright header on all staged .mjs files
+
+MISSING=""
+
+for file in $(git diff --cached --name-only --diff-filter=ACM | grep '\.mjs$'); do
+  if ! head -2 "$file" | grep -q "AGPL"; then
+    MISSING="$MISSING\n  $file"
+  fi
+done
+
+if [ -n "$MISSING" ]; then
+  echo "❌ Missing AGPL v3 copyright header in:$MISSING"
+  echo ""
+  echo "Add these two lines at the top of each file:"
+  echo "// Copyright (c) 2026 Peter Emery. All rights reserved."
+  echo "// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0)."
+  echo "// See LICENSE file in the project root for full license terms."
+  exit 1
+fi
+
+exit 0
