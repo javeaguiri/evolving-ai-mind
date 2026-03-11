@@ -17,22 +17,16 @@ import { bootstrap }          from './init-brain.mjs';
  * /api/v1/serv/* request.
  */
 export async function handler(event) {
-  // Bootstrap PGC tables on cold start — idempotent, skipped on warm containers
   await bootstrap();
 
-  const req = parseEvent(event);
-
-  // schema routes have a subRoute — e.g. /serv/schema/createTable
-  // inject it into req so schema.mjs dispatcher can use it
-  req.subRoute = req.path.split('/').filter(Boolean).pop();
-
+  const req      = parseEvent(event);
+  const segments = req.path.split('/').filter(Boolean);
+  req.subRoute   = segments.pop();          // 'listTables'
+  req.route      = segments.pop() || req.subRoute;  // 'schema' or 'ping-db'
+  
   switch (req.route) {
     case 'ping-db': return pingDb(req);
     case 'schema':  return schema(req);
-    // Future routes:
-    // case 'table':  return table(req);
-    // case 'query':  return query(req);
-    // case 'entity': return entity(req);
     default:
       return err(404, `SERV route "${req.route}" not found`, req.correlationId);
   }
