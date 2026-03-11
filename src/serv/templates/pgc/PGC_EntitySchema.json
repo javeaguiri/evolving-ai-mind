@@ -1,0 +1,21 @@
+{
+  "table_name": "PGC_EntitySchema",
+  "target": "pgc",
+  "description": "Defines business entities that span multiple PGD tables. SERV-Entity reads this to build jsonb_agg queries. Example: a Recipe entity spans PGD_Recipes, PGD_Ingredients, PGD_Steps.",
+  "columns": [
+    { "name": "id",            "type": "serial",                         "primaryKey": true },
+    { "name": "entity_name",   "type": "text",    "nullable": false,     "unique": true },
+    { "name": "description",   "type": "text",    "nullable": true       },
+    { "name": "root_table",    "type": "text",    "nullable": false      },
+    { "name": "joins",         "type": "jsonb",   "nullable": false,     "default": "'[]'::jsonb" },
+    { "name": "aggregations",  "type": "jsonb",   "nullable": false,     "default": "'[]'::jsonb" },
+    { "name": "filters",       "type": "jsonb",   "nullable": true,      "default": "'[]'::jsonb" },
+    { "name": "created_at",    "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",    "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [],
+  "triggers": [
+    { "name": "trg_pgc_entityschema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

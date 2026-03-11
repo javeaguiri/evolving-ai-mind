@@ -1,0 +1,21 @@
+{
+  "table_name": "PGC_DomainHelp",
+  "target": "pgc",
+  "description": "User-facing command aliases and help text per domain. Populated at runtime when a domain is created. Powers /help {domain} responses.",
+  "columns": [
+    { "name": "id",           "type": "serial",      "primaryKey": true },
+    { "name": "domain",       "type": "text",        "nullable": false },
+    { "name": "aliases",      "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+    { "name": "description",  "type": "text",        "nullable": true },
+    { "name": "commands",     "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+    { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [
+    { "type": "unique", "name": "uq_domainhelp_domain", "columns": ["domain"] }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_domainhelp_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

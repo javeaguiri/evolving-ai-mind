@@ -1,0 +1,34 @@
+[
+  {
+    "table_name":   "PGC_Schema",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_TableMap",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_EntitySchema",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_DomainHelp",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  }
+]

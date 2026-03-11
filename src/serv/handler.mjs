@@ -9,23 +9,30 @@
 
 import { parseEvent, err } from '../shared/ping-utils.mjs';
 import { handle as pingDb } from './ping-db.mjs';
+import { handle as schema }   from './schema.mjs';
+import { bootstrap }          from './init-brain.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway for every
  * /api/v1/serv/* request.
  */
 export async function handler(event) {
+  // Bootstrap PGC tables on cold start — idempotent, skipped on warm containers
+  await bootstrap();
+
   const req = parseEvent(event);
 
+  // schema routes have a subRoute — e.g. /serv/schema/createTable
+  // inject it into req so schema.mjs dispatcher can use it
+  req.subRoute = req.path.split('/').filter(Boolean).pop();
+
   switch (req.route) {
-    case 'ping-db':
-      return pingDb(req);
-
-    // Future routes added here:
+    case 'ping-db': return pingDb(req);
+    case 'schema':  return schema(req);
+    // Future routes:
     // case 'table':  return table(req);
+    // case 'query':  return query(req);
     // case 'entity': return entity(req);
-    // case 'schema': return schema(req);
-
     default:
       return err(404, `SERV route "${req.route}" not found`, req.correlationId);
   }

@@ -1,0 +1,24 @@
+{
+  "table_name": "PGC_Schema",
+  "target": "pgc",
+  "description": "Registry of all table definitions — system bootstrap and user domain schemas. Every table in the system has a row here.",
+  "columns": [
+    { "name": "id",          "type": "serial",                        "primaryKey": true },
+    { "name": "table_name",  "type": "text",    "nullable": false,    "unique": true },
+    { "name": "target",      "type": "text",    "nullable": false     },
+    { "name": "description", "type": "text",    "nullable": true      },
+    { "name": "columns",     "type": "jsonb",   "nullable": false     },
+    { "name": "foreign_keys","type": "jsonb",   "nullable": true,     "default": "'[]'::jsonb" },
+    { "name": "constraints", "type": "jsonb",   "nullable": true,     "default": "'[]'::jsonb" },
+    { "name": "triggers",    "type": "jsonb",   "nullable": true,     "default": "'[]'::jsonb" },
+    { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "constraints": [
+    { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_schema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ],
+  "foreign_keys": []
+}

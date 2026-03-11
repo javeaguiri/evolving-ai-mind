@@ -1,0 +1,99 @@
+[
+  {
+    "table_name": "PGC_Schema",
+    "target": "pgc",
+    "description": "Registry of all table definitions — system bootstrap and user domain schemas. Self-describing.",
+    "columns": [
+      { "name": "id",           "type": "serial",      "primaryKey": true },
+      { "name": "table_name",   "type": "text",        "nullable": false, "unique": true },
+      { "name": "target",       "type": "text",        "nullable": false },
+      { "name": "description",  "type": "text",        "nullable": true },
+      { "name": "columns",      "type": "jsonb",       "nullable": false },
+      { "name": "foreign_keys", "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+      { "name": "constraints",  "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+      { "name": "triggers",     "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
+      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+    ],
+    "triggers": [
+      { "name": "trg_pgc_schema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+    ]
+  },
+  {
+    "table_name": "PGC_TableMap",
+    "target": "pgc",
+    "description": "Registry of all active tables that SERV-Table is permitted to write to. Security gatekeeper.",
+    "columns": [
+      { "name": "id",           "type": "serial",      "primaryKey": true },
+      { "name": "table_name",   "type": "text",        "nullable": false, "unique": true },
+      { "name": "target",       "type": "text",        "nullable": false },
+      { "name": "schema_id",    "type": "integer",     "nullable": false },
+      { "name": "allow_insert", "type": "boolean",     "nullable": false, "default": "true" },
+      { "name": "allow_update", "type": "boolean",     "nullable": false, "default": "true" },
+      { "name": "allow_delete", "type": "boolean",     "nullable": false, "default": "false" },
+      { "name": "views",        "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
+      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+    ],
+    "foreign_keys": [
+      {
+        "name": "fk_tablemap_schema",
+        "column": "schema_id",
+        "references": { "table": "PGC_Schema", "column": "id" },
+        "onDelete": "RESTRICT"
+      }
+    ],
+    "constraints": [
+      { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+    ],
+    "triggers": [
+      { "name": "trg_pgc_tablemap_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+    ]
+  },
+  {
+    "table_name": "PGC_EntitySchema",
+    "target": "pgc",
+    "description": "Defines business entities spanning multiple PGD tables. SERV-Entity reads this to build jsonb_agg queries.",
+    "columns": [
+      { "name": "id",           "type": "serial",      "primaryKey": true },
+      { "name": "entity_name",  "type": "text",        "nullable": false, "unique": true },
+      { "name": "description",  "type": "text",        "nullable": true },
+      { "name": "root_table",   "type": "text",        "nullable": false },
+      { "name": "joins",        "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+      { "name": "aggregations", "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+      { "name": "filters",      "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
+      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+    ],
+    "foreign_keys": [],
+    "constraints": [],
+    "triggers": [
+      { "name": "trg_pgc_entityschema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+    ]
+  },
+  {
+    "table_name": "PGC_DomainHelp",
+    "target": "pgc",
+    "description": "User-facing command aliases and help text per domain. Powers /help {domain} responses.",
+    "columns": [
+      { "name": "id",          "type": "serial",      "primaryKey": true },
+      { "name": "domain",      "type": "text",        "nullable": false, "unique": true },
+      { "name": "aliases",     "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+      { "name": "description", "type": "text",        "nullable": true },
+      { "name": "commands",    "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+      { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
+      { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      { "type": "unique", "name": "uq_domainhelp_domain", "columns": ["domain"] }
+    ],
+    "triggers": [
+      { "name": "trg_pgc_domainhelp_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+    ]
+  }
+]

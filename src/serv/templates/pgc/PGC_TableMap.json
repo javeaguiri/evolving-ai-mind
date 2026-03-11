@@ -1,0 +1,31 @@
+{
+  "table_name": "PGC_TableMap",
+  "target": "pgc",
+  "description": "Registry of all active tables that SERV-Table is permitted to write to. Acts as a security gatekeeper — tables not listed here are rejected.",
+  "columns": [
+    { "name": "id",            "type": "serial",                         "primaryKey": true },
+    { "name": "table_name",    "type": "text",    "nullable": false,     "unique": true },
+    { "name": "target",        "type": "text",    "nullable": false      },
+    { "name": "schema_id",     "type": "integer", "nullable": false      },
+    { "name": "allow_insert",  "type": "boolean", "nullable": false,     "default": "true" },
+    { "name": "allow_update",  "type": "boolean", "nullable": false,     "default": "true" },
+    { "name": "allow_delete",  "type": "boolean", "nullable": false,     "default": "false" },
+    { "name": "views",         "type": "jsonb",   "nullable": true,      "default": "'[]'::jsonb" },
+    { "name": "created_at",    "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",    "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_tablemap_schema",
+      "column": "schema_id",
+      "references": { "table": "PGC_Schema", "column": "id" },
+      "onDelete": "RESTRICT"
+    }
+  ],
+  "constraints": [
+    { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_tablemap_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}
