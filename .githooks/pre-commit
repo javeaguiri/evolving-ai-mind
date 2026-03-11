@@ -13,7 +13,7 @@ if [ -n "$MISSING" ]; then
   echo "❌ Missing AGPL v3 copyright header in:$MISSING"
   echo ""
   echo "Add these two lines at the top of each file:"
-  echo "// Copyright (c) 2026 Peter Emery. All rights reserved."
+  echo "// Copyright (c) 2026 Javea Guiri. All rights reserved."
   echo "// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0)."
   echo "// See LICENSE file in the project root for full license terms."
   exit 1

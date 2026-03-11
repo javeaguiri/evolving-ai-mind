@@ -1,4 +1,6 @@
-Copyright (C) 2026 Javea Guiri All rights reserved. Unauthorized copying or distribution of this or any file in this repo via any medium is strictly prohibited. Collaborators are welcome but require permission.
+Copyright (c) 2026 Javea Guiri. All rights reserved.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See LICENSE file in the project root for full license terms.
 
 🧠 evolving-mind-ai
 Self-Evolving, Low-Cost Cognitive Automation System
@@ -376,4 +378,6 @@ export function parseUnifiedPayload(event) {
 Status: Phase 1 in progress — building AWS-PostgreSQL-Lambda integration.
 Repo Presentation: Designed for GitHub with full Markdown styling, Mermaid diagrams, and YAML clarity for developers.
 
-Copyright (C) 2026 Javea Guiri All rights reserved. Unauthorized copying or distribution of this or any file in this repo via any medium is strictly prohibited. Collaborators are welcome but require permission.
+Copyright (c) 2026 Javea Guiri. All rights reserved.
+Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+See LICENSE file in the project root for full license terms.
