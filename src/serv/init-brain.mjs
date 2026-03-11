@@ -199,7 +199,7 @@ export function buildCreateTableSQL(template) {
   // Triggers are separate statements — must run after CREATE TABLE
   const triggerStatements = (triggers || []).map(trg => `
     CREATE OR REPLACE TRIGGER "${trg.name}"
-      ${trg.timing} UPDATE ON "${table_name}"
+      ${trg.timing} ON "${table_name}"
       FOR EACH ROW EXECUTE FUNCTION ${trg.function};
   `.trim());
 
