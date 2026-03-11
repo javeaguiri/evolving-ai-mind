@@ -21,8 +21,9 @@ export async function handler(event) {
 
   const req      = parseEvent(event);
   const segments = req.path.split('/').filter(Boolean);
-  req.subRoute   = segments.pop();          // 'listTables'
-  req.route      = segments.pop() || req.subRoute;  // 'schema' or 'ping-db'
+  req.subRoute   = segments.pop();
+  const parent   = segments.pop();
+  req.route      = parent === 'serv' ? req.subRoute : parent;  
   
   switch (req.route) {
     case 'ping-db': return pingDb(req);
