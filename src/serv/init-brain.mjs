@@ -14,12 +14,16 @@
 // Never throws — returns { ok, error } so callers can decide how to handle failures.
 
 import pg           from 'pg';
-import { readFile } from 'fs/promises';
-import { join }     from 'path';
-import { fileURLToPath } from 'url';
+
+// Fixed — bundled at build time by esbuild
+import PGC_Schema       from './templates/pgc/PGC_Schema.json'       with { type: 'json' };
+import PGC_TableMap     from './templates/pgc/PGC_TableMap.json'     with { type: 'json' };
+import PGC_EntitySchema from './templates/pgc/PGC_EntitySchema.json' with { type: 'json' };
+import PGC_DomainHelp   from './templates/pgc/PGC_DomainHelp.json'   with { type: 'json' };
+import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'   with { type: 'json' };
+import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json' with { type: 'json' };
 
 const { Client } = pg;
-const __dirname  = fileURLToPath(new URL('.', import.meta.url));
 
 // ---------------------------------------------------------------------------
 // SSL config — rejectUnauthorized: false accepts RDS self-signed cert.
@@ -38,10 +42,10 @@ let bootstrapComplete = false;
 // PGC_TableMap (which has a FK to PGC_Schema).
 // ---------------------------------------------------------------------------
 const PGC_TEMPLATES = [
-  'PGC_Schema.json',
-  'PGC_TableMap.json',
-  'PGC_EntitySchema.json',
-  'PGC_DomainHelp.json',
+  PGC_Schema,
+  PGC_TableMap,
+  PGC_EntitySchema,
+  PGC_DomainHelp,
 ];
 
 // ---------------------------------------------------------------------------
@@ -84,8 +88,8 @@ export async function bootstrap() {
     await installTriggerFunction(client);
 
     // Step 2 — create PGC system tables from templates
-    for (const filename of PGC_TEMPLATES) {
-      await createTableFromTemplate(client, filename);
+    for (const template of PGC_TEMPLATES) {
+      await createTableFromTemplate(client, template);
     }
 
     // Step 3 — seed PGC_Schema self-referential rows
@@ -101,7 +105,6 @@ export async function bootstrap() {
   } catch (error) {
     console.error('init-brain: bootstrap failed', error.message);
     return { ok: false, error: error.message };
-
   } finally {
     await client.end();
   }
@@ -135,12 +138,8 @@ async function installTriggerFunction(client) {
  * @param {pg.Client} client
  * @param {string}    filename  — e.g. 'PGC_Schema.json'
  */
-async function createTableFromTemplate(client, filename) {
-  const templatePath = join(__dirname, 'templates', 'pgc', filename);
-  const raw          = await readFile(templatePath, 'utf-8');
-  const template     = JSON.parse(raw);
-  const ddl          = buildCreateTableSQL(template);
-
+async function createTableFromTemplate(client, template) {
+  const ddl = buildCreateTableSQL(template);
   await client.query(ddl.createTable);
   console.info(`init-brain: table ready — ${template.table_name}`);
 
@@ -217,10 +216,7 @@ function resolveType(col) {
 }
 
 async function seedPGCSchema(client) {
-  const raw   = await readFile(join(__dirname, 'templates', 'pgc', 'seeds', 'seed_PGC_Schema.json'), 'utf-8');
-  const rows  = JSON.parse(raw);
-
-  for (const row of rows) {
+  for (const row of seedSchema) {
     await client.query(
       `INSERT INTO "PGC_Schema"
          (table_name, target, description, columns, foreign_keys, constraints, triggers)
@@ -239,11 +235,7 @@ async function seedPGCSchema(client) {
 }
 
 async function seedPGCTableMap(client) {
-  const raw  = await readFile(join(__dirname, 'templates', 'pgc', 'seeds', 'seed_PGC_TableMap.json'), 'utf-8');
-  const rows = JSON.parse(raw);
-
-  for (const row of rows) {
-    // Resolve schema_id from PGC_Schema
+  for (const row of seedTableMap) {
     const lookup = await client.query(
       `SELECT id FROM "PGC_Schema" WHERE table_name = $1`,
       [row.table_name]
@@ -252,15 +244,13 @@ async function seedPGCTableMap(client) {
       console.warn(`init-brain: seed_PGC_TableMap — no PGC_Schema row for ${row.table_name}, skipping`);
       continue;
     }
-    const schemaId = lookup.rows[0].id;
-
     await client.query(
       `INSERT INTO "PGC_TableMap"
          (table_name, target, schema_id, allow_insert, allow_update, allow_delete, views)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (table_name) DO NOTHING`,
       [
-        row.table_name, row.target, schemaId,
+        row.table_name, row.target, lookup.rows[0].id,
         row.allow_insert, row.allow_update, row.allow_delete,
         JSON.stringify(row.views),
       ]
