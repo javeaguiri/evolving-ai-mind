@@ -483,6 +483,7 @@ Resources:
         Variables:
           SQS_SLACK_RESULTS_URL: !Ref SlackResultsQueue
           SERV_FUNCTION_NAME:    !Ref ServFunction 
+          LLM_API_KEY:           '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

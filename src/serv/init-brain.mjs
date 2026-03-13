@@ -10,8 +10,8 @@
 //      Reads src/serv/templates/pgc/*.json → buildCreateTableSQL() → CREATE TABLE IF NOT EXISTS.
 //      Safe to call on every Lambda invocation — IF NOT EXISTS makes it idempotent.
 //
-// Called by: schema.mjs (and future table.mjs, query.mjs, entity.mjs)
-// Never throws — returns { ok, error } so callers can decide how to handle failures.
+// Called by: serv/handler.mjs (cold start), schema.mjs (getClient, buildCreateTableSQL)
+// Never throws — returns { ok, report, error } so callers decide how to handle failures.
 
 import pg           from 'pg';
 
@@ -36,6 +36,9 @@ const SSL_CONFIG = { rejectUnauthorized: false };
 // Subsequent invocations on a warm container skip the DDL checks entirely.
 // ---------------------------------------------------------------------------
 let bootstrapComplete = false;
+
+/** @type {BootstrapReport | null} Cached on warm containers — returned immediately. */
+let cachedReport = null;
 
 // ---------------------------------------------------------------------------
 // PGC template load order matters — PGC_Schema must exist before
@@ -68,17 +71,33 @@ export function getClient(connectionString) {
 }
 
 /**
+ * @typedef {Object} TableBootstrapResult
+ * @property {string}  table_name
+ * @property {'created' | 'already_existed'} status
+ */
+
+/**
+ * @typedef {Object} BootstrapReport
+ * @property {boolean}               freshEnvironment  — true if any table was newly created
+ * @property {TableBootstrapResult[]} tables            — one entry per PGC system table
+ * @property {string}                 bootstrappedAt    — ISO timestamp
+ */
+
+/**
  * Ensure all PGC system tables exist.
  * Safe to call on every Lambda invocation — skips on warm containers.
  *
- * @returns {Promise<{ ok: boolean, error?: string }>}
+ * @returns {Promise<{ ok: boolean, report?: BootstrapReport, error?: string, cached?: boolean }>}
  */
 export async function bootstrap() {
   if (bootstrapComplete) {
-    return { ok: true };
+    return { ok: true, report: cachedReport, cached: true };
   }
 
   const client = getClient(process.env.PGC_DATABASE_URL);
+
+  /** @type {TableBootstrapResult[]} */
+  const tableResults = [];
 
   try {
     await client.connect();
@@ -87,9 +106,10 @@ export async function bootstrap() {
     // Step 1 — install set_updated_at() trigger function
     await installTriggerFunction(client);
 
-    // Step 2 — create PGC system tables from templates
+    // Step 2 — create PGC system tables from templates, tracking new vs existing
     for (const template of PGC_TEMPLATES) {
-      await createTableFromTemplate(client, template);
+      const status = await createTableFromTemplate(client, template);
+      tableResults.push({ table_name: template[0].table_name, status });
     }
 
     // Step 3 — seed PGC_Schema self-referential rows
@@ -97,10 +117,26 @@ export async function bootstrap() {
 
     // Step 4 — seed PGC_TableMap gatekeeper rows
     await seedPGCTableMap(client);
-	
+
+    const freshEnvironment = tableResults.some(r => r.status === 'created');
+
+    /** @type {BootstrapReport} */
+    const report = {
+      freshEnvironment,
+      tables:         tableResults,
+      bootstrappedAt: new Date().toISOString(),
+    };
+
+    cachedReport      = report;
     bootstrapComplete = true;
-    console.info('init-brain: bootstrap complete');
-    return { ok: true };
+
+    if (freshEnvironment) {
+      console.info('init-brain: fresh environment detected — PGC tables created', report);
+    } else {
+      console.info('init-brain: bootstrap complete — all tables already existed');
+    }
+
+    return { ok: true, report };
 
   } catch (error) {
     console.error('init-brain: bootstrap failed', error.message);
@@ -133,19 +169,34 @@ async function installTriggerFunction(client) {
 }
 
 /**
- * Load a PGC template JSON file, build DDL, execute it.
+ * Check whether a table exists, then create it if not.
+ * Returns 'created' or 'already_existed' — used to build BootstrapReport.
  *
  * @param {pg.Client} client
- * @param {string}    filename  — e.g. 'PGC_Schema.json'
+ * @param {object[]}  templateArray  — JSON template is an array; first element holds table_name
+ * @returns {Promise<'created' | 'already_existed'>}
  */
-async function createTableFromTemplate(client, template) {
+async function createTableFromTemplate(client, templateArray) {
+  // Each PGC template JSON file is an array — bootstrap uses index 0
+  const template = Array.isArray(templateArray) ? templateArray[0] : templateArray;
+
+  // Check existence before CREATE TABLE IF NOT EXISTS so we can report accurately
+  const exists = await client.query(
+    `SELECT to_regclass($1::text) AS oid`,
+    [`"${template.table_name}"`]
+  );
+  const alreadyExisted = exists.rows[0].oid !== null;
+
   const ddl = buildCreateTableSQL(template);
   await client.query(ddl.createTable);
-  console.info(`init-brain: table ready — ${template.table_name}`);
 
   for (const triggerSQL of ddl.triggers) {
     await client.query(triggerSQL);
   }
+
+  const status = alreadyExisted ? 'already_existed' : 'created';
+  console.info(`init-brain: ${template.table_name} — ${status}`);
+  return status;
 }
 
 /**
@@ -208,7 +259,8 @@ export function buildCreateTableSQL(template) {
 
 /**
  * Resolve the PostgreSQL column type string.
- * Handles serial specially — serial implies NOT NULL so we skip that flag.
+ * Types are passed through verbatim from JSON
+ * e.g. serial, text, integer, jsonb, timestamptz
  */
 function resolveType(col) {
   return col.type;   // types are passed through verbatim from JSON
@@ -216,7 +268,9 @@ function resolveType(col) {
 }
 
 async function seedPGCSchema(client) {
-  for (const row of seedSchema) {
+  // seedSchema is the array from seed_PGC_Schema.json
+  const rows = Array.isArray(seedSchema) ? seedSchema : [seedSchema];
+  for (const row of rows) {
     await client.query(
       `INSERT INTO "PGC_Schema"
          (table_name, target, description, columns, foreign_keys, constraints, triggers)
@@ -235,7 +289,8 @@ async function seedPGCSchema(client) {
 }
 
 async function seedPGCTableMap(client) {
-  for (const row of seedTableMap) {
+  const rows = Array.isArray(seedTableMap) ? seedTableMap : [seedTableMap];
+  for (const row of rows) {
     const lookup = await client.query(
       `SELECT id FROM "PGC_Schema" WHERE table_name = $1`,
       [row.table_name]

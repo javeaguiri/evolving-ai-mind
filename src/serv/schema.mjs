@@ -9,22 +9,20 @@
 //
 // Routes:
 //   POST   /serv/schema/createTable   — build DDL from JSON + register in PGC_Schema
-//   GET    /serv/schema/listTables    — list all entries in PGC_Schema
-//   GET    /serv/schema/getTable      — get one entry by table_name
-//   PUT    /serv/schema/updateTable   — update description/definition in PGC_Schema
-//   DELETE /serv/schema/deleteTable   — drop table + remove from PGC_Schema
+//   POST   /serv/schema/listTables    — list all entries in PGC_Schema
+//   POST   /serv/schema/getTable      — get one entry by table_name
+//   POST   /serv/schema/updateTable   — update description/definition in PGC_Schema
+//   POST   /serv/schema/deleteTable   — drop table + remove from PGC_Schema
 //
 // Security gate: all table names and column types are validated before any
 // SQL is executed. Raw SQL in payloads is rejected.
 //
-// Slack: if slackChannel is present in the payload, result is enqueued to
-// SQS SlackResults for async notification. Never blocks the HTTP response.
+// UI notification: SERV is UI-agnostic. Slack callbacks are owned by PROC.
+// SERV never reads slackChannel / slackThreadTs — those fields are ignored
+// even if present in a request body.
 
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ok, err }                        from '../shared/ping-utils.mjs';
 import { getClient, buildCreateTableSQL } from './init-brain.mjs';
-
-const sqs = new SQSClient({});
 
 // ---------------------------------------------------------------------------
 // Allowed PostgreSQL column types — security gate.
@@ -41,8 +39,7 @@ const ALLOWED_TYPES = new Set([
   'uuid',
 ]);
 
-// Allowed table name prefix — all user domain tables must start with PGD_
-// All system tables must start with PGC_
+// Allowed table name pattern — PGC_* system tables, PGD_* user domain tables
 const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 
 // ---------------------------------------------------------------------------
@@ -69,8 +66,11 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 async function createTable(req) {
-  const { tableName, target, columns, foreignKeys = [], constraints = [],
-          triggers = [], description = '', slackChannel, slackThreadTs } = req.body;
+  const {
+    tableName, target,
+    columns, foreignKeys = [], constraints = [],
+    triggers = [], description = '',
+  } = req.body;
 
   // --- Validate ---
   const validationError = validateCreatePayload({ tableName, target, columns });
@@ -131,23 +131,14 @@ async function createTable(req) {
     );
     console.info(`schema: PGC_TableMap row inserted for ${tableName}`);
 
-    const result = {
-      success:    true,
+    return ok({
+      success:       true,
       tableName,
       target,
       schemaId:   insert.rows[0].id,
       createdAt:  insert.rows[0].created_at,
       correlationId: req.correlationId,
-    };
-
-    // --- Optional Slack notification ---
-    await maybeNotifySlack({
-      slackChannel, slackThreadTs,
-      message: `📊 Table \`${tableName}\` created on ${target.toUpperCase()}`,
-      workflowId: req.correlationId,
-    });
-
-    return ok(result, req.correlationId);
+    }, req.correlationId);
 
   } catch (error) {
     console.error('schema createTable error:', error.message);
@@ -159,7 +150,7 @@ async function createTable(req) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /serv/schema/listTables
+// POST /serv/schema/listTables
 // ---------------------------------------------------------------------------
 
 async function listTables(req) {
@@ -193,7 +184,7 @@ async function listTables(req) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /serv/schema/getTable
+// POST /serv/schema/getTable
 // ---------------------------------------------------------------------------
 
 async function getTable(req) {
@@ -231,12 +222,14 @@ async function getTable(req) {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /serv/schema/updateTable
+// POST /serv/schema/updateTable
 // ---------------------------------------------------------------------------
 
 async function updateTable(req) {
-  const { tableName, description, columns, foreignKeys,
-          constraints, triggers, slackChannel, slackThreadTs } = req.body;
+  const {
+    tableName, description, columns,
+    foreignKeys, constraints, triggers,
+  } = req.body;
 
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
@@ -276,12 +269,6 @@ async function updateTable(req) {
       return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
     }
 
-    await maybeNotifySlack({
-      slackChannel, slackThreadTs,
-      message: `📝 Schema \`${tableName}\` updated`,
-      workflowId: req.correlationId,
-    });
-
     return ok({
       success:   true,
       tableName,
@@ -298,11 +285,11 @@ async function updateTable(req) {
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /serv/schema/deleteTable
+// POST /serv/schema/deleteTable
 // ---------------------------------------------------------------------------
 
 async function deleteTable(req) {
-  const { tableName, slackChannel, slackThreadTs } = req.body;
+  const { tableName } = req.body;
 
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
@@ -350,12 +337,6 @@ async function deleteTable(req) {
     await pgcClient.query(`DELETE FROM "PGC_Schema" WHERE id = $1`, [id]);
     console.info(`schema: PGC_Schema + PGC_TableMap rows removed for ${tableName}`);
 
-    await maybeNotifySlack({
-      slackChannel, slackThreadTs,
-      message: `🗑️ Table \`${tableName}\` dropped from ${target.toUpperCase()}`,
-      workflowId: req.correlationId,
-    });
-
     return ok({
       success:   true,
       tableName,
@@ -398,28 +379,4 @@ function validateCreatePayload({ tableName, target, columns }) {
   }
 
   return null;  // valid
-}
-
-// ---------------------------------------------------------------------------
-// Optional Slack notification via SQS
-// ---------------------------------------------------------------------------
-
-async function maybeNotifySlack({ slackChannel, slackThreadTs, message, workflowId }) {
-  if (!slackChannel) return;
-
-  try {
-    await sqs.send(new SendMessageCommand({
-      QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
-      MessageBody: JSON.stringify({
-        type:          'SERV_NOTIFICATION',
-        workflowId,
-        slackChannel,
-        slackThreadTs: slackThreadTs || undefined,
-        result: { message },
-      }),
-    }));
-  } catch (error) {
-    // Never fail the main operation because of a Slack notification error
-    console.error('schema: Slack notification failed', error.message);
-  }
 }
