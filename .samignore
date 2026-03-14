@@ -1,0 +1,7 @@
+node_modules
+.aws-sam
+terraform-aws
+.postman
+postman
+.githooks
+docs

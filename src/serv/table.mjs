@@ -182,8 +182,10 @@ async function insertRow(req) {
 
     // --- Build parameterised INSERT ---
     const cols   = Object.keys(row);
-    const vals   = Object.values(row);
-    const colList   = cols.map(c => `"${c}"`).join(', ');
+    const vals         = Object.values(row).map(v =>
+      (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
+    );
+    const colList      = cols.map(c => `"${c}"`).join(', ');
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
 
     const dbClient = target === 'pgd'
