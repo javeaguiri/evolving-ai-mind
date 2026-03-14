@@ -136,6 +136,23 @@ async function handleCreateDomain(message) {
     console.info('create-domain: table created', { tableName: table.tableName, workflowId });
   }
 
+  // If all tables already existed, domain was previously created — skip insert and return early
+  const allExisted = createdTables.every(t => t.status === 'already_existed');
+  if (allExisted) {
+    await sendCallbackResult(callback, {
+      type:       'CREATE_DOMAIN_RESULT',
+      workflowId,
+      result: {
+        success: true,
+        message: `🧠 Domain *${domainName}* already exists — no changes made`,
+        domainName,
+        tables:  createdTables,
+        workflowId,
+        completedAt: new Date().toISOString(),
+      },
+    });
+    return;
+  }  
   // Step 2 — register domain help via SERV-Table insertRow
   const helpResp = await invokeServ('POST', '/api/v1/serv/table/insertRow', {
     tableName: 'PGC_DomainHelp',

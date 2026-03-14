@@ -211,6 +211,11 @@ async function insertRow(req) {
     }, req.correlationId);
 
   } catch (error) {
+    // PostgreSQL unique violation — return 409 so callers can treat as idempotent
+    if (error.code === '23505') {
+      console.info('table insertRow: unique constraint violation', { tableName, constraint: error.constraint });
+      return err(409, `Duplicate key — row already exists in "${tableName}"`, req.correlationId);
+    }
     console.error('table insertRow error:', error.message);
     return err(500, `insertRow failed: ${error.message}`, req.correlationId);
   } finally {
