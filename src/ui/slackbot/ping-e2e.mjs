@@ -45,11 +45,14 @@ export async function handle(req) {
       MessageBody: JSON.stringify({
         type:          'PING_E2E',
         workflowId,
-        slackChannel,
         slackUser,
-        slackThreadTs: ackTs,
-        hop:           1,
-        enqueuedAt:    new Date().toISOString(),
+        callback: {
+          provider: 'slack',
+          channel:  slackChannel,
+          threadId: ackTs,
+        },
+        hop:        1,
+        enqueuedAt: new Date().toISOString(),
       }),
     }));
   } catch (error) {

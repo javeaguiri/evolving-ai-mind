@@ -3,8 +3,8 @@
 // See LICENSE file in the project root for full license terms.
 // src/proc/step-orchestrator.mjs
 // SQS-triggered Lambda — consumes SYSSQSWorkflow messages.
-// For ping-sqs: receives hop 1, sends hop 2 to SYSSQSSlackResults.
-// For ping-e2e: receives hop 1, invokes ServFunction (ping-db), sends result to SYSSQSSlackResults.
+// For ping-sqs: receives hop 1, sends hop 2 to SYSSQSCallbackResults .
+// For ping-e2e: receives hop 1, invokes ServFunction (ping-db), sends result to SYSSQSCallbackResults .
 // For future workflows: routes to the appropriate workflow executor.
 //
 // This is the PROC layer's async backbone — every workflow step
@@ -82,16 +82,14 @@ async function processRecord(record) {
 }
 
 async function handlePingSqs(message) {
-  // Hop 2 — forward result to SlackResults queue
-  // SlackCallbackListenerFunction picks this up and posts to Slack thread
+  // Hop 2 — forward result to CallbackResults queue
+  // A UI CallbackListenerFunction will pick this up and posts to UI
   await sqs.send(new SendMessageCommand({
     QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
     MessageBody: JSON.stringify({
       type:          'PING_SQS_RESULT',
       workflowId:    message.workflowId,
-      slackChannel:  message.slackChannel,
-      slackUser:     message.slackUser,
-      slackThreadTs: message.slackThreadTs,
+      callback: message.callback,
       hop:           2,
       result: {
         success:     true,
@@ -130,9 +128,7 @@ async function handlePingE2e(message) {
     MessageBody: JSON.stringify({
       type:          'PING_E2E_RESULT',
       workflowId:    message.workflowId,
-      slackChannel:  message.slackChannel,
-      slackUser:     message.slackUser,
-      slackThreadTs: message.slackThreadTs,
+      callback:   message.callback,
       result: {
         success:        true,
         message:        `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,

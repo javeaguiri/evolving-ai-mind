@@ -2,13 +2,41 @@
 // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 // See LICENSE file in the project root for full license terms.
 // src/ui/slackbot/callback.mjs
-// SQS-triggered Lambda — consumes SYSSQSSlackResults messages.
-// Posts threaded replies back to Slack for async workflow completions.
-// No HTTP trigger — fires only when a message lands on SYSSQSSlackResults.
+// SQS-triggered Lambda — consumes SYSSQSCallbackResults messages.
+// Routes on callback.provider and posts replies back to the originating UI.
+// No HTTP trigger — fires only when a message lands on SYSSQSCallbackResults.
+//
+// Adding a new UI provider:
+//   1. Add a case to routeCallback() below.
+//   2. No new queue or Lambda needed for the common case.
 
 import { WebClient } from '@slack/web-api';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+// ---------------------------------------------------------------------------
+// Provider router — add new UI providers here.
+// callback: { provider, channel, threadId }
+// ---------------------------------------------------------------------------
+async function routeCallback(callback, text, blocks) {
+  switch (callback?.provider) {
+    case 'slack':
+      await slack.chat.postMessage({
+        channel:   callback.channel,
+        thread_ts: callback.threadId || undefined,
+        text,
+        blocks,
+      });
+      break;
+
+    // Future providers:
+    // case 'teams': await postToTeams(callback, text, blocks); break;
+    // case 'webhook': await postToWebhook(callback, text); break;
+
+    default:
+      console.warn('callback: unknown provider', callback?.provider);
+  }
+}
 
 export async function handler(event) {
   const failures = [];
@@ -75,90 +103,70 @@ async function processRecord(record) {
 }
 
 async function postPingSqsResult(message) {
-  const { slackChannel, slackThreadTs, result } = message;
-
-  await slack.chat.postMessage({
-    channel:   slackChannel,
-    thread_ts: slackThreadTs || undefined,
-    text:      result.message,
-    blocks: [
-      {
-        type: 'section',
-        text: {
+  const { callback, result } = message;
+  await routeCallback(callback, result.message, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.message },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
           type: 'mrkdwn',
-          text: result.message,
+          text: `workflowId: ${result.workflowId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`,
         },
-      },
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `workflowId: ${result.workflowId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`,
-          },
-        ],
-      },
-    ],
-  });
-
+      ],
+    },
+  ]);
   console.info('callback: Slack message posted', {
-    channel:   slackChannel,
+    channel:    callback.channel,
     workflowId: message.workflowId,
   });
 }
 
 async function postPingE2eResult(message) {
-  const { slackChannel, slackThreadTs, result } = message;
-  await slack.chat.postMessage({
-    channel:   slackChannel,
-    thread_ts: slackThreadTs || undefined,
-    text:      result.message,
-    blocks: [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: result.message },
-      },
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `workflowId: ${result.workflowId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
-          },
-        ],
-      },
-    ],
-  });
+  const { callback, result } = message;
+  await routeCallback(callback, result.message, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.message },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `workflowId: ${result.workflowId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
+        },
+      ],
+    },
+  ]);
   console.info('callback: ping-e2e Slack message posted', {
-    channel:    slackChannel,
+    channel:    callback.channel,
     workflowId: message.workflowId,
   });
 }
 
 async function postServNotification(message) {
-  const { slackChannel, slackThreadTs, result } = message;
-  await slack.chat.postMessage({
-    channel:   slackChannel,
-    thread_ts: slackThreadTs || undefined,
-    text:      result.message,
-    blocks: [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: result.message },
-      },
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `workflowId: ${message.workflowId}`,
-          },
-        ],
-      },
-    ],
-  });
+  const { callback, result } = message;
+  await routeCallback(callback, result.message, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.message },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `workflowId: ${message.workflowId}`,
+        },
+      ],
+    },
+  ]);
   console.info('callback: SERV notification posted', {
-    channel:    slackChannel,
+    channel:    callback.channel,
     workflowId: message.workflowId,
   });
 }

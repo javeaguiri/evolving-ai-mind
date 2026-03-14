@@ -104,7 +104,7 @@ Resources:
   SlackResultsQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: SYSSQSSlackResults
+      QueueName: SYSSQSCallbackResults
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt SlackResultsDLQ.Arn
         maxReceiveCount: 3
@@ -126,7 +126,7 @@ Resources:
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: SYSSQSSlackResultsDLQ
+      QueueName: SYSSQSCallbackResultsDLQ
       MessageRetentionPeriod: 1209600
 
   WorkflowDLQ:
@@ -532,8 +532,8 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-WorkflowQueueUrl'
 
-  SlackResultsQueueUrl:
+  CallbackResultsQueueUrl:
     Value: !Ref SlackResultsQueue
     Export:
-      Name: !Sub '${AWS::StackName}-SlackResultsQueueUrl'
+      Name: !Sub '${AWS::StackName}-CallbackResultsQueueUrl'
  
