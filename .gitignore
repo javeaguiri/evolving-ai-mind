@@ -24,3 +24,7 @@ build/
 Thumbs.db
 .vercel
 .env*.local
+
+#Postman
+.postman
+postman/

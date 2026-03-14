@@ -1,4 +1,0 @@
-$kind: collection
-description: API for Slackbot Lambda testing
-variables:
-  baseUrl: https://evolving-mind-api.amazon.com/
