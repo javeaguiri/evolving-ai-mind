@@ -1,0 +1,37 @@
+{
+  "table_name": "PGC_WorkflowRun",
+  "target": "pgc",
+  "description": "One row per workflow execution. Holds the execution stack and accumulated state. Status tracks the full lifecycle from pending through completion or failure.",
+  "columns": [
+    { "name": "id",          "type": "serial",      "primaryKey": true },
+    { "name": "workflow_id", "type": "integer",     "nullable": false },
+    { "name": "status",      "type": "text",        "nullable": false, "default": "'pending'" },
+    { "name": "input",       "type": "jsonb",       "nullable": true },
+    { "name": "stack",       "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+    { "name": "output",      "type": "jsonb",       "nullable": true },
+    { "name": "callback",    "type": "jsonb",       "nullable": true },
+    { "name": "error",       "type": "jsonb",       "nullable": true },
+    { "name": "started_at",  "type": "timestamptz", "nullable": true },
+    { "name": "completed_at","type": "timestamptz", "nullable": true },
+    { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_workflowrun_workflow",
+      "column": "workflow_id",
+      "references": { "table": "PGC_Workflow", "column": "id" },
+      "onDelete": "RESTRICT"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "check",
+      "name": "chk_run_status",
+      "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'completed', 'failed', 'cancelled')"
+    }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_workflowrun_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

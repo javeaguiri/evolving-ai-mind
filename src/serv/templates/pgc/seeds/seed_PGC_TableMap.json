@@ -1,0 +1,82 @@
+[
+  {
+    "table_name":   "PGC_Schema",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_TableMap",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_EntitySchema",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_DomainHelp",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_Workflow",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_WorkflowRun",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_WorkflowRunStep",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": false,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_Prompt",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_IntentMap",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  },
+  {
+    "table_name":   "PGC_WorkflowRunLock",
+    "target":       "pgc",
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views":        []
+  }
+]

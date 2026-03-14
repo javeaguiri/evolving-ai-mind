@@ -1,0 +1,26 @@
+{
+  "table_name": "PGC_WorkflowRunLock",
+  "target": "pgc",
+  "description": "Reserved for future parallel execution — optimistic locking. NOT used in sequential mode. Bootstrapped empty. run_id is unique — one lock row per active run.",
+  "columns": [
+    { "name": "id",         "type": "serial",      "primaryKey": true },
+    { "name": "run_id",     "type": "integer",     "nullable": false, "unique": true },
+    { "name": "locked_by",  "type": "text",        "nullable": true },
+    { "name": "locked_at",  "type": "timestamptz", "nullable": true },
+    { "name": "version",    "type": "integer",     "nullable": false, "default": "1" },
+    { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at", "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_runlock_run",
+      "column": "run_id",
+      "references": { "table": "PGC_WorkflowRun", "column": "id" },
+      "onDelete": "CASCADE"
+    }
+  ],
+  "constraints": [],
+  "triggers": [
+    { "name": "trg_pgc_workflowrunlock_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

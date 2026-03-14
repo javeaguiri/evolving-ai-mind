@@ -1,0 +1,32 @@
+{
+  "table_name": "PGC_IntentMap",
+  "target": "pgc",
+  "description": "Maps user input patterns to workflows or action types for the Intent Preprocessor. workflow_id is nullable — some intents are ad-hoc and have no pre-built workflow.",
+  "columns": [
+    { "name": "id",               "type": "serial",      "primaryKey": true },
+    { "name": "pattern",          "type": "text",        "nullable": false },
+    { "name": "intent_category",  "type": "text",        "nullable": false },
+    { "name": "workflow_id",      "type": "integer",     "nullable": true },
+    { "name": "action_type",      "type": "text",        "nullable": false },
+    { "name": "created_at",       "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",       "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_intentmap_workflow",
+      "column": "workflow_id",
+      "references": { "table": "PGC_Workflow", "column": "id" },
+      "onDelete": "SET NULL"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "check",
+      "name": "chk_action_type",
+      "expression": "action_type IN ('crud', 'workflow', 'heavy_lift')"
+    }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_intentmap_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

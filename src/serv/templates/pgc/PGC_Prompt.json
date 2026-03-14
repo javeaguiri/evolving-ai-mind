@@ -1,0 +1,30 @@
+{
+  "table_name": "PGC_Prompt",
+  "target": "pgc",
+  "description": "Stores LLM prompts with versioning and quality tracking for self-improvement. Self-referential via parent_prompt_id to track prompt evolution history.",
+  "columns": [
+    { "name": "id",                "type": "serial",      "primaryKey": true },
+    { "name": "intent_category",   "type": "text",        "nullable": false },
+    { "name": "prompt_text",       "type": "text",        "nullable": false },
+    { "name": "model",             "type": "text",        "nullable": true },
+    { "name": "version",           "type": "integer",     "nullable": false, "default": "1" },
+    { "name": "parent_prompt_id",  "type": "integer",     "nullable": true },
+    { "name": "was_successful",    "type": "boolean",     "nullable": true },
+    { "name": "quality_score",     "type": "numeric",     "nullable": true },
+    { "name": "error_log",         "type": "jsonb",       "nullable": true },
+    { "name": "created_at",        "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",        "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_prompt_parent",
+      "column": "parent_prompt_id",
+      "references": { "table": "PGC_Prompt", "column": "id" },
+      "onDelete": "SET NULL"
+    }
+  ],
+  "constraints": [],
+  "triggers": [
+    { "name": "trg_pgc_prompt_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

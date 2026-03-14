@@ -20,8 +20,14 @@ import PGC_Schema       from './templates/pgc/PGC_Schema.json'       with { type
 import PGC_TableMap     from './templates/pgc/PGC_TableMap.json'     with { type: 'json' };
 import PGC_EntitySchema from './templates/pgc/PGC_EntitySchema.json' with { type: 'json' };
 import PGC_DomainHelp   from './templates/pgc/PGC_DomainHelp.json'   with { type: 'json' };
-import seedSchema       from './templates/pgc/seeds/PGC_Schema.json'   with { type: 'json' };
-import seedTableMap     from './templates/pgc/seeds/PGC_TableMap.json' with { type: 'json' };
+import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'   with { type: 'json' };
+import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json' with { type: 'json' };
+import PGC_Workflow        from './templates/pgc/PGC_Workflow.json'        with { type: 'json' };
+import PGC_WorkflowRun     from './templates/pgc/PGC_WorkflowRun.json'     with { type: 'json' };
+import PGC_WorkflowRunStep from './templates/pgc/PGC_WorkflowRunStep.json' with { type: 'json' };
+import PGC_Prompt          from './templates/pgc/PGC_Prompt.json'          with { type: 'json' };
+import PGC_IntentMap       from './templates/pgc/PGC_IntentMap.json'       with { type: 'json' };
+import PGC_WorkflowRunLock from './templates/pgc/PGC_WorkflowRunLock.json' with { type: 'json' };
 
 const { Client } = pg;
 
@@ -41,14 +47,23 @@ let bootstrapComplete = false;
 let cachedReport = null;
 
 // ---------------------------------------------------------------------------
-// PGC template load order matters — PGC_Schema must exist before
-// PGC_TableMap (which has a FK to PGC_Schema).
+// PGC template load order matters — dependencies must exist before dependents:
+//   PGC_Schema before PGC_TableMap (FK)
+//   PGC_Workflow before PGC_WorkflowRun, PGC_IntentMap (FK)
+//   PGC_WorkflowRun before PGC_WorkflowRunStep, PGC_WorkflowRunLock (FK)
+//   PGC_Prompt is self-referential — safe to create at any point
 // ---------------------------------------------------------------------------
 const PGC_TEMPLATES = [
   PGC_Schema,
   PGC_TableMap,
   PGC_EntitySchema,
   PGC_DomainHelp,
+  PGC_Workflow,
+  PGC_WorkflowRun,
+  PGC_WorkflowRunStep,
+  PGC_Prompt,
+  PGC_IntentMap,
+  PGC_WorkflowRunLock,
 ];
 
 // ---------------------------------------------------------------------------
@@ -71,19 +86,6 @@ export function getClient(connectionString) {
 }
 
 /**
- * @typedef {Object} TableBootstrapResult
- * @property {string}  table_name
- * @property {'created' | 'already_existed'} status
- */
-
-/**
- * @typedef {Object} BootstrapReport
- * @property {boolean}               freshEnvironment  — true if any table was newly created
- * @property {TableBootstrapResult[]} tables            — one entry per PGC system table
- * @property {string}                 bootstrappedAt    — ISO timestamp
- */
-
-/**
  * Ensure all PGC system tables exist.
  * Safe to call on every Lambda invocation — skips on warm containers.
  *
@@ -95,8 +97,6 @@ export async function bootstrap() {
   }
 
   const client = getClient(process.env.PGC_DATABASE_URL);
-
-  /** @type {TableBootstrapResult[]} */
   const tableResults = [];
 
   try {
@@ -111,6 +111,7 @@ export async function bootstrap() {
       const status = await createTableFromTemplate(client, template);
       tableResults.push({ table_name: template.table_name, status });
     }
+
     // Step 3 — seed PGC_Schema self-referential rows
     await seedPGCSchema(client);
 
@@ -118,8 +119,6 @@ export async function bootstrap() {
     await seedPGCTableMap(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
-
-    /** @type {BootstrapReport} */
     const report = {
       freshEnvironment,
       tables:         tableResults,
@@ -168,17 +167,12 @@ async function installTriggerFunction(client) {
 }
 
 /**
- * Check whether a table exists, then create it if not.
- * Returns 'created' or 'already_existed' — used to build BootstrapReport.
+ * Load a PGC template JSON file, build DDL, execute it.
  *
  * @param {pg.Client} client
- * @param {object[]}  templateArray  — JSON template is an array; first element holds table_name
- * @returns {Promise<'created' | 'already_existed'>}
+ * @param {string}    filename  — e.g. 'PGC_Schema.json'
  */
-async function createTableFromTemplate(client, templateArray) {
-  // Each PGC template JSON file is an array — bootstrap uses index 0
-  const template = Array.isArray(templateArray) ? templateArray[0] : templateArray;
-
+async function createTableFromTemplate(client, template) {
   // Check existence before CREATE TABLE IF NOT EXISTS so we can report accurately
   const exists = await client.query(
     `SELECT to_regclass($1::text) AS oid`,
@@ -258,8 +252,7 @@ export function buildCreateTableSQL(template) {
 
 /**
  * Resolve the PostgreSQL column type string.
- * Types are passed through verbatim from JSON
- * e.g. serial, text, integer, jsonb, timestamptz
+ * Handles serial specially — serial implies NOT NULL so we skip that flag.
  */
 function resolveType(col) {
   return col.type;   // types are passed through verbatim from JSON
@@ -267,7 +260,6 @@ function resolveType(col) {
 }
 
 async function seedPGCSchema(client) {
-  // seedSchema is the array from seed_PGC_Schema.json
   const rows = Array.isArray(seedSchema) ? seedSchema : [seedSchema];
   for (const row of rows) {
     await client.query(

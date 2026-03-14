@@ -1,0 +1,34 @@
+{
+  "table_name": "PGC_WorkflowRunStep",
+  "target": "pgc",
+  "description": "Append-only audit log — one row per step execution. Never updated after insert. Used for idempotency checks on SQS redelivery and debugging.",
+  "columns": [
+    { "name": "id",              "type": "serial",      "primaryKey": true },
+    { "name": "run_id",          "type": "integer",     "nullable": false },
+    { "name": "frame_id",        "type": "text",        "nullable": false },
+    { "name": "step_number",     "type": "integer",     "nullable": false },
+    { "name": "step_type",       "type": "text",        "nullable": false },
+    { "name": "status",          "type": "text",        "nullable": false },
+    { "name": "input_snapshot",  "type": "jsonb",       "nullable": true },
+    { "name": "output_snapshot", "type": "jsonb",       "nullable": true },
+    { "name": "error",           "type": "jsonb",       "nullable": true },
+    { "name": "duration_ms",     "type": "integer",     "nullable": true },
+    { "name": "executed_at",     "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_runstep_run",
+      "column": "run_id",
+      "references": { "table": "PGC_WorkflowRun", "column": "id" },
+      "onDelete": "RESTRICT"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "check",
+      "name": "chk_runstep_status",
+      "expression": "status IN ('completed', 'failed', 'skipped')"
+    }
+  ],
+  "triggers": []
+}
