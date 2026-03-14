@@ -209,7 +209,7 @@ paths:
       summary: SQS round-trip ping
       description: >
         Validates Slack → SQS WorkflowQueue → ProcStepOrchestrator
-        → SQS SlackResults → SlackCallbackListener → Slack thread.
+        → SQS CallbackResults → SlackCallbackListener → Slack thread.
         ACK posted via chat.postMessage. Threaded reply arrives ~5s later.
       tags: [Ping]
       parameters:
@@ -234,7 +234,7 @@ paths:
       summary: Full end-to-end ping
       description: >
         Validates full chain — Slack → SQS → ProcStepOrchestrator
-        → ServFunction (ping-db) → SQS SlackResults → Slack thread.
+        → ServFunction (ping-db) → SQS CallbackResults → Slack thread.
         Returns RDS PostgreSQL version string in thread.
       tags: [Ping]
       parameters:

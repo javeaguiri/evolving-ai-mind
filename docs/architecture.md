@@ -291,25 +291,32 @@ Security gate on `createTable`:
 - Table names must match `^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$`
 - Protected system tables (`PGC_Schema`, `PGC_TableMap`, `PGC_EntitySchema`, `PGC_DomainHelp`) cannot be dropped
 
+### SERV-Table (partial — getRows + insertRow complete)
+DML executor gated by PGC_TableMap.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit — gated by PGC_TableMap |
+| `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by allow_insert |
+
+Security gate on all operations:
+- Table must be registered in PGC_TableMap
+- Column names validated against PGC_Schema columns for that table
+- Filter operators validated against whitelist (eq, neq, gt, gte, lt, lte, like, in, is_null, not_null)
+- `insertRow` additionally checks `allow_insert = true`
+
 ### SERV services — not yet built
-- **SERV-Table** — INSERT/UPDATE/DELETE validated via PGC_TableMap
-- **SERV-Query** — parameterised SELECT with filters, pagination
+- **SERV-Table** updateRow, deleteRow — deferred, not needed until Phase 3
+- **SERV-Query** — parameterised SELECT with joins, pagination
 - **SERV-Entity** — multi-table jsonb_agg queries driven by PGC_EntitySchema
 
 ---
 
-## 8. Callback / Notification Abstraction — DECISION PENDING IMPLEMENTATION
+## 8. Callback / Notification Abstraction — IMPLEMENTED
 
-**Current state:** `slackChannel` and `slackThreadTs` are fields in SERV request bodies. This is a known tech debt.
-
-**Agreed design (not yet implemented):**
-- Remove `slackChannel` / `slackThreadTs` from all SERV request bodies
-- Replace with generic `callback` object: `{ provider, channel, threadId }`
-- `SlackCallbackListenerFunction` routes on `provider` field — today only `slack`, extensible to `teams`, `webhook`, etc.
-- SERV passes `callback` through to SQS without interpreting it
-- PROC owns callback routing — SERV is UI-agnostic
-
-**Action required:** Implement before SERV-Table is built.
+All SQS message payloads use `callback: { provider, channel, threadId }`.
+`routeCallback()` in `callback.mjs` dispatches on `provider` — adding a new UI is one new `case`.
+SERV is UI-agnostic — callback fields are never read in the SERV layer.
 
 ---
 
@@ -503,7 +510,6 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 
 | Item | Priority | Notes |
 |---|---|---|
-| Callback abstraction | High | Remove `slackChannel`/`slackThreadTs` from SERV bodies, replace with `{ provider, channel, threadId }` |
 | Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`. Use `node:test` built-in |
 | Integration tests | Low | Defer until PROC/Schema complete — use `testcontainers` + PostgreSQL |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
@@ -521,24 +527,29 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 | `v3.2-scaffolding-complete` | All 5 pings pass (ping-api, ping-llm, ping-sqs, ping-db, ping-e2e) |
 | `v3.2-ping-complete` | ping-sqs threading fixed, ping-e2e full round trip with RDS version string |
 | `v3.2-serv-schema-complete` | SERV-Schema all CRUD endpoints, init-brain bootstrap, 4 PGC system tables |
+| `v3.2-pgc-workflow-tables-complete` | 10 PGC system tables bootstrapped and seeded |
+| `v3.2-callback-abstraction-complete` | Generic callback object, SYSSQSCallbackResults queue rename |
+| `v3.2-serv-table-partial` | SERV-Table getRows + insertRow, wired into serv handler |
 
 ---
 
 ## 17. Build Order — Remaining Work
 
+~~1. Callback abstraction~~              ✅ complete — v3.2-callback-abstraction-complete
+~~2. PGC workflow table templates~~      ✅ complete — v3.2-pgc-workflow-tables-complete
+~~7. SERV-Table (getRows + insertRow)~~  ✅ complete — v3.2-serv-table-partial
 
-1. Callback abstraction              implement provider-agnostic callback in SERV
-2. PGC workflow table templates      JSON templates + bootstrap for 6 new PGC tables
-3. PROC — Intent Preprocessor        coded logic + cheap LLM classification
-4. PROC — /create-domain             Slack → LLM → SERV-Schema → domain tables
-5. Slack /interactive endpoint        human gates (confirmation + error recovery)
-6. PROC — Step Processor             SQS-driven stack execution engine
-7. SERV-Table                        INSERT/UPDATE/DELETE validated via PGC_TableMap
-8. SERV-Query                        parameterised SELECT with filters, pagination
-9. SERV-Entity                       multi-table jsonb_agg via PGC_EntitySchema
-10. Parallel execution               fan-out/fan-in, optimistic locking (future)
-11. Unit + integration tests         node:test for pure functions, testcontainers for DB
-12. CI/CD GitHub Actions             after template.yaml stabilises
+1. PROC — /create-domain (Phase 2b)     scaffold end to end, hardcoded payload, no LLM
+2. PROC — /create-domain (Phase 2c)     live LLM reading prompt from PGC_Prompt
+3. PROC — Intent Preprocessor           coded logic + cheap LLM classification
+4. Slack /interactive endpoint           human gates (confirmation + error recovery)
+5. PROC — Step Processor                SQS-driven stack execution engine
+6. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
+7. SERV-Query                           parameterised SELECT with joins, pagination
+8. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
+9. Parallel execution                   fan-out/fan-in, optimistic locking (future)
+10. Unit + integration tests            node:test for pure functions, testcontainers for DB
+11. CI/CD GitHub Actions                after template.yaml stabilises
 
 ## 18. pgvector — Semantic Search
 

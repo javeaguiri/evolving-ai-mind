@@ -209,7 +209,7 @@ paths:
       summary: SQS round-trip ping
       description: >
         Validates Slack → SQS WorkflowQueue → ProcStepOrchestrator
-        → SQS SlackResults → SlackCallbackListener → Slack thread.
+        → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
         ACK posted via chat.postMessage. Threaded reply arrives ~5s later.
       tags: [Ping]
       parameters:
@@ -234,7 +234,7 @@ paths:
       summary: Full end-to-end ping
       description: >
         Validates full chain — Slack → SQS → ProcStepOrchestrator
-        → ServFunction (ping-db) → SQS SlackResults → Slack thread.
+        → ServFunction (ping-db) → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
         Returns RDS PostgreSQL version string in thread.
       tags: [Ping]
       parameters:
@@ -506,3 +506,140 @@ paths:
           description: Table not found in PGC_Schema
         '500':
           description: Drop or registry cleanup failed
+
+  # ── SERV-Table ─────────────────────────────────────────────────────────────
+
+  /api/v1/serv/table/getRows:
+    post:
+      summary: SELECT rows from a registered table
+      description: >
+        Parameterised SELECT gated by PGC_TableMap. Supports filters, orderBy,
+        and limit. Column names in filters are validated against PGC_Schema.
+        Filter operators — eq, neq, gt, gte, lt, lte, like, in, is_null, not_null.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGC_Prompt
+                filters:
+                  type: array
+                  items:
+                    type: object
+                    required: [column, op]
+                    properties:
+                      column:
+                        type: string
+                      op:
+                        type: string
+                        enum: [eq, neq, gt, gte, lt, lte, like, in, is_null, not_null]
+                      value: {}
+                orderBy:
+                  type: object
+                  properties:
+                    column:
+                      type: string
+                    direction:
+                      type: string
+                      enum: [asc, desc]
+                      default: asc
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 100
+            example:
+              tableName: PGC_Prompt
+              filters:
+                - { column: intent_category, op: eq, value: create_domain }
+                - { column: was_successful,  op: not_null }
+              orderBy: { column: version, direction: desc }
+              limit: 10
+      responses:
+        '200':
+          description: Matching rows returned
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGC_Prompt
+                count: 1
+                rows:
+                  - id: 1
+                    intent_category: create_domain
+                    prompt_text: "You are a schema designer..."
+                    version: 1
+        '400':
+          description: Validation error — bad table name, unknown column, disallowed operator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Query failed
+
+  /api/v1/serv/table/insertRow:
+    post:
+      summary: INSERT a single row into a registered table
+      description: >
+        Single INSERT gated by PGC_TableMap allow_insert flag.
+        Column names validated against PGC_Schema. Returns full inserted row.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, row]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGC_DomainHelp
+                row:
+                  type: object
+                  description: Column/value pairs to insert
+            example:
+              tableName: PGC_DomainHelp
+              row:
+                domain: recipes
+                aliases: ["recipe", "cooking"]
+                description: Recipe management domain
+                commands: []
+      responses:
+        '200':
+          description: Row inserted
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGC_DomainHelp
+                row:
+                  id: 1
+                  domain: recipes
+        '400':
+          description: Validation error — bad table name or unknown column
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: INSERT not permitted on this table
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Insert failed
