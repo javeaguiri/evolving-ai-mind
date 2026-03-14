@@ -13,6 +13,7 @@ import { handle as pingApi  } from './ping.mjs';
 import { handle as pingSqs  } from './ping-sqs.mjs';
 import { handle as pingLlm  } from './ping-llm.mjs';
 import { handle as pingE2e  } from './ping-e2e.mjs';   
+import { handle as createDomain } from './create-domain.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway for every
@@ -25,7 +26,8 @@ export async function handler(event) {
     case 'ping-api': return pingApi(req);
     case 'ping-sqs': return pingSqs(req);
     case 'ping-llm': return pingLlm(req);
-	case 'ping-e2e': return pingE2e(req);
+    case 'ping-e2e': return pingE2e(req);
+    case 'create-domain':  return createDomain(req);
 
     // Future routes:
     // case 'commands': return commands(req);

@@ -83,6 +83,10 @@ async function processRecord(record) {
         await postServNotification(message);
         break;
 
+      case 'CREATE_DOMAIN_RESULT':
+        await postCreateDomainResult(message);
+        break;
+
       // Future result types added here:
       // case 'FLOW_RESULT': await postFlowResult(message); break;
 
@@ -167,6 +171,30 @@ async function postServNotification(message) {
   ]);
   console.info('callback: SERV notification posted', {
     channel:    callback.channel,
+    workflowId: message.workflowId,
+  });
+}
+
+async function postCreateDomainResult(message) {
+  const { callback, result } = message;
+  await routeCallback(callback, result.message, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.message },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `workflowId: ${message.workflowId} | completed: ${result.completedAt}`,
+        },
+      ],
+    },
+  ]);
+  console.info('callback: create-domain result posted', {
+    channel:    callback.channel,
+    domainName: result.domainName,
     workflowId: message.workflowId,
   });
 }

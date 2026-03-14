@@ -1,0 +1,60 @@
+{
+  "domain": "recipes",
+  "tables": [
+    {
+      "tableName": "PGD_Recipes",
+      "target": "pgd",
+      "description": "Core recipe definitions — name, description, prep and cook times, serving size.",
+      "columns": [
+        { "name": "id",           "type": "serial",      "primaryKey": true },
+        { "name": "name",         "type": "text",        "nullable": false },
+        { "name": "description",  "type": "text",        "nullable": true },
+        { "name": "prep_minutes", "type": "integer",     "nullable": true },
+        { "name": "cook_minutes", "type": "integer",     "nullable": true },
+        { "name": "servings",     "type": "integer",     "nullable": true },
+        { "name": "tags",         "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
+        { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
+        { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+      ],
+      "foreignKeys": [],
+      "constraints": [],
+      "triggers": [
+        { "name": "trg_pgd_recipes_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      ]
+    },
+    {
+      "tableName": "PGD_Ingredients",
+      "target": "pgd",
+      "description": "Ingredients belonging to a recipe — quantity, unit, and name.",
+      "columns": [
+        { "name": "id",         "type": "serial",      "primaryKey": true },
+        { "name": "recipe_id",  "type": "integer",     "nullable": false },
+        { "name": "name",       "type": "text",        "nullable": false },
+        { "name": "quantity",   "type": "numeric",     "nullable": true },
+        { "name": "unit",       "type": "text",        "nullable": true },
+        { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()" }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ingredients_recipe",
+          "column": "recipe_id",
+          "references": { "table": "PGD_Recipes", "column": "id" },
+          "onDelete": "CASCADE"
+        }
+      ],
+      "constraints": [],
+      "triggers": []
+    }
+  ],
+  "domainHelp": {
+    "domain": "recipes",
+    "aliases": ["recipe", "cooking", "cook"],
+    "description": "Recipe management — create and browse recipes and their ingredients.",
+    "commands": [
+      { "command": "/create-domain recipes", "description": "Create the recipes domain" },
+      { "command": "add recipe <name>",       "description": "Add a new recipe" },
+      { "command": "list recipes",            "description": "List all recipes" },
+      { "command": "add ingredient to <recipe>", "description": "Add an ingredient to a recipe" }
+    ]
+  }
+}
