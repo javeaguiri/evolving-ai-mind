@@ -109,9 +109,8 @@ export async function bootstrap() {
     // Step 2 — create PGC system tables from templates, tracking new vs existing
     for (const template of PGC_TEMPLATES) {
       const status = await createTableFromTemplate(client, template);
-      tableResults.push({ table_name: template[0].table_name, status });
+      tableResults.push({ table_name: template.table_name, status });
     }
-
     // Step 3 — seed PGC_Schema self-referential rows
     await seedPGCSchema(client);
 
