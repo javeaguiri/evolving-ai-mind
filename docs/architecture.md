@@ -510,6 +510,10 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 
 | Item | Priority | Notes |
 |---|---|---|
+| Rename `ping-utils.mjs` → `lambda-utils.mjs` | Medium | Pure rename, touches ~10 import paths — see Section 19 |
+| Extract workflow logic to `shared/domain-workflows.mjs` | Medium | Enables PROC HTTP endpoints + removes future hop — see Section 19 |
+| LLM URLs to env vars (`LLM_AGENT_URL`, `LLM_CHAT_URL`) | Medium | Before Phase 3 — avoids redeploy on provider change — see Section 19 |
+| `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`. Use `node:test` built-in |
 | Integration tests | Low | Defer until PROC/Schema complete — use `testcontainers` + PostgreSQL |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
@@ -530,6 +534,8 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 | `v3.2-pgc-workflow-tables-complete` | 10 PGC system tables bootstrapped and seeded |
 | `v3.2-callback-abstraction-complete` | Generic callback object, SYSSQSCallbackResults queue rename |
 | `v3.2-serv-table-partial` | SERV-Table getRows + insertRow, wired into serv handler |
+| `v3.2-create-domain-scaffold` | /create-domain end to end with hardcoded recipes scaffold |
+| `v3.2-create-domain-live-llm` | /create-domain live LLM via Perplexity Agent API + json_schema output |
 
 ---
 
@@ -537,19 +543,20 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 
 ~~1. Callback abstraction~~              ✅ complete — v3.2-callback-abstraction-complete
 ~~2. PGC workflow table templates~~      ✅ complete — v3.2-pgc-workflow-tables-complete
+~~3. PROC — /create-domain (Phase 2b)~~ ✅ complete — v3.2-create-domain-scaffold
+~~4. PROC — /create-domain (Phase 2c)~~ ✅ complete — v3.2-create-domain-live-llm
 ~~7. SERV-Table (getRows + insertRow)~~  ✅ complete — v3.2-serv-table-partial
 
-1. PROC — /create-domain (Phase 2b)     scaffold end to end, hardcoded payload, no LLM
-2. PROC — /create-domain (Phase 2c)     live LLM reading prompt from PGC_Prompt
-3. PROC — Intent Preprocessor           coded logic + cheap LLM classification
-4. Slack /interactive endpoint           human gates (confirmation + error recovery)
-5. PROC — Step Processor                SQS-driven stack execution engine
-6. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
-7. SERV-Query                           parameterised SELECT with joins, pagination
-8. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
-9. Parallel execution                   fan-out/fan-in, optimistic locking (future)
-10. Unit + integration tests            node:test for pure functions, testcontainers for DB
-11. CI/CD GitHub Actions                after template.yaml stabilises
+1. Refactoring (tech debt)              rename ping-utils, extract domain-workflows, LLM URLs to env vars
+2. PROC — Intent Preprocessor           coded logic + cheap LLM classification, ProcFunction HTTP endpoints
+3. Slack /interactive endpoint          human gates (confirmation + error recovery)
+4. PROC — Step Processor                SQS-driven stack execution engine, full PGC_WorkflowRun lifecycle
+5. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
+6. SERV-Query                           parameterised SELECT with joins, pagination
+7. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
+8. Parallel execution                   fan-out/fan-in, optimistic locking (future)
+9. Unit + integration tests             node:test for pure functions, testcontainers for DB
+10. CI/CD GitHub Actions                after template.yaml stabilises
 
 ## 18. pgvector — Semantic Search
 
@@ -566,3 +573,48 @@ Primary use cases:
 
 Status: Designed, not yet implemented. Add to ALLOWED_TYPES in schema.mjs
         when pgvector extension is enabled on RDS.
+
+---
+
+## 19. PROC Layer Architecture — Refactoring Decisions
+
+### Step Orchestrator → PROC service endpoints
+**Decision:** Extract workflow logic from `ProcStepOrchestrator` into callable PROC endpoints
+(e.g. `proc/design-schema`, `proc/create-workflow`) so they can be:
+- Called directly via curl for testing and prompt iteration without SQS
+- Invoked by `ProcFunction` (HTTP) for the intent pipeline in Phase 3
+- Reused by `ProcStepOrchestrator` (SQS) without a Lambda-to-Lambda hop
+
+**Implementation:** Extract into `src/shared/domain-workflows.mjs` — a shared util bundled
+into both Lambdas by esbuild. No runtime hop, no extra cost. `ProcStepOrchestrator` and
+`ProcFunction` both import and call the same functions directly.
+
+Note: `invokeServ()` calls inside the workflow functions still incur a Lambda-to-Lambda hop
+to `ServFunction` — that is unavoidable and by design. The hop being eliminated is the
+hypothetical `ProcStepOrchestrator → ProcFunction` hop.
+
+**Status:** Deferred — implement when building the Intent Preprocessor (Phase 3).
+At that point `ProcFunction` needs `/create-domain` as an HTTP endpoint anyway,
+making the shared util the natural home for the logic.
+
+### Rename `shared/ping-utils.mjs` → `shared/lambda-utils.mjs`
+**Decision:** `parseEvent`, `ok`, `err`, and `respond` are used by every Lambda handler,
+not just pings. `lambda-utils.mjs` accurately describes the module's purpose.
+
+**Scope:** Pure rename — no logic changes. Touches all files that import from `ping-utils.mjs`:
+`ping-db.mjs`, `schema.mjs`, `table.mjs`, `ping.mjs`, `ping-sqs.mjs`, `ping-e2e.mjs`,
+`ping-llm.mjs` (both PROC and slackbot), `create-domain.mjs`, and both `handler.mjs` files.
+
+**Status:** Deferred — low risk, do as a standalone refactoring commit when convenient.
+
+### LLM URLs in environment variables
+`AGENT_API_URL` and `LLM_CHAT_URL` are currently hardcoded in `step-orchestrator.mjs`
+and `ping-llm.mjs`. Move to SSM + Lambda env vars before Phase 3 so provider URLs
+can change without a redeploy.
+
+```yaml
+LLM_AGENT_URL: 'https://api.perplexity.ai/v1/agent'
+LLM_CHAT_URL:  'https://api.perplexity.ai/chat/completions'
+```
+
+**Status:** Deferred — do before Phase 3 intent preprocessor.
