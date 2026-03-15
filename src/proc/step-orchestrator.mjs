@@ -96,7 +96,7 @@ async function processRecord(record) {
 // ---------------------------------------------------------------------------
 
 async function handleCreateDomain(message) {
-  const { domainName, workflowId, callback } = message;
+  const { userInput, workflowId, callback } = message;
 
   // Step 0 — read create_domain prompt from PGC_Prompt via SERV-Table
   const promptResp = await invokeServ('POST', '/api/v1/serv/table/getRows', {
@@ -111,7 +111,7 @@ async function handleCreateDomain(message) {
   }
 
   const promptRow  = promptResp.rows[0];
-  const promptText = promptRow.prompt_text.replace('{{domainName}}', domainName);
+  const promptText = promptRow.prompt_text.replace('{{userInput}}', userInput);
 
   console.info('create-domain: prompt loaded', {
     promptId: promptRow.id,
@@ -121,20 +121,50 @@ async function handleCreateDomain(message) {
   });
 
   // Step 0b — call LLM via Perplexity Agent API
-  const scaffold = await callLlm(promptRow.model, promptText, domainName);
+  const scaffold = await callLlm(promptRow.model, promptText, userInput);
+
+  // scaffold.domain is the authoritative name inferred by the LLM
+  const domainName = scaffold.domain;
 
   console.info('create-domain: LLM returned scaffold', {
+    userInput,
     domainName,
     tables: scaffold.tables?.map(t => t.tableName),
     workflowId,
   });
 
-  // Step 1 — create each PGD table via SERV-Schema createTable
+  // Step 1 — normalise FK shape and create each PGD table via SERV-Schema createTable
   const createdTables = [];
   for (const table of scaffold.tables) {
+    // Normalise foreignKeys — LLM may return "references": "TableName(column)"
+    // buildCreateTableSQL expects { table: "TableName", column: "column" }
+    table.foreignKeys = (table.foreignKeys || []).map((fk, i) => {
+      if (typeof fk.references === 'string') {
+        const match = fk.references.match(/^([^(]+)\(([^)]+)\)$/);
+        return {
+          name:       fk.name || `fk_${table.tableName.toLowerCase()}_${fk.column}_${i}`,
+          column:     fk.column,
+          references: match
+            ? { table: match[1].trim(), column: match[2].trim() }
+            : { table: fk.references, column: 'id' },
+          onDelete: fk.onDelete || 'RESTRICT',
+        };
+      }
+      // Ensure name is present
+      if (!fk.name) fk.name = `fk_${table.tableName.toLowerCase()}_${fk.column}_${i}`;
+      return fk;
+    });
+
+    // Normalise constraints — LLM may return type as "UNIQUE" instead of "unique"
+    table.constraints = (table.constraints || []).map((con, i) => ({
+      ...con,
+      type:    con.type?.toLowerCase(),
+      name:    con.name || `uq_${table.tableName.toLowerCase()}_${i}`,
+      columns: con.columns || [],
+    }));
+
     const resp = await invokeServ('POST', '/api/v1/serv/schema/createTable', table);
     if (!resp.success) {
-      // If table already exists (409) treat as success — idempotent
       if (resp.statusCode === 409) {
         console.info('create-domain: table already exists, skipping', { tableName: table.tableName });
         createdTables.push({ tableName: table.tableName, status: 'already_existed' });
@@ -144,6 +174,24 @@ async function handleCreateDomain(message) {
     }
     createdTables.push({ tableName: table.tableName, status: 'created' });
     console.info('create-domain: table created', { tableName: table.tableName, workflowId });
+  }
+
+  // If all tables already existed domain was previously created — exit early
+  const allExisted = createdTables.every(t => t.status === 'already_existed');
+  if (allExisted) {
+    await sendCallbackResult(callback, {
+      type:       'CREATE_DOMAIN_RESULT',
+      workflowId,
+      result: {
+        success:     true,
+        message:     `🧠 Domain *${domainName}* already exists — no changes made`,
+        domainName,
+        tables:      createdTables,
+        workflowId,
+        completedAt: new Date().toISOString(),
+      },
+    });
+    return;
   }
 
   // Step 2 — register domain help via SERV-Table insertRow
@@ -213,7 +261,7 @@ async function invokeServ(method, path, body) {
  * Note: first request with a new schema takes 10-30s to prepare —
  * subsequent requests are fast. SQS will retry if first call times out.
  */
-async function callLlm(model, promptText, domainName) {
+async function callLlm(model, promptText, userInput) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
 
@@ -225,62 +273,9 @@ async function callLlm(model, promptText, domainName) {
     },
     body: JSON.stringify({
       model,
-      input:        `Create a database domain called "${domainName}"`,
+      input:        `Design a database domain for: "${userInput}"`,
       instructions: promptText,
       temperature:  0.2,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'domain_scaffold',
-          schema: {
-            type: 'object',
-            required: ['domain', 'tables', 'domainHelp'],
-            properties: {
-              domain: { type: 'string' },
-              tables: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  required: ['tableName', 'target', 'description', 'columns', 'foreignKeys', 'constraints', 'triggers'],
-                  properties: {
-                    tableName:   { type: 'string' },
-                    target:      { type: 'string', enum: ['pgd'] },
-                    description: { type: 'string' },
-                    columns: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        required: ['name', 'type'],
-                        properties: {
-                          name:       { type: 'string' },
-                          type:       { type: 'string' },
-                          primaryKey: { type: 'boolean' },
-                          nullable:   { type: 'boolean' },
-                          unique:     { type: 'boolean' },
-                          default:    { type: 'string' },
-                        },
-                      },
-                    },
-                    foreignKeys: { type: 'array', items: { type: 'object' } },
-                    constraints: { type: 'array', items: { type: 'object' } },
-                    triggers:    { type: 'array', items: { type: 'object' } },
-                  },
-                },
-              },
-              domainHelp: {
-                type: 'object',
-                required: ['domain', 'aliases', 'description', 'commands'],
-                properties: {
-                  domain:      { type: 'string' },
-                  aliases:     { type: 'array', items: { type: 'string' } },
-                  description: { type: 'string' },
-                  commands:    { type: 'array', items: { type: 'object' } },
-                },
-              },
-            },
-          },
-        },
-      },
     }),
   });
 
@@ -291,11 +286,20 @@ async function callLlm(model, promptText, domainName) {
 
   const data = await response.json();
 
+  console.info('create-domain: LLM raw response', {
+    status:     response.status,
+    outputLen:  data.output?.length,
+    usage:      data.usage,
+    output:     JSON.stringify(data.output),
+  });
+
   // Extract text from output array — find the message block
   const messageBlock = data.output?.find(o => o.type === 'message');
   const rawText      = messageBlock?.content?.[0]?.text ?? '';
 
   if (!rawText) throw new Error('LLM returned empty response');
+
+  console.info('create-domain: LLM raw text', { rawText: rawText.slice(0, 500) });
 
   // Strip markdown fences defensively, then parse JSON
   const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();

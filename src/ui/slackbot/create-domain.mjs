@@ -4,7 +4,8 @@
 // src/ui/slackbot/create-domain.mjs
 // Handles POST /api/v1/ui/slack/create-domain
 //
-// Accepts: /create-domain <domain-name>
+// Accepts: /create-domain <description>
+// The full user input is passed to the LLM which infers a clean domain name.
 // Validates: SlackbotFunction → SQS WorkflowQueue → ProcStepOrchestrator
 //            → ServFunction (schema + table) → SQS CallbackResults
 //            → SlackCallbackListenerFunction → Slack thread
@@ -24,24 +25,24 @@ export async function handle(req) {
     return err(405, 'Method not allowed — create-domain expects POST', req.correlationId);
   }
 
-  // Slack slash command sends the argument in body.text
-  const domainName   = (req.body?.text || '').trim().toLowerCase();
+  // Pass the full Slack text to the LLM — it infers a clean domain name
+  const userInput    = (req.body?.text || '').trim();
   const slackUser    = req.body?.user_id    || 'unknown';
   const slackChannel = req.body?.channel_id || 'unknown';
   const workflowId   = req.correlationId;
 
-  if (!domainName) {
-    return err(400, 'Usage: /create-domain <domain-name>', req.correlationId);
+  if (!userInput) {
+    return err(400, 'Usage: /create-domain <description>', req.correlationId);
   }
 
-  console.info('create-domain start', { workflowId, domainName, slackUser, slackChannel });
+  console.info('create-domain start', { workflowId, userInput, slackUser, slackChannel });
 
   // Post ACK — becomes the thread root for the result reply
   let ackTs;
   try {
     const ack = await slack.chat.postMessage({
       channel: slackChannel,
-      text:    `⏳ Creating domain *${domainName}* — watch this thread for results`,
+      text:    `⏳ Designing domain for *${userInput}* — watch this thread for results`,
     });
     ackTs = ack.ts;
   } catch (error) {
@@ -56,7 +57,7 @@ export async function handle(req) {
       MessageBody: JSON.stringify({
         type:       'CREATE_DOMAIN',
         workflowId,
-        domainName,
+        userInput,
         slackUser,
         callback: {
           provider: 'slack',
