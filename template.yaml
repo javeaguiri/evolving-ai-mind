@@ -458,15 +458,13 @@ Resources:
 
   # ===========================================================================
   # LAMBDA 5 — PROC Step Orchestrator (SQS-triggered)
-  # TODO (Phase 2): Update Handler to src/proc/step-orchestrator.handler
-  #                 once src/proc/step-orchestrator.mjs is written.
-  #                 Currently points to legacy handler.mjs — not called during
-  #                 scaffolding phase, safe to leave as placeholder.
+  # Consumes SYSSQSWorkflow messages — ping-sqs, ping-e2e, create-domain.
   # ===========================================================================
   ProcStepOrchestrator:
     Type: AWS::Serverless::Function
     Properties:
       Runtime: nodejs22.x
+      Timeout: 60                    # LLM schema preparation can take 10-30s on first request
       FunctionName: SYSLMBOrchestrator # "Pretty" name
       Handler: step-orchestrator.handler
       CodeUri: src/proc/

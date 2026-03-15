@@ -5,7 +5,7 @@
 // SQS-triggered Lambda — consumes SYSSQSWorkflow messages.
 // For ping-sqs:      receives hop 1, sends hop 2 to SYSSQSCallbackResults.
 // For ping-e2e:      receives hop 1, invokes ServFunction (ping-db), sends result.
-// For create-domain: loads scaffold, invokes ServFunction (schema + table), sends result.
+// For create-domain: reads prompt from PGC_Prompt, calls LLM, creates PGD tables.
 // For future workflows: routes to the appropriate workflow executor.
 //
 // This is the PROC layer's async backbone — every workflow step
@@ -14,14 +14,9 @@
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { LambdaClient, InvokeCommand }   from '@aws-sdk/client-lambda';
 
-const sqs = new SQSClient({});
-// Phase 2b scaffold — replaced by LLM call in Phase 2c
-import recipesScaffold from './scaffolds/recipes.json' with { type: 'json' };
+const AGENT_API_URL = 'https://api.perplexity.ai/v1/agent';
 
-const SCAFFOLDS = {
-  recipes: recipesScaffold,
-};
-
+const sqs    = new SQSClient({});
 const lambda = new LambdaClient({});
 
 export async function handler(event) {
@@ -96,28 +91,43 @@ async function processRecord(record) {
 
 // ---------------------------------------------------------------------------
 // CREATE_DOMAIN
-// Phase 2b: loads scaffold JSON — Phase 2c replaces this with LLM call.
+// Phase 2c: reads prompt from PGC_Prompt, calls Perplexity Agent API,
+// parses LLM JSON response into scaffold, creates PGD tables.
 // ---------------------------------------------------------------------------
 
 async function handleCreateDomain(message) {
   const { domainName, workflowId, callback } = message;
 
-  // Phase 2b — load scaffold. Phase 2c: replace with LLM call reading
-  // from PGC_Prompt via SERV-Table getRows.
-  const scaffold = SCAFFOLDS[domainName];
-  if (!scaffold) {
-    await sendCallbackResult(callback, {
-      type:       'CREATE_DOMAIN_RESULT',
-      workflowId,
-      result: {
-        success: false,
-        message: `❌ No scaffold found for domain "${domainName}" — Phase 2c will add LLM generation`,
-      },
-    });
-    return;
+  // Step 0 — read create_domain prompt from PGC_Prompt via SERV-Table
+  const promptResp = await invokeServ('POST', '/api/v1/serv/table/getRows', {
+    tableName: 'PGC_Prompt',
+    filters:   [{ column: 'intent_category', op: 'eq', value: 'create_domain' }],
+    orderBy:   { column: 'version', direction: 'desc' },
+    limit:     1,
+  });
+
+  if (!promptResp.success || promptResp.count === 0) {
+    throw new Error('create_domain prompt not found in PGC_Prompt — run migration first');
   }
 
-  console.info('create-domain: scaffold loaded', { domainName, workflowId });
+  const promptRow  = promptResp.rows[0];
+  const promptText = promptRow.prompt_text.replace('{{domainName}}', domainName);
+
+  console.info('create-domain: prompt loaded', {
+    promptId: promptRow.id,
+    version:  promptRow.version,
+    model:    promptRow.model,
+    workflowId,
+  });
+
+  // Step 0b — call LLM via Perplexity Agent API
+  const scaffold = await callLlm(promptRow.model, promptText, domainName);
+
+  console.info('create-domain: LLM returned scaffold', {
+    domainName,
+    tables: scaffold.tables?.map(t => t.tableName),
+    workflowId,
+  });
 
   // Step 1 — create each PGD table via SERV-Schema createTable
   const createdTables = [];
@@ -136,23 +146,6 @@ async function handleCreateDomain(message) {
     console.info('create-domain: table created', { tableName: table.tableName, workflowId });
   }
 
-  // If all tables already existed, domain was previously created — skip insert and return early
-  const allExisted = createdTables.every(t => t.status === 'already_existed');
-  if (allExisted) {
-    await sendCallbackResult(callback, {
-      type:       'CREATE_DOMAIN_RESULT',
-      workflowId,
-      result: {
-        success: true,
-        message: `🧠 Domain *${domainName}* already exists — no changes made`,
-        domainName,
-        tables:  createdTables,
-        workflowId,
-        completedAt: new Date().toISOString(),
-      },
-    });
-    return;
-  }  
   // Step 2 — register domain help via SERV-Table insertRow
   const helpResp = await invokeServ('POST', '/api/v1/serv/table/insertRow', {
     tableName: 'PGC_DomainHelp',
@@ -215,6 +208,114 @@ async function invokeServ(method, path, body) {
 }
 
 /**
+ * Call Perplexity Agent API and return parsed JSON scaffold.
+ * Uses response_format json_schema for guaranteed structured output.
+ * Note: first request with a new schema takes 10-30s to prepare —
+ * subsequent requests are fast. SQS will retry if first call times out.
+ */
+async function callLlm(model, promptText, domainName) {
+  const llmKey = process.env.LLM_API_KEY;
+  if (!llmKey) throw new Error('LLM_API_KEY env var not set');
+
+  const response = await fetch(AGENT_API_URL, {
+    method:  'POST',
+    headers: {
+      'Authorization': `Bearer ${llmKey}`,
+      'Content-Type':  'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input:        `Create a database domain called "${domainName}"`,
+      instructions: promptText,
+      temperature:  0.2,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'domain_scaffold',
+          schema: {
+            type: 'object',
+            required: ['domain', 'tables', 'domainHelp'],
+            properties: {
+              domain: { type: 'string' },
+              tables: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['tableName', 'target', 'description', 'columns', 'foreignKeys', 'constraints', 'triggers'],
+                  properties: {
+                    tableName:   { type: 'string' },
+                    target:      { type: 'string', enum: ['pgd'] },
+                    description: { type: 'string' },
+                    columns: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        required: ['name', 'type'],
+                        properties: {
+                          name:       { type: 'string' },
+                          type:       { type: 'string' },
+                          primaryKey: { type: 'boolean' },
+                          nullable:   { type: 'boolean' },
+                          unique:     { type: 'boolean' },
+                          default:    { type: 'string' },
+                        },
+                      },
+                    },
+                    foreignKeys: { type: 'array', items: { type: 'object' } },
+                    constraints: { type: 'array', items: { type: 'object' } },
+                    triggers:    { type: 'array', items: { type: 'object' } },
+                  },
+                },
+              },
+              domainHelp: {
+                type: 'object',
+                required: ['domain', 'aliases', 'description', 'commands'],
+                properties: {
+                  domain:      { type: 'string' },
+                  aliases:     { type: 'array', items: { type: 'string' } },
+                  description: { type: 'string' },
+                  commands:    { type: 'array', items: { type: 'object' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Agent API error ${response.status}: ${text}`);
+  }
+
+  const data = await response.json();
+
+  // Extract text from output array — find the message block
+  const messageBlock = data.output?.find(o => o.type === 'message');
+  const rawText      = messageBlock?.content?.[0]?.text ?? '';
+
+  if (!rawText) throw new Error('LLM returned empty response');
+
+  // Strip markdown fences defensively, then parse JSON
+  const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  let scaffold;
+  try {
+    scaffold = JSON.parse(clean);
+  } catch (error) {
+    throw new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
+  }
+
+  // Shape validation
+  if (!scaffold.domain || !Array.isArray(scaffold.tables) || scaffold.tables.length === 0) {
+    throw new Error(`LLM scaffold missing required fields. Got: ${JSON.stringify(scaffold).slice(0, 200)}`);
+  }
+
+  return scaffold;
+}
+
+/**
  * Send a result message to SYSSQSCallbackResults.
  */
 async function sendCallbackResult(callback, payload) {
@@ -252,11 +353,11 @@ async function handlePingE2e(message) {
     FunctionName:   process.env.SERV_FUNCTION_NAME,
     InvocationType: 'RequestResponse',
     Payload:        JSON.stringify({
-      httpMethod: 'GET',
-      path:       '/api/v1/serv/ping-db',
+      httpMethod:     'GET',
+      path:           '/api/v1/serv/ping-db',
       pathParameters: { proxy: 'ping-db' },
-      headers:    {},
-      body:       null,
+      headers:        {},
+      body:           null,
     }),
   }));
 
