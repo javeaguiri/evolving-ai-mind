@@ -541,7 +541,7 @@ not yet supported.
 
 ---
 
-4.3.4 #### Updated PGC Table Count
+#### 4.3.4 Updated PGC Table Count
 
 | # | Table | Status |
 |---|---|---|
@@ -649,10 +649,10 @@ Step 7 input: "{{item}}"                                            → each tab
 workflow frame. Sub-workflow frames have their own `local_state`. When a sub-workflow
 pops, its output can be written back to the parent frame's `local_state` via the
 sub-workflow's own `output_key`.
-```
 
 ### Step types
 
+```
 | Type | Description | Executes |
 |---|---|---|
 | `serv_query` | SELECT from PGD table | ServFunction direct invoke |
@@ -667,8 +667,8 @@ sub-workflow's own `output_key`.
 | `js_transform` | Run sandboxed JS (Option C) | In-process sandbox with security gate |
 | `notify` | Post message to UI | SQS SlackResults → CallbackListener |
 | `end` | Terminate workflow cleanly | — |
+```
 
----
 
 ### 6.3 Execution Stack — Frame Schema
 
