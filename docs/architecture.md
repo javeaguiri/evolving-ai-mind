@@ -44,6 +44,7 @@ A self-evolving, low-cost cognitive automation brain that:
 - All esbuild configs use Banner CJS shim for dynamic require compatibility
 - `OutExtension: .js=.mjs` on all functions — Lambda loads as ESM
 - JSON template files imported as static ES module imports — NOT read via `fs.readFile` at runtime (esbuild bundles them)
+- PROC endpoint modules are transport-agnostic — never import AWS SDK or Slack SDK. Check `req.source` ('http' or 'sqs') only to determine response path. Business logic is identical for both transports.
 
 ---
 
@@ -100,16 +101,164 @@ not shared across users of a multi-tenant service.
 
 ```
 ProcFunction handler.mjs
-  if (event.Records)   → SQS path → processWorkflowMessage(record)
+  if (event.Records)    → SQS path → processSqsBatch(event)
   if (event.httpMethod) → HTTP path:
       parseEvent() → normalised req
       segments = path.split('/').filter(Boolean)
       req.subRoute = segments.pop()
       req.route    = segments.pop()
-      switch(req.route) → delegate to handler module
-```
+      switch(req.route) → delegate to endpoint module
 
 All other Lambda handlers follow the same HTTP dispatch pattern.
+
+### Directory structure and file partitioning rules
+
+```
+evolving-mind-ai/
+├── src/
+│   ├── ui/
+│   │   └── slackbot/                 Experience tier — Slack only
+│   │       ├── handler.mjs           Lambda entry point — HTTP dispatch only
+│   │       ├── ping.mjs              /ping-api
+│   │       ├── ping-sqs.mjs          /ping-sqs
+│   │       ├── ping-llm.mjs          /ping-llm
+│   │       ├── ping-e2e.mjs          /ping-e2e
+│   │       ├── create-domain.mjs     /create-domain — ACK + SQS enqueue only
+│   │       └── callback.mjs          SQS CallbackResults consumer — Slack reply
+│   │
+│   ├── proc/                         Process tier — business logic only
+│   │   ├── handler.mjs               Lambda entry — HTTP + SQS dual dispatch
+│   │   │                             Detects event.Records vs event.httpMethod
+│   │   │                             NO AWS SDK imports
+│   │   ├── ping-llm.mjs              /proc/ping-llm
+│   │   ├── create-domain.mjs         /proc/create-domain — transport-agnostic
+│   │   ├── design-domain.mjs         /proc/design-domain — LLM call, no DB writes
+│   │   ├── classify-intent.mjs       /proc/classify-intent
+│   │   ├── run-workflow.mjs          /proc/run-workflow — Step Processor
+│   │   ├── shutdown.mjs              /proc/shutdown
+│   │   ├── migrations/               One-time DB seed scripts — run manually
+│   │   │   └── seed-*.mjs
+│   │   └── scaffolds/                Phase 2b only — deleted when LLM takes over
+│   │       └── recipes.json
+│   │
+│   ├── serv/                         Service tier — DB access only
+│   │   ├── handler.mjs               Lambda entry — HTTP dispatch only
+│   │   ├── ping-db.mjs               /serv/ping-db
+│   │   ├── schema.mjs                /serv/schema/* — DDL
+│   │   ├── table.mjs                 /serv/table/* — DML
+│   │   ├── init-brain.mjs            Bootstrap — PGC table creation + seeding
+│   │   └── templates/
+│   │       └── pgc/                  JSON table definitions imported at build time
+│   │           ├── PGC_Schema.json
+│   │           ├── PGC_TableMap.json
+│   │           └── ...
+│   │
+│   └── shared/                       Cross-cutting utilities — no business logic
+│       ├── lambda-utils.mjs          parseEvent, ok, err — used by all Lambda handlers
+│       └── sqs-callback.mjs          enqueueCallback() — ONLY place @aws-sdk/client-sqs
+│                                     lives in ProcFunction
+│
+├── docs/
+│   └── architecture.md
+├── template.yaml                     SAM/CloudFormation — infrastructure only
+├── samconfig.toml
+├── package.json
+└── .samignore
+```
+
+### File partitioning rules — where does new code go?
+
+**Experience tier (`src/ui/`):**
+- Slack command parsing, ACK messages, thread formatting
+- SQS enqueueing to WorkflowQueue (fire and forget — no business logic)
+- Slack callback posting (`callback.mjs`)
+- `@aws-sdk/client-sqs` and `@slack/web-api` are allowed here
+- Never contains business logic or DB calls
+
+**Process tier (`src/proc/`):**
+- All business logic — LLM calls, workflow orchestration, intent classification
+- Every endpoint module is transport-agnostic:
+  - No `@aws-sdk/*` imports in endpoint modules
+  - No `@slack/*` imports in endpoint modules
+  - Use `fetch()` for all external calls (SERV, LLM)
+  - Check `req.source` only to determine response path
+- `handler.mjs` is the only file in proc that handles SQS event structure
+- `enqueueCallback()` from `src/shared/sqs-callback.mjs` is how proc sends results back
+
+**Service tier (`src/serv/`):**
+- PostgreSQL access only — `pg` client is allowed here
+- No business logic — pure data access and DDL
+- No LLM calls, no SQS, no Slack
+- `init-brain.mjs` is the only file allowed to create tables or seed rows at bootstrap
+
+**Shared (`src/shared/`):**
+- Pure utilities with no business logic and no tier-specific imports
+- `lambda-utils.mjs` — `parseEvent`, `ok`, `err`, `buildReqFromSqs`
+- `sqs-callback.mjs` — `enqueueCallback()` — the ONLY place `@aws-sdk/client-sqs`
+  is imported in `ProcFunction`. Isolated here so endpoint modules stay AWS-agnostic.
+
+**When adding a new PROC endpoint:**
+1. Create `src/proc/<endpoint-name>.mjs` — export `handle(req)`
+2. Add `case '<endpoint-name>': return handle(req)` to HTTP switch in `handler.mjs`
+3. Add `case '<SQS_MESSAGE_TYPE>': return handle(buildReq(message))` to SQS switch
+4. Document in `openapi.yaml` spec-first
+5. Never import AWS SDK in the endpoint module
+```
+
+### Transport-agnostic endpoint pattern — IMPORTANT
+
+`ProcFunction` endpoint modules are called identically whether the request
+arrived via HTTP (API Gateway) or SQS (WorkflowQueue). This is the core of
+the Mulesoft process tier principle — business logic is transport-agnostic.
+
+**How it works:**
+
+`processSqsBatch` builds the same normalised `req` object that `parseEvent`
+builds from HTTP events. The endpoint module receives identical input either way:
+
+```js
+// HTTP delivery
+POST /api/v1/proc/create-domain  { userInput: 'stock portfolio' }
+  → parseEvent(event)  → req = { route: 'create-domain', body: { userInput }, source: 'http', ... }
+  → createDomain(req)
+
+// SQS delivery
+{ type: 'CREATE_DOMAIN', userInput: 'stock portfolio', callback: {...}, traceId: '...' }
+  → buildReqFromSqs(record) → req = { route: 'create-domain', body: { userInput }, source: 'sqs', callback, traceId, ... }
+  → createDomain(req)
+```
+
+The endpoint function `createDomain(req)` never imports AWS SDK or Slack SDK.
+It contains only business logic and HTTP fetch calls to SERV and LLM.
+
+**The one difference — response path:**
+
+The endpoint checks `req.source` to determine how to deliver results:
+
+```js
+// src/proc/create-domain.mjs
+export async function handle(req) {
+  const result = await doWork(req.body);
+
+  if (req.source === 'http') {
+    return ok(result, req.traceId);          // JSON response to API Gateway caller
+  }
+
+  // SQS — enqueue result to CallbackResults for SlackCallbackListenerFunction
+  await enqueueCallback(req.callback, {
+    type:    'CREATE_DOMAIN_RESULT',
+    result,
+    traceId: req.traceId,
+  });
+  return { batchItemFailures: [] };          // SQS success — no retry
+}
+```
+
+This pattern means every PROC endpoint is:
+- **Directly testable via curl** — no SQS, no Slack required
+- **Callable from Slack** — via SQS async path
+- **Cloud-agnostic** — no AWS SDK in the endpoint module itself
+- **Single source of truth** — one function, two transports, identical business logic
 
 ---
 

@@ -1,165 +1,120 @@
-# evolving-mind-ai — Session Handoff
-<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
-<!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
-<!-- See LICENSE file in the project root for full license terms. -->
+We are building evolving-mind-ai v3.2 — a self-evolving, low-cost cognitive
+automation system built on AWS Lambda, SQS, PostgreSQL (RDS), and a Slack bot.
 
----
+CRITICAL: Read docs/architecture.md before doing anything else in every
+conversation. It contains every architectural decision, their rationale, and
+things we explicitly decided NOT to do. Never suggest alternatives to decisions
+marked as final in that document.
 
-## How To Use This Document
+GENERAL RULES:
+- Never suggest changing: ESM format, esbuild bundler, shared LambdaExecutionRole,
+  Lambda-outside-VPC architecture, SSM String parameters. These are final.
+- Always wait for all relevant files to be shared before writing any code.
+- Always propose changes and wait for confirmation before writing code on
+  complex tasks.
+- Iterate with minimal diffs — change only what is necessary.
+- Never rewrite a file completely unless explicitly asked.
+- Always check existing patterns in the codebase before introducing new ones.
+- Before placing any new file, consult the directory structure and partitioning
+  rules in architecture.md Section 3.
 
-Paste the prompt below as your first message in the new chat thread,
-then attach or paste every file listed in the File Manifest.
-Do not start asking questions or requesting code until Claude confirms
-it has read all files and the architecture document.
+COPYRIGHT:
+Every .mjs file must have this exact header on lines 1-3:
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
 
----
-
-## Prompt — Paste This First
-
-```
-We are continuing development of evolving-mind-ai v3.2 — a self-evolving
-cognitive automation system built on AWS Lambda, SQS, PostgreSQL (RDS),
-and a Slack bot.
-
-Before doing anything else, please read docs/architecture.md carefully.
-It contains every architectural decision made so far, their rationale,
-and the list of things we explicitly decided NOT to do. Do not suggest
-alternatives to any decision marked as final in that document.
-
-After reading architecture.md, read all source files listed below.
-Then confirm you have read everything and summarise:
-  1. What has been built and is working
-  2. What the next task is
-  3. Any questions you have before starting
-
-Do not write any code until I confirm your summary is correct.
-
-Key facts:
-- Copyright header on every .mjs file:
-    // Copyright (c) 2026 Javea Guiri. All rights reserved.
-    // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-    // See LICENSE file in the project root for full license terms.
-- Windows dev environment — PowerShell backtick ` for line continuation
-- Git Bash available for Unix commands
-- Stack name: evomind-infrastructure, region us-east-2
+ENVIRONMENT:
+- Windows development — use cmd.exe for curl, not PowerShell
+- AWS stack: evomind-infrastructure, region us-east-2
 - API base: https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod
-- Log tailing: aws logs tail /aws/lambda/<function-name> --follow
-```
+- Log tailing: aws logs tail /aws/lambda/<name> --follow --region us-east-2
+- Log history: aws logs tail /aws/lambda/<name> --since 30m --region us-east-2
+- Deploy: sam build && sam deploy
+- Local scripts: set VAR=value && node script.mjs  (--env-file has CRLF issues on Windows)
+- .samignore excludes postman/ — removed from repo due to em-dash filename issue
 
----
+DATABASE:
+- PGC database — system config tables (PGC_* tables)
+- PGD database — user domain tables (PGD_* tables)
+- Table names are mixed case and MUST be quoted in SQL: "PGC_Schema"
+- ssl: { rejectUnauthorized: false } on all pg connections — never change this
+- PGC_WorkflowRun and PGC_Workflow bootstrap templates are STALE — new safety
+  columns in architecture.md Section 4.4 not yet reflected in JSON templates
+- PGC_DATABASE_URL: set PGC_DATABASE_URL=postgresql://... && node script.mjs
 
-## File Manifest — Attach All Of These
+THREE-TIER ARCHITECTURE (architecture.md Sections 2 and 3):
+- Experience tier: SlackbotFunction, SlackCallbackListenerFunction
+- Process tier: ProcFunction
+  - Dual-trigger: API Gateway (HTTP) + SQS WorkflowQueue (async)
+  - handler.mjs detects event type and routes to endpoint modules
+  - Endpoint modules are transport-agnostic — NO AWS SDK, NO Slack SDK
+  - req.source = 'http' | 'sqs' — only difference is response path:
+      http → return ok(result) directly to API Gateway
+      sqs  → enqueueCallback(req.callback, result) via sqs-callback.mjs
+  - sqs-callback.mjs is the ONLY place @aws-sdk/client-sqs lives in ProcFunction
+  - All external calls via fetch() — SERV_API_URL, LLM_AGENT_URL
+- Service tier: ServFunction — DB CRUD/DDL only, no business logic
 
-### Documentation (read first)
-```
-docs/architecture.md               ← START HERE — all decisions and rationale
-docs/openapi.yaml                  ← API spec
-```
+CURRENT STATE (last tag: v3.2-create-domain-live-llm):
+- Four Lambda functions deployed (ProcStepOrchestrator still exists — to be removed)
+- All 5 pings passing
+- SERV-Schema CRUD complete
+- SERV-Table getRows + insertRow complete (PGC_TableMap gated)
+- 10 PGC system tables bootstrapped and seeded
+- /create-domain working end-to-end with live LLM (Perplexity Agent API,
+  anthropic/claude-sonnet-4-5, prompt version 2)
+- PGD domains created: recipes, stock_portfolio
+- PGC_WorkflowRun + PGC_Workflow bootstrap templates stale (new safety columns)
 
-### Infrastructure
-```
-template.yaml                      ← SAM template — all Lambda + SQS + RDS resources
-```
+LAMBDA FUNCTIONS:
+- evolving-mind-ai-slackbot              (SlackbotFunction)
+- evolving-mind-ai-proc                  (ProcFunction) — HTTP only today, SQS to be added
+- evolving-mind-ai-serv                  (ServFunction)
+- evolving-mind-ai-slack-callback-listener (SlackCallbackListenerFunction)
+- SYSLMBOrchestrator                     (ProcStepOrchestrator) — TO BE DELETED
 
-### Shared
-```
-src/shared/ping-utils.mjs          ← parseEvent, respond, ok, err helpers
-```
+KEY FILES (current locations):
+- src/ui/slackbot/handler.mjs            Slackbot entry point
+- src/ui/slackbot/create-domain.mjs      Slack /create-domain command
+- src/ui/slackbot/callback.mjs           SQS CallbackResults consumer
+- src/proc/handler.mjs                   ProcFunction entry (HTTP only today)
+- src/proc/step-orchestrator.mjs         TO BE DELETED — logic moves to proc endpoints
+- src/serv/handler.mjs                   ServFunction entry
+- src/serv/schema.mjs                    SERV-Schema DDL
+- src/serv/table.mjs                     SERV-Table DML
+- src/serv/init-brain.mjs               Bootstrap
+- src/shared/ping-utils.mjs              TO BE RENAMED lambda-utils.mjs
 
-### UI / Slackbot layer
-```
-src/ui/slackbot/handler.mjs        ← route dispatcher
-src/ui/slackbot/ping.mjs           ← ping-api handler
-src/ui/slackbot/ping-sqs.mjs       ← ping-sqs handler (ACK via chat.postMessage)
-src/ui/slackbot/ping-llm.mjs       ← ping-llm handler
-src/ui/slackbot/ping-e2e.mjs       ← ping-e2e handler
-src/ui/slackbot/callback.mjs       ← SQS SlackResults consumer
-```
+NEXT TASK — Phase 1: Refactoring (must complete before any new features)
 
-### PROC layer
-```
-src/proc/handler.mjs               ← route dispatcher
-src/proc/ping-llm.mjs              ← Perplexity fortune cookie
-src/proc/step-orchestrator.mjs     ← SQS WorkflowQueue consumer
-```
+Goal: align codebase with three-tier architecture. Eliminate ProcStepOrchestrator.
+Make ProcFunction handle both HTTP and SQS. Make all proc endpoints transport-agnostic.
 
-### SERV layer
-```
-src/serv/handler.mjs               ← route dispatcher + bootstrap call
-src/serv/init-brain.mjs            ← PGC bootstrap, buildCreateTableSQL, seed helpers
-src/serv/schema.mjs                ← SERV-Schema CRUD endpoints
-src/serv/ping-db.mjs               ← PostgreSQL health check
-```
+Steps in order:
+1. Update PGC_Workflow + PGC_WorkflowRun JSON templates with new safety columns
+   (architecture.md Section 4.4) and drop/recreate PGC tables
+2. Add SERV_API_URL, LLM_AGENT_URL, LLM_CHAT_URL to SSM + template.yaml
+3. Create src/shared/sqs-callback.mjs — exports enqueueCallback()
+   ONLY place @aws-sdk/client-sqs lives in ProcFunction
+4. Create src/shared/lambda-utils.mjs — copy of ping-utils.mjs (rename)
+5. Add processSqsBatch() to src/proc/handler.mjs
+   — no AWS SDK, plain event.Records iteration
+   — builds normalised req from SQS message via buildReqFromSqs()
+   — dispatches to same endpoint modules as HTTP path
+6. Add SQS WorkflowQueue trigger to ProcFunction in template.yaml
+7. Remove ProcStepOrchestrator from template.yaml
+8. Move handleCreateDomain + callLlm into src/proc/create-domain.mjs
+   — transport-agnostic, no AWS SDK
+   — req.source === 'sqs' → enqueueCallback(), req.source === 'http' → return ok()
+9. Replace invokeServ Lambda invoke with fetch(process.env.SERV_API_URL + path)
+10. Delete src/proc/step-orchestrator.mjs
+11. Update all imports from ping-utils.mjs → lambda-utils.mjs (~10 files)
+12. Rename workflowId → traceId in all SQS payloads and UI messages
+13. Move PGC_Prompt, PGC_Workflow, PGC_IntentMap seeds into init-brain.mjs
+14. Move FK + constraint normalisation into schema.mjs createTable
+15. Add response_format json_schema back to callLlm Agent API call
 
-### PGC bootstrap templates (imported as ES module static imports)
-```
-src/serv/templates/pgc/PGC_Schema.json
-src/serv/templates/pgc/PGC_TableMap.json
-src/serv/templates/pgc/PGC_EntitySchema.json
-src/serv/templates/pgc/PGC_DomainHelp.json
-src/serv/templates/pgc/seeds/seed_PGC_Schema.json
-src/serv/templates/pgc/seeds/seed_PGC_TableMap.json
-```
-
-### PGD domain mockups (runtime data shape — not code files)
-```
-src/serv/templates/pgd/domains/recipes/PGD_Recipes.json
-src/serv/templates/pgd/domains/recipes/PGD_Ingredients.json
-src/serv/templates/pgd/domains/recipes/PGD_RecipeSteps.json
-src/serv/templates/pgd/domains/recipes/PGC_EntitySchema_Recipe.json
-src/serv/templates/pgd/domains/recipes/PGC_TableMap_Recipes.json
-```
-
----
-
-## Current State Summary — For Your Reference
-
-### What is working (verified with curl + CloudWatch logs)
-
-| Test | Status |
-|---|---|
-| `/ping-api` — Slack → SlackbotFunction | ✅ |
-| `/ping-llm` — Slack → ProcFunction → Perplexity | ✅ |
-| `/ping-sqs` — Slack → SQS → Orchestrator → SQS → Slack thread | ✅ |
-| `ping-db` — curl → ServFunction → RDS PGC + PGD | ✅ |
-| `/ping-e2e` — Slack → SQS → Orchestrator → ServFunction → RDS → Slack thread | ✅ |
-| `init-brain bootstrap` — 4 PGC tables created + seeded on cold start | ✅ |
-| `SERV-Schema createTable` | ✅ |
-| `SERV-Schema listTables` | ✅ |
-| `SERV-Schema getTable` | ✅ |
-| `SERV-Schema updateTable` | ✅ |
-| `SERV-Schema deleteTable` | ✅ |
-
-### Git tags
-```
-v3.2-scaffolding-complete   all 5 pings passing
-v3.2-ping-complete          ping-sqs threading + ping-e2e
-v3.2-serv-schema-complete   SERV-Schema CRUD + init-brain bootstrap
-```
-
-### Next task
-Implement PROC/Schema — `/create-domain` Slack command that:
-1. ACKs via `chat.postMessage` (same pattern as ping-sqs/ping-e2e)
-2. Enqueues `CREATE_DOMAIN` to SQS WorkflowQueue
-3. ProcStepOrchestrator routes `CREATE_DOMAIN`
-4. Calls LLM to generate domain JSON (tables, entity schema, domain help)
-5. Calls ServFunction directly (Lambda invoke) to execute createTable for each table
-6. Posts result to Slack thread via SQS SlackResults
-
-But before coding, two tech debt items should be resolved first:
-- Callback abstraction (remove Slack coupling from SERV request bodies)
-- PGC workflow table JSON templates (PGC_Workflow, PGC_WorkflowRun,
-  PGC_WorkflowRunStep, PGC_Prompt, PGC_IntentMap, PGC_WorkflowRunLock)
-
-### Files that will need to change for next task
-```
-src/ui/slackbot/handler.mjs          add create-domain route
-src/ui/slackbot/create-domain.mjs    NEW — ACK + enqueue CREATE_DOMAIN
-src/proc/step-orchestrator.mjs       add CREATE_DOMAIN case
-src/proc/create-domain.mjs           NEW — LLM call + SERV-Schema invokes
-src/ui/slackbot/callback.mjs         add CREATE_DOMAIN_RESULT case
-template.yaml                        SERV_FUNCTION_NAME already on Orchestrator
-                                     check SLACK_BOT_TOKEN on Orchestrator for LLM
-src/serv/init-brain.mjs              add 6 new PGC workflow tables to bootstrap
-src/serv/templates/pgc/              6 new JSON template files
-```
+Please confirm you have read docs/architecture.md and all uploaded files.
+Summarise: what has been built, what is working, and what the next task is.
+Do not write any code until I confirm your summary is correct.
