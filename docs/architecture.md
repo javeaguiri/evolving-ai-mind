@@ -110,6 +110,7 @@ ProcFunction handler.mjs
       switch(req.route) → delegate to endpoint module
 
 All other Lambda handlers follow the same HTTP dispatch pattern.
+```
 
 ### Directory structure and file partitioning rules
 
@@ -168,6 +169,7 @@ evolving-mind-ai/
 
 ### File partitioning rules — where does new code go?
 
+```
 **Experience tier (`src/ui/`):**
 - Slack command parsing, ACK messages, thread formatting
 - SQS enqueueing to WorkflowQueue (fire and forget — no business logic)
