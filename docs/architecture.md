@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Phase 2 in progress  
-Last updated: 2026-03-12
+Status: Active development — Phase 3 next  
+Last updated: 2026-03-15
 
 ---
 
@@ -47,64 +47,108 @@ A self-evolving, low-cost cognitive automation brain that:
 
 ---
 
-## 3. Lambda Architecture — Five Functions
+## 3. Lambda Architecture — Four Functions
 
-| Function | Name | Trigger | Owns |
-|---|---|---|---|
-| SlackbotFunction | `evolving-mind-ai-slackbot` | API Gateway | `/api/v1/ui/slack/{proxy+}` |
-| ProcFunction | `evolving-mind-ai-proc` | API Gateway | `/api/v1/proc/{proxy+}` |
-| ServFunction | `evolving-mind-ai-serv` | API Gateway | `/api/v1/serv/{proxy+}` |
-| SlackCallbackListenerFunction | `evolving-mind-ai-slack-callback-listener` | SQS SlackResultsQueue | Posts threaded Slack replies |
-| ProcStepOrchestrator | `SYSLMBOrchestrator` | SQS WorkflowQueue | Workflow step execution |
+| Function | Name | Triggers | Tier | Owns |
+|---|---|---|---|---|
+| SlackbotFunction | `evolving-mind-ai-slackbot` | API Gateway | Experience | `/api/v1/ui/slack/{proxy+}` — Slack parsing, ACK, threading |
+| ProcFunction | `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | `/api/v1/proc/{proxy+}` — business logic, LLM, intent, workflow execution |
+| ServFunction | `evolving-mind-ai-serv` | API Gateway | Service | `/api/v1/serv/{proxy+}` — DB CRUD, DDL, data access |
+| SlackCallbackListenerFunction | `evolving-mind-ai-slack-callback-listener` | SQS CallbackResults | Experience | Posts threaded Slack replies |
 
-### Route dispatch pattern — same in every Lambda
+**Note:** `ProcStepOrchestrator` (`SYSLMBOrchestrator`) is eliminated as a separate Lambda.
+`ProcFunction` handles both HTTP requests (API Gateway) and async workflow messages (SQS WorkflowQueue)
+via dual event triggers in `template.yaml`. `handler.mjs` detects the event type and routes accordingly:
+```js
+if (event.Records) → SQS dispatch path → processWorkflowMessage()
+if (event.httpMethod) → HTTP dispatch path → switch(req.route)
+```
+This eliminates the Lambda-to-Lambda hop, reduces cold start surface, and keeps all
+process-tier logic in one deployable unit.
+
+### Three-tier architecture — Mulesoft model
+
+The system follows a strict three-tier separation inspired by Mulesoft's API-led connectivity.
+The system is designed for household-scale private deployment — PII is segmented per instance,
+not shared across users of a multi-tenant service.
+
+**Experience tier** (`SlackbotFunction`, `SlackCallbackListenerFunction`)
+- Owned by UI concerns — Slack parsing, ACK messages, thread formatting
+- Never contains business logic
+- Today: Slack. Tomorrow: Teams, webhook, or any other UI — swap the experience layer only
+
+**Process tier** (`ProcFunction`)
+- Contains all business logic and the true value of the system
+- Cloud-agnostic — no AWS SDK imports
+- Calls SERV and LLM via HTTP fetch only (API Gateway URLs)
+- Testable directly via curl without SQS or Slack
+- Handles both HTTP (API Gateway) and async (SQS WorkflowQueue) event types
+- All endpoints documented spec-first in `openapi.yaml`
+
+**Service tier** (`ServFunction`)
+- Interfaces external system touchpoints — PostgreSQL today
+- If the database changes, only this layer is refactored
+- No business logic — pure data access
+- All endpoints documented in `openapi.yaml`
+
+**SQS listener** (`SlackCallbackListenerFunction`)
+- AWS + Slack specific — contains ONLY AWS SDK + Slack SDK code
+- Routes on `callback.provider` — adding a new UI is one new `case`
+- Cloud portability: replacing AWS SQS with Azure Service Bus only touches this file
+
+### Route dispatch pattern
 
 ```
-handler.mjs (entry point)
-  → parseEvent() → normalised req object
-  → segments = path.split('/').filter(Boolean)
-  → req.subRoute = segments.pop()      // last segment
-  → req.route    = segments.pop()      // second-to-last, falls back to subRoute
-  → switch(req.route) → delegate to handler module
+ProcFunction handler.mjs
+  if (event.Records)   → SQS path → processWorkflowMessage(record)
+  if (event.httpMethod) → HTTP path:
+      parseEvent() → normalised req
+      segments = path.split('/').filter(Boolean)
+      req.subRoute = segments.pop()
+      req.route    = segments.pop()
+      switch(req.route) → delegate to handler module
 ```
 
-Handler modules receive the normalised `req` object and return API Gateway response objects directly.
+All other Lambda handlers follow the same HTTP dispatch pattern.
 
 ---
 
-## 4. Database Architecture
+## 4. Data Architecture
 
-### Two separate PostgreSQL instances
+### 4.1 Two PostgreSQL Instances
 
 | Instance | Purpose | Contains |
 |---|---|---|
 | PGC | Config / system tables | PGC_* tables — system metadata, workflow definitions, prompts |
 | PGD | Domain / user data | PGD_* tables — user-created domain tables |
 
-### Naming conventions
+### 4.2 Naming Conventions and Bootstrap
 
+**Naming:**
 - System config tables: `PGC_*` (live in PGC database)
 - User domain tables: `PGD_*` (live in PGD database)
 - Table names are mixed case and MUST be quoted in SQL: `"PGC_Schema"`
 
-### Bootstrap — `init-brain.mjs`
+**Bootstrap — `init-brain.mjs`**
 
 On every Lambda cold start, `bootstrap()` runs and is idempotent:
 1. Install `set_updated_at()` trigger function on PGC
-2. `CREATE TABLE IF NOT EXISTS` for all four PGC system tables (from imported JSON templates)
+2. `CREATE TABLE IF NOT EXISTS` for all PGC system tables (from imported JSON templates)
 3. Seed self-referential rows into `PGC_Schema` (`ON CONFLICT DO NOTHING`)
 4. Seed gatekeeper rows into `PGC_TableMap` (`ON CONFLICT DO NOTHING`)
-5. Set `bootstrapComplete = true` — skipped on warm containers
+5. Seed `PGC_Prompt` rows for system workflows (`ON CONFLICT DO NOTHING`)
+6. Seed `PGC_Workflow` rows for system workflows (`ON CONFLICT DO NOTHING`)
+7. Seed `PGC_IntentMap` rows (`ON CONFLICT DO NOTHING`)
+8. Set `bootstrapComplete = true` — skipped on warm containers
 
-Bootstrap template files live in `src/serv/templates/pgc/` and are imported as ES module static imports — NOT read via fs at runtime.
+Bootstrap template files live in `src/serv/templates/pgc/` and are imported as ES module
+static imports — NOT read via `fs.readFile` at runtime.
 
----
+### 4.3 PGC System Tables
 
-## 5. PGC System Tables — Current State (Bootstrapped)
-
-### PGC_Schema
+#### PGC_Schema
 Registry of ALL table definitions — both system (PGC) and user domain (PGD).
-Every table in the system has a row here including the system tables themselves (self-referential).
+Every table in the system has a row here including the system tables themselves.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -119,7 +163,7 @@ Every table in the system has a row here including the system tables themselves 
 | created_at | timestamptz | |
 | updated_at | timestamptz | Auto-updated by trigger |
 
-### PGC_TableMap
+#### PGC_TableMap
 SERV-Table security gatekeeper. SERV-Table rejects writes to any table not registered here.
 
 | Column | Type | Notes |
@@ -135,7 +179,7 @@ SERV-Table security gatekeeper. SERV-Table rejects writes to any table not regis
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_EntitySchema
+#### PGC_EntitySchema
 Defines business entities that span multiple PGD tables.
 SERV-Entity reads this to build `jsonb_agg` queries.
 
@@ -151,7 +195,7 @@ SERV-Entity reads this to build `jsonb_agg` queries.
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_DomainHelp
+#### PGC_DomainHelp
 User-facing command aliases and help text per domain.
 Powers `/help {domain}` responses. Populated at runtime by PROC when a domain is created.
 
@@ -165,34 +209,35 @@ Powers `/help {domain}` responses. Populated at runtime by PROC when a domain is
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
----
+### 4.4 PGC Workflow Tables
 
-## 6. PGC Workflow Tables — Current State (Bootstrapped)
+These tables support the PROC layer workflow execution engine.
 
-These four tables support the PROC layer workflow execution engine.
-
-### PGC_Workflow
+#### PGC_Workflow
 Stores reusable workflow definitions generated by LLM or created manually.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
-| name | text UNIQUE | e.g. "deduct_inventory" |
+| name | text UNIQUE | e.g. "create_domain", "deduct_inventory" |
 | description | text | |
 | intent_keywords | jsonb | For coded intent matching |
 | intent_embedding | vector | For pgvector similarity matching (future) |
-| steps | jsonb | Array of StepDefinition (see Section 9) |
+| steps | jsonb | Array of StepDefinition |
 | state_strategy | text | `fire_and_forget`, `sequential`, `sequential_with_confirmation` |
 | confirmation_required_at | jsonb | Step indices requiring human gate |
-| js_extensions | jsonb | Optional sandboxed JS for complex steps (Option C) |
+| js_extensions | jsonb | Optional sandboxed JS for complex steps |
 | model_used | text | Which LLM generated this workflow |
 | quality_score | numeric | Human or auto-rated |
 | version | integer | |
 | parent_workflow_id | integer FK | Self-referential — workflow evolution history |
+| max_execution_ms | integer | Execution accumulator ceiling. NULL = no limit |
+| max_steps_per_window | integer | Velocity detector threshold. Default 20 |
+| window_seconds | integer | Velocity detector window in seconds. Default 10 |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_WorkflowRun
+#### PGC_WorkflowRun
 One row per workflow execution. Holds the execution stack and accumulated state.
 
 | Column | Type | Notes |
@@ -201,16 +246,20 @@ One row per workflow execution. Holds the execution stack and accumulated state.
 | workflow_id | integer FK | → PGC_Workflow.id |
 | status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `completed`, `failed`, `cancelled` |
 | input | jsonb | Original user intent + parameters |
-| stack | jsonb | Execution stack — array of FrameDefinition (see Section 10) |
+| stack | jsonb | Execution stack — array of FrameDefinition |
 | output | jsonb | Final workflow output |
 | callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }` |
 | error | jsonb | Last error details |
+| total_execution_ms | integer | Running sum of all step duration_ms — feeds execution accumulator |
+| step_count | integer | Total steps executed this run — incremented on every step |
+| steps_in_window | integer | Steps since last human_gate — reset on human_gate — feeds velocity detector |
+| window_started_at | timestamptz | When current velocity window started |
 | started_at | timestamptz | |
 | completed_at | timestamptz | |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_WorkflowRunStep
+#### PGC_WorkflowRunStep
 Append-only audit log — one row per step execution. Never updated after insert.
 Used for idempotency checks on SQS redelivery and debugging.
 
@@ -228,7 +277,7 @@ Used for idempotency checks on SQS redelivery and debugging.
 | duration_ms | integer | |
 | executed_at | timestamptz | |
 
-### PGC_Prompt
+#### PGC_Prompt
 Stores LLM prompts with versioning and quality tracking for self-improvement.
 
 | Column | Type | Notes |
@@ -245,7 +294,7 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_IntentMap
+#### PGC_IntentMap
 Maps user input patterns to workflows or action types for the Intent Preprocessor.
 
 | Column | Type | Notes |
@@ -258,7 +307,7 @@ Maps user input patterns to workflows or action types for the Intent Preprocesso
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-### PGC_WorkflowRunLock
+#### PGC_WorkflowRunLock
 Reserved for future parallel execution — optimistic locking. NOT used in sequential mode.
 
 | Column | Type | Notes |
@@ -273,9 +322,9 @@ Reserved for future parallel execution — optimistic locking. NOT used in seque
 
 ---
 
-## 7. SERV Layer — Implemented
+## 5. Service Layer — SERV
 
-### SERV-Schema (complete)
+### 5.1 SERV-Schema (complete)
 DDL executor and PGC metadata registry.
 
 | Endpoint | Method | Description |
@@ -291,7 +340,7 @@ Security gate on `createTable`:
 - Table names must match `^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$`
 - Protected system tables (`PGC_Schema`, `PGC_TableMap`, `PGC_EntitySchema`, `PGC_DomainHelp`) cannot be dropped
 
-### SERV-Table (partial — getRows + insertRow complete)
+### 5.2 SERV-Table (partial — getRows + insertRow complete)
 DML executor gated by PGC_TableMap.
 
 | Endpoint | Method | Description |
@@ -305,14 +354,16 @@ Security gate on all operations:
 - Filter operators validated against whitelist (eq, neq, gt, gte, lt, lte, like, in, is_null, not_null)
 - `insertRow` additionally checks `allow_insert = true`
 
-### SERV services — not yet built
+### 5.3 SERV services — not yet built
 - **SERV-Table** updateRow, deleteRow — deferred, not needed until Phase 3
 - **SERV-Query** — parameterised SELECT with joins, pagination
 - **SERV-Entity** — multi-table jsonb_agg queries driven by PGC_EntitySchema
 
 ---
 
-## 8. Callback / Notification Abstraction — IMPLEMENTED
+## 6. Process Layer — PROC
+
+### 6.1 Callback / Notification Abstraction — IMPLEMENTED
 
 All SQS message payloads use `callback: { provider, channel, threadId }`.
 `routeCallback()` in `callback.mjs` dispatches on `provider` — adding a new UI is one new `case`.
@@ -320,7 +371,7 @@ SERV is UI-agnostic — callback fields are never read in the SERV layer.
 
 ---
 
-## 9. Step Definition Schema
+### 6.2 Step Definition Schema
 
 Every workflow step in `PGC_Workflow.steps` follows this schema:
 
@@ -336,6 +387,26 @@ Every workflow step in `PGC_Workflow.steps` follows this schema:
   "on_condition": { "if_true": "next | step:N", "if_false": "next | step:N" },
   "confirmation_message": null
 }
+```
+
+### `output_key` — step state hashmap
+
+`output_key` is a string key into the frame's `local_state` hashmap. When a step
+completes, the Step Processor stores the step's result at `local_state[output_key]`.
+Subsequent steps read from it using `{{output_key}}` or `{{output_key.field}}`
+template syntax in their `input`, `message_template`, and `context_key` fields.
+
+```
+Step 1 executes → local_state['proposed_scaffold'] = { domain, tables, domainHelp }
+Step 2 message_template: "Plan for *{{proposed_scaffold.domain}}*"  → resolved at runtime
+Step 5 items_key: "proposed_scaffold.tables"                        → iterator seeds from it
+Step 7 input: "{{item}}"                                            → each table from iterator
+```
+
+`local_state` is a plain JSON object on the frame — a hashmap scoped to the current
+workflow frame. Sub-workflow frames have their own `local_state`. When a sub-workflow
+pops, its output can be written back to the parent frame's `local_state` via the
+sub-workflow's own `output_key`.
 ```
 
 ### Step types
@@ -357,7 +428,7 @@ Every workflow step in `PGC_Workflow.steps` follows this schema:
 
 ---
 
-## 10. Execution Stack — Frame Schema
+### 6.3 Execution Stack — Frame Schema
 
 `PGC_WorkflowRun.stack` is a JSON array. The Step Processor always executes the **top frame** (last element).
 
@@ -399,59 +470,106 @@ Every workflow step in `PGC_Workflow.steps` follows this schema:
   "type":          "WORKFLOW_STEP",
   "workflowRunId": 42,
   "action":        "execute_top | resume_gate | cancel",
-  "correlationId": "uuid"
+  "traceId":       "uuid"
 }
 ```
+
+Note: `traceId` is a plain UUID today. W3C `traceparent` format
+(`{version}-{traceId}-{parentId}-{flags}`) is deferred to when observability
+tooling is added. See tech debt register.
 
 ### Idempotency
 Before executing any step, the Step Processor checks `PGC_WorkflowRunStep` for a row with the same `run_id`, `frame_id`, and `step_number`. If found, the step already ran (SQS redelivery) — skip execution, enqueue next message based on existing stack state.
 
 ---
 
-## 11. PROC Layer — Intent Pipeline (Not Yet Built)
+### 6.4 Intent Preprocessor
 
-### Three-tier intent processing
+### Design principles
+- Coded logic always runs first — cheap, fast, no LLM cost
+- LLM only invoked when coded logic cannot classify the intent
+- Every classified intent resolves to a `PGC_Workflow` row and is handed to the Step Processor
+- Novel intents that require new workflows or domains are `heavy_lift` — use powerful LLM
+
+### Three-tier classification pipeline
 
 ```
-User input
+User input (natural language)
   │
   ▼
-Tier 1 — Intent Preprocessor (coded logic first, cheap LLM second)
+Tier 1 — Coded exact match (zero cost)
+  ├── Exact match in PGC_IntentMap.pattern    → load PGC_Workflow → Step Processor
+  ├── Alias match in PGC_DomainHelp.aliases   → load PGC_Workflow → Step Processor
+  └── Simple CRUD pattern (regex coded logic) → build ad-hoc step → Step Processor
+         e.g. "list recipes", "add recipe X", "delete ingredient Y"
   │
-  ├── Exact match in PGC_IntentMap         → load workflow → Step Processor
-  ├── Simple CRUD pattern (coded logic)    → build ad-hoc step → Step Processor
-  ├── Alias match in PGC_DomainHelp        → load workflow → Step Processor
-  └── Novel / ambiguous intent             → cheap LLM classification
-        └── suggestedWorkflow exists       → load workflow → Step Processor
-        └── requiresHeavyLift: true        → Heavy Lift LLM
-              └── create domain/workflow   → SERV-Schema → Step Processor
+  ▼ (no match)
+Tier 2 — Cheap LLM classification (Claude Haiku / GPT-4o-mini)
+  Prompt: "Classify this intent. Return JSON: { intent_category, workflow_name, action_type }"
+  ├── workflow_name found in PGC_Workflow      → load workflow → Step Processor
+  ├── action_type = 'crud'                    → build ad-hoc CRUD step → Step Processor
+  └── action_type = 'heavy_lift'              → Tier 3
   │
   ▼
-Step Processor (SQS-driven, one Lambda invocation per stack frame operation)
-  │
-  ├── serv_* steps     → ServFunction direct invoke
-  ├── llm_call steps   → LLM provider (model from PGC_Prompt)
-  ├── sub_workflow     → push frame, enqueue execute_top
-  ├── human_gate       → Slack interactive, suspend
-  ├── js_transform     → sandboxed JS (security gate required)
-  └── notify           → SQS SlackResults
+Tier 3 — Heavy lift LLM (Claude Sonnet/Opus)
+  ├── intent_category = 'create_domain'       → create_domain workflow → Step Processor
+  └── intent_category = 'create_workflow'     → design + store new PGC_Workflow → Step Processor
 ```
 
-### LLM model selection — coded logic
+### PGC_IntentMap bootstrap rows (seeded at init-brain bootstrap)
+
+| pattern | intent_category | workflow_id | action_type |
+|---|---|---|---|
+| `create.domain\|new.domain\|build.domain` | `create_domain` | → create_domain workflow | `heavy_lift` |
+| `create.workflow\|new.workflow` | `create_workflow` | → create_workflow workflow | `heavy_lift` |
+| `list.domains\|show.domains` | `list_domains` | → list_domains workflow | `crud` |
+| `help` | `help` | → help workflow | `crud` |
+
+### CRUD pattern detection (coded logic — no LLM)
+
+Patterns detected without any LLM call:
+```
+list <domain>           → serv_query on root table of domain
+add <domain> <name>     → serv_insert into root table
+update <domain> <id>    → serv_update on root table
+delete <domain> <id>    → serv_delete + human confirm gate
+show <domain> <id>      → serv_query with filter
+```
+Domain is resolved via `PGC_DomainHelp.aliases` match.
+
+### Intent Preprocessor HTTP endpoint
+
+```
+POST /proc/classify-intent
+Body: { userInput, traceId }
+Response: {
+  intent_category,
+  action_type,        // 'crud' | 'workflow' | 'heavy_lift'
+  workflow_id,        // PGC_Workflow.id if found
+  ad_hoc_step,        // step definition if CRUD pattern matched
+  confidence,         // 'exact' | 'alias' | 'llm_classified' | 'heavy_lift'
+  traceId
+}
+```
+
+Called by `ProcFunction` SQS handler after receiving a `CLASSIFY_INTENT` message,
+or directly via curl for testing intent classification without SQS.
+
+### LLM model selection
 
 | Task | Model | Reason |
 |---|---|---|
-| Intent classification | Claude Haiku / GPT-4o-mini | Fast, cheap, structured JSON output |
-| Simple workflow generation | Claude Sonnet | Good reasoning, moderate cost |
-| Complex schema / domain generation | Claude Opus / GPT-4o | Best reasoning for novel domains |
-| Prompt improvement | Claude Sonnet | Good at meta-reasoning |
-| Error analysis | Claude Sonnet | Good at debugging |
+| Intent classification | `perplexity/sonar` or Claude Haiku | Fast, cheap, structured JSON |
+| Simple workflow generation | `anthropic/claude-sonnet-4-5` | Good reasoning, moderate cost |
+| Complex domain/schema generation | `anthropic/claude-sonnet-4-5` | Best JSON output, reliable |
+| Prompt improvement | `anthropic/claude-sonnet-4-5` | Good at meta-reasoning |
+| Error analysis | `anthropic/claude-sonnet-4-5` | Good at debugging |
 
-Model selection is coded logic based on task category, stored in `PGC_Prompt.model` per prompt record.
+Model selection is coded logic based on task category, stored in `PGC_Prompt.model`.
 
 ---
 
-## 12. Workflow as Code — Option C (Hybrid)
+### 6.5 Workflow as Code — Hybrid Approach
 
 Decision: Declarative JSON steps for common operations, sandboxed JS only for complex transformations.
 
@@ -462,33 +580,79 @@ Decision: Declarative JSON steps for common operations, sandboxed JS only for co
 
 ---
 
-## 13. Human-in-the-Loop — Two Gates
+### 6.6 Human-in-the-Loop — General Pattern
 
-### Confirmation gate (destructive operations)
+Any workflow step can declare itself as requiring human input before or after
+execution. The system suspends the stack at a `human_gate` frame, presents
+context to the user via the experience layer, waits for a response, then
+resumes or branches accordingly.
+
+### General `human_gate` step schema
+
+```json
+{
+  "type":             "human_gate",
+  "gate_type":        "confirm | review_tables | review_fields | merge_tables | add_table | choose | error_recovery",
+  "message_template": "Template string with {{variable}} substitution from local_state",
+  "context_key":      "local_state key containing data to display",
+  "options": [
+    { "label": "✅ Confirm",  "action": "confirm",  "on_select": "next"      },
+    { "label": "❌ Cancel",   "action": "cancel",   "on_select": "cancel"    },
+    { "label": "🔀 Modify",   "action": "branch",   "on_select": "step:3"    }
+  ],
+  "on_timeout":       "cancel",
+  "timeout_seconds":  3600
+}
+```
+
+When a `human_gate` step is reached:
+1. Step Processor pushes a `human_gate` frame onto the stack
+2. Sets `PGC_WorkflowRun.status = 'awaiting_human_gate'`
+3. Posts interactive Slack message via SQS CallbackResults
+4. SQS message processing completes — stack suspended, no timeout on Lambda
+5. User responds → Slack sends to `/interactive` endpoint on SlackbotFunction
+6. SlackbotFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'resume_gate', response: '...' }`
+7. Step Processor resumes — pops gate frame, routes based on user response
+
+### Gate type catalogue
+
+| Gate type | When used | User sees |
+|---|---|---|
+| `confirm` | Destructive operations, final approval | Single confirmation message + [Confirm] [Cancel] |
+| `review_tables` | After LLM proposes domain schema | Table list with relationships + action buttons |
+| `review_fields` | Per-table field review | All fields for one table + modify/add/remove controls |
+| `merge_tables` | User requests table merge | Picker for two tables + [Merge] [Cancel] |
+| `add_table` | User requests new table | Text input for description → LLM designs fields |
+| `choose` | Multi-path branching | Labelled options mapping to workflow branches |
+| `error_recovery` | Step execution failed | Error details + [Fix schema] [Fix data] [Skip] [Cancel] |
+| `execution_limit` | Execution accumulator tripped | Elapsed time + cost + [Continue] [Stop] [Disable timer] |
+| `velocity_limit` | Velocity detector tripped | Step count + last step + [Show workflow] [Delete] [Dismiss] |
+
+### Gate instances
+
+**Destructive operation gate**
 ```
 ⚠️ You are about to drop table PGD_Recipes and all its data.
 This cannot be undone.
-[Confirm] [Cancel]
+[Confirm]  [Cancel]
 ```
-Implemented as Slack interactive message. Stack pauses at `human_gate` frame with `status: awaiting_human_gate`. Requires `/interactive` endpoint on SlackbotFunction (not yet built).
+Stack operation on Confirm: pop gate frame, continue.
+Stack operation on Cancel: unwind stack to root, set status=cancelled.
 
-### Error recovery gate
+**Error recovery gate**
 ```
 ⚠️ Step 3 of "deduct_inventory" failed.
 Error: Column "quantity" not found in PGD_Inventory.
 
-I can:
 [A] Fix the schema    [B] Fix the data    [C] Skip step    [D] Cancel
 ```
-Each response maps to a stack operation:
-- A → push `fix_schema` sub-workflow frame
-- B → push `fix_data` sub-workflow frame
-- C → pop failed frame, advance
-- D → clear stack, set status=cancelled
+Stack operations: A/B → push sub-workflow frame. C → pop failed frame, advance. D → cancel.
+
+**Domain review gates** — see Section 20 for full create-domain workflow.
 
 ---
 
-## 14. Parallel Execution — Deferred, Hooks Only
+### 6.7 Parallel Execution — Deferred, Hooks Only
 
 Decision: Implement sequentially now. Parallel is a future nice-to-have.
 
@@ -504,27 +668,400 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 - Fan-in watches for all group frames to reach `completed`
 - Optimistic locking via `PGC_WorkflowRunLock.version` prevents race conditions on stack writes
 
+### 6.8 create_domain Workflow — Full Definition
+
+#### Overview
+`create_domain` is the first declarative workflow stored in `PGC_Workflow`.
+It demonstrates the full capability of the Step Processor — LLM calls, multi-step
+human review gates, iterators, sub-workflows, and service calls — all driven by
+the declarative step schema in Section 6.2.
+
+The current `handleCreateDomain` hardcoded implementation is a placeholder.
+Once the Step Processor is built, `create_domain` becomes a `PGC_Workflow` row
+executed generically — no special-case code in PROC.
+
+#### Bootstrap seeds required (in `init-brain.mjs`)
+
+**`PGC_Prompt` rows:**
+- `intent_category: 'create_domain'` — schema design prompt (version 2 already seeded manually)
+- `intent_category: 'design_table'` — designs fields for a single new table when user adds one
+- `intent_category: 'merge_tables'` — redesigns a merged table from two inputs
+
+**`PGC_Workflow` row:** `name: 'create_domain'`
+
+**`PGC_IntentMap` row:** pattern `create.domain|new.domain`, workflow_id → create_domain
+
+#### Declarative step definitions
+
+```json
+[
+  {
+    "step": 1,
+    "type": "llm_call",
+    "description": "LLM designs full domain schema from user description",
+    "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
+    "output_key": "proposed_scaffold",
+    "on_success": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": 2,
+    "type": "human_gate",
+    "gate_type": "review_tables",
+    "description": "User reviews proposed table list and high-level relationships",
+    "context_key": "proposed_scaffold",
+    "message_template": "🧠 Here's my plan for domain *{{proposed_scaffold.domain}}*:\n\n{{proposed_scaffold.table_summary}}\n\nDoes this look right?",
+    "options": [
+      { "label": "✅ Review fields",  "action": "confirm",  "on_select": "next"   },
+      { "label": "🔀 Merge tables",   "action": "branch",   "on_select": "step:3" },
+      { "label": "➕ Add a table",    "action": "branch",   "on_select": "step:4" },
+      { "label": "🔄 Start over",     "action": "branch",   "on_select": "step:1" },
+      { "label": "❌ Cancel",         "action": "cancel",   "on_select": "cancel" }
+    ],
+    "on_success": "next",
+    "on_failure": "cancel"
+  },
+  {
+    "step": 3,
+    "type": "human_gate",
+    "gate_type": "merge_tables",
+    "description": "User selects two tables to merge",
+    "context_key": "proposed_scaffold.tables",
+    "message_template": "Which two tables would you like to merge?",
+    "options": "dynamic",
+    "on_success": "step:3b",
+    "on_failure": "step:2"
+  },
+  {
+    "step": "3b",
+    "type": "llm_call",
+    "description": "LLM redesigns the merged table from the two inputs",
+    "input": { "prompt": "merge_tables", "tables": "{{gate.selected_tables}}" },
+    "output_key": "merged_table",
+    "on_success": "step:3c",
+    "on_failure": "step:2"
+  },
+  {
+    "step": "3c",
+    "type": "js_transform",
+    "description": "Replace two source tables with merged table in proposed_scaffold",
+    "on_success": "step:2",
+    "on_failure": "step:2"
+  },
+  {
+    "step": 4,
+    "type": "human_gate",
+    "gate_type": "add_table",
+    "description": "User describes the new table they want",
+    "message_template": "Describe the new table you'd like to add:",
+    "options": "text_input",
+    "on_success": "step:4b",
+    "on_failure": "step:2"
+  },
+  {
+    "step": "4b",
+    "type": "llm_call",
+    "description": "LLM designs fields for the new table",
+    "input": { "prompt": "design_table", "description": "{{gate.text_input}}" },
+    "output_key": "new_table",
+    "on_success": "step:4c",
+    "on_failure": "step:2"
+  },
+  {
+    "step": "4c",
+    "type": "human_gate",
+    "gate_type": "review_fields",
+    "description": "User reviews and modifies fields for the new table",
+    "context_key": "new_table",
+    "message_template": "Here are the proposed fields for *{{new_table.tableName}}*:",
+    "options": "field_editor",
+    "on_success": "step:4d",
+    "on_failure": "step:2"
+  },
+  {
+    "step": "4d",
+    "type": "js_transform",
+    "description": "Append confirmed new table to proposed_scaffold.tables",
+    "on_success": "step:2",
+    "on_failure": "step:2"
+  },
+  {
+    "step": 5,
+    "type": "iterator",
+    "description": "For each table: review and modify fields",
+    "items_key": "proposed_scaffold.tables",
+    "item_workflow": "review_table_fields",
+    "execution_mode": "sequential",
+    "on_complete": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": 6,
+    "type": "human_gate",
+    "gate_type": "confirm",
+    "description": "Final confirmation before DDL execution",
+    "context_key": "proposed_scaffold",
+    "message_template": "✅ Ready to create domain *{{proposed_scaffold.domain}}* with {{proposed_scaffold.tables.length}} tables. Proceed?",
+    "options": [
+      { "label": "✅ Create it", "action": "confirm", "on_select": "next"   },
+      { "label": "❌ Cancel",    "action": "cancel",  "on_select": "cancel" }
+    ],
+    "on_success": "next",
+    "on_failure": "cancel"
+  },
+  {
+    "step": 7,
+    "type": "iterator",
+    "description": "Create each confirmed PGD table via SERV-Schema",
+    "items_key": "proposed_scaffold.tables",
+    "item_step": {
+      "type": "serv_schema",
+      "input": "{{item}}",
+      "on_failure": "human_feedback"
+    },
+    "on_complete": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": 8,
+    "type": "serv_insert",
+    "description": "Register domain in PGC_DomainHelp",
+    "input": { "tableName": "PGC_DomainHelp", "row": "{{proposed_scaffold.domainHelp}}" },
+    "on_success": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": 9,
+    "type": "notify",
+    "description": "Confirm domain creation to user",
+    "message_template": "🧠 Domain *{{proposed_scaffold.domain}}* is ready!\n\n{{created_tables_summary}}",
+    "on_success": "end"
+  },
+  {
+    "step": 10,
+    "type": "end"
+  }
+]
+```
+
+#### `review_table_fields` sub-workflow
+
+Called by the iterator at step 5 — one invocation per table.
+
+```json
+[
+  {
+    "step": 1,
+    "type": "human_gate",
+    "gate_type": "review_fields",
+    "description": "Show all fields for this table — user can modify, add, or remove",
+    "context_key": "item",
+    "message_template": "📋 *{{item.tableName}}* — review fields:",
+    "options": "field_editor",
+    "on_success": "end",
+    "on_failure": "end"
+  }
+]
+```
+
+The `field_editor` option type renders a Slack Block Kit message with:
+- Each field shown as a row: name, type, nullable indicator
+- [✏️ Modify] button per field → opens modal with type/nullable/default inputs
+- [❌ Remove] button per field (protected: `id`, `created_at`, `updated_at` cannot be removed)
+- [➕ Add field] button → opens modal with name/type inputs
+- [✅ Done] button → confirms and pops the sub-workflow frame
+
+#### Local state shape during execution
+
+```json
+{
+  "input": { "userInput": "stock portfolio with price history" },
+  "proposed_scaffold": {
+    "domain": "stock_portfolio",
+    "tables": [...],
+    "domainHelp": {...},
+    "table_summary": "• PGD_Companies\n• PGD_StockPriceHistory\n..."
+  },
+  "created_tables": [...],
+  "created_tables_summary": "• `PGD_Companies` — created ✅\n..."
+}
+```
+
+### 6.9 Workflow Safety — Circuit Breakers and Emergency Shutdown
+
+Workflows generated by the LLM may contain logic errors causing infinite loops or
+runaway execution. The system protects against this at two levels: static analysis
+at workflow creation time, and runtime monitoring during execution.
+
+Legitimate long-running workflows (e.g. analysing 300 stocks) must not be blocked
+by overly restrictive limits. Guards are designed to detect abnormal behaviour
+patterns, not constrain valid workloads.
+
+#### Guard 1 — Velocity detector (runtime, kills run)
+
+Detects tight routing loops — the signature of a buggy LLM-generated step graph.
+
+**Trigger:** More than `max_steps_per_window` steps execute within `window_seconds`
+with no `human_gate` step in between.
+
+**Rationale:** A legitimate 300-stock analysis has natural pacing — each stock takes
+real time. A loop executes as fast as SQS + Lambda allows — dozens of steps per second.
+A human gate anywhere in the window resets the counter (human interaction = not a loop).
+
+**Action:** Kill immediately. Set `PGC_WorkflowRun.status = 'failed'`. Post to Slack:
+
+```
+⚠️ Workflow *{{workflow_name}}* was stopped — possible infinite loop detected.
+
+{{step_count}} steps executed in {{window_seconds}}s with no human interaction.
+Last step: {{last_step_description}}
+
+[🔍 Show workflow definition]  [🗑️ Delete this workflow]  [❌ Dismiss]
+```
+
+**Defaults:** `max_steps_per_window: 20`, `window_seconds: 10`
+Configurable per workflow in `PGC_Workflow.max_steps_per_window`.
+
+#### Guard 2 — Execution accumulator (runtime, pauses run)
+
+Monitors total Lambda execution time across all steps of a run.
+Designed to handle legitimately long workflows — pauses rather than kills.
+
+**Trigger:** `PGC_WorkflowRun.total_execution_ms` exceeds `PGC_Workflow.max_execution_ms`.
+
+**How it works:** Every step writes a `PGC_WorkflowRunStep` row with `duration_ms`.
+The Step Processor adds that value to `PGC_WorkflowRun.total_execution_ms` in the
+same UPDATE — no extra DB round-trip. Check runs before enqueuing the next step.
+
+**Action:** Suspend at next step boundary. Set status to `awaiting_human_gate`. Post to Slack:
+
+```
+⏸️ Workflow *{{workflow_name}}* has been running for {{elapsed_minutes}} minutes.
+Steps completed: {{step_count}} | Estimated cost: ~${{estimated_cost}}
+
+Still going?
+[▶️ Continue for another {{extension_minutes}} min]  [⏹️ Stop now]  [🔕 Disable timer for this run]
+```
+
+User options:
+- **Continue** → extends `max_execution_ms` by a configurable increment, resumes
+- **Stop now** → sets status to `cancelled`, posts confirmation
+- **Disable timer** → sets `max_execution_ms = NULL` for this run, resumes without limit
+
+**Defaults:** `max_execution_ms: 300000` (5 minutes), `extension_minutes: 5`
+Configurable per workflow in `PGC_Workflow.max_execution_ms`.
+Cost estimate uses the usage data already returned by the Perplexity Agent API response.
+
+#### Guard 3 — Cycle detector (static, rejects workflow at store time)
+
+Validates the step graph for structural cycles before a workflow is stored in `PGC_Workflow`.
+Runs once at creation — zero runtime cost.
+
+**How it works:** Traverse all `on_success`, `on_failure`, `on_select` routing values.
+Build a directed graph of step → step edges. Run DFS cycle detection.
+If a cycle is found, reject the `INSERT` into `PGC_Workflow` with a descriptive error.
+
+**Limitation:** Cannot catch dynamic routing loops (where routing depends on runtime
+local_state values). Those are caught by Guard 1 at runtime.
+
+**Action:** Reject workflow storage. Log the cycle path. Increment `PGC_Prompt.error_log`
+for the prompt that generated this workflow — feeds prompt improvement loop.
+
+#### `/shutdown` — Emergency stop (user-initiated, immediate)
+
+Allows the user to immediately cancel all active workflows or a specific run.
+Use case: user fears a misworded command is causing harm and wants to stop everything.
+
+**Slack commands:**
+```
+/shutdown                 — cancel ALL active workflow runs for this instance
+/shutdown <runId>         — cancel a specific run by PGC_WorkflowRun.id
+```
+
+**Flow:**
+1. Slack → SlackbotFunction → synchronous response (no SQS hop — must be immediate)
+2. SlackbotFunction calls `ProcFunction POST /proc/shutdown` directly via HTTP
+3. ProcFunction sets `PGC_WorkflowRun.status = 'cancelled'` for matching runs
+4. ProcFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'cancel', workflowRunId }` 
+   to SQS WorkflowQueue for each cancelled run
+5. Step Processor discards any in-flight message for cancelled runs on next execution
+6. SlackbotFunction posts immediate confirmation to Slack:
+
+```
+🛑 Shutdown complete.
+
+Cancelled {{count}} active workflow(s):
+{{#each cancelled}}
+• *{{workflow_name}}* — stopped at step {{current_step}} (was: {{status}})
+{{/each}}
+
+Any in-flight steps will be discarded on next execution.
+```
+
+If no active workflows exist:
+```
+✅ No active workflows to cancel.
+```
+
+**Step Processor cancellation check:**
+Before executing any step, the Step Processor reads `PGC_WorkflowRun.status`.
+If `cancelled` → discard SQS message (return success to avoid retry), do not execute.
+This check already exists for idempotency — cancellation reuses the same path.
+
+#### Schema additions required
+
+**`PGC_WorkflowRun` — new columns:**
+
+| Column | Type | Notes |
+|---|---|---|
+| `total_execution_ms` | integer | Running sum of all step `duration_ms` values |
+| `step_count` | integer | Total steps executed — incremented on every step |
+| `steps_in_window` | integer | Steps since last human gate — reset on human_gate step |
+| `window_started_at` | timestamptz | Timestamp when current velocity window started |
+
+**`PGC_Workflow` — new columns:**
+
+| Column | Type | Notes |
+|---|---|---|
+| `max_execution_ms` | integer | Execution accumulator ceiling. NULL = no limit |
+| `max_steps_per_window` | integer | Velocity detector threshold. Default 20 |
+| `window_seconds` | integer | Velocity detector window. Default 10 |
+
 ---
 
-## 15. Tech Debt Register
+## 7. Tech Debt Register
 
 | Item | Priority | Notes |
 |---|---|---|
-| Rename `ping-utils.mjs` → `lambda-utils.mjs` | Medium | Pure rename, touches ~10 import paths — see Section 19 |
+| Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
+| `/shutdown` Slack command | High | Emergency stop for all active workflow runs — see Section 6.9 |
+| `PGC_WorkflowRun` missing safety columns | High | `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` need adding to JSON template and bootstrap |
+| `PGC_Workflow` missing safety limit columns | High | `max_execution_ms`, `max_steps_per_window`, `window_seconds` need adding to JSON template and bootstrap |
+| Rename `workflowId` → `traceId` in all SQS payloads and UI messages | Medium | `workflowId` confused with PGC_WorkflowRun concepts — `traceId` is accurate today |
+| W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
 | Extract workflow logic to `shared/domain-workflows.mjs` | Medium | Enables PROC HTTP endpoints + removes future hop — see Section 19 |
 | LLM URLs to env vars (`LLM_AGENT_URL`, `LLM_CHAT_URL`) | Medium | Before Phase 3 — avoids redeploy on provider change — see Section 19 |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
+| FK + constraint normalisation belongs in `schema.mjs` | Medium | Currently normalised in `step-orchestrator.mjs` — fragile, wrong layer |
+| `response_format json_schema` removed from Agent API call | Medium | Stripped due to 400 error — revisit, schema enforcement is more reliable than prompt |
+| `PGC_Prompt` seeds not in bootstrap | High | Manual migration scripts — stack rebuild loses prompts silently. Move to `init-brain.mjs` or add runbook |
+| `.env.local` Windows `\r` line ending issue | Low | `--env-file` fails with CRLF on Windows — document workaround (`set VAR=...`) |
+| Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
+| Domain creation review gate | High | LLM schema proposed but not confirmed before DDL — see Section 13 Gate 1 |
+| Slack `/interactive` endpoint | High | Required for all human gates — needed before Step Processor and domain review |
+| Remove `ProcStepOrchestrator` Lambda + add SQS trigger to `ProcFunction` | High | Eliminates hop, reduces cold start surface — see Section 11 |
+| `step-orchestrator.mjs` business logic moves to `ProcFunction` HTTP endpoints | High | Currently handleCreateDomain + callLlm live in wrong layer — see Section 11 |
+| `invokeServ` uses Lambda invoke not HTTP fetch | High | Should be HTTP fetch to API Gateway for cloud portability — see Section 11 |
 | Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`. Use `node:test` built-in |
 | Integration tests | Low | Defer until PROC/Schema complete — use `testcontainers` + PostgreSQL |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
 | pgvector for intent matching | Low | Add to RDS when similarity search is needed |
-| Slack `/interactive` endpoint | High | Required for human gates — needed before Step Processor is complete |
 | CI/CD GitHub Actions | Low | Deliberately deferred until template.yaml stabilises |
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
 
 ---
 
-## 16. Completed Milestones
+## 8. Completed Milestones
 
 | Tag | What was completed |
 |---|---|
@@ -539,7 +1076,7 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 
 ---
 
-## 17. Build Order — Remaining Work
+## 9. Build Order — Remaining Work
 
 ~~1. Callback abstraction~~              ✅ complete — v3.2-callback-abstraction-complete
 ~~2. PGC workflow table templates~~      ✅ complete — v3.2-pgc-workflow-tables-complete
@@ -547,18 +1084,33 @@ Decision: Implement sequentially now. Parallel is a future nice-to-have.
 ~~4. PROC — /create-domain (Phase 2c)~~ ✅ complete — v3.2-create-domain-live-llm
 ~~7. SERV-Table (getRows + insertRow)~~  ✅ complete — v3.2-serv-table-partial
 
-1. Refactoring (tech debt)              rename ping-utils, extract domain-workflows, LLM URLs to env vars
-2. PROC — Intent Preprocessor           coded logic + cheap LLM classification, ProcFunction HTTP endpoints
-3. Slack /interactive endpoint          human gates (confirmation + error recovery)
-4. PROC — Step Processor                SQS-driven stack execution engine, full PGC_WorkflowRun lifecycle
-5. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
-6. SERV-Query                           parameterised SELECT with joins, pagination
-7. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
-8. Parallel execution                   fan-out/fan-in, optimistic locking (future)
-9. Unit + integration tests             node:test for pure functions, testcontainers for DB
-10. CI/CD GitHub Actions                after template.yaml stabilises
+1. Refactoring (tech debt — do before anything else)
+   - remove `ProcStepOrchestrator` (`SYSLMBOrchestrator`) from `template.yaml`
+   - add SQS WorkflowQueue trigger to `ProcFunction` in `template.yaml`
+   - move all logic from `step-orchestrator.mjs` into `ProcFunction` as HTTP endpoints
+   - delete `step-orchestrator.mjs`
+   - replace `invokeServ` Lambda invoke with HTTP fetch to API Gateway
+   - rename `ping-utils.mjs` → `lambda-utils.mjs`
+   - add `SERV_API_URL`, `LLM_AGENT_URL`, `LLM_CHAT_URL` to SSM + template.yaml env vars
+   - move `PGC_Prompt`, `PGC_Workflow`, `PGC_IntentMap` seeds into `init-brain.mjs` bootstrap
+   - move FK + constraint normalisation from proc layer into `schema.mjs`
+   - rename `workflowId` → `traceId` in all SQS payloads and UI messages
+   - add `response_format json_schema` back to Agent API call
 
-## 18. pgvector — Semantic Search
+2. Slack `/interactive` endpoint        required for all human gates + domain review
+3. `/shutdown` Slack command            emergency stop — ProcFunction + SlackbotFunction
+4. Domain creation review gate          DESIGN_DOMAIN → Slack review → CREATE_DOMAIN (Section 6.6)
+5. PROC — Intent Preprocessor           coded logic + cheap LLM classification
+6. PROC — Step Processor                SQS-driven stack execution, full PGC_WorkflowRun lifecycle
+   — include velocity detector, execution accumulator, cycle detector (Section 6.9)
+7. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
+7. SERV-Query                           parameterised SELECT with joins, pagination
+8. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
+9. Parallel execution                   fan-out/fan-in, optimistic locking (future)
+10. Unit + integration tests            node:test for pure functions, testcontainers for DB
+11. CI/CD GitHub Actions                after template.yaml stabilises
+
+## 10. pgvector — Semantic Search
 
 Extension: pgvector (available on RDS PostgreSQL 15+, no extra cost)
 Enable: CREATE EXTENSION IF NOT EXISTS vector;
@@ -576,45 +1128,61 @@ Status: Designed, not yet implemented. Add to ALLOWED_TYPES in schema.mjs
 
 ---
 
-## 19. PROC Layer Architecture — Refactoring Decisions
+## 11. Refactoring Decisions
 
-### Step Orchestrator → PROC service endpoints
-**Decision:** Extract workflow logic from `ProcStepOrchestrator` into callable PROC endpoints
-(e.g. `proc/design-schema`, `proc/create-workflow`) so they can be:
-- Called directly via curl for testing and prompt iteration without SQS
-- Invoked by `ProcFunction` (HTTP) for the intent pipeline in Phase 3
-- Reused by `ProcStepOrchestrator` (SQS) without a Lambda-to-Lambda hop
+### Target architecture — four Lambdas, dual-trigger ProcFunction
 
-**Implementation:** Extract into `src/shared/domain-workflows.mjs` — a shared util bundled
-into both Lambdas by esbuild. No runtime hop, no extra cost. `ProcStepOrchestrator` and
-`ProcFunction` both import and call the same functions directly.
+All items below are deferred to the refactoring commit (Build Order item 1).
 
-Note: `invokeServ()` calls inside the workflow functions still incur a Lambda-to-Lambda hop
-to `ServFunction` — that is unavoidable and by design. The hop being eliminated is the
-hypothetical `ProcStepOrchestrator → ProcFunction` hop.
+**`ProcStepOrchestrator` eliminated**
 
-**Status:** Deferred — implement when building the Intent Preprocessor (Phase 3).
-At that point `ProcFunction` needs `/create-domain` as an HTTP endpoint anyway,
-making the shared util the natural home for the logic.
+`SYSLMBOrchestrator` is removed from `template.yaml` entirely.
+`ProcFunction` gains a second SQS event trigger on `WorkflowQueue`.
+`handler.mjs` in PROC detects event type and routes accordingly:
+```js
+if (event.Records)    → SQS path → processWorkflowMessage(record)
+if (event.httpMethod) → HTTP path → switch(req.route)
+```
+All workflow logic currently in `step-orchestrator.mjs` moves into `ProcFunction`
+as HTTP endpoints. `step-orchestrator.mjs` is deleted.
+
+**`ProcFunction` — all business logic, cloud-agnostic**
+
+All workflow logic moves from `step-orchestrator.mjs` into `ProcFunction` endpoints:
+
+| Endpoint | Description |
+|---|---|
+| `POST /proc/design-domain` | Call LLM, return proposed scaffold — no DB writes |
+| `POST /proc/create-domain` | Accept confirmed scaffold, create tables, insert DomainHelp |
+| `POST /proc/classify-intent` | Intent Preprocessor — coded logic + cheap LLM |
+| `POST /proc/run-workflow` | Step Processor — execute top frame of PGC_WorkflowRun stack |
+| `POST /proc/improve-prompt` | Prompt evolution — update PGC_Prompt with new version |
+
+No AWS SDK imports in the process tier. All external calls via HTTP fetch:
+- SERV: `fetch(process.env.SERV_API_URL + '/serv/table/getRows', ...)`
+- LLM: `fetch(process.env.LLM_AGENT_URL, ...)`
+
+**`invokeServ` → HTTP fetch**
+
+Current: `lambda.send(new InvokeCommand({ FunctionName: SERV_FUNCTION_NAME, ... }))`
+Target: `fetch(process.env.SERV_API_URL + path, { method, body })`
+
+Why API Gateway HTTP instead of direct Lambda invoke:
+- **Contract enforcement** — PROC endpoints are versioned and documented in `openapi.yaml`
+- **Cloud portability** — `fetch(apiGatewayUrl)` works on any cloud. Lambda invoke is AWS-only
+- **Testability** — curl works against API Gateway without AWS credentials
+- **Latency is not a concern** — traffic stays on AWS internal backbone within us-east-2
 
 ### Rename `shared/ping-utils.mjs` → `shared/lambda-utils.mjs`
-**Decision:** `parseEvent`, `ok`, `err`, and `respond` are used by every Lambda handler,
-not just pings. `lambda-utils.mjs` accurately describes the module's purpose.
 
-**Scope:** Pure rename — no logic changes. Touches all files that import from `ping-utils.mjs`:
+Pure rename — no logic changes. Touches all files importing from `ping-utils.mjs`:
 `ping-db.mjs`, `schema.mjs`, `table.mjs`, `ping.mjs`, `ping-sqs.mjs`, `ping-e2e.mjs`,
 `ping-llm.mjs` (both PROC and slackbot), `create-domain.mjs`, and both `handler.mjs` files.
 
-**Status:** Deferred — low risk, do as a standalone refactoring commit when convenient.
-
-### LLM URLs in environment variables
-`AGENT_API_URL` and `LLM_CHAT_URL` are currently hardcoded in `step-orchestrator.mjs`
-and `ping-llm.mjs`. Move to SSM + Lambda env vars before Phase 3 so provider URLs
-can change without a redeploy.
+### Environment variables to add
 
 ```yaml
-LLM_AGENT_URL: 'https://api.perplexity.ai/v1/agent'
-LLM_CHAT_URL:  'https://api.perplexity.ai/chat/completions'
+LLM_AGENT_URL:  'https://api.perplexity.ai/v1/agent'
+LLM_CHAT_URL:   'https://api.perplexity.ai/chat/completions'
+SERV_API_URL:   'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
 ```
-
-**Status:** Deferred — do before Phase 3 intent preprocessor.
