@@ -8,7 +8,7 @@
 // No downstream calls to PROC, SERV, SQS, LLM, or DB.
 // If this fails → Slack App config or Lambda IAM issue.
 
-import { ok, err } from '../../shared/ping-utils.mjs';
+import { ok, err } from '../../shared/lambda-utils.mjs';
 
 /**
  * @param {ReturnType<import('../../shared/ping-utils.mjs').parseEvent>} req

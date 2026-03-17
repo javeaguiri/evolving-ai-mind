@@ -18,7 +18,7 @@
 //   - Filter operators validated against whitelist
 //   - No raw SQL accepted in any field
 
-import { ok, err }      from '../shared/ping-utils.mjs';
+import { ok, err }      from '../shared/lambda-utils.mjs';
 import { getClient }    from './init-brain.mjs';
 
 // ---------------------------------------------------------------------------

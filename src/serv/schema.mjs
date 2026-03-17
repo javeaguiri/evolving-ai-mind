@@ -21,7 +21,7 @@
 // SERV never reads slackChannel / slackThreadTs — those fields are ignored
 // even if present in a request body.
 
-import { ok, err }                        from '../shared/ping-utils.mjs';
+import { ok, err }                        from '../shared/lambda-utils.mjs';
 import { getClient, buildCreateTableSQL } from './init-brain.mjs';
 
 // ---------------------------------------------------------------------------

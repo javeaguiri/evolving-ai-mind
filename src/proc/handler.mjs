@@ -18,8 +18,7 @@
 // PROC endpoint modules are transport-agnostic — no AWS SDK, no Slack SDK.
 // req.source ('http' | 'sqs') determines response path only.
 
-import { parseEvent, err }    from '../shared/ping-utils.mjs';
-import { buildReqFromSqs }    from '../shared/lambda-utils.mjs';
+import { parseEvent, err, buildReqFromSqs } from '../shared/lambda-utils.mjs';
 import { handle as pingLlm }  from './ping-llm.mjs';
 import { handle as createDomain } from './create-domain.mjs';
 

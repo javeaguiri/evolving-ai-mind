@@ -16,7 +16,7 @@
 // Registers domain in PGC_DomainHelp via SERV-Table insertRow.
 // All SERV calls via fetch(SERV_API_URL) — no Lambda invoke.
 
-import { ok, err }            from '../shared/ping-utils.mjs';
+import { ok, err }            from '../shared/lambda-utils.mjs';
 import { enqueueCallback }    from '../shared/sqs-callback.mjs';
 
 /**

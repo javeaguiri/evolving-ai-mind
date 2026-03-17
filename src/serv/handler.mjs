@@ -11,7 +11,7 @@
 //
 // Sub-route switching lives here — NOT in template.yaml.
 
-import { parseEvent, err } from '../shared/ping-utils.mjs';
+import { parseEvent, err } from '../shared/lambda-utils.mjs';
 import { handle as pingDb } from './ping-db.mjs';
 import { handle as schema }   from './schema.mjs';
 import { bootstrap }          from './init-brain.mjs';
