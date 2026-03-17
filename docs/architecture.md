@@ -1488,21 +1488,19 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 Goal: align codebase with three-tier architecture. Eliminate ProcStepOrchestrator.
 Make ProcFunction handle both HTTP and SQS. Make all proc endpoints transport-agnostic.
 
-| Step | Task | Status |
-|---|---|---|
 | R1  | Update PGC JSON templates + drop/recreate PGC tables | ✅ complete |
 | R2  | Add SERV_API_URL, LLM_AGENT_URL, LLM_CHAT_URL to SSM + template.yaml | ✅ complete |
 | R3  | Create src/shared/sqs-callback.mjs — enqueueCallback() | ✅ complete |
 | R4  | Create src/shared/lambda-utils.mjs — parseEvent + buildReqFromSqs | ✅ complete |
 | R5  | Add processSqsBatch() to src/proc/handler.mjs | ✅ complete |
-| R6  | Add SQS WorkflowQueue trigger to ProcFunction in template.yaml | 🔄 in progress |
-| R7  | Remove ProcStepOrchestrator from template.yaml | ⬜ pending |
-| R8  | Move handleCreateDomain + callLlm into src/proc/create-domain.mjs — transport-agnostic | ⬜ pending |
-| R9  | Replace invokeServ Lambda invoke with fetch(SERV_API_URL) | ⬜ pending |
-| R10 | Delete src/proc/step-orchestrator.mjs | ⬜ pending |
-| R11 | Update all imports from ping-utils.mjs → lambda-utils.mjs | ⬜ pending |
-| R12 | Rename workflowId → traceId in all SQS payloads and UI messages | ⬜ pending |
-| R13 | Move PGC_Prompt, PGC_Workflow, PGC_IntentMap seeds into init-brain.mjs | ✅ complete — done in R1 |
+| R6  | Add SQS WorkflowQueue trigger to ProcFunction in template.yaml | ✅ complete |
+| R7  | Remove ProcStepOrchestrator from template.yaml | ✅ complete |
+| R8  | Move handleCreateDomain + callLlm into src/proc/create-domain.mjs — transport-agnostic | ✅ complete |
+| R9  | Replace invokeServ Lambda invoke with fetch(SERV_API_URL) | ✅ complete — landed in R6/R8 |
+| R10 | Delete src/proc/step-orchestrator.mjs | ✅ complete |
+| R11 | Update all imports from ping-utils.mjs → lambda-utils.mjs | ✅ complete |
+| R12 | Rename workflowId → traceId in all SQS payloads and UI messages | ✅ complete |
+| R13 | Move PGC_Prompt, PGC_Workflow, PGC_IntentMap seeds into init-brain.mjs | ✅ complete — landed in R1/R8 |
 | R14 | Move FK + constraint normalisation into schema.mjs createTable | ⬜ pending |
 | R15 | Add response_format json_schema back to callLlm Agent API call | ⬜ pending |
 
