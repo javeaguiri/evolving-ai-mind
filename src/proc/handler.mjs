@@ -50,7 +50,7 @@ async function processHttpRequest(event) {
  * Each record is normalised to the same req shape as the HTTP path,
  * then dispatched to the same endpoint modules.
  * Ping message types (PING_SQS, PING_E2E) are handled inline here —
- * they carry the legacy flat envelope and are not transport-agnostic routes.
+ * they are not transport-agnostic routes and read routing from message.callback.
  * ReportBatchItemFailures — only failed records return to the queue.
  */
 async function processSqsBatch(records) {
@@ -60,8 +60,8 @@ async function processSqsBatch(records) {
     try {
       const message = JSON.parse(record.body);
 
-      // Ping types carry the legacy flat envelope (slackChannel, slackThreadTs)
-      // and are handled inline — they are not transport-agnostic PROC routes.
+      // Ping types are handled inline — they use the generic callback object
+      // and are not transport-agnostic PROC routes.
       if (message.type === 'PING_SQS') {
         await handlePingSqs(message);
         continue;
@@ -105,23 +105,20 @@ async function dispatch(req) {
 }
 
 // ---------------------------------------------------------------------------
-// Ping SQS handlers — inline, legacy flat envelope, removed after Step 12
+// Ping SQS handlers — inline, not transport-agnostic routes, removed after Step 12
 // ---------------------------------------------------------------------------
 
 /**
  * Hop 2 — forward ping-sqs result to SlackResults queue.
- * Uses fetch() to SERV_API_URL — no AWS SDK in this file.
+ * Passes message.callback through intact — SlackCallbackListenerFunction
+ * routes on callback.provider to determine the UI target.
  */
 async function handlePingSqs(message) {
-  console.info('proc: handlePingSqs message', JSON.stringify(message));
-  // Hop 2 — no SERV call needed, just forward the result
   await enqueueSlackResult({
-    type:          'PING_SQS_RESULT',
-    workflowId:    message.workflowId,
-    slackChannel:  message.slackChannel,
-    slackUser:     message.slackUser,
-    slackThreadTs: message.slackThreadTs,
-    hop:           2,
+    type:      'PING_SQS_RESULT',
+    workflowId: message.workflowId,
+    callback:   message.callback,
+    hop:        2,
     result: {
       success:         true,
       message:         '📬 ping-sqs complete — 2 SQS hops confirmed ✅',
@@ -135,6 +132,8 @@ async function handlePingSqs(message) {
 
 /**
  * Hop 2 — call SERV ping-db via HTTP fetch, forward result to SlackResults queue.
+ * Passes message.callback through intact — SlackCallbackListenerFunction
+ * routes on callback.provider to determine the UI target.
  * Replaces the Lambda invoke in step-orchestrator.mjs — uses fetch() instead.
  */
 async function handlePingE2e(message) {
@@ -143,11 +142,9 @@ async function handlePingE2e(message) {
   const version = payload?.pgc?.version ?? payload?.pgd?.version ?? 'unknown';
 
   await enqueueSlackResult({
-    type:          'PING_E2E_RESULT',
-    workflowId:    message.workflowId,
-    slackChannel:  message.slackChannel,
-    slackUser:     message.slackUser,
-    slackThreadTs: message.slackThreadTs,
+    type:      'PING_E2E_RESULT',
+    workflowId: message.workflowId,
+    callback:   message.callback,
     result: {
       success:     true,
       message:     `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
