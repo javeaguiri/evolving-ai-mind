@@ -64,7 +64,7 @@ async function processRecord(record) {
 
   console.info('callback received', {
     type:       message.type,
-    workflowId: message.workflowId,
+    traceId: message.traceId,
     messageId,
   });
 
@@ -99,7 +99,7 @@ async function processRecord(record) {
   } catch (error) {
     console.error('callback: Slack post error', {
       type:       message.type,
-      workflowId: message.workflowId,
+      traceId: message.traceId,
       error:      error.message,
     });
     return false; // return to queue for retry
@@ -118,14 +118,14 @@ async function postPingSqsResult(message) {
       elements: [
         {
           type: 'mrkdwn',
-          text: `workflowId: ${result.workflowId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`,
+          text: `traceId: ${result.traceId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`,
         },
       ],
     },
   ]);
   console.info('callback: Slack message posted', {
     channel:    callback.channel,
-    workflowId: message.workflowId,
+    traceId: message.traceId,
   });
 }
 
@@ -141,14 +141,14 @@ async function postPingE2eResult(message) {
       elements: [
         {
           type: 'mrkdwn',
-          text: `workflowId: ${result.workflowId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
+          text: `traceId: ${result.traceId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
         },
       ],
     },
   ]);
   console.info('callback: ping-e2e Slack message posted', {
     channel:    callback.channel,
-    workflowId: message.workflowId,
+    traceId: message.traceId,
   });
 }
 
@@ -164,14 +164,14 @@ async function postServNotification(message) {
       elements: [
         {
           type: 'mrkdwn',
-          text: `workflowId: ${message.workflowId}`,
+          text: `traceId: ${message.traceId}`,
         },
       ],
     },
   ]);
   console.info('callback: SERV notification posted', {
     channel:    callback.channel,
-    workflowId: message.workflowId,
+    traceId: message.traceId,
   });
 }
 
@@ -187,7 +187,7 @@ async function postCreateDomainResult(message) {
       elements: [
         {
           type: 'mrkdwn',
-          text: `workflowId: ${message.workflowId} | completed: ${result.completedAt}`,
+          text: `traceId: ${message.traceId} | completed: ${result.completedAt}`,
         },
       ],
     },
@@ -195,6 +195,6 @@ async function postCreateDomainResult(message) {
   console.info('callback: create-domain result posted', {
     channel:    callback.channel,
     domainName: result.domainName,
-    workflowId: message.workflowId,
+    traceId: message.traceId,
   });
 }

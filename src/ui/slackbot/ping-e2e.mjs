@@ -4,8 +4,8 @@
 // src/ui/slackbot/ping-e2e.mjs
 // Handles POST /api/v1/ui/slack/ping-e2e
 //
-// Validates: SlackbotFunction → SQS → ProcStepOrchestrator → ServFunction
-//            → SQS SlackResults → SlackCallbackListener → Slack thread
+// Validates: SlackbotFunction → SQS → ProcFunction → ServFunction (via fetch)
+//            → SQS SlackResults → SlackCallbackListenerFunction → Slack thread
 // Response:  Immediate ACK posted via chat.postMessage (returns ts for threading).
 //            Threaded reply with RDS version string arrives ~5-10s later.
 
@@ -21,11 +21,11 @@ export async function handle(req) {
     return err(405, 'Method not allowed — ping-e2e expects POST', req.correlationId);
   }
 
-  const workflowId   = req.correlationId;
+  const traceId   = req.correlationId;
   const slackUser    = req.body?.user_id    || 'unknown';
   const slackChannel = req.body?.channel_id || 'unknown';
 
-  console.info('ping-e2e start', { workflowId, slackUser, slackChannel });
+  console.info('ping-e2e start', { traceId, slackUser, slackChannel });
 
   let ackTs;
   try {
@@ -44,7 +44,7 @@ export async function handle(req) {
       QueueUrl:    process.env.SQS_WORKFLOW_URL,
       MessageBody: JSON.stringify({
         type:          'PING_E2E',
-        workflowId,
+        traceId,
         slackUser,
         callback: {
           provider: 'slack',

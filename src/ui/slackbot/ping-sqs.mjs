@@ -4,7 +4,7 @@
 // src/ui/slackbot/ping-sqs.mjs
 // Handles POST /api/v1/ui/slack/ping-sqs
 //
-// Validates: SlackbotFunction → SQS → ProcStepOrchestrator → SQS → SlackCallbackListener → Slack
+// Validates: SlackbotFunction → SQS → ProcFunction → SQS → SlackCallbackListenerFunction → Slack
 // Response:  Immediate ACK posted via chat.postMessage (returns ts for threading).
 //            Threaded reply arrives ~5-10s later.
 // If this fails after ping-api passes → SQS IAM, queue config, or orchestrator issue.
@@ -21,11 +21,11 @@ export async function handle(req) {
     return err(405, 'Method not allowed — ping-sqs expects POST', req.correlationId);
   }
 
-  const workflowId  = req.correlationId;
+  const traceId       = req.correlationId;
   const slackUser   = req.body?.user_id    || 'unknown';
   const slackChannel = req.body?.channel_id || 'unknown';
 
-  console.info('ping-sqs start', { workflowId, slackUser, slackChannel });
+  console.info('ping-sqs start', { traceId, slackUser, slackChannel });
 
   // Post ACK via chat.postMessage so Slack returns a ts we can thread against.
   // Slash commands give us no thread_ts — this message becomes the thread root.
@@ -46,7 +46,7 @@ export async function handle(req) {
       QueueUrl:    process.env.SQS_WORKFLOW_URL,
       MessageBody: JSON.stringify({
         type:          'PING_SQS',
-        workflowId,
+        traceId,
         slackUser,
         callback: {
           provider: 'slack',

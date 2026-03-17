@@ -118,18 +118,18 @@ async function dispatch(req) {
 async function handlePingSqs(message) {
   await enqueueSlackResult({
     type:      'PING_SQS_RESULT',
-    workflowId: message.workflowId,
+    traceId: message.traceId,
     callback:   message.callback,
     hop:        2,
     result: {
       success:         true,
       message:         '📬 ping-sqs complete — 2 SQS hops confirmed ✅',
-      workflowId:      message.workflowId,
+      traceId:      message.traceId,
       hop1EnqueuedAt:  message.enqueuedAt,
       hop2ProcessedAt: new Date().toISOString(),
     },
   });
-  console.info('proc: ping-sqs hop 2 enqueued', { workflowId: message.workflowId });
+  console.info('proc: ping-sqs hop 2 enqueued', { traceId: message.traceId });
 }
 
 /**
@@ -145,17 +145,17 @@ async function handlePingE2e(message) {
 
   await enqueueSlackResult({
     type:      'PING_E2E_RESULT',
-    workflowId: message.workflowId,
+    traceId: message.traceId,
     callback:   message.callback,
     result: {
       success:     true,
       message:     `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
-      workflowId:  message.workflowId,
+      traceId:  message.traceId,
       enqueuedAt:  message.enqueuedAt,
       completedAt: new Date().toISOString(),
     },
   });
-  console.info('proc: ping-e2e result enqueued', { workflowId: message.workflowId, version });
+  console.info('proc: ping-e2e result enqueued', { traceId: message.traceId, version });
 }
 
 /**
