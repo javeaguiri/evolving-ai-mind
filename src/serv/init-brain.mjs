@@ -33,6 +33,7 @@ import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'    wit
 import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json'  with { type: 'json' };
 import seedWorkflow     from './templates/pgc/seeds/seed_PGC_Workflow.json'  with { type: 'json' };
 import seedIntentMap    from './templates/pgc/seeds/seed_PGC_IntentMap.json' with { type: 'json' };
+import seedPrompt       from './templates/pgc/seeds/seed_PGC_Prompt.json'    with { type: 'json' };
 
 const { Client } = pg;
 
@@ -135,6 +136,9 @@ export async function bootstrap() {
 
     // Step 7 — seed PGC_IntentMap bootstrap rows (resolves workflow_id by name)
     await seedPGCIntentMap(client);
+
+    // Step 8 — seed PGC_Prompt system prompt rows
+    await seedPGCPrompt(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -313,7 +317,14 @@ async function seedPGCSchema(client) {
       `INSERT INTO "PGC_Schema"
          (table_name, target, domain, description, columns, foreign_keys, constraints, triggers)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (table_name) DO NOTHING`,
+       ON CONFLICT (table_name) DO UPDATE SET
+         domain       = EXCLUDED.domain,
+         description  = EXCLUDED.description,
+         columns      = EXCLUDED.columns,
+         foreign_keys = EXCLUDED.foreign_keys,
+         constraints  = EXCLUDED.constraints,
+         triggers     = EXCLUDED.triggers,
+         updated_at   = now()`,
       [
         row.table_name, row.target, row.domain ?? null, row.description,
         JSON.stringify(row.columns),
@@ -400,4 +411,29 @@ async function seedPGCIntentMap(client) {
     );
   }
   console.info('init-brain: PGC_IntentMap seeded');
+}
+
+async function seedPGCPrompt(client) {
+  const rows = Array.isArray(seedPrompt) ? seedPrompt : [seedPrompt];
+  for (const row of rows) {
+    // Use WHERE NOT EXISTS to deduplicate on (intent_category, version)
+    // PGC_Prompt has no unique constraint on this pair yet — added in R14
+    await client.query(
+      `INSERT INTO "PGC_Prompt"
+         (intent_category, prompt_text, model, version, was_successful)
+       SELECT $1, $2, $3, $4, $5
+       WHERE NOT EXISTS (
+         SELECT 1 FROM "PGC_Prompt"
+         WHERE intent_category = $1 AND version = $4
+       )`,
+      [
+        row.intent_category,
+        row.prompt_text,
+        row.model ?? null,
+        row.version ?? 1,
+        row.was_successful ?? null,
+      ]
+    );
+  }
+  console.info('init-brain: PGC_Prompt seeded');
 }

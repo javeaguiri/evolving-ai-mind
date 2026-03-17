@@ -21,6 +21,7 @@
 import { parseEvent, err }    from '../shared/ping-utils.mjs';
 import { buildReqFromSqs }    from '../shared/lambda-utils.mjs';
 import { handle as pingLlm }  from './ping-llm.mjs';
+import { handle as createDomain } from './create-domain.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -95,8 +96,10 @@ async function dispatch(req) {
     case 'ping-llm':
       return pingLlm(req);
 
+    case 'create-domain':
+      return createDomain(req);
+
     // Routes added here as refactor progresses:
-    // case 'create-domain': return createDomain(req);  // Step 8
     // case 'run-workflow':  return runWorkflow(req);    // Phase 2
 
     default:
