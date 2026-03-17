@@ -303,9 +303,9 @@ This pattern means every PROC endpoint is:
 
 ## 4. Data Architecture
 
-### 4.1 Two PostgreSQL Instances
+### 4.1 One PostgreSQL Instances, two login URLs
 
-| Instance | Purpose | Contains |
+| Login URL | Purpose | Primary Use |
 |---|---|---|
 | PGC | Config / system tables | PGC_* tables — system metadata, workflow definitions, prompts |
 | PGD | Domain / user data | PGD_* tables — user-created domain tables |
