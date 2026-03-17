@@ -49,6 +49,8 @@ async function processHttpRequest(event) {
  * Process a batch of SQS WorkflowQueue records.
  * Each record is normalised to the same req shape as the HTTP path,
  * then dispatched to the same endpoint modules.
+ * Ping message types (PING_SQS, PING_E2E) are handled inline here —
+ * they carry the legacy flat envelope and are not transport-agnostic routes.
  * ReportBatchItemFailures — only failed records return to the queue.
  */
 async function processSqsBatch(records) {
@@ -57,8 +59,21 @@ async function processSqsBatch(records) {
   for (const record of records) {
     try {
       const message = JSON.parse(record.body);
-      const req     = buildReqFromSqs(message);
+
+      // Ping types carry the legacy flat envelope (slackChannel, slackThreadTs)
+      // and are handled inline — they are not transport-agnostic PROC routes.
+      if (message.type === 'PING_SQS') {
+        await handlePingSqs(message);
+        continue;
+      }
+      if (message.type === 'PING_E2E') {
+        await handlePingE2e(message);
+        continue;
+      }
+
+      const req = buildReqFromSqs(message);
       await dispatch(req);
+
     } catch (error) {
       console.error('proc: SQS record failed', {
         messageId: record.messageId,
@@ -82,9 +97,78 @@ async function dispatch(req) {
 
     // Routes added here as refactor progresses:
     // case 'create-domain': return createDomain(req);  // Step 8
-    // case 'run-workflow':  return runWorkflow(req);    // Phase 3
+    // case 'run-workflow':  return runWorkflow(req);    // Phase 2
 
     default:
       return err(404, `PROC route "${req.route}" not found`, req.correlationId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Ping SQS handlers — inline, legacy flat envelope, removed after Step 12
+// ---------------------------------------------------------------------------
+
+/**
+ * Hop 2 — forward ping-sqs result to SlackResults queue.
+ * Uses fetch() to SERV_API_URL — no AWS SDK in this file.
+ */
+async function handlePingSqs(message) {
+  console.info('proc: handlePingSqs message', JSON.stringify(message));
+  // Hop 2 — no SERV call needed, just forward the result
+  await enqueueSlackResult({
+    type:          'PING_SQS_RESULT',
+    workflowId:    message.workflowId,
+    slackChannel:  message.slackChannel,
+    slackUser:     message.slackUser,
+    slackThreadTs: message.slackThreadTs,
+    hop:           2,
+    result: {
+      success:         true,
+      message:         '📬 ping-sqs complete — 2 SQS hops confirmed ✅',
+      workflowId:      message.workflowId,
+      hop1EnqueuedAt:  message.enqueuedAt,
+      hop2ProcessedAt: new Date().toISOString(),
+    },
+  });
+  console.info('proc: ping-sqs hop 2 enqueued', { workflowId: message.workflowId });
+}
+
+/**
+ * Hop 2 — call SERV ping-db via HTTP fetch, forward result to SlackResults queue.
+ * Replaces the Lambda invoke in step-orchestrator.mjs — uses fetch() instead.
+ */
+async function handlePingE2e(message) {
+  const resp    = await fetch(`${process.env.SERV_API_URL}/api/v1/serv/ping-db`);
+  const payload = await resp.json();
+  const version = payload?.pgc?.version ?? payload?.pgd?.version ?? 'unknown';
+
+  await enqueueSlackResult({
+    type:          'PING_E2E_RESULT',
+    workflowId:    message.workflowId,
+    slackChannel:  message.slackChannel,
+    slackUser:     message.slackUser,
+    slackThreadTs: message.slackThreadTs,
+    result: {
+      success:     true,
+      message:     `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
+      workflowId:  message.workflowId,
+      enqueuedAt:  message.enqueuedAt,
+      completedAt: new Date().toISOString(),
+    },
+  });
+  console.info('proc: ping-e2e result enqueued', { workflowId: message.workflowId, version });
+}
+
+/**
+ * Send a result message to SYSSQSSlackResults.
+ * Used only by the legacy ping handlers above — all future routes use
+ * enqueueCallback() from src/shared/sqs-callback.mjs instead.
+ */
+async function enqueueSlackResult(payload) {
+  const { SQSClient, SendMessageCommand } = await import('@aws-sdk/client-sqs');
+  const sqs = new SQSClient({});
+  await sqs.send(new SendMessageCommand({
+    QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
+    MessageBody: JSON.stringify(payload),
+  }));
 }
