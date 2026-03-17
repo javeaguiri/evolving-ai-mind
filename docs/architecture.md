@@ -1482,33 +1482,56 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 ~~2. PGC workflow table templates~~      ✅ complete — v3.2-pgc-workflow-tables-complete
 ~~3. PROC — /create-domain (Phase 2b)~~ ✅ complete — v3.2-create-domain-scaffold
 ~~4. PROC — /create-domain (Phase 2c)~~ ✅ complete — v3.2-create-domain-live-llm
-~~7. SERV-Table (getRows + insertRow)~~  ✅ complete — v3.2-serv-table-partial
+~~5. SERV-Table (getRows + insertRow)~~  ✅ complete — v3.2-serv-table-partial
+~~6. PGC schema v2 — 13 tables + seeds~~ ✅ complete — v3.2-pgc-schema-v2-complete
 
-1. Refactoring (tech debt — do before anything else)
-   - remove `ProcStepOrchestrator` (`SYSLMBOrchestrator`) from `template.yaml`
-   - add SQS WorkflowQueue trigger to `ProcFunction` in `template.yaml`
-   - move all logic from `step-orchestrator.mjs` into `ProcFunction` as HTTP endpoints
-   - delete `step-orchestrator.mjs`
-   - replace `invokeServ` Lambda invoke with HTTP fetch to API Gateway
-   - rename `ping-utils.mjs` → `lambda-utils.mjs`
-   - add `SERV_API_URL`, `LLM_AGENT_URL`, `LLM_CHAT_URL` to SSM + template.yaml env vars
-   - move `PGC_Prompt`, `PGC_Workflow`, `PGC_IntentMap` seeds into `init-brain.mjs` bootstrap
-   - move FK + constraint normalisation from proc layer into `schema.mjs`
-   - rename `workflowId` → `traceId` in all SQS payloads and UI messages
-   - add `response_format json_schema` back to Agent API call
+### Phase 1 — Refactoring (in progress — complete before any new features)
 
-2. Slack `/interactive` endpoint        required for all human gates + domain review
-3. `/shutdown` Slack command            emergency stop — ProcFunction + SlackbotFunction
-4. Domain creation review gate          DESIGN_DOMAIN → Slack review → CREATE_DOMAIN (Section 6.6)
-5. PROC — Intent Preprocessor           coded logic + cheap LLM classification
-6. PROC — Step Processor                SQS-driven stack execution, full PGC_WorkflowRun lifecycle
-   — include velocity detector, execution accumulator, cycle detector (Section 6.9)
-7. SERV-Table updateRow/deleteRow       deferred until Phase 3 needs them
-7. SERV-Query                           parameterised SELECT with joins, pagination
-8. SERV-Entity                          multi-table jsonb_agg via PGC_EntitySchema
-9. Parallel execution                   fan-out/fan-in, optimistic locking (future)
-10. Unit + integration tests            node:test for pure functions, testcontainers for DB
-11. CI/CD GitHub Actions                after template.yaml stabilises
+Goal: align codebase with three-tier architecture. Eliminate ProcStepOrchestrator.
+Make ProcFunction handle both HTTP and SQS. Make all proc endpoints transport-agnostic.
+
+| Step | Task | Status |
+|---|---|---|
+| R1  | Update PGC JSON templates + drop/recreate PGC tables | ✅ complete |
+| R2  | Add SERV_API_URL, LLM_AGENT_URL, LLM_CHAT_URL to SSM + template.yaml | ✅ complete |
+| R3  | Create src/shared/sqs-callback.mjs — enqueueCallback() | ✅ complete |
+| R4  | Create src/shared/lambda-utils.mjs — parseEvent + buildReqFromSqs | ✅ complete |
+| R5  | Add processSqsBatch() to src/proc/handler.mjs | ✅ complete |
+| R6  | Add SQS WorkflowQueue trigger to ProcFunction in template.yaml | 🔄 in progress |
+| R7  | Remove ProcStepOrchestrator from template.yaml | ⬜ pending |
+| R8  | Move handleCreateDomain + callLlm into src/proc/create-domain.mjs — transport-agnostic | ⬜ pending |
+| R9  | Replace invokeServ Lambda invoke with fetch(SERV_API_URL) | ⬜ pending |
+| R10 | Delete src/proc/step-orchestrator.mjs | ⬜ pending |
+| R11 | Update all imports from ping-utils.mjs → lambda-utils.mjs | ⬜ pending |
+| R12 | Rename workflowId → traceId in all SQS payloads and UI messages | ⬜ pending |
+| R13 | Move PGC_Prompt, PGC_Workflow, PGC_IntentMap seeds into init-brain.mjs | ✅ complete — done in R1 |
+| R14 | Move FK + constraint normalisation into schema.mjs createTable | ⬜ pending |
+| R15 | Add response_format json_schema back to callLlm Agent API call | ⬜ pending |
+
+Retest after each step — if any ping breaks, stop and fix before continuing.
+Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move through them quickly.
+
+### Phase 2 — New Features
+
+| # | Task |
+|---|---|
+| 1 | Slack /interactive endpoint — required for all human gates + domain review |
+| 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction |
+| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN |
+| 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification |
+| 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle |
+|   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) |
+
+### Phase 3 — Deferred
+
+| # | Task |
+|---|---|
+| 1 | SERV-Table updateRow/deleteRow |
+| 2 | SERV-Query — parameterised SELECT with joins, pagination |
+| 3 | SERV-Entity — multi-table jsonb_agg via PGC_EntitySchema |
+| 4 | Parallel execution — fan-out/fan-in, optimistic locking |
+| 5 | Unit + integration tests — node:test, testcontainers |
+| 6 | CI/CD GitHub Actions — after template.yaml stabilises |
 
 ## 10. pgvector — Semantic Search
 
