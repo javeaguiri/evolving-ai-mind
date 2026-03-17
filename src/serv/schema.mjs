@@ -67,7 +67,7 @@ export async function handle(req) {
 
 async function createTable(req) {
   const {
-    tableName, target,
+    tableName, target, domain = null,
     columns, foreignKeys = [], constraints = [],
     triggers = [], description = '',
   } = req.body;
@@ -109,11 +109,11 @@ async function createTable(req) {
     // --- Register in PGC_Schema ---
     const insert = await pgcClient.query(
       `INSERT INTO "PGC_Schema"
-         (table_name, target, description, columns, foreign_keys, constraints, triggers)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (table_name, target, domain, description, columns, foreign_keys, constraints, triggers)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, created_at`,
       [
-        tableName, target, description,
+        tableName, target, domain, description,
         JSON.stringify(columns),
         JSON.stringify(foreignKeys),
         JSON.stringify(constraints),
@@ -125,9 +125,9 @@ async function createTable(req) {
     // --- Register in PGC_TableMap ---
     await pgcClient.query(
       `INSERT INTO "PGC_TableMap"
-         (table_name, target, schema_id, allow_insert, allow_update, allow_delete)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [tableName, target, insert.rows[0].id, true, true, false]
+         (table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [tableName, target, domain, insert.rows[0].id, true, true, false]
     );
     console.info(`schema: PGC_TableMap row inserted for ${tableName}`);
 
@@ -135,6 +135,7 @@ async function createTable(req) {
       success:       true,
       tableName,
       target,
+      domain,
       schemaId:   insert.rows[0].id,
       createdAt:  insert.rows[0].created_at,
       correlationId: req.correlationId,
@@ -161,9 +162,9 @@ async function listTables(req) {
     await client.connect();
 
     const query = target
-      ? `SELECT id, table_name, target, description, created_at, updated_at
+      ? `SELECT id, table_name, target, domain, description, created_at, updated_at
            FROM "PGC_Schema" WHERE target = $1 ORDER BY table_name`
-      : `SELECT id, table_name, target, description, created_at, updated_at
+      : `SELECT id, table_name, target, domain, description, created_at, updated_at
            FROM "PGC_Schema" ORDER BY target, table_name`;
 
     const result = await client.query(query, target ? [target] : []);

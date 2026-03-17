@@ -20,14 +20,19 @@ import PGC_Schema       from './templates/pgc/PGC_Schema.json'       with { type
 import PGC_TableMap     from './templates/pgc/PGC_TableMap.json'     with { type: 'json' };
 import PGC_EntitySchema from './templates/pgc/PGC_EntitySchema.json' with { type: 'json' };
 import PGC_DomainHelp   from './templates/pgc/PGC_DomainHelp.json'   with { type: 'json' };
-import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'   with { type: 'json' };
-import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json' with { type: 'json' };
 import PGC_Workflow        from './templates/pgc/PGC_Workflow.json'        with { type: 'json' };
 import PGC_WorkflowRun     from './templates/pgc/PGC_WorkflowRun.json'     with { type: 'json' };
 import PGC_WorkflowRunStep from './templates/pgc/PGC_WorkflowRunStep.json' with { type: 'json' };
 import PGC_Prompt          from './templates/pgc/PGC_Prompt.json'          with { type: 'json' };
 import PGC_IntentMap       from './templates/pgc/PGC_IntentMap.json'       with { type: 'json' };
 import PGC_WorkflowRunLock from './templates/pgc/PGC_WorkflowRunLock.json' with { type: 'json' };
+import PGC_SystemContext   from './templates/pgc/PGC_SystemContext.json'   with { type: 'json' };
+import PGC_StepType        from './templates/pgc/PGC_StepType.json'        with { type: 'json' };
+import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with { type: 'json' };
+import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'    with { type: 'json' };
+import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json'  with { type: 'json' };
+import seedWorkflow     from './templates/pgc/seeds/seed_PGC_Workflow.json'  with { type: 'json' };
+import seedIntentMap    from './templates/pgc/seeds/seed_PGC_IntentMap.json' with { type: 'json' };
 
 const { Client } = pg;
 
@@ -52,6 +57,7 @@ let cachedReport = null;
 //   PGC_Workflow before PGC_WorkflowRun, PGC_IntentMap (FK)
 //   PGC_WorkflowRun before PGC_WorkflowRunStep, PGC_WorkflowRunLock (FK)
 //   PGC_Prompt is self-referential — safe to create at any point
+//   PGC_SystemContext, PGC_StepType, PGC_Capability have no FKs — append after
 // ---------------------------------------------------------------------------
 const PGC_TEMPLATES = [
   PGC_Schema,
@@ -64,6 +70,9 @@ const PGC_TEMPLATES = [
   PGC_Prompt,
   PGC_IntentMap,
   PGC_WorkflowRunLock,
+  PGC_SystemContext,
+  PGC_StepType,
+  PGC_Capability,
 ];
 
 // ---------------------------------------------------------------------------
@@ -112,11 +121,20 @@ export async function bootstrap() {
       tableResults.push({ table_name: template.table_name, status });
     }
 
-    // Step 3 — seed PGC_Schema self-referential rows
+    // Step 3 — create PGC_WorkflowStats view (depends on PGC_WorkflowRun)
+    await installWorkflowStatsView(client);
+
+    // Step 4 — seed PGC_Schema self-referential rows
     await seedPGCSchema(client);
 
-    // Step 4 — seed PGC_TableMap gatekeeper rows
+    // Step 5 — seed PGC_TableMap gatekeeper rows
     await seedPGCTableMap(client);
+
+    // Step 6 — seed PGC_Workflow system workflow rows
+    await seedPGCWorkflow(client);
+
+    // Step 7 — seed PGC_IntentMap bootstrap rows (resolves workflow_id by name)
+    await seedPGCIntentMap(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -164,6 +182,35 @@ async function installTriggerFunction(client) {
   `;
   await client.query(sql);
   console.info('init-brain: set_updated_at() installed');
+}
+
+/**
+ * Install the PGC_WorkflowStats view.
+ * CREATE OR REPLACE — safe to run on every bootstrap.
+ * Not a physical table — registered in PGC_TableMap.views on the PGC_WorkflowRun row.
+ */
+async function installWorkflowStatsView(client) {
+  const sql = `
+    CREATE OR REPLACE VIEW "PGC_WorkflowStats" AS
+    SELECT
+      workflow_id,
+      COUNT(*)                                             AS run_count,
+      COUNT(*) FILTER (WHERE status = 'failed')            AS failure_count,
+      COUNT(*) FILTER (WHERE status = 'completed')         AS success_count,
+      COUNT(*) FILTER (WHERE status = 'cancelled')         AS cancelled_count,
+      ROUND(
+        COUNT(*) FILTER (WHERE status = 'failed')::numeric
+        / NULLIF(COUNT(*), 0) * 100, 1
+      )                                                    AS failure_rate_pct,
+      MAX(created_at)                                      AS last_run_at,
+      (ARRAY_AGG(status ORDER BY created_at DESC))[1]      AS last_status,
+      AVG(total_execution_ms)
+        FILTER (WHERE status = 'completed')                AS avg_execution_ms
+    FROM "PGC_WorkflowRun"
+    GROUP BY workflow_id;
+  `;
+  await client.query(sql);
+  console.info('init-brain: PGC_WorkflowStats view installed');
 }
 
 /**
@@ -264,11 +311,11 @@ async function seedPGCSchema(client) {
   for (const row of rows) {
     await client.query(
       `INSERT INTO "PGC_Schema"
-         (table_name, target, description, columns, foreign_keys, constraints, triggers)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (table_name, target, domain, description, columns, foreign_keys, constraints, triggers)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (table_name) DO NOTHING`,
       [
-        row.table_name, row.target, row.description,
+        row.table_name, row.target, row.domain ?? null, row.description,
         JSON.stringify(row.columns),
         JSON.stringify(row.foreign_keys),
         JSON.stringify(row.constraints),
@@ -292,15 +339,65 @@ async function seedPGCTableMap(client) {
     }
     await client.query(
       `INSERT INTO "PGC_TableMap"
-         (table_name, target, schema_id, allow_insert, allow_update, allow_delete, views)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete, views)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (table_name) DO NOTHING`,
       [
-        row.table_name, row.target, lookup.rows[0].id,
+        row.table_name, row.target, row.domain ?? null, lookup.rows[0].id,
         row.allow_insert, row.allow_update, row.allow_delete,
         JSON.stringify(row.views),
       ]
     );
   }
   console.info('init-brain: PGC_TableMap seeded');
+}
+
+async function seedPGCWorkflow(client) {
+  const rows = Array.isArray(seedWorkflow) ? seedWorkflow : [seedWorkflow];
+  for (const row of rows) {
+    await client.query(
+      `INSERT INTO "PGC_Workflow"
+         (name, domain, description, intent_keywords, steps, state_strategy, model_used, version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (name) DO NOTHING`,
+      [
+        row.name,
+        row.domain ?? null,
+        row.description,
+        JSON.stringify(row.intent_keywords ?? []),
+        JSON.stringify(row.steps ?? []),
+        row.state_strategy ?? null,
+        row.model_used ?? null,
+        row.version ?? 1,
+      ]
+    );
+  }
+  console.info('init-brain: PGC_Workflow seeded');
+}
+
+async function seedPGCIntentMap(client) {
+  const rows = Array.isArray(seedIntentMap) ? seedIntentMap : [seedIntentMap];
+  for (const row of rows) {
+    // Resolve workflow_id by name if provided — nullable for ad-hoc intents
+    let workflowId = null;
+    if (row.workflow_name) {
+      const lookup = await client.query(
+        `SELECT id FROM "PGC_Workflow" WHERE name = $1`,
+        [row.workflow_name]
+      );
+      if (lookup.rows.length === 0) {
+        console.warn(`init-brain: seed_PGC_IntentMap — no PGC_Workflow row for "${row.workflow_name}", seeding with workflow_id = NULL`);
+      } else {
+        workflowId = lookup.rows[0].id;
+      }
+    }
+    await client.query(
+      `INSERT INTO "PGC_IntentMap"
+         (pattern, intent_category, workflow_id, action_type)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING`,
+      [row.pattern, row.intent_category, workflowId, row.action_type]
+    );
+  }
+  console.info('init-brain: PGC_IntentMap seeded');
 }

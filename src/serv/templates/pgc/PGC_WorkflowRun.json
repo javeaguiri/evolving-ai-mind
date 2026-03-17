@@ -1,20 +1,27 @@
 {
   "table_name": "PGC_WorkflowRun",
   "target": "pgc",
-  "description": "One row per workflow execution. Holds the execution stack and accumulated state. Status tracks the full lifecycle from pending through completion or failure.",
+  "description": "One row per workflow execution. Holds the execution stack, accumulated state, callback routing, and runtime safety counters. Status tracks the full lifecycle from pending through completion or failure.",
   "columns": [
-    { "name": "id",          "type": "serial",      "primaryKey": true },
-    { "name": "workflow_id", "type": "integer",     "nullable": false },
-    { "name": "status",      "type": "text",        "nullable": false, "default": "'pending'" },
-    { "name": "input",       "type": "jsonb",       "nullable": true },
-    { "name": "stack",       "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-    { "name": "output",      "type": "jsonb",       "nullable": true },
-    { "name": "callback",    "type": "jsonb",       "nullable": true },
-    { "name": "error",       "type": "jsonb",       "nullable": true },
-    { "name": "started_at",  "type": "timestamptz", "nullable": true },
-    { "name": "completed_at","type": "timestamptz", "nullable": true },
-    { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
-    { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
+    { "name": "id",                  "type": "serial",      "primaryKey": true },
+    { "name": "workflow_id",         "type": "integer",     "nullable": false },
+    { "name": "trace_id",            "type": "text",        "nullable": true },
+    { "name": "triggered_by",        "type": "text",        "nullable": true },
+    { "name": "status",              "type": "text",        "nullable": false, "default": "'pending'" },
+    { "name": "input",               "type": "jsonb",       "nullable": true },
+    { "name": "stack",               "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+    { "name": "state",               "type": "jsonb",       "nullable": true },
+    { "name": "output",              "type": "jsonb",       "nullable": true },
+    { "name": "callback",            "type": "jsonb",       "nullable": true },
+    { "name": "total_execution_ms",  "type": "integer",     "nullable": false, "default": "0" },
+    { "name": "step_count",          "type": "integer",     "nullable": false, "default": "0" },
+    { "name": "steps_in_window",     "type": "integer",     "nullable": false, "default": "0" },
+    { "name": "window_started_at",   "type": "timestamptz", "nullable": true },
+    { "name": "error",               "type": "jsonb",       "nullable": true },
+    { "name": "started_at",          "type": "timestamptz", "nullable": true },
+    { "name": "completed_at",        "type": "timestamptz", "nullable": true },
+    { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
   ],
   "foreign_keys": [
     {
@@ -29,6 +36,11 @@
       "type": "check",
       "name": "chk_run_status",
       "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'completed', 'failed', 'cancelled')"
+    },
+    {
+      "type": "check",
+      "name": "chk_triggered_by",
+      "expression": "triggered_by IN ('slack', 'api', 'workflow', 'system')"
     }
   ],
   "triggers": [

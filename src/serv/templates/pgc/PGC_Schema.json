@@ -6,6 +6,7 @@
     { "name": "id",          "type": "serial",                        "primaryKey": true },
     { "name": "table_name",  "type": "text",    "nullable": false,    "unique": true },
     { "name": "target",      "type": "text",    "nullable": false     },
+    { "name": "domain",      "type": "text",    "nullable": true      },
     { "name": "description", "type": "text",    "nullable": true      },
     { "name": "columns",     "type": "jsonb",   "nullable": false     },
     { "name": "foreign_keys","type": "jsonb",   "nullable": true,     "default": "'[]'::jsonb" },

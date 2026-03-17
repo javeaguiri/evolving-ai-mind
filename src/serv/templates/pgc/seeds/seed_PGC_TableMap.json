@@ -1,82 +1,28 @@
 [
+  { "table_name": "PGC_Schema",          "target": "pgc", "domain": null, "allow_insert": false, "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_TableMap",        "target": "pgc", "domain": null, "allow_insert": false, "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_EntitySchema",    "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_DomainHelp",      "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_Workflow",        "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
   {
-    "table_name":   "PGC_Schema",
-    "target":       "pgc",
+    "table_name": "PGC_WorkflowRun",
+    "target": "pgc",
+    "domain": null,
     "allow_insert": true,
     "allow_update": true,
     "allow_delete": false,
-    "views":        []
+    "views": [
+      {
+        "name": "PGC_WorkflowStats",
+        "sql": "CREATE OR REPLACE VIEW \"PGC_WorkflowStats\" AS SELECT workflow_id, COUNT(*) AS run_count, COUNT(*) FILTER (WHERE status = 'failed') AS failure_count, COUNT(*) FILTER (WHERE status = 'completed') AS success_count, COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count, ROUND(COUNT(*) FILTER (WHERE status = 'failed')::numeric / NULLIF(COUNT(*), 0) * 100, 1) AS failure_rate_pct, MAX(created_at) AS last_run_at, (ARRAY_AGG(status ORDER BY created_at DESC))[1] AS last_status, AVG(total_execution_ms) FILTER (WHERE status = 'completed') AS avg_execution_ms FROM \"PGC_WorkflowRun\" GROUP BY workflow_id;"
+      }
+    ]
   },
-  {
-    "table_name":   "PGC_TableMap",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_EntitySchema",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_DomainHelp",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_Workflow",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_WorkflowRun",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_WorkflowRunStep",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": false,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_Prompt",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_IntentMap",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  },
-  {
-    "table_name":   "PGC_WorkflowRunLock",
-    "target":       "pgc",
-    "allow_insert": true,
-    "allow_update": true,
-    "allow_delete": false,
-    "views":        []
-  }
+  { "table_name": "PGC_WorkflowRunStep", "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": false, "allow_delete": false, "views": [] },
+  { "table_name": "PGC_Prompt",          "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_IntentMap",       "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_WorkflowRunLock", "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_SystemContext",   "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_StepType",        "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] },
+  { "table_name": "PGC_Capability",      "target": "pgc", "domain": null, "allow_insert": true,  "allow_update": true,  "allow_delete": false, "views": [] }
 ]

@@ -1,0 +1,24 @@
+{
+  "table_name": "PGC_Capability",
+  "target": "pgc",
+  "description": "Registry of what this system can currently do. Injected into heavy-lift prompts so the LLM proposes only feasible workflows and gives honest answers when asked for something not yet supported.",
+  "columns": [
+    { "name": "id",              "type": "serial",      "primaryKey": true },
+    { "name": "capability_key",  "type": "text",        "nullable": false, "unique": true },
+    { "name": "category",        "type": "text",        "nullable": false },
+    { "name": "description",     "type": "text",        "nullable": false },
+    { "name": "status",          "type": "text",        "nullable": false, "default": "'live'" },
+    { "name": "available_in",    "type": "jsonb",       "nullable": true },
+    { "name": "notes",           "type": "text",        "nullable": true },
+    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [
+    { "type": "check", "name": "chk_capability_status",   "expression": "status IN ('live', 'planned', 'not_supported')" },
+    { "type": "check", "name": "chk_capability_category", "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution')" }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_capability_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

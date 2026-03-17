@@ -6,6 +6,7 @@
     { "name": "id",            "type": "serial",                         "primaryKey": true },
     { "name": "table_name",    "type": "text",    "nullable": false,     "unique": true },
     { "name": "target",        "type": "text",    "nullable": false      },
+    { "name": "domain",        "type": "text",    "nullable": true       },
     { "name": "schema_id",     "type": "integer", "nullable": false      },
     { "name": "allow_insert",  "type": "boolean", "nullable": false,     "default": "true" },
     { "name": "allow_update",  "type": "boolean", "nullable": false,     "default": "true" },

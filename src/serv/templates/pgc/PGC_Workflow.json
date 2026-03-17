@@ -5,6 +5,7 @@
   "columns": [
     { "name": "id",                       "type": "serial",      "primaryKey": true },
     { "name": "name",                     "type": "text",        "nullable": false, "unique": true },
+    { "name": "domain",                   "type": "text",        "nullable": true },
     { "name": "description",              "type": "text",        "nullable": true },
     { "name": "intent_keywords",          "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
     { "name": "intent_embedding",         "type": "vector",      "nullable": true },
@@ -14,6 +15,9 @@
     { "name": "js_extensions",            "type": "jsonb",       "nullable": true },
     { "name": "model_used",               "type": "text",        "nullable": true },
     { "name": "quality_score",            "type": "numeric",     "nullable": true },
+    { "name": "max_execution_ms",         "type": "integer",     "nullable": true },
+    { "name": "max_steps_per_window",     "type": "integer",     "nullable": true },
+    { "name": "window_seconds",           "type": "integer",     "nullable": true },
     { "name": "version",                  "type": "integer",     "nullable": true,  "default": "1" },
     { "name": "parent_workflow_id",       "type": "integer",     "nullable": true },
     { "name": "created_at",              "type": "timestamptz", "nullable": false, "default": "now()" },

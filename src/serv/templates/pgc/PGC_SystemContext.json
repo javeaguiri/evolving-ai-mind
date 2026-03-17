@@ -1,0 +1,24 @@
+{
+  "table_name": "PGC_SystemContext",
+  "target": "pgc",
+  "description": "Compact runtime self-description of the system. Injected into heavy-lift LLM prompts so the model knows what it is operating inside, what it can do, and what the rules are. Replaces architecture.md at runtime. Seeded on bootstrap.",
+  "columns": [
+    { "name": "id",            "type": "serial",      "primaryKey": true },
+    { "name": "key",           "type": "text",        "nullable": false, "unique": true },
+    { "name": "section",       "type": "text",        "nullable": false },
+    { "name": "content",       "type": "text",        "nullable": false },
+    { "name": "format",        "type": "text",        "nullable": false, "default": "'prose'" },
+    { "name": "inject_always", "type": "boolean",     "nullable": false, "default": "false" },
+    { "name": "inject_for",    "type": "jsonb",       "nullable": true },
+    { "name": "version",       "type": "integer",     "nullable": false, "default": "1" },
+    { "name": "created_at",    "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",    "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [
+    { "type": "check", "name": "chk_format", "expression": "format IN ('prose', 'json')" }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_systemcontext_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

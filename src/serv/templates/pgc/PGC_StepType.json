@@ -1,0 +1,25 @@
+{
+  "table_name": "PGC_StepType",
+  "target": "pgc",
+  "description": "Canonical catalogue of all valid workflow step types with their input/output contracts. Seeded on bootstrap. Injected into workflow generation and improvement prompts so the LLM produces valid step definitions.",
+  "columns": [
+    { "name": "id",                  "type": "serial",      "primaryKey": true },
+    { "name": "step_type",           "type": "text",        "nullable": false, "unique": true },
+    { "name": "description",         "type": "text",        "nullable": false },
+    { "name": "input_contract",      "type": "jsonb",       "nullable": true },
+    { "name": "output_contract",     "type": "jsonb",       "nullable": true },
+    { "name": "on_success_options",  "type": "jsonb",       "nullable": true },
+    { "name": "on_failure_options",  "type": "jsonb",       "nullable": true },
+    { "name": "requires_capability", "type": "text",        "nullable": true },
+    { "name": "status",              "type": "text",        "nullable": false, "default": "'live'" },
+    { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
+    { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [
+    { "type": "check", "name": "chk_steptype_status", "expression": "status IN ('live', 'planned', 'deprecated')" }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_steptype_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}
