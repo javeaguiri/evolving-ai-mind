@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
+// src/shared/sqs-callback.mjs
+// Enqueues a result message to SYSSQSCallbackResults so the
+// SlackCallbackListenerFunction can route it back to the originating UI.
+//
+// This is the ONLY place @aws-sdk/client-sqs is imported in ProcFunction.
+// Isolated here so all PROC endpoint modules remain AWS-agnostic.
+//
+// Called by: PROC endpoint modules when req.source === 'sqs'
+// Never called on the HTTP path — HTTP responses go directly to API Gateway.
+
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+
+const sqs = new SQSClient({});
+
+/**
+ * Enqueue a result to SYSSQSCallbackResults.
+ * SlackCallbackListenerFunction consumes this queue and routes on callback.provider.
+ *
+ * @param {{ provider: string, channel: string, threadId: string }} callback
+ *   Provider-agnostic UI routing — carried end-to-end from the originating Slack message.
+ * @param {object} payload
+ *   The result body — merged with callback for the outbound SQS message.
+ *   Must include at minimum: { type, traceId }.
+ * @returns {Promise<void>}
+ */
+export async function enqueueCallback(callback, payload) {
+  await sqs.send(new SendMessageCommand({
+    QueueUrl:    process.env.SQS_SLACK_RESULTS_URL,
+    MessageBody: JSON.stringify({
+      ...payload,
+      callback,
+    }),
+  }));
+
+  console.info('sqs-callback: result enqueued', {
+    type:     payload.type,
+    traceId:  payload.traceId,
+    provider: callback?.provider,
+    channel:  callback?.channel,
+  });
+}
