@@ -104,7 +104,7 @@ Resources:
   SlackResultsQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: SYSSQSCallbackResults
+      QueueName: SYSSQSSlackResults
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt SlackResultsDLQ.Arn
         maxReceiveCount: 3
@@ -126,7 +126,7 @@ Resources:
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: SYSSQSCallbackResultsDLQ
+      QueueName: SYSSQSSlackResultsDLQ
       MessageRetentionPeriod: 1209600
 
   WorkflowDLQ:
@@ -351,7 +351,8 @@ Resources:
 
   # ===========================================================================
   # LAMBDA 2 — PROC (Process Orchestration)
-  # Owns:  /api/v1/proc/{proxy+}
+  # Owns:  /api/v1/proc/{proxy+}  (HTTP)
+  #        SQS WorkflowQueue      (async workflow execution)
   # Pings: POST /api/v1/proc/ping-llm
   # ===========================================================================
   ProcFunction:
@@ -375,6 +376,16 @@ Resources:
           Properties:
             Path: /api/v1/proc/{proxy+}
             Method: ANY
+        WorkflowTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt WorkflowQueue.Arn
+            # BatchSize is a cost optimisation only — not intra-run parallelism.
+            # One SQS message per workflowRunId is always in flight.
+            # processSqsBatch handles concurrent runs across different workflowRunIds.
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -459,45 +470,6 @@ Resources:
         EntryPoints:
           - src/ui/slackbot/callback.mjs
 
-  # ===========================================================================
-  # LAMBDA 5 — PROC Step Orchestrator (SQS-triggered)
-  # Consumes SYSSQSWorkflow messages — ping-sqs, ping-e2e, create-domain.
-  # ===========================================================================
-  ProcStepOrchestrator:
-    Type: AWS::Serverless::Function
-    Properties:
-      Runtime: nodejs22.x
-      Timeout: 60                    # LLM schema preparation can take 10-30s on first request
-      FunctionName: SYSLMBOrchestrator # "Pretty" name
-      Handler: step-orchestrator.handler
-      CodeUri: src/proc/
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Events:
-        WorkflowTrigger:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt WorkflowQueue.Arn
-            BatchSize: 1
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
-      Environment:
-        Variables:
-          SQS_SLACK_RESULTS_URL: !Ref SlackResultsQueue
-          SERV_FUNCTION_NAME:    !Ref ServFunction 
-          LLM_API_KEY:           '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2022
-        Format: esm
-        OutExtension:
-          - .js=.mjs
-        Banner:
-          - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
-        EntryPoints:
-          - step-orchestrator.mjs
-
 # -----------------------------------------------------------------------------
 # Outputs — merged into single block             FIX 2: duplicate Outputs removed
 # -----------------------------------------------------------------------------
@@ -537,4 +509,3 @@ Outputs:
     Value: !Ref SlackResultsQueue
     Export:
       Name: !Sub '${AWS::StackName}-CallbackResultsQueueUrl'
- 
