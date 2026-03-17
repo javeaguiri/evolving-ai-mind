@@ -1435,8 +1435,6 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 |---|---|---|
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
 | `/shutdown` Slack command | High | Emergency stop for all active workflow runs — see Section 6.9 |
-| `PGC_WorkflowRun` missing safety columns | High | `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` need adding to JSON template and bootstrap |
-| `PGC_Workflow` missing safety limit columns | High | `max_execution_ms`, `max_steps_per_window`, `window_seconds` need adding to JSON template and bootstrap |
 | Rename `workflowId` → `traceId` in all SQS payloads and UI messages | Medium | `workflowId` confused with PGC_WorkflowRun concepts — `traceId` is accurate today |
 | W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
 | Extract workflow logic to `shared/domain-workflows.mjs` | Medium | Enables PROC HTTP endpoints + removes future hop — see Section 19 |
@@ -1563,7 +1561,7 @@ All items below are deferred to the refactoring commit (Build Order item 1).
 `ProcFunction` gains a second SQS event trigger on `WorkflowQueue`.
 `handler.mjs` in PROC detects event type and routes accordingly:
 ```js
-if (event.Records)    → SQS path → processWorkflowMessage(record)
+if (event.Records)    → SQS path → processSqsBatch(record)
 if (event.httpMethod) → HTTP path → switch(req.route)
 ```
 All workflow logic currently in `step-orchestrator.mjs` moves into `ProcFunction`
