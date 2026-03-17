@@ -364,6 +364,9 @@ Resources:
       Environment:
         Variables:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          LLM_AGENT_URL:        'https://api.perplexity.ai/v1/agent'
+          LLM_CHAT_URL:         'https://api.perplexity.ai/chat/completions'
+          SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       Events:
