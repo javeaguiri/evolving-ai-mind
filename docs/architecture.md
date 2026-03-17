@@ -1487,7 +1487,8 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 
 Goal: align codebase with three-tier architecture. Eliminate ProcStepOrchestrator.
 Make ProcFunction handle both HTTP and SQS. Make all proc endpoints transport-agnostic.
-
+| Step | Task | Status |
+|---|---|---|
 | R1  | Update PGC JSON templates + drop/recreate PGC tables | ✅ complete |
 | R2  | Add SERV_API_URL, LLM_AGENT_URL, LLM_CHAT_URL to SSM + template.yaml | ✅ complete |
 | R3  | Create src/shared/sqs-callback.mjs — enqueueCallback() | ✅ complete |
