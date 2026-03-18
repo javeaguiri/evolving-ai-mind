@@ -1605,6 +1605,7 @@ structured context to learn from.
 | `v3.2-create-domain-scaffold` | /create-domain end to end with hardcoded recipes scaffold |
 | `v3.2-create-domain-live-llm` | /create-domain live LLM via Perplexity Agent API + json_schema output |
 | `v3.2-r14-r15-complete` | FK/constraint normalisation moved to SERV layer; response_format restored on LLM call |
+| `v3.2-slack-signing-complete` | Slack signing secret verification added to SlackbotFunction handler |
 
 ---
 
@@ -1646,7 +1647,7 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 
 | # | Task |
 |---|---|
-| 1 | Slack /interactive endpoint — required for all human gates + domain review |
+| 1 | Slack /interactive endpoint — required for all human gates + domain review. Include verifySlackSignature() from day one (Section 12.2) |
 | 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction |
 | 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN |
 | 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) |
@@ -1680,6 +1681,225 @@ Primary use cases:
 
 Status: Designed, not yet implemented. Add to ALLOWED_TYPES in schema.mjs
         when pgvector extension is enabled on RDS.
+
+---
+
+## 12. Security
+
+### 12.1 Threat Model
+
+evolving-mind-ai is a household-scale private deployment. The attack surfaces are:
+
+- **Slack endpoints** — publicly reachable API Gateway URLs. Anyone who knows the URL
+  can POST to them without authentication unless protected.
+- **PROC endpoints** — business logic layer. A fake request can trigger LLM calls,
+  DDL execution, or workflow cancellation.
+- **SERV endpoints** — data layer. A fake request can read or write PGC/PGD tables.
+- **Prompt injection** — malicious content in user input or LLM output attempting to
+  manipulate workflow execution. Covered by the right-brain validation loop (Section 6.10).
+
+### 12.2 Slack Endpoint Security — Signing Secret Verification
+
+**All `/api/v1/ui/slack/*` routes verify the Slack signing secret before any routing
+or business logic executes.** This is the official Slack-recommended mechanism and is
+implemented in `src/ui/slackbot/handler.mjs`.
+
+**How it works:**
+
+Every genuine Slack request includes two headers:
+- `X-Slack-Signature` — HMAC-SHA256 of `"v0:{timestamp}:{raw_body}"` signed with the
+  signing secret
+- `X-Slack-Request-Timestamp` — Unix timestamp of when Slack sent the request
+
+The handler computes the expected signature independently and compares using
+`timingSafeEqual` (Node.js `crypto`) — constant-time comparison that prevents
+timing attacks. Requests that fail verification are rejected with `401` before
+any business logic runs.
+
+**Replay attack protection:** Requests with a timestamp older than 5 minutes are
+rejected regardless of signature validity. This prevents an attacker from capturing
+and replaying a legitimate Slack request.
+
+**Implementation:**
+```js
+// src/ui/slackbot/handler.mjs
+import { createHmac, timingSafeEqual } from 'crypto';
+
+const sigBase  = `v0:${timestamp}:${rawBody}`;
+const expected = 'v0=' + createHmac('sha256', signingSecret)
+                           .update(sigBase, 'utf8')
+                           .digest('hex');
+
+if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+  return err(401, 'Unauthorized — invalid Slack signature');
+}
+```
+
+**Exempt routes:** Ping routes (`ping-api`, `ping-sqs`, `ping-llm`, `ping-e2e`) bypass
+signature verification. These are direct curl health checks that carry no Slack signature,
+are read-only, and enqueue no business logic payloads. They are defined in `EXEMPT_ROUTES`
+in `handler.mjs`.
+
+**The `/interactive` endpoint** must apply the same verification — it is the highest-risk
+surface because a forged button click can advance a live workflow run without user consent.
+Verification is built in from day one, not added later.
+
+**SSM parameter:** `/evolving-mind-ai/slack-signing-secret` — `SecureString`.
+Injected into SlackbotFunction via `template.yaml` Environment block as `SLACK_SIGNING_SECRET`.
+
+### 12.3 PROC and SERV Endpoint Security
+
+PROC and SERV endpoints are not directly called from Slack — PROC is called by the
+SQS WorkflowQueue (internal AWS) and by the operator via curl for testing. SERV is
+called only by PROC via HTTP fetch to API Gateway.
+
+**Current state:** No authentication on PROC or SERV endpoints. Anyone with the API
+Gateway URL can call them.
+
+**Target state:** AWS API Gateway resource policy restricting PROC and SERV to requests
+originating from within the AWS account. This requires no application code changes —
+it is a `template.yaml` / CloudFormation configuration only.
+
+For curl testing, the operator authenticates with `aws-sigv4`:
+```bash
+curl --aws-sigv4 "aws:amz:us-east-2:execute-api"      --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY"      -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/create-domain      -d '{"userInput":"recipes"}'
+```
+
+**Priority:** Medium — implement before any public exposure of PROC/SERV endpoints.
+No action needed while the system is household-scale with a known operator.
+
+### 12.4 Security Implementation Status
+
+| Surface | Protection | Status |
+|---|---|---|
+| `/ui/slack/command` | Slack signing secret — HMAC-SHA256 + replay protection | ✅ Implemented |
+| `/ui/slack/interactive` | Slack signing secret — same verifySlackSignature() | ⬜ Built in when /interactive is implemented (Phase 2 item 1) |
+| `/proc/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
+| `/serv/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
+| Prompt injection | Right-brain validation loop — Ajv + AST gate | ⬜ Implemented with /proc/review-output (Phase 2 item 3a) |
+| API keys (external callers) | API Gateway usage plans | ⬜ Phase 3 — only if external integrations added |
+
+### 12.5 What Is Deliberately Not Done
+
+- **No VPC on Lambda** — Lambda connects to RDS over public internet with SSL.
+  This is a cost decision ($32/month NAT Gateway avoided). RDS uses
+  `ssl: { rejectUnauthorized: false }` — connection is encrypted, cert not validated.
+  Acceptable for household-scale private deployment. Final — do not suggest VPC.
+- **No WAF** — AWS WAF adds ~$5-10/month minimum. Not justified at this scale.
+- **No API keys on Slack endpoints** — Slack signing secret is the correct
+  mechanism for Slack-originated requests. API keys would be redundant.
+
+
+---
+
+## 12. Security
+
+### 12.1 Threat Model
+
+evolving-mind-ai is a household-scale private deployment. The attack surfaces are:
+
+- **Slack endpoints** — publicly reachable API Gateway URLs. Anyone who knows the URL
+  can POST to them without authentication unless protected.
+- **PROC endpoints** — business logic layer. A fake request can trigger LLM calls,
+  DDL execution, or workflow cancellation.
+- **SERV endpoints** — data layer. A fake request can read or write PGC/PGD tables.
+- **Prompt injection** — malicious content in user input or LLM output attempting to
+  manipulate workflow execution. Covered by the right-brain validation loop (Section 6.10).
+
+### 12.2 Slack Endpoint Security — Signing Secret Verification
+
+**All `/api/v1/ui/slack/*` routes verify the Slack signing secret before any routing
+or business logic executes.** This is the official Slack-recommended mechanism and is
+implemented in `src/ui/slackbot/handler.mjs`.
+
+**How it works:**
+
+Every genuine Slack request includes two headers:
+- `X-Slack-Signature` — HMAC-SHA256 of `"v0:{timestamp}:{raw_body}"` signed with the
+  signing secret
+- `X-Slack-Request-Timestamp` — Unix timestamp of when Slack sent the request
+
+The handler computes the expected signature independently and compares using
+`timingSafeEqual` (Node.js `crypto`) — constant-time comparison that prevents
+timing attacks. Requests that fail verification are rejected with `401` before
+any business logic runs.
+
+**Replay attack protection:** Requests with a timestamp older than 5 minutes are
+rejected regardless of signature validity. This prevents an attacker from capturing
+and replaying a legitimate Slack request.
+
+**Implementation:**
+```js
+// src/ui/slackbot/handler.mjs
+import { createHmac, timingSafeEqual } from 'crypto';
+
+const sigBase  = `v0:${timestamp}:${rawBody}`;
+const expected = 'v0=' + createHmac('sha256', signingSecret)
+                           .update(sigBase, 'utf8')
+                           .digest('hex');
+
+if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+  return err(401, 'Unauthorized — invalid Slack signature');
+}
+```
+
+**Exempt routes:** Ping routes (`ping-api`, `ping-sqs`, `ping-llm`, `ping-e2e`) bypass
+signature verification. These are direct curl health checks that carry no Slack signature,
+are read-only, and enqueue no business logic payloads. They are defined in `EXEMPT_ROUTES`
+in `handler.mjs`.
+
+**The `/interactive` endpoint** must apply the same verification — it is the highest-risk
+surface because a forged button click can advance a live workflow run without user consent.
+Verification is built in from day one, not added later.
+
+**SSM parameter:** `/evolving-mind-ai/slack-signing-secret` — `SecureString`.
+Injected into SlackbotFunction via `template.yaml` Environment block as `SLACK_SIGNING_SECRET`.
+
+### 12.3 PROC and SERV Endpoint Security
+
+PROC and SERV endpoints are not directly called from Slack — PROC is called by the
+SQS WorkflowQueue (internal AWS) and by the operator via curl for testing. SERV is
+called only by PROC via HTTP fetch to API Gateway.
+
+**Current state:** No authentication on PROC or SERV endpoints. Anyone with the API
+Gateway URL can call them.
+
+**Target state:** AWS API Gateway resource policy restricting PROC and SERV to requests
+originating from within the AWS account. This requires no application code changes —
+it is a `template.yaml` / CloudFormation configuration only.
+
+For curl testing, the operator authenticates with `aws-sigv4`:
+```bash
+curl --aws-sigv4 "aws:amz:us-east-2:execute-api" \
+     --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+     -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/create-domain \
+     -d '{"userInput":"recipes"}'
+```
+
+**Priority:** Medium — implement before any public exposure of PROC/SERV endpoints.
+No action needed while the system is household-scale with a known operator.
+
+### 12.4 Security Implementation Status
+
+| Surface | Protection | Status |
+|---|---|---|
+| `/ui/slack/command` | Slack signing secret — HMAC-SHA256 + replay protection | ✅ Implemented |
+| `/ui/slack/interactive` | Slack signing secret — same verifySlackSignature() | ⬜ Built in when /interactive is implemented (Phase 2 item 1) |
+| `/proc/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
+| `/serv/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
+| Prompt injection | Right-brain validation loop — Ajv + AST gate | ⬜ Implemented with /proc/review-output (Phase 2 item 3a) |
+| API keys (external callers) | API Gateway usage plans | ⬜ Phase 3 — only if external integrations added |
+
+### 12.5 What Is Deliberately Not Done
+
+- **No VPC on Lambda** — Lambda connects to RDS over public internet with SSL.
+  This is a cost decision ($32/month NAT Gateway avoided). RDS uses
+  `ssl: { rejectUnauthorized: false }` — connection is encrypted, cert not validated.
+  Acceptable for household-scale private deployment. Final — do not suggest VPC.
+- **No WAF** — AWS WAF adds ~$5-10/month minimum. Not justified at this scale.
+- **No API keys on Slack endpoints** — Slack signing secret is the correct
+  mechanism for Slack-originated requests. API keys would be redundant.
+
 
 ---
 

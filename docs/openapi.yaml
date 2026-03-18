@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.2.0
+  version: 3.3.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -170,15 +170,91 @@ components:
           type: string
           format: date-time
 
-    SlackNotification:
+
+    Callback:
       type: object
+      description: Provider-agnostic UI callback routing
+      required: [provider, channel]
       properties:
-        slackChannel:
+        provider:
           type: string
-          example: C123456789
-        slackThreadTs:
+          enum: [slack]
+          example: slack
+        channel:
+          type: string
+          example: C0AEJ87JSKF
+        threadId:
           type: string
           example: "1234567890.123456"
+
+    ValidationErrorDetail:
+      type: object
+      description: Single Ajv validation error
+      properties:
+        instancePath:
+          type: string
+          example: "/tables/2/constraints/0"
+        schemaPath:
+          type: string
+        keyword:
+          type: string
+          example: required
+        params:
+          type: object
+        message:
+          type: string
+          example: "must have required property 'expression'"
+
+    ReviewOutputRequest:
+      type: object
+      required: [intentCategory, output]
+      properties:
+        intentCategory:
+          type: string
+          description: PGC_Prompt.intent_category — used to fetch output_schema for validation
+          example: create_domain
+        output:
+          type: object
+          description: The LLM-generated JSON to validate
+        outputType:
+          type: string
+          enum: [json, js]
+          default: json
+          description: >
+            json — validate against PGC_Prompt.output_schema using Ajv.
+            js   — parse with acorn AST gate + vm.runInNewContext sandbox execution.
+        testInput:
+          type: object
+          description: >
+            Required when outputType is js. Passed as sandbox context for in-situ execution.
+        traceId:
+          type: string
+          format: uuid
+
+    ReviewOutputResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        intentCategory:
+          type: string
+        attempt:
+          type: integer
+          description: Which attempt produced a valid result (1 or 2)
+        correctedOutput:
+          type: object
+          description: Present only when attempt 2 succeeded — the LLM-corrected output
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationErrorDetail'
+          description: Ajv errors from the failed attempt — present only when valid is false
+        errorLogged:
+          type: boolean
+          description: Whether the failure was written to PGC_Prompt.error_log
+        traceId:
+          type: string
+          format: uuid
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -208,7 +284,7 @@ paths:
     post:
       summary: SQS round-trip ping
       description: >
-        Validates Slack → SQS WorkflowQueue → ProcStepOrchestrator
+        Validates Slack → SQS WorkflowQueue → ProcFunction
         → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
         ACK posted via chat.postMessage. Threaded reply arrives ~5s later.
       tags: [Ping]
@@ -233,7 +309,7 @@ paths:
     post:
       summary: Full end-to-end ping
       description: >
-        Validates full chain — Slack → SQS → ProcStepOrchestrator
+        Validates full chain — Slack → SQS → ProcFunction
         → ServFunction (ping-db) → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
         Returns RDS PostgreSQL version string in thread.
       tags: [Ping]
@@ -311,8 +387,6 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/SlackNotification'
               type: object
               required: [tableName, target, columns]
               properties:
@@ -444,8 +518,6 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/SlackNotification'
               type: object
               required: [tableName]
               properties:
@@ -488,8 +560,6 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/SlackNotification'
               type: object
               required: [tableName]
               properties:
@@ -643,3 +713,322 @@ paths:
           description: Table not registered in PGC_TableMap
         '500':
           description: Insert failed
+
+  # ── UI / Slack — command + interactive ────────────────────────────────────
+
+  /api/v1/ui/slack/command:
+    post:
+      summary: Slack slash command receiver
+      description: >
+        Receives all Slack slash commands (/create-domain, /shutdown, /ping-*, etc.).
+        Validates Slack request signature, ACKs immediately with 200, then enqueues
+        a message to SQS WorkflowQueue for async processing by ProcFunction.
+        Slack requires a response within 3 seconds — this endpoint always responds
+        within 1s. The threaded result arrives via SlackCallbackListenerFunction.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /create-domain
+                text:
+                  type: string
+                  example: recipes
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+                thread_ts:
+                  type: string
+                  example: "1234567890.123456"
+      responses:
+        '200':
+          description: >
+            ACK — command accepted. Result will be posted to the Slack thread.
+          content:
+            application/json:
+              example:
+                response_type: in_channel
+                text: "🧠 Designing domain for *recipes* — watch this thread for results"
+        '400':
+          description: Invalid Slack signature or missing required fields
+        '500':
+          description: Failed to enqueue to SQS WorkflowQueue
+
+  /api/v1/ui/slack/interactive:
+    post:
+      summary: Slack interactive payload handler
+      description: >
+        Receives interactive component payloads from Slack — button clicks,
+        modal submissions, and overflow menu selections. Used exclusively for
+        human_gate responses in the workflow execution stack.
+
+        Flow:
+          1. User clicks button in a Slack Block Kit message (e.g. "✅ Confirm")
+          2. Slack POSTs a URL-encoded payload to this endpoint
+          3. SlackbotFunction validates the Slack signature
+          4. Parses the payload — extracts workflowRunId, action, and user response
+          5. Enqueues { type: WORKFLOW_STEP, action: resume_gate, response } to WorkflowQueue
+          6. Returns 200 immediately — Slack requires response within 3s
+
+        The Step Processor picks up the resume_gate message and pops the
+        human_gate frame from the execution stack, routing based on the user response.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload:
+                  type: string
+                  description: >
+                    URL-encoded JSON string from Slack containing action details.
+                    Parsed fields used internally:
+                    type (block_actions | view_submission),
+                    actions[0].action_id,
+                    actions[0].value (encodes workflowRunId + user response),
+                    user.id, channel.id, message.ts
+      responses:
+        '200':
+          description: >
+            Interactive action acknowledged. Stack will resume asynchronously.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: Invalid Slack signature or malformed payload
+        '404':
+          description: workflowRunId not found or run not in awaiting_human_gate status
+        '500':
+          description: Failed to enqueue resume_gate message to WorkflowQueue
+
+  # ── PROC — business logic endpoints ───────────────────────────────────────
+
+  /api/v1/proc/create-domain:
+    post:
+      summary: Design and create a new user domain
+      description: >
+        Transport-agnostic endpoint — called identically via HTTP (curl/test)
+        or SQS (WorkflowQueue async message from Slack).
+
+        Reads the create_domain prompt from PGC_Prompt, calls the LLM to design
+        a full relational schema, validates the scaffold via review-output (Ajv),
+        creates each PGD table via SERV-Schema createTable, and registers the
+        domain in PGC_DomainHelp.
+
+        On SQS delivery, result is enqueued to SYSSQSCallbackResults for
+        SlackCallbackListenerFunction to post as a threaded reply.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userInput]
+              properties:
+                userInput:
+                  type: string
+                  description: >
+                    Free-form natural language description of the domain.
+                    LLM infers a clean snake_case domain name from this.
+                  example: recipes with ingredients and nutritional info
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              userInput: recipes with ingredients and nutritional info
+              callback:
+                provider: slack
+                channel: C0AEJ87JSKF
+                threadId: "1234567890.123456"
+      responses:
+        '200':
+          description: Domain created successfully
+          content:
+            application/json:
+              example:
+                success: true
+                domainName: recipes
+                tables:
+                  - { tableName: PGD_Recipes,     status: created }
+                  - { tableName: PGD_Ingredients,  status: created }
+                completedAt: "2026-03-18T10:46:45.870Z"
+        '400':
+          description: userInput is required
+        '500':
+          description: LLM call, validation, or DDL execution failed
+
+  /api/v1/proc/shutdown:
+    post:
+      summary: Emergency stop — cancel active workflow runs
+      description: >
+        Immediately cancels all active workflow runs for this instance, or a
+        specific run by ID. Sets PGC_WorkflowRun.status = 'cancelled' and
+        enqueues a cancel message to WorkflowQueue so any in-flight SQS step
+        is discarded on next execution.
+
+        Called synchronously by SlackbotFunction on /shutdown command —
+        no SQS hop. Must respond within Slack's 3s window.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflowRunId:
+                  type: integer
+                  description: >
+                    Specific run to cancel. Omit to cancel ALL active runs.
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              callback:
+                provider: slack
+                channel: C0AEJ87JSKF
+                threadId: "1234567890.123456"
+      responses:
+        '200':
+          description: Shutdown complete — cancelledCount is 0 when no active runs exist
+          content:
+            application/json:
+              examples:
+                runs_cancelled:
+                  summary: One or more runs cancelled
+                  value:
+                    success: true
+                    cancelledCount: 2
+                    cancelled:
+                      - { workflowRunId: 42, workflowName: create_domain, stoppedAtStep: 3 }
+                      - { workflowRunId: 43, workflowName: deduct_inventory, stoppedAtStep: 1 }
+                no_active_runs:
+                  summary: No active workflows to cancel
+                  value:
+                    success: true
+                    cancelledCount: 0
+                    cancelled: []
+        '500':
+          description: DB update or SQS enqueue failed
+
+  /api/v1/proc/review-output:
+    post:
+      summary: Right-brain output validation — Ajv JSON Schema + in-situ JS sandbox
+      description: >
+        Validates LLM-generated output before it is passed to any downstream step
+        (DDL, SQS payload, workflow state write). Implements the repeat-until-correct
+        loop defined in architecture Section 6.10.
+
+        For JSON output (outputType: json):
+          - Fetches PGC_Prompt.output_schema for the given intentCategory
+          - Validates the output against the schema using Ajv
+          - If invalid: injects Ajv errors into a correction prompt, calls LLM once more
+          - If attempt 2 also fails: writes to PGC_Prompt.error_log, returns valid: false
+
+        For JS output (outputType: js):
+          - Parses the generated code with acorn (AST gate — syntax validation)
+          - Executes in vm.runInNewContext() sandbox with hard 500ms timeout
+          - Validates output shape against PGC_StepType.output_schema
+          - Same 2-attempt correction loop applies
+
+        Maximum 2 LLM correction attempts. Never an unbounded loop.
+        All failures written to PGC_Prompt.error_log regardless of recovery outcome.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewOutputRequest'
+            examples:
+              json_validation:
+                summary: Validate LLM scaffold JSON
+                value:
+                  intentCategory: create_domain
+                  outputType: json
+                  output:
+                    domain: recipes
+                    tables:
+                      - tableName: PGD_Recipes
+                        target: pgd
+                        columns:
+                          - { name: id, type: serial, primaryKey: true }
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+              js_validation:
+                summary: Validate LLM-generated JS transform
+                value:
+                  intentCategory: js_transform_merge_tables
+                  outputType: js
+                  output: "function transform(input) { return { merged: input.tables }; }"
+                  testInput: { tables: ["PGD_A", "PGD_B"] }
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+      responses:
+        '200':
+          description: Validation result — check valid field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewOutputResponse'
+              examples:
+                valid_first_attempt:
+                  summary: Valid on first attempt
+                  value:
+                    valid: true
+                    intentCategory: create_domain
+                    attempt: 1
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                valid_after_correction:
+                  summary: Invalid attempt 1, corrected on attempt 2
+                  value:
+                    valid: true
+                    intentCategory: create_domain
+                    attempt: 2
+                    correctedOutput:
+                      domain: recipes
+                      tables: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                invalid_both_attempts:
+                  summary: Both attempts failed — run halted
+                  value:
+                    valid: false
+                    intentCategory: create_domain
+                    attempt: 2
+                    errors:
+                      - instancePath: "/tables/2/constraints/0"
+                        keyword: required
+                        message: "must have required property 'expression'"
+                    errorLogged: true
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+        '400':
+          description: Missing intentCategory or output, unknown outputType
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No PGC_Prompt row found for intentCategory
+        '500':
+          description: Validation infrastructure error (Ajv compile, vm sandbox, DB write)
