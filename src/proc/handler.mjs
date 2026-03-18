@@ -21,6 +21,7 @@
 import { parseEvent, err, buildReqFromSqs } from '../shared/lambda-utils.mjs';
 import { handle as pingLlm }  from './ping-llm.mjs';
 import { handle as createDomain } from './create-domain.mjs';
+import { handleHelp, handleHelpResume }     from './help.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -68,6 +69,17 @@ async function processSqsBatch(records) {
       }
       if (message.type === 'PING_E2E') {
         await handlePingE2e(message);
+        continue;
+      }
+      if (message.type === 'HELP') {
+        await handleHelp(message);
+        continue;
+      }
+      // resume_gate — routes to the correct workflow handler.
+      // TODO: replace with PGC_WorkflowRun lookup when Step Processor is built.
+      // For now: all resume_gate messages are routed to the HELP workflow.
+      if (message.type === 'WORKFLOW_STEP' && message.action === 'resume_gate') {
+        await handleHelpResume(message);
         continue;
       }
 

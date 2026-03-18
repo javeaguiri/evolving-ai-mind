@@ -87,6 +87,14 @@ async function processRecord(record) {
         await postCreateDomainResult(message);
         break;
 
+      case 'HELP_GATE':
+        await postHelpGate(message);
+        break;
+
+      case 'HELP_RESULT':
+        await postHelpResult(message);
+        break;
+
       // Future result types added here:
       // case 'FLOW_RESULT': await postFlowResult(message); break;
 
@@ -196,5 +204,80 @@ async function postCreateDomainResult(message) {
     channel:    callback.channel,
     domainName: result.domainName,
     traceId: message.traceId,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// HELP handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Post the Block Kit help gate — confirm/cancel buttons.
+ * Button values encode { workflowRunId, action } so interactive.mjs
+ * can route the response without a DB lookup.
+ */
+async function postHelpGate(message) {
+  const { callback, result } = message;
+  const { workflowRunId, traceId } = result;
+
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: '👋 *Welcome to evolving-mind!*\n\nI can help you build and manage data domains using natural language. Want to see what I can do?',
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type:      'button',
+          style:     'primary',
+          text:      { type: 'plain_text', text: '✅ Yes, show me' },
+          action_id: 'help_response',
+          value:     JSON.stringify({ workflowRunId, action: 'confirm' }),
+        },
+        {
+          type:      'button',
+          text:      { type: 'plain_text', text: '❌ Not now' },
+          action_id: 'help_response',
+          value:     JSON.stringify({ workflowRunId, action: 'cancel' }),
+        },
+      ],
+    },
+    {
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: `traceId: ${traceId}` },
+      ],
+    },
+  ];
+
+  await routeCallback(callback, '👋 Welcome to evolving-mind! Want to see what I can do?', blocks);
+  console.info('callback: HELP_GATE posted', { channel: callback.channel, traceId });
+}
+
+/**
+ * Post the help result — plain threaded reply after user responds.
+ */
+async function postHelpResult(message) {
+  const { callback, result } = message;
+  await routeCallback(callback, result.message, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.message },
+    },
+    {
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: `traceId: ${result.traceId} | completed: ${result.completedAt}` },
+      ],
+    },
+  ]);
+  console.info('callback: HELP_RESULT posted', {
+    channel:      callback.channel,
+    userResponse: result.userResponse,
+    traceId:      result.traceId,
   });
 }
