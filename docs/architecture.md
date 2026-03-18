@@ -1566,29 +1566,17 @@ structured context to learn from.
 | Item | Priority | Notes |
 |---|---|---|
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
-| `/shutdown` Slack command | High | Emergency stop for all active workflow runs — see Section 6.9 |
-| Rename `workflowId` → `traceId` in all SQS payloads and UI messages | Medium | `workflowId` confused with PGC_WorkflowRun concepts — `traceId` is accurate today |
-| W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
-| Extract workflow logic to `shared/domain-workflows.mjs` | Medium | Enables PROC HTTP endpoints + removes future hop — see Section 19 |
-| LLM URLs to env vars (`LLM_AGENT_URL`, `LLM_CHAT_URL`) | Medium | Before Phase 3 — avoids redeploy on provider change — see Section 19 |
+| `resume_gate` routes to HELP workflow only | High | `proc/handler.mjs` routes all `resume_gate` messages to `handleHelpResume`. Replace with `PGC_WorkflowRun` lookup when Step Processor is built |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
-| FK + constraint normalisation belongs in `schema.mjs` | Medium | Currently normalised in `step-orchestrator.mjs` — fragile, wrong layer |
-| `response_format json_schema` removed from Agent API call | Medium | Stripped due to 400 error — revisit, schema enforcement is more reliable than prompt |
-| `PGC_Prompt` seeds not in bootstrap | High | Manual migration scripts — stack rebuild loses prompts silently. Move to `init-brain.mjs` or add runbook |
-| `.env.local` Windows `\r` line ending issue | Low | `--env-file` fails with CRLF on Windows — document workaround (`set VAR=...`) |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
-| AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager (no public IP required) when promotional credits near exhaustion. No application code changes needed. |
-| Domain creation review gate | High | LLM schema proposed but not confirmed before DDL — see Section 13 Gate 1 |
-| Slack `/interactive` endpoint | High | Required for all human gates — needed before Step Processor and domain review |
-| Remove `ProcStepOrchestrator` Lambda + add SQS trigger to `ProcFunction` | High | Eliminates hop, reduces cold start surface — see Section 11 |
-| `step-orchestrator.mjs` business logic moves to `ProcFunction` HTTP endpoints | High | Currently handleCreateDomain + callLlm live in wrong layer — see Section 11 |
-| `invokeServ` uses Lambda invoke not HTTP fetch | High | Should be HTTP fetch to API Gateway for cloud portability — see Section 11 |
+| AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager when promotional credits near exhaustion. No application code changes needed. |
+| W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
+| `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
 | Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`. Use `node:test` built-in |
 | Integration tests | Low | Defer until PROC/Schema complete — use `testcontainers` + PostgreSQL |
-| `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
-| pgvector for intent matching | Low | Add to RDS when similarity search is needed |
-| CI/CD GitHub Actions | Low | Deliberately deferred until template.yaml stabilises |
+| CI/CD GitHub Actions | Low | Deliberately deferred until `template.yaml` stabilises |
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
+| PROC/SERV API Gateway resource policy | Medium | Restrict to AWS account-scoped requests before any public exposure — see Section 12.3 |
 
 ---
 
@@ -1606,6 +1594,9 @@ structured context to learn from.
 | `v3.2-create-domain-live-llm` | /create-domain live LLM via Perplexity Agent API + json_schema output |
 | `v3.2-r14-r15-complete` | FK/constraint normalisation moved to SERV layer; response_format restored on LLM call |
 | `v3.2-slack-signing-complete` | Slack signing secret verification added to SlackbotFunction handler |
+| `v3.2-template-cleanup` | SchemaQueue + DLQ removed, LambdaInvokePolicy removed, stale env vars cleaned |
+| `v3.2-clean-baseline` | All pings passing, Lambda invoke pattern fully gone, clean foundation for Phase 2 |
+| `v3.2-interactive-complete` | /interactive endpoint live, /help command proves full interactive loop end-to-end |
 
 ---
 
@@ -1645,15 +1636,16 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 
 ### Phase 2 — New Features
 
-| # | Task |
-|---|---|
-| 1 | Slack /interactive endpoint — required for all human gates + domain review. Include verifySlackSignature() from day one (Section 12.2) |
-| 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction |
-| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN |
-| 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) |
-| 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification |
-| 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle |
-|   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) |
+| # | Task | Status |
+|---|---|---|
+| 1 | Slack /interactive endpoint + Slack signing verification (Section 12.2) | ✅ complete — v3.2-interactive-complete |
+| 1a | /help command — interactive loop proof + permanent intent pipeline foundation | ✅ complete — v3.2-interactive-complete |
+| 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction | ⬜ next |
+| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN | ⬜ |
+| 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) | ⬜ |
+| 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ |
+| 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ⬜ |
+|   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) | |
 
 ### Phase 3 — Deferred
 
@@ -1773,7 +1765,7 @@ No action needed while the system is household-scale with a known operator.
 | Surface | Protection | Status |
 |---|---|---|
 | `/ui/slack/command` | Slack signing secret — HMAC-SHA256 + replay protection | ✅ Implemented |
-| `/ui/slack/interactive` | Slack signing secret — same verifySlackSignature() | ⬜ Built in when /interactive is implemented (Phase 2 item 1) |
+| `/ui/slack/interactive` | Slack signing secret — same verifySlackSignature() | ✅ Implemented — v3.2-interactive-complete |
 | `/proc/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
 | `/serv/*` | AWS API Gateway resource policy — account-scoped | ⬜ Deferred — low risk at household scale |
 | Prompt injection | Right-brain validation loop — Ajv + AST gate | ⬜ Implemented with /proc/review-output (Phase 2 item 3a) |
@@ -1792,61 +1784,30 @@ No action needed while the system is household-scale with a known operator.
 
 ---
 
-## 13. Refactoring Decisions
+## 13. Refactoring Decisions — Completed
 
-### Target architecture — four Lambdas, dual-trigger ProcFunction
+All Phase 1 refactoring is complete as of `v3.2-clean-baseline`.
 
-All items below are deferred to the refactoring commit (Build Order item 1).
+| Decision | Rationale | Status |
+|---|---|---|
+| `ProcStepOrchestrator` eliminated — `ProcFunction` dual HTTP+SQS trigger | Eliminates Lambda-to-Lambda hop, reduces cold start surface | ✅ complete |
+| `invokeServ` replaced with `fetch(SERV_API_URL)` | Cloud portability — Lambda invoke is AWS-only; HTTP fetch works anywhere | ✅ complete |
+| All PROC endpoint modules transport-agnostic | No AWS SDK in business logic — `req.source` determines response path only | ✅ complete |
+| `shared/ping-utils.mjs` → `shared/lambda-utils.mjs` | Accurate name — utility serves all Lambdas, not just pings | ✅ complete |
+| `workflowId` → `traceId` throughout | `workflowId` conflated with `PGC_WorkflowRun.id` — `traceId` is accurate | ✅ complete |
+| FK + constraint normalisation moved to `buildCreateTableSQL` | SERV layer owns DDL contract — PROC should not pre-process LLM output | ✅ complete |
+| `response_format json_schema` restored on Agent API call | Model-level JSON enforcement reduces malformed output | ✅ complete |
+| `SchemaQueue` + `LambdaInvokePolicy` removed from `template.yaml` | Orphaned resources — no trigger, no application references | ✅ complete |
+| `PROC_FUNCTION_NAME` + stale env vars removed | Lambda invoke pattern gone — env vars were dead references | ✅ complete |
 
-**`ProcStepOrchestrator` eliminated**
-
-`SYSLMBOrchestrator` is removed from `template.yaml` entirely.
-`ProcFunction` gains a second SQS event trigger on `WorkflowQueue`.
-`handler.mjs` in PROC detects event type and routes accordingly:
-```js
-if (event.Records)    → SQS path → processSqsBatch(record)
-if (event.httpMethod) → HTTP path → switch(req.route)
-```
-All workflow logic currently in `step-orchestrator.mjs` moves into `ProcFunction`
-as HTTP endpoints. `step-orchestrator.mjs` is deleted.
-
-**`ProcFunction` — all business logic, cloud-agnostic**
-
-All workflow logic moves from `step-orchestrator.mjs` into `ProcFunction` endpoints:
+**Planned PROC endpoints** (documented in `openapi.yaml` — not yet implemented):
 
 | Endpoint | Description |
 |---|---|
-| `POST /proc/design-domain` | Call LLM, return proposed scaffold — no DB writes |
-| `POST /proc/create-domain` | Accept confirmed scaffold, create tables, insert DomainHelp |
-| `POST /proc/classify-intent` | Intent Preprocessor — coded logic + cheap LLM |
-| `POST /proc/run-workflow` | Step Processor — execute top frame of PGC_WorkflowRun stack |
-| `POST /proc/improve-prompt` | Prompt evolution — update PGC_Prompt with new version |
-
-No AWS SDK imports in the process tier. All external calls via HTTP fetch:
-- SERV: `fetch(process.env.SERV_API_URL + '/serv/table/getRows', ...)`
-- LLM: `fetch(process.env.LLM_AGENT_URL, ...)`
-
-**`invokeServ` → HTTP fetch**
-
-Current: `lambda.send(new InvokeCommand({ FunctionName: SERV_FUNCTION_NAME, ... }))`
-Target: `fetch(process.env.SERV_API_URL + path, { method, body })`
-
-Why API Gateway HTTP instead of direct Lambda invoke:
-- **Contract enforcement** — PROC endpoints are versioned and documented in `openapi.yaml`
-- **Cloud portability** — `fetch(apiGatewayUrl)` works on any cloud. Lambda invoke is AWS-only
-- **Testability** — curl works against API Gateway without AWS credentials
-- **Latency is not a concern** — traffic stays on AWS internal backbone within us-east-2
-
-### Rename `shared/ping-utils.mjs` → `shared/lambda-utils.mjs`
-
-Pure rename — no logic changes. Touches all files importing from `ping-utils.mjs`:
-`ping-db.mjs`, `schema.mjs`, `table.mjs`, `ping.mjs`, `ping-sqs.mjs`, `ping-e2e.mjs`,
-`ping-llm.mjs` (both PROC and slackbot), `create-domain.mjs`, and both `handler.mjs` files.
-
-### Environment variables to add
-
-```yaml
-LLM_AGENT_URL:  'https://api.perplexity.ai/v1/agent'
-LLM_CHAT_URL:   'https://api.perplexity.ai/chat/completions'
-SERV_API_URL:   'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
-```
+| `POST /proc/create-domain` | ✅ Live — LLM schema design + DDL execution |
+| `POST /proc/design-domain` | ⬜ Phase 3 — LLM call only, no DB writes (pre-gate step) |
+| `POST /proc/classify-intent` | ⬜ Phase 2 item 4 — Intent Preprocessor |
+| `POST /proc/run-workflow` | ⬜ Phase 2 item 5 — Step Processor |
+| `POST /proc/review-output` | ⬜ Phase 2 item 3a — Ajv + JS sandbox validation |
+| `POST /proc/shutdown` | ⬜ Phase 2 item 2 — emergency stop |
+| `POST /proc/improve-prompt` | ⬜ Phase 3 — prompt evolution |
