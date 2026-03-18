@@ -1,382 +1,484 @@
-Copyright (c) 2026 Javea Guiri. All rights reserved.
-Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-See LICENSE file in the project root for full license terms.
+# evolving-mind-ai
 
-🧠 evolving-mind-ai
-Self-Evolving, Low-Cost Cognitive Automation System
-evolving-mind-ai is an intelligent low-cost automation brain that creates, manages, and evolves its own process flows and data schemas. It harnesses LLM-powered reasoning to generate new workflows and database structures dynamically, while routine tasks run entirely through low-cost AWS Lambda + PostgreSQL operations.
+> A self-evolving, low-cost cognitive automation brain — v3.2
 
-⚙️ Design Principles
-Principle	Description
-Intelligent & Adaptive	Uses LLM only to create new task/process flows and SQL schemas when novelty is detected.
-Low-Cost Operation	Everyday tasks run through AWS Lambda serverless functions + PostgreSQL free tier.
-Autonomous Schema Evolution	The system evolves PGC (config schemas) and PGD (domain data tables) automatically.
-Composability	Modular services—PROC, SERV, API—are stateless and functionally replaceable.
-GitHub Readability	Fully visualized architecture, directory outline, and YAML/operator clarity.
-Target Cost: ~$0.03–$0.05 per month
-Stack: Slack → AWS Lambda → PostgreSQL → LLM (OpenAI / Anthropic-compatible layer)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
+[![AWS SAM](https://img.shields.io/badge/infra-AWS%20SAM-orange)](https://docs.aws.amazon.com/serverless-application-model/)
+[![Node.js 22](https://img.shields.io/badge/runtime-Node.js%2022%20ESM-green)](https://nodejs.org/)
 
-🏗️ System Architecture
-text
-graph TD;
-  Slack[Slack Bot UI] --> PROC[Rules Engine (PROC)];
-  PROC --> SERV[Service Layer (AWS Lambda)];
-  SERV --> API[API Gateway + PostgreSQL Service Endpoints];
-  API --> PGC[(PostgreSQL Schema Config - PGC)];
-  API --> PGD[(PostgreSQL Domain Tables - PGD)];
-  PROC --> LLM[LLM Layer (Flow & Schema Synthesizer)];
+---
 
-  LLM --> PROC;
-Flow Summary
-Slack input triggers low-cost Lambda endpoint.
+## What Is evolving-mind?
 
-Rules Engine routes intents using pre-defined function routes or schema-driven logic.
+evolving-mind is a serverless cognitive automation system that accepts natural language intent from users — via Slack today, and any UI tomorrow — and turns that intent into persistent, reusable, self-improving workflows.
 
-Service layer executes SQL operations through PostgreSQL adapters (new Function()–based runners).
+The design philosophy is strict: **LLMs are used sparingly.** Once a workflow is generated, it is stored in PostgreSQL and reused forever. The system costs approximately **$0.03–$0.05 per month** in AWS infrastructure because 95% of all operations are Lambda + PostgreSQL with zero LLM calls. LLMs are only invoked for genuinely novel problems.
 
-LLM layer steps in only when new workflows or entity types are needed.
+Over time the brain becomes smarter. It generates new schemas, new workflows, new prompts — and records the quality of its own outputs so it can improve them. This is what makes it self-evolving.
 
-🧰 Core Components
-1. Slack Bot (UI Layer)
-Natural interface for creating & executing flows.
+---
 
-Example Slash Commands
+## The Left Brain and the Right Brain
 
-text
-/create-domain project-management
-/create-task-flow "weekly goal planning"
-/list-domains
-/run-flow project-management:weekly-goal-planning
-Each interaction maps to a PROC orchestration, which runs in Lambda and calls into the PostgreSQL-backed service layer.
+The system is designed around two complementary modes of reasoning that must work together. Neither is sufficient alone.
 
-2. Rules Engine (PROC Layer)
-Routes messages, creates temporary execution plans, and reuses prebuilt task flows.
+### Left Brain — Structured, Logical, Language-Driven
+The left brain is what we are currently building:
 
-javascript
-const ROUTES = {
-  "create-domain": llmGenerateSchema(),          // LLM creates new PGC entry + tables
-  "create-task-flow": llmGenerateTaskFlow(),     // LLM defines procedural SQL flow
-  "run-flow": executeProcessFlow(),              // Executes defined task logic
-  "list-domains": pgcListDomains()               // Reads PGC and formats via prettyPrint()
-};
-Workflows execute via new Function() to enable dynamic orchestration.
+- Natural language → intent → workflow → data
+- Self-generating database schemas and table definitions
+- Persistent workflow definitions with step-by-step execution
+- Human-in-the-loop gates for confirmation and error recovery
+- LLM-assisted prompt evolution and quality scoring
 
-All persistent state (schemas, flows, logs) lives in PostgreSQL.
+The left brain is deterministic by design. It stores everything in PostgreSQL. It reuses what it knows. It costs almost nothing per operation.
 
-AWS SQS supports async handoffs and decoupled event orchestration.
+### Right Brain — Creative, Associative, Self-Correcting
+The right brain is designed but not yet built. It is not simply "more features" — it is the feedback and reasoning layer that makes the left brain reliable:
 
-3. Service Layer (SERV)
-Stateless Lambda endpoints that implement core CRUD and orchestration services.
+- **Output validation** — reviews LLM-generated schemas, workflows, and prompts before they are stored or executed. Catches structural errors, ambiguity, and drift from the system's own rules.
+- **Self-correction** — when the left brain produces malformed output (wrong FK shape, invalid column types, schema contradictions), the right brain reasons about the error and corrects it — not with a regex, but with genuine understanding.
+- **Pattern recognition** — identifies when a new user intent is semantically similar to an existing workflow even when the wording is completely different.
+- **Prompt evolution** — analyses `PGC_Prompt.error_log` and `output_sample` to suggest prompt improvements. The left brain stores what happened; the right brain understands why and what to change.
+- **Analogy and ideation** — when asked to design a new domain, the right brain draws on knowledge of existing domains to propose better schema structures than a left-brain-only LLM call would produce.
 
-Endpoint	Purpose
-POST /api/schema	Create or update entries in PGC-Schema tables
-POST /api/domain	Insert domain data into PGD tables
-GET /api/process	Retrieve process definitions for execution
-POST /api/process/run	Execute stored process flows
-POST /api/pretty	Format and summarize process output (LLM optional)
-GET /api/health	System health and status check
-Example AWS Lambda Handler
+**The critical insight:** Many "code problems" we encounter today — FK normalisation, JSON schema enforcement, defensive validation — are symptoms of the left brain working without the right brain. The correct fix is not more defensive code. It is building the feedback loop between the two sides so the system can reason about and correct its own outputs.
 
-javascript
-export const handler = async (event) => {
-  const { path, body } = event;
-  if (path === "/api/process/run") {
-    return runProcessFlow(body);
-  }
-  if (path === "/api/schema") {
-    return updatePGCSchema(body);
-  }
-  return { statusCode: 404, body: "Not found" };
-};
-4. PostgreSQL Backbone
-A unified data store for configuration + operational domains.
+The scaffolding for this feedback loop is already in the schema:
+- `PGC_Prompt.input_variables` — documents what the prompt expects
+- `PGC_Prompt.output_schema` — the expected JSON shape of a correct LLM response
+- `PGC_Prompt.output_sample` — a representative successful output for regression checking
+- `PGC_Prompt.error_log` — structured error history: `{ attempts: [{ at, error_type, error_message, llm_raw_output, recovery_action }] }`
+- `PGC_WorkflowRunStep` — append-only audit log of every step execution
 
-PGC (PostgreSQL Config Tables)
+These fields exist precisely so the right brain has the data it needs to reason about quality and improvement.
 
-Table	Description
-PGC_Schema	Defines entity configurations, relationships, indexes.
-PGC_Process	Stores workflow metadata and SQL flow definitions.
-PGD (PostgreSQL Domain Tables)
+---
 
-Table	Description
-PGD_<Domain>	Dynamically created tables for user-specific domains.
-PGD_Events	Logs runtime events and flow executions.
-5. YAML Configuration (Declarative)
-Declarative configs define schema evolution rules and CRUD metadata for code generation—not domain data.
+## What Can evolving-mind Create?
 
-text
-# config/pgc-config.yaml
-pgc:
-  - name: SchemaDefinition
-    fields:
-      - { name: entity_name, type: text }
-      - { name: field_definitions, type: jsonb }
+When a user types a natural language command into Slack, the evolving mind can:
 
-  - name: ProcessDefinition
-    fields:
-      - { name: process_name, type: text }
-      - { name: sql_script, type: text }
-      - { name: version, type: integer }
-💡 Example LLM Flow Generation
-When a user sends /create-domain health-tracking, the LLM automatically:
+- **Create new user domains on demand** — e.g., `/create-domain recipes` causes the brain to design a full relational schema, generate the tables in PostgreSQL, register all metadata, and immediately make the domain available for data entry and query — with zero manual coding.
 
-Proposes a schema for PGD_health_tracking
+- **Built-in domain examples:**
+  - 🍳 **Recipes** — ingredients, instructions, nutritional data, tags
+  - 📦 **Inventory** — items, quantities, locations, reorder levels
+  - 📈 **Stock Portfolios** — holdings, lots, prices, performance tracking
+  - 🎓 **Teaching Tools** — flashcard decks, practice drills, quiz scoring, spaced repetition
+  - 🏆 **Sports & Entertainment** — standings, schedules, player stats, watchlists
+  - 🎯 Any domain the user can describe in plain language
 
-Generates DDL (CREATE TABLE …) persisted to PGC_Schema
+- **Self-aware domain management** — the brain knows which domains it has already built (via `PGC_Schema` and `PGC_DomainHelp`), can answer `/help recipes`, list available commands, and evolve the schema when needs change.
 
-Registers metadata in PGC_Process
+---
 
-Responds via Slack with a summary:
+## How the Brain Thinks — Intent Pipeline
 
-text
-🧬 Domain "health-tracking" created  
-Tables: health_metrics, activities  
-You can now run `/create-task-flow "daily summary"` to generate a workflow
-💰 Cost Model
-text
-25 daily ops: PostgreSQL query calls via Lambda (0 tokens)
-5 LLM ops/day: 22.5K tokens/week → 55K/month → ~$0.03
-AWS Lambda (Free tier)
-PostgreSQL (Free tier)
-Slack API (Free tier)
-🚀 Phase Plan
-Phase 1 — AWS & PostgreSQL Foundation
-Build Lambda + PostgreSQL integration
+```
+User (Slack): "add 3 cans of tomatoes to my pantry"
+       │
+       ▼
+Tier 1 — Intent Preprocessor (coded logic, no LLM cost)
+       │
+       ├── Exact match in PGC_IntentMap?     → load cached workflow → run
+       ├── Simple CRUD pattern?              → build ad-hoc step   → run
+       ├── Alias match in PGC_DomainHelp?    → load workflow       → run
+       └── Novel / ambiguous intent          → cheap LLM classify
+             └── Known workflow suggested?   → load workflow       → run
+             └── Genuinely new problem?      → Heavy-Lift LLM
+                   └── Generate domain/workflow → store → run
+       │
+       ▼
+Step Processor  (SQS-driven, one Lambda invocation per stack frame)
+       │
+       ├── serv_* steps    → SERV layer (database operations)
+       ├── llm_call steps  → LLM provider (model chosen by task category)
+       ├── sub_workflow    → push child frame onto execution stack
+       ├── human_gate      → Slack interactive message, stack suspends
+       ├── js_transform    → sandboxed JS with AST security gate
+       └── notify          → post reply to Slack thread
+```
 
-Deploy /api/schema and /api/process endpoints
+The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **never** fans out — it pushes one item frame, waits for it to complete, then pushes the next. At any moment there is exactly one SQS message in flight per workflow run.
 
-Test new Function() orchestration model
+---
 
-Phase 2 — Core Logic & CRUD Services
-Finalize PGC/PGD table models
+## Architecture Summary
 
-Implement Lambda endpoints and Slack routing
+### AWS Stack
 
-Add unit/integration testing
+| Component | Choice |
+|---|---|
+| Runtime | Node.js 22.x ESM, arm64 Graviton2 |
+| Bundler | esbuild (ESM-native, CJS shim banner) |
+| Infrastructure | AWS SAM + CloudFormation |
+| Compute | AWS Lambda (4 functions) |
+| Queuing | AWS SQS (WorkflowQueue + SlackResultsQueue) |
+| Database | PostgreSQL 16.6 on RDS (PGC + PGD databases) |
+| Primary UI | Slack Bot |
+| LLM | Pluggable — currently Perplexity; model selection is coded logic |
+| Region | us-east-2 |
 
-Phase 3 — LLM Schema/Flow Generation
-Enable Slash /create-domain + /create-task-flow
+### Four Lambda Functions
 
-Automate SQL generation and persistence
+| Function | Trigger | Tier | Purpose |
+|---|---|---|---|
+| `evolving-mind-ai-slackbot` | API Gateway | Experience | Receives Slack slash commands, enqueues to WorkflowQueue |
+| `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | Intent pipeline, domain creation, workflow orchestration |
+| `evolving-mind-ai-serv` | API Gateway | Service | DDL executor, table CRUD, PGC bootstrap |
+| `evolving-mind-ai-slack-callback-listener` | SQS SlackResultsQueue | Experience | Posts threaded Slack replies |
 
-Phase 4 — Polish & Expansion
-Add GitHub Actions pipeline
+`evolving-mind-ai-proc` has a dual trigger — HTTP for direct API calls and SQS for async workflow execution. The same endpoint modules handle both transports identically. `req.source` (`'http'` or `'sqs'`) determines the response path only.
 
-Pretty output formatting with LLM fallback
+### Two PostgreSQL Databases
 
-Visualization metrics dashboard
+| Database | Tables | Purpose |
+|---|---|---|
+| **PGC** | `PGC_*` | System config — workflow definitions, prompts, schemas, intent maps |
+| **PGD** | `PGD_*` | User domain data — everything the brain creates at runtime |
 
-# 📁 Directory Structure
+### PGC System Tables (13 bootstrapped)
+
+| Table | Role |
+|---|---|
+| `PGC_Schema` | Registry of every table in the system, including itself (self-referential) |
+| `PGC_TableMap` | Security gatekeeper — SERV-Table rejects writes to any unregistered table |
+| `PGC_EntitySchema` | Multi-table business entity definitions for `jsonb_agg` queries |
+| `PGC_DomainHelp` | User-facing command aliases and help text per domain |
+| `PGC_Workflow` | Reusable workflow definitions, versioned, with quality scores and guardrail thresholds |
+| `PGC_WorkflowRun` | One row per execution — holds live execution stack, state, and safety counters |
+| `PGC_WorkflowRunStep` | Append-only audit log — idempotency + debugging |
+| `PGC_WorkflowRunLock` | Reserved for future parallel execution (optimistic locking) |
+| `PGC_Prompt` | LLM prompts with version history, output schema, samples, and error log |
+| `PGC_IntentMap` | Pattern-to-workflow mappings for coded intent matching |
+| `PGC_SystemContext` | Runtime self-description injected into heavy-lift LLM prompts |
+| `PGC_StepType` | Catalogue of valid step types with input/output contracts |
+| `PGC_Capability` | Registry of what the system can currently do — injected into LLM prompts |
+
+A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical table. Used by PROC when building LLM prompts for workflow evaluation.
+
+### Shared Utilities
+
+| File | Purpose |
+|---|---|
+| `src/shared/lambda-utils.mjs` | `parseEvent()`, `buildReqFromSqs()`, `ok()`, `err()` — used by all Lambda handlers |
+| `src/shared/sqs-callback.mjs` | `enqueueCallback()` — the only place `@aws-sdk/client-sqs` lives in ProcFunction |
+
+### Semantic Search — pgvector (Designed, Not Yet Enabled)
+
+When enabled, `text-embedding-3-small` (OpenAI, 1536 dimensions) will power:
+- **Intent matching** — find the right workflow by semantic similarity, not just keywords
+- **`/help` search** — find a domain from a natural language description
+- **Prompt deduplication** — prevent generating duplicate prompts
+
+Enable with: `CREATE EXTENSION IF NOT EXISTS vector;` on RDS PostgreSQL 15+.
+
+---
+
+## Directory Structure
 
 ```
 evolving-mind-ai/
-├── api/
-│   ├── proc/                          # PROC-*: Core business logic layer
-│   │   ├── interpret.js                  # PROC-Interpret: AI instruction interpretation
-│   │   ├── run-workflow.js               # PROC-Workflow: Workflow orchestration  
-│   │   ├── sync-brain.js                 # PROC-Sync: Brain state synchronization
-│   │   ├── ping.js                       # PROC-Ping: Vercel→LLM health check
-│   │   └── index.js                      # PROC-Router: /api/process/ endpoints
-│   │
-│   ├── serv/                          # SERV-*: SPD/SPC database operations
-│   │   ├── table.js                      # SERV-Table: CRUD operations
-│   │   ├── entity.js                     # SERV-Entity: Multi-table operations
-│   │   ├── schema.js                     # SERV-Schema: DDL operations
-│   │   ├── query.js                      # SERV-Query: Complex SELECTs/JOINs
-│   │   └── index.js                      # SERV-Router: /api/service/ endpoints
-│   │
-│   ├── ui/slackbot/                      # SLACK-*: Vercel Slack bot (Bolt.js)
-│   │   ├── ping.js                       # SLACK-Ping: /ping [1-10] threaded test
-│   │   ├── second-brain.js               # SLACK-SecondBrain: Dynamic router/help
-│   │   ├── commands.js                   # SLACK-Commands: Dynamic registry
-│   │   └── index.js                      # SLACK-Router: Bolt ExpressReceiver
-│   │
-│   └── shared/                           # SHARED-*: Cross-cutting concerns
-│       ├── graph-client.js               # SHARED-Graph: GraphQL client
-│       ├── auth.js                       # SHARED-Auth: JWT/API key validation
-│       ├── config.js                     # SHARED-Config: Env vars/flags
-│       └── logger.js                     # SHARED-Logger: Structured JSON logs
+├── template.yaml                     # SAM / CloudFormation — all infrastructure
+├── openapi.yaml                      # API Gateway OpenAPI definition
+├── architecture.md                   # Architectural decision log — read first
+├── package.json
+├── .samignore
 │
-├── package.json                          # NPM-Deps: @slack/bolt + runtime deps
-└── README.md                             # SETUP-Guide: Deployment instructions
+├── src/
+│   ├── shared/                       # Cross-cutting utilities — no business logic
+│   │   ├── lambda-utils.mjs          # parseEvent, buildReqFromSqs, ok, err
+│   │   └── sqs-callback.mjs          # enqueueCallback — sole SQS client in ProcFunction
+│   │
+│   ├── ui/
+│   │   └── slackbot/                 # Experience tier — Slack only
+│   │       ├── handler.mjs           # Route dispatcher — HTTP only
+│   │       ├── ping.mjs              # /ping-api
+│   │       ├── ping-sqs.mjs          # /ping-sqs — enqueues PING_SQS to WorkflowQueue
+│   │       ├── ping-llm.mjs          # /ping-llm — direct LLM connectivity check
+│   │       ├── ping-e2e.mjs          # /ping-e2e — full round trip via SQS
+│   │       ├── create-domain.mjs     # /create-domain — ACK + SQS enqueue only
+│   │       └── callback.mjs          # SQS SlackResultsQueue consumer — routes on callback.provider
+│   │
+│   ├── proc/                         # Process tier — all business logic
+│   │   ├── handler.mjs               # Dual HTTP + SQS dispatch — no AWS SDK
+│   │   ├── ping-llm.mjs              # /proc/ping-llm
+│   │   └── create-domain.mjs         # /proc/create-domain — transport-agnostic
+│   │
+│   └── serv/                         # Service tier — DB access only
+│       ├── handler.mjs               # Route dispatcher
+│       ├── ping-db.mjs               # /serv/ping-db
+│       ├── schema.mjs                # SERV-Schema — DDL + PGC_Schema registry
+│       ├── table.mjs                 # SERV-Table — DML gated by PGC_TableMap
+│       ├── init-brain.mjs            # Bootstrap — PGC table creation + seeding
+│       └── templates/
+│           └── pgc/                  # PGC table definition JSON (static ES imports)
+│               ├── PGC_Schema.json
+│               ├── PGC_TableMap.json
+│               ├── PGC_EntitySchema.json
+│               ├── PGC_DomainHelp.json
+│               ├── PGC_Workflow.json
+│               ├── PGC_WorkflowRun.json
+│               ├── PGC_WorkflowRunStep.json
+│               ├── PGC_WorkflowRunLock.json
+│               ├── PGC_Prompt.json
+│               ├── PGC_IntentMap.json
+│               ├── PGC_SystemContext.json
+│               ├── PGC_StepType.json
+│               ├── PGC_Capability.json
+│               └── seeds/
+│                   ├── seed_PGC_Schema.json
+│                   ├── seed_PGC_TableMap.json
+│                   ├── seed_PGC_Workflow.json
+│                   ├── seed_PGC_IntentMap.json
+│                   └── seed_PGC_Prompt.json
 ```
 
-🧪 Scaffolding Test Components (Ping Flows)
-Purpose: Development diagnostics + production troubleshooting. These ping endpoints isolate integration points between layers (Slack, Lambda, SQS, LLM, PostgreSQL). Always available for manual testing via Slack commands and curl.
+---
 
-Diagnostic Matrix:
+## Current State — What Works and What Doesn't
 
-Test	Slack Cmd	curl Cmd	Validates
-Slackbot	/ping-api	N/A	Slack → Lambda wiring
-LLM	/ping-llm	POST /proc/ping-llm	PROC + LLM
-SQS Orchestration	/ping-sqs	N/A	PROC → SQS → SERV → PROC → Slack
-PostgreSQL	N/A	GET /serv/ping-db	SERV + PostgreSQL
-1. Slack → Slackbot Lambda Only (/ping-api)
-Validates: Slack slash command config + Slackbot Lambda (no PROC/SQS/LLM/DB).
+### What Works
 
-Slack Command: /ping-api
+| Capability | Status | Notes |
+|---|---|---|
+| All 4 Slack pings | ✅ Passing | ping-api, ping-sqs, ping-llm, ping-e2e |
+| curl ping-db | ✅ Passing | Direct SERV endpoint |
+| SERV-Schema CRUD | ✅ Complete | createTable, listTables, getTable, updateTable, deleteTable |
+| SERV-Table getRows | ✅ Complete | 10 filter operators, PGC_TableMap gated |
+| SERV-Table insertRow | ✅ Complete | PGC_TableMap gated, unique constraint → 409 |
+| PGC bootstrap | ✅ Complete | 13 tables + 1 view, idempotent cold-start seeding |
+| `/create-domain` | ✅ Working | End-to-end: Slack → SQS → LLM → PGD tables → Slack reply |
+| Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
+| Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
+| traceId | ✅ Complete | Renamed from workflowId across all SQS payloads |
 
-Implementation: src/ui/slackbot/ping.js
+### Known Limitations and Honest Behaviour
 
-javascript
-export const handler = async (event) => {
-  const { text = 'pong', channel_id, user_id } = JSON.parse(event.body || '{}');
-  const correlationId = crypto.randomUUID();
-  
-  return {
-    statusCode: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      response_type: 'in_channel',
-      text: `🤖 **pong-api** from slackbot <@${user_id}><br/>correlationId: ${correlationId}`,
-      thread_ts: event.body?.thread_ts
-    })
-  };
-};
-Expected Slack Response:
+**`/create-domain` — SQS retry behaviour**
 
-text
-🤖 pong-api from slackbot @user
-correlationId: abc123-def456
-Troubleshooting: If this fails → Slack app config or Slackbot Lambda issue.
+The most important thing to understand about how `/create-domain` currently works:
 
-2. HTTP → PROC Ping (LLM Fortune Cookie) (POST /api/v1/proc/ping-llm)
-Validates: PROC Lambda + LLM provider (no Slack/SQS/DB). Perfect for curl from terminal/CI.
+When the LLM occasionally returns a malformed column (missing `name` field), `createTable` fails with a PostgreSQL error. SQS retries the message up to 3 times (`maxReceiveCount: 3`). On retry, the LLM is called **again** — and because LLM output is non-deterministic, the second call may return a different (valid) scaffold. Tables created in the first partial attempt are skipped gracefully (409 → `already_existed`). The workflow completes on the second or third attempt.
 
-curl Test:
+This was observed in testing — a first attempt created 3 of 4 tables before failing on `PGD_RecipeRatings` (malformed column). The retry produced a different scaffold without `PGD_RecipeRatings`, found the 3 existing tables, created the new 4th table `PGD_RecipeTags`, and succeeded.
 
-bash
-curl -X POST https://api.example.com/api/v1/proc/ping-llm \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-Id: test-123" \
-  -d '{"test":"ping"}'
-Implementation: src/proc/ping-llm.js (single handler for both curl + Slack)
+**This works but is not correct by design.** Recovery happened by accident — non-deterministic LLM retry producing a different result, not idempotent re-execution of the same intent. The correct fix requires the right brain (see below) — not more defensive code in `create-domain.mjs`.
 
-javascript
-import OpenAI from 'openai';
+**Other known limitations:**
+- `updateTable` in SERV-Schema updates metadata only — does not execute `ALTER TABLE`
+- `PGC_Prompt` has no unique constraint on `(intent_category, version)` — seeding uses `WHERE NOT EXISTS`
+- FK normalisation code in `create-domain.mjs` is a temporary workaround — belongs in right-brain output validation
+- `PGC_WorkflowRun` lifecycle is not yet implemented — `/create-domain` does not write run records
+- No human gate on domain creation — LLM schema goes straight to DDL without user review
+- `workflowId: undefined` appeared in early Slack context blocks — fixed in R12 (traceId rename)
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+---
 
-export const handler = async (event) => {
-  const payload = parseUnifiedPayload(event);
-  const correlationId = payload.correlationId || crypto.randomUUID();
-  
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: 'Fortune cookie about evolving-mind-ai + AWS Lambda' }]
-  });
-  
-  const response = {
-    success: true,
-    message: completion.choices[0].message.content,
-    model: completion.choices[0].message.model,
-    correlationId
-  };
-  
-  return formatResponse(payload.source, response);
-};
-Expected JSON Response:
+## Installation
 
-json
-{
-  "success": true,
-  "message": "Your AWS Lambda workflows will evolve smarter than you expect! 🍪",
-  "model": "gpt-4o-mini",
-  "correlationId": "abc123"
-}
-Troubleshooting: If this fails → LLM API key, PROC Lambda, or API Gateway issue.
+### Prerequisites
 
-3. Slack → PROC Ping (LLM E2E) (/ping-llm)
-Validates: Slack → Slackbot → PROC → LLM → Slack full pipeline.
+| Tool | Version | Notes |
+|---|---|---|
+| Node.js | 22.x | Required for ESM and Lambda runtime match |
+| AWS CLI | v2 | `aws --version` |
+| AWS SAM CLI | latest | `sam --version` |
+| Git | any | |
 
-Slack Command: /ping-llm
+You will also need:
+- An **AWS account** with permissions to create Lambda, API Gateway, RDS, SQS, SSM, IAM, and CloudFormation resources
+- A **Slack app** with a bot token and signing secret
+- An **LLM API key** (Perplexity by default)
 
-Slackbot Forwarding: src/ui/slackbot/commands.js
+---
 
-javascript
-app.command('/ping-llm', async ({command, ack, respond}) => {
-  await ack('⏳ Testing LLM integration…');
-  
-  const result = await invokeLambda('PROC-PingLLM', {
-    source: 'slack',
-    slackPayload: command,
-    correlationId: crypto.randomUUID()
-  });
-  
-  await respond({
-    response_type: 'in_channel',
-    text: `🔮 **LLM pong-llm**<br/>${result.message}<br/>model: ${result.model}<br/>ID: ${result.correlationId}`
-  });
-});
-Expected Slack Response:
+### Step 1 — Clone and Install Dependencies
 
-text
-🔮 LLM pong-llm
-"Your Lambda functions will achieve enlightenment! 🍪"
-model: gpt-4o-mini
-ID: abc123
-Troubleshooting: If /ping-api works but this fails → PROC routing or LLM issue.
+```bash
+git clone https://github.com/your-org/evolving-mind-ai.git
+cd evolving-mind-ai
+npm install
+```
 
-4. Slack → PROC Ping with SQS (/ping-sqs)
-Validates: Slack → PROC → SQS → SERV → PROC → Slack orchestration pipeline.
+---
 
-Slack Command: /ping-sqs
+### Step 2 — Configure AWS CLI
 
-Implementation Flow:
+```bash
+aws configure
+# Region: us-east-2 | Output: json
+aws sts get-caller-identity  # verify
+```
 
-UI-SlackBot: ACK + forward to PROC-PingSQS
+---
 
-PROC-PingSQS: Queue test message to SYS-SQS-Workflow
+### Step 3 — Load Secrets into AWS SSM Parameter Store
 
-SERV-PingSQS (SQS-triggered): Process → queue completion
+evolving-mind does **not** use `.env` files at runtime. All secrets are stored in SSM and resolved by CloudFormation at deploy time.
 
-UI-SlackCallbackListener (SQS-triggered): Post result to Slack thread
+```powershell
+# Slack
+aws ssm put-parameter --name "/evolving-mind-ai/slack-bot-token" --value "xoxb-..." --type SecureString --region us-east-2
+aws ssm put-parameter --name "/evolving-mind-ai/slack-signing-secret" --value "..." --type SecureString --region us-east-2
 
-Expected Slack Flow:
+# LLM
+aws ssm put-parameter --name "/evolving-mind-ai/llm-api-key" --value "..." --type SecureString --region us-east-2
 
-text
-⏳ ping-sqs started… (immediate ACK)
+# Database connection strings
+aws ssm put-parameter --name "/evolving-mind-ai/pgc-database-url" --value "postgresql://..." --type SecureString --region us-east-2
+aws ssm put-parameter --name "/evolving-mind-ai/pgd-database-url" --value "postgresql://..." --type SecureString --region us-east-2
+```
 
-[30s later in same thread]
-📬 ping-sqs complete!
-✅ 2 SQS hops, workflowId: abc123
-Troubleshooting: If /ping-llm works but this fails → SQS IAM, queue config, or orchestration issue.
+> **Windows note:** Use `cmd.exe` for AWS CLI commands, not PowerShell. For local scripts use `set VAR=value && node script.mjs` — `--env-file` has CRLF issues on Windows.
 
-Unified Payload Parser (Shared Across All Pings)
-javascript
-// src/shared/ping-utils.js
-export function parseUnifiedPayload(event) {
-  if (event.httpMethod) {  // API Gateway
-    return {
-      source: 'http',
-      payload: JSON.parse(event.body || '{}'),
-      correlationId: event.headers['X-Correlation-Id'] || crypto.randomUUID()
-    };
-  }
-  if (event.slackPayload) {  // Slackbot forwarded
-    return {
-      source: 'slack',
-      payload: event.slackPayload,
-      correlationId: event.correlationId || crypto.randomUUID()
-    };
-  }
-  throw new Error('Unknown event source');
-}
+---
 
-✅ Success Metrics
- <100K tokens/month
+### Step 4 — Build and Deploy
 
- 95% operations handled via Lambda (no LLM)
+```bash
+sam build && sam deploy
+```
 
- PostgreSQL schema evolution functional
+On first deploy SAM will prompt for stack parameters:
+- **Stack name** → `evomind-infrastructure`
+- **Region** → `us-east-2`
+- **DBPassword** → your RDS master password
 
- Slash commands /create-domain and /create-task-flow operational
+---
 
- GitHub Actions build + status shield visible
+### Step 5 — Verify Pings Pass
 
-Status: Phase 1 in progress — building AWS-PostgreSQL-Lambda integration.
-Repo Presentation: Designed for GitHub with full Markdown styling, Mermaid diagrams, and YAML clarity for developers.
+```bash
+# curl ping-db directly
+curl https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/ping-db
 
-Copyright (c) 2026 Javea Guiri. All rights reserved.
-Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-See LICENSE file in the project root for full license terms.
+# Slack pings (from Slack)
+/ping-api
+/ping-sqs
+/ping-llm
+/ping-e2e
+```
+
+Log tailing:
+```bash
+aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --region us-east-2
+aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --region us-east-2
+aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --region us-east-2
+aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --region us-east-2
+```
+
+---
+
+### Step 6 — Configure Slack App
+
+In the [Slack API dashboard](https://api.slack.com/apps):
+
+1. **Slash Commands** → each pointing to:
+   ```
+   https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/command
+   ```
+   Commands: `/ping-api`, `/ping-sqs`, `/ping-llm`, `/ping-e2e`, `/create-domain`
+
+2. **Interactivity** → Request URL (required for human gates — Phase 2):
+   ```
+   https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/interactive
+   ```
+
+3. **OAuth Scopes** → `chat:write`, `commands`, `app_mentions:read`, `im:history`
+
+---
+
+## Current Status
+
+| Milestone | Tag | Status |
+|---|---|---|
+| All 5 pings pass | `v3.2-scaffolding-complete` | ✅ Done |
+| SQS threading, ping-e2e round trip | `v3.2-ping-complete` | ✅ Done |
+| SERV-Schema CRUD, PGC tables live | `v3.2-pgc-workflow-tables-complete` | ✅ Done |
+| Callback abstraction | `v3.2-callback-abstraction-complete` | ✅ Done |
+| SERV-Table getRows + insertRow | `v3.2-serv-table-partial` | ✅ Done |
+| `/create-domain` scaffold | `v3.2-create-domain-scaffold` | ✅ Done |
+| `/create-domain` live LLM | `v3.2-create-domain-live-llm` | ✅ Done |
+| PGC schema v2 — 13 tables + seeds | `v3.2-pgc-schema-v2-complete` | ✅ Done |
+| Phase 1 refactoring complete | `v3.2-refactor-complete` | ✅ Done |
+
+---
+
+## What's Next — Phase 2
+
+The next phase is not about adding more features to the left brain in isolation. It is about building the **feedback loop between the left and right brain** so the system can reason about and improve its own outputs.
+
+### The Right Brain First
+
+Before building the Step Processor or the Slack `/interactive` endpoint, we need a clear architectural decision on how the right brain participates in the execution pipeline. Specifically:
+
+**Where does right-brain validation fit in the `create-domain` flow?**
+
+Currently the flow is:
+```
+LLM call → parse JSON → createTable (may fail) → SQS retry
+```
+
+The target flow is:
+```
+LLM call → right-brain review → corrected scaffold → createTable (clean) → no retry needed
+```
+
+The right brain review step would:
+1. Read the LLM output against `PGC_Prompt.output_schema`
+2. Identify structural errors (missing names, wrong types, malformed FKs)
+3. Either correct them directly or ask the LLM to fix its own output
+4. Log the error and recovery action to `PGC_Prompt.error_log`
+5. Pass a validated scaffold to `createTable`
+
+This is a new PROC endpoint — `POST /proc/review-output` or integrated into `create-domain.mjs` as a pre-DDL step. It uses a cheap LLM call (Haiku/sonar) not a heavy one. The cost is minimal because it only fires when the output schema validation fails.
+
+### Phase 2 Build Order
+
+1. **Right-brain output validation** — `POST /proc/review-output` — validates LLM scaffold against `PGC_Prompt.output_schema` before DDL. Writes to `PGC_Prompt.error_log` on failure.
+2. **Slack `/interactive` endpoint** — required for all human gates. Without this, the Step Processor cannot pause for user confirmation.
+3. **`/shutdown` Slack command** — emergency stop for runaway workflows.
+4. **Domain creation review gate** — human sees proposed schema before DDL executes. Uses `/interactive`. Eliminates the current "LLM goes straight to DDL" problem.
+5. **Intent Preprocessor** — coded logic + cheap LLM classification. Tiered: exact match → alias → cheap LLM → heavy LLM.
+6. **Step Processor** — SQS-driven stack execution. Replaces `create-domain.mjs` hardcoded logic with generic declarative execution of `PGC_Workflow` step definitions. Includes velocity detector, execution accumulator, cycle detector.
+
+---
+
+## Key Design Decisions (Do Not Propose Alternatives)
+
+The following are final architectural decisions. See `architecture.md` for full rationale.
+
+- **ESM format** — all `.mjs` files, `OutExtension: .js=.mjs` in esbuild
+- **esbuild bundler** — with CJS interop banner shim on all functions
+- **Shared `LambdaExecutionRole`** — single IAM role with inline policies
+- **Lambda outside VPC** — no $32/month NAT Gateway; RDS is `PubliclyAccessible: true` with SSL
+- **SSM parameters** — `{{resolve:ssm:...}}` in per-function `Environment` blocks only, never in `Globals`
+- **`ssl: { rejectUnauthorized: false }`** — on all `pg` connections; do not change
+- **JSON templates as static ES imports** — bundled by esbuild, never read via `fs.readFile` at runtime
+- **PROC endpoints are transport-agnostic** — no AWS SDK, no Slack SDK; `req.source` determines response path only
+- **All SERV calls via `fetch(SERV_API_URL)`** — no Lambda invoke; cloud-portable
+
+---
+
+## Collaboration Wanted — UI Development
+
+The evolving mind is designed so the **UI layer is fully abstracted**. Slack is the first interface, but the architecture explicitly supports adding any UI: a web app, a mobile app, Microsoft Teams, a REST client, or a voice interface. The callback object `{ provider, channel, threadId }` routes replies to wherever the user is — no SERV or PROC changes required.
+
+We are actively looking for collaborators on:
+
+- **Web UI** — a browser-based chat interface and domain management dashboard
+- **Domain visualisation** — displaying generated schemas, active workflow runs, and execution history
+- **Workflow builder** — a drag-and-drop or conversational interface for designing workflows
+- **Mobile interface** — push notifications and native chat UI
+- **Voice input** — transcription feeds directly into the intent pipeline
+
+If you are interested in contributing, please open an issue or reach out directly. The full API contract is documented in `openapi.yaml`.
+
+---
+
+## License
+
+Copyright (c) 2026 Javea Guiri. All rights reserved.  
+Licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
