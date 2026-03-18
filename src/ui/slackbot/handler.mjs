@@ -19,6 +19,7 @@ import { handle as pingSqs  } from './ping-sqs.mjs';
 import { handle as pingLlm  } from './ping-llm.mjs';
 import { handle as pingE2e  } from './ping-e2e.mjs';   
 import { handle as createDomain } from './create-domain.mjs';
+import { handle as interactive  } from './interactive.mjs';
 
 // ---------------------------------------------------------------------------
 // Slack signature verification
@@ -102,9 +103,8 @@ export async function handler(event) {
     case 'ping-sqs': return pingSqs(req);
     case 'ping-llm': return pingLlm(req);
     case 'ping-e2e': return pingE2e(req);
-    case 'create-domain':  return createDomain(req);
-
-    // case 'interactive':   return interactive(req);   // Phase 2 item 1
+    case 'create-domain': return createDomain(req);
+    case 'interactive':   return interactive(req);
 
     default:
       return err(404, `Slackbot route "${route}" not found`, req.correlationId);

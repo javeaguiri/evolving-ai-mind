@@ -6,7 +6,7 @@
 //
 // Accepts: /create-domain <description>
 // The full user input is passed to the LLM which infers a clean domain name.
-// Validates: SlackbotFunction → SQS WorkflowQueue → ProcStepOrchestrator
+// Validates: SlackbotFunction → SQS WorkflowQueue → ProcFunction
 //            → ServFunction (schema + table) → SQS CallbackResults
 //            → SlackCallbackListenerFunction → Slack thread
 //
@@ -29,13 +29,13 @@ export async function handle(req) {
   const userInput    = (req.body?.text || '').trim();
   const slackUser    = req.body?.user_id    || 'unknown';
   const slackChannel = req.body?.channel_id || 'unknown';
-  const workflowId   = req.correlationId;
+  const traceId      = req.correlationId;
 
   if (!userInput) {
     return err(400, 'Usage: /create-domain <description>', req.correlationId);
   }
 
-  console.info('create-domain start', { workflowId, userInput, slackUser, slackChannel });
+  console.info('create-domain start', { traceId, userInput, slackUser, slackChannel });
 
   // Post ACK — becomes the thread root for the result reply
   let ackTs;
@@ -50,13 +50,13 @@ export async function handle(req) {
     return err(500, `Slack ACK failed: ${error.message}`, req.correlationId);
   }
 
-  // Enqueue to WorkflowQueue for ProcStepOrchestrator
+  // Enqueue to WorkflowQueue — ProcFunction handles async via SQS trigger
   try {
     await sqs.send(new SendMessageCommand({
       QueueUrl:    process.env.SQS_WORKFLOW_URL,
       MessageBody: JSON.stringify({
         type:       'CREATE_DOMAIN',
-        workflowId,
+        traceId,
         userInput,
         slackUser,
         callback: {
