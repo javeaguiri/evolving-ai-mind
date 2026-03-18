@@ -1429,6 +1429,138 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 
 ---
 
+### 6.10 Right-Brain Output Validation — Repeat-Until-Correct Loop
+
+Every `llm_call` and `js_transform` step produces output that must be validated before
+being passed to the next step. Without validation, structurally invalid output propagates
+silently into DDL, SQS payloads, or workflow state — causing failures downstream with no
+recoverable context. This section defines the validation and correction loop that runs
+after every LLM output is received, before any downstream action executes.
+
+#### Design principles
+
+- Validation is always **in-process** — no extra Lambda invocation, no external call
+- Maximum **2 LLM attempts** per step execution — never an unbounded loop
+- All failures are written to `PGC_Prompt.error_log` — structured, queryable, permanent
+- The correction prompt injects the **exact Ajv or runtime error** from attempt 1 — not a vague retry
+- SQS retries are **not** the correction mechanism — they are for transient infrastructure failures only
+
+#### JSON Schema validation — Ajv
+
+Used for all `llm_call` steps that return structured JSON (e.g. `create_domain`, `merge_tables`).
+
+The validator is **Ajv** (Another JSON Validator) — the Node.js standard for JSON Schema validation,
+equivalent to XSD for XML. The schema lives in `PGC_Prompt.output_schema` and is fetched alongside
+the prompt. No hardcoded rules — the schema is the contract, and it evolves with the prompt.
+
+**Validation loop:**
+
+```
+attempt 1
+  LLM call → parse JSON → Ajv.validate(output_schema, scaffold)
+  if valid   → pass scaffold to next step
+  if invalid → log errors to PGC_Prompt.error_log
+             → inject Ajv error array into correction prompt
+             → attempt 2: LLM call with error context
+
+attempt 2
+  LLM call → parse JSON → Ajv.validate(output_schema, scaffold)
+  if valid   → pass scaffold to next step
+  if invalid → write full error record to PGC_Prompt.error_log
+             → set WorkflowRun status = 'failed'
+             → post error_recovery human_gate to Slack
+             → halt — do not proceed to DDL or next step
+```
+
+**Correction prompt injection (attempt 2):**
+
+```
+Your previous response had these validation errors:
+{{ajv_errors_as_json}}
+
+Return the corrected JSON only. Do not change any fields that were not flagged.
+```
+
+**Error log entry shape** (written on any validation failure):
+
+```json
+{
+  "at": "ISO timestamp",
+  "error_type": "json_schema_validation",
+  "error_message": "Ajv error summary",
+  "ajv_errors": [ ...full Ajv error array... ],
+  "llm_raw_output": "raw text before parse",
+  "recovery_action": "injected_errors_retry | halt"
+}
+```
+
+**Known error caught by Ajv today:**
+The `check` constraint `expression` field — the LLM returned `"columns": ["quantity >= 0"]`
+instead of `"expression": "quantity >= 0"`. Ajv would flag `expression` as required and missing
+before any `createTable` call fires.
+
+#### In-situ JS validation — `js_transform` steps
+
+Used for `js_transform` steps where the LLM generates executable JavaScript.
+There is no JSON Schema equivalent for arbitrary JS — two complementary gates are used instead.
+
+**Gate 1 — Static AST parse (acorn)**
+
+Parse the generated JS using `acorn` before executing it. If the source is syntactically
+invalid, it cannot be executed safely. Reject immediately, log, apply correction loop.
+This is the security gate referenced in Section 6.5 — already planned for `js_transform`.
+
+**Gate 2 — In-situ sandbox execution**
+
+Run the generated function against a known test input using `vm.runInNewContext()` with a
+hard timeout. Compare the output shape against `PGC_StepType.output_schema` for the
+step type. If the function throws, times out, or returns the wrong shape — apply the
+correction loop.
+
+```js
+import vm from 'node:vm';
+
+const sandbox = vm.createContext({ input: testInput });
+const result  = vm.runInNewContext(generatedCode, sandbox, { timeout: 500 });
+// validate result shape against PGC_StepType.output_schema
+```
+
+**Correction loop for JS (same 2-attempt ceiling):**
+
+```
+attempt 1
+  AST parse → sandbox execute → validate output shape
+  if valid   → pass to execution
+  if invalid → log error (parse error / runtime error / shape mismatch)
+             → inject error + stack trace into correction prompt
+             → attempt 2
+
+attempt 2
+  AST parse → sandbox execute → validate output shape
+  if valid   → pass to execution
+  if invalid → write to PGC_Prompt.error_log → halt → error_recovery gate
+```
+
+#### Where this runs
+
+Validation runs inside the Step Processor (`POST /proc/run-workflow`) immediately after
+receiving LLM output, before writing to `local_state` or advancing the stack.
+It is not a separate Lambda or endpoint — it is a synchronous in-process call
+within the step execution loop. The 2-attempt ceiling includes the cost of both LLM calls
+in the step's `duration_ms` logged to `PGC_WorkflowRunStep`.
+
+#### Relationship to right-brain architecture
+
+This section is the first concrete implementation of the right-brain feedback loop.
+`PGC_Prompt.error_log` accumulates structured evidence of where each prompt fails.
+A future `POST /proc/improve-prompt` endpoint reads this log and generates an improved
+prompt version — the self-evolution loop. The validation layer is what makes that loop
+meaningful: without it, failures are either silent or surface as DDL errors with no
+structured context to learn from.
+
+
+---
+
 ## 7. Tech Debt Register
 
 | Item | Priority | Notes |
@@ -1445,6 +1577,7 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 | `PGC_Prompt` seeds not in bootstrap | High | Manual migration scripts — stack rebuild loses prompts silently. Move to `init-brain.mjs` or add runbook |
 | `.env.local` Windows `\r` line ending issue | Low | `--env-file` fails with CRLF on Windows — document workaround (`set VAR=...`) |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
+| AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager (no public IP required) when promotional credits near exhaustion. No application code changes needed. |
 | Domain creation review gate | High | LLM schema proposed but not confirmed before DDL — see Section 13 Gate 1 |
 | Slack `/interactive` endpoint | High | Required for all human gates — needed before Step Processor and domain review |
 | Remove `ProcStepOrchestrator` Lambda + add SQS trigger to `ProcFunction` | High | Eliminates hop, reduces cold start surface — see Section 11 |
@@ -1471,6 +1604,7 @@ the `CREATE VIEW` statement in `init-brain.mjs`.
 | `v3.2-serv-table-partial` | SERV-Table getRows + insertRow, wired into serv handler |
 | `v3.2-create-domain-scaffold` | /create-domain end to end with hardcoded recipes scaffold |
 | `v3.2-create-domain-live-llm` | /create-domain live LLM via Perplexity Agent API + json_schema output |
+| `v3.2-r14-r15-complete` | FK/constraint normalisation moved to SERV layer; response_format restored on LLM call |
 
 ---
 
@@ -1502,8 +1636,8 @@ Make ProcFunction handle both HTTP and SQS. Make all proc endpoints transport-ag
 | R11 | Update all imports from ping-utils.mjs → lambda-utils.mjs | ✅ complete |
 | R12 | Rename workflowId → traceId in all SQS payloads and UI messages | ✅ complete |
 | R13 | Move PGC_Prompt, PGC_Workflow, PGC_IntentMap seeds into init-brain.mjs | ✅ complete — landed in R1/R8 |
-| R14 | Move FK + constraint normalisation into schema.mjs createTable | ⬜ pending |
-| R15 | Add response_format json_schema back to callLlm Agent API call | ⬜ pending |
+| R14 | Move FK + constraint normalisation into buildCreateTableSQL in init-brain.mjs | ✅ complete — v3.2-r14-r15-complete |
+| R15 | Add response_format json_schema back to callLlm Agent API call | ✅ complete — v3.2-r14-r15-complete |
 
 Retest after each step — if any ping breaks, stop and fix before continuing.
 Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move through them quickly.
@@ -1515,6 +1649,7 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 | 1 | Slack /interactive endpoint — required for all human gates + domain review |
 | 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction |
 | 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN |
+| 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) |
 | 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification |
 | 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle |
 |   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) |
