@@ -252,7 +252,34 @@ async function createTableFromTemplate(client, template) {
  * @returns {{ createTable: string, triggers: string[] }}
  */
 export function buildCreateTableSQL(template) {
-  const { table_name, columns = [], constraints = [], triggers = [], foreign_keys = [] } = template;
+  const { table_name, columns = [], triggers = [] } = template;
+
+  // Normalise foreign_keys — LLM may return "references": "TableName(column)" string.
+  // buildCreateTableSQL always expects { table: "TableName", column: "column" }.
+  // Auto-generate name if absent. Safe to call on pre-normalised PGC bootstrap data.
+  const foreign_keys = (template.foreign_keys || []).map((fk, i) => {
+    const normalised = { ...fk };
+    if (typeof normalised.references === 'string') {
+      const match = normalised.references.match(/^([^(]+)\(([^)]+)\)$/);
+      normalised.references = match
+        ? { table: match[1].trim(), column: match[2].trim() }
+        : { table: normalised.references, column: 'id' };
+    }
+    if (!normalised.name) {
+      normalised.name = `fk_${table_name.toLowerCase()}_${normalised.column}_${i}`;
+    }
+    normalised.onDelete = normalised.onDelete || 'RESTRICT';
+    return normalised;
+  });
+
+  // Normalise constraints — LLM may return type as "UNIQUE" instead of "unique".
+  // Auto-generate name if absent.
+  const constraints = (template.constraints || []).map((con, i) => ({
+    ...con,
+    type:    con.type?.toLowerCase(),
+    name:    con.name || `uq_${table_name.toLowerCase()}_${i}`,
+    columns: con.columns || [],
+  }));
 
   const columnDefs = columns.map(col => {
     const parts = [`  ${col.name}`, resolveType(col)];

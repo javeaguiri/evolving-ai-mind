@@ -85,7 +85,7 @@ async function runCreateDomain(userInput, traceId) {
   });
 
   // Step 0b — call LLM via Perplexity Agent API
-  const scaffold = await callLlm(promptRow.model, promptText, userInput, traceId);
+  const scaffold = await callLlm(promptRow.model, promptText, userInput, promptRow.output_schema, traceId);
   const domainName = scaffold.domain;
 
   console.info('create-domain: LLM returned scaffold', {
@@ -95,35 +95,10 @@ async function runCreateDomain(userInput, traceId) {
     traceId,
   });
 
-  // Step 1 — normalise FK/constraint shape and create each PGD table via SERV-Schema
+  // Step 1 — create each PGD table via SERV-Schema createTable.
+  // FK and constraint normalisation is handled inside buildCreateTableSQL (SERV layer).
   const createdTables = [];
   for (const table of scaffold.tables) {
-    // Normalise foreignKeys — LLM may return "references": "TableName(column)"
-    // buildCreateTableSQL expects { table: "TableName", column: "column" }
-    table.foreignKeys = (table.foreignKeys || []).map((fk, i) => {
-      if (typeof fk.references === 'string') {
-        const match = fk.references.match(/^([^(]+)\(([^)]+)\)$/);
-        return {
-          name:       fk.name || `fk_${table.tableName.toLowerCase()}_${fk.column}_${i}`,
-          column:     fk.column,
-          references: match
-            ? { table: match[1].trim(), column: match[2].trim() }
-            : { table: fk.references, column: 'id' },
-          onDelete: fk.onDelete || 'RESTRICT',
-        };
-      }
-      if (!fk.name) fk.name = `fk_${table.tableName.toLowerCase()}_${fk.column}_${i}`;
-      return fk;
-    });
-
-    // Normalise constraints — LLM may return type as "UNIQUE" instead of "unique"
-    table.constraints = (table.constraints || []).map((con, i) => ({
-      ...con,
-      type:    con.type?.toLowerCase(),
-      name:    con.name || `uq_${table.tableName.toLowerCase()}_${i}`,
-      columns: con.columns || [],
-    }));
-
     const resp = await servFetch('POST', '/api/v1/serv/schema/createTable', table);
     if (!resp.success) {
       if (resp.statusCode === 409) {
@@ -216,12 +191,26 @@ async function servFetch(method, path, body) {
  * @param {string} model       LLM model name from PGC_Prompt row
  * @param {string} promptText  System prompt with {{userInput}} already substituted
  * @param {string} userInput   Original user input — passed as the user message
- * @param {string} traceId     For logging
- * @returns {Promise<object>}  Parsed scaffold { domain, tables, domainHelp }
+ * @param {object} outputSchema JSON schema from PGC_Prompt.output_schema — enforced by Agent API
+ * @param {string} traceId      For logging
+ * @returns {Promise<object>}   Parsed scaffold { domain, tables, domainHelp }
  */
-async function callLlm(model, promptText, userInput, traceId) {
+async function callLlm(model, promptText, userInput, outputSchema, traceId) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
+
+  const body = {
+    model,
+    input:        `Design a database domain for: "${userInput}"`,
+    instructions: promptText,
+    temperature:  0.2,
+  };
+
+  // Enforce structured JSON output at the model level when schema is available.
+  // Eliminates markdown-fence wrapping — the defensive strip below remains as a safety net.
+  if (outputSchema) {
+    body.response_format = { type: 'json_schema', json_schema: outputSchema };
+  }
 
   const response = await fetch(process.env.LLM_AGENT_URL, {
     method:  'POST',
@@ -229,12 +218,7 @@ async function callLlm(model, promptText, userInput, traceId) {
       'Authorization': `Bearer ${llmKey}`,
       'Content-Type':  'application/json',
     },
-    body: JSON.stringify({
-      model,
-      input:        `Design a database domain for: "${userInput}"`,
-      instructions: promptText,
-      temperature:  0.2,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
