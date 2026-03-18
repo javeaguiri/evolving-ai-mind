@@ -3,9 +3,11 @@ Transform: AWS::Serverless-2016-10-31
 
 Description: >
   evolving-mind-ai v3.2
-  Per-function Lambda routing — ping scaffolding phase.
-  Each layer (UI/Slackbot, PROC, SERV, Callback) is its own Lambda.
-  Routes are owned by this template; no path-switching in application code.
+  Four Lambda functions — SlackbotFunction, ProcFunction, ServFunction, SlackCallbackListenerFunction.
+  SlackbotFunction: Slack slash commands + interactive callbacks (HTTP).
+  ProcFunction: business logic, LLM routing, workflow execution (HTTP + SQS WorkflowQueue).
+  ServFunction: DB CRUD and DDL (HTTP).
+  SlackCallbackListenerFunction: posts threaded Slack replies (SQS SlackResultsQueue).
   
 # -----------------------------------------------------------------------------
 # Global defaults applied to every Function unless overridden
@@ -82,25 +84,8 @@ Resources:
                 Resource:
                   - !GetAtt WorkflowQueue.Arn
                   - !GetAtt SlackResultsQueue.Arn
-                  - !GetAtt SchemaQueue.Arn
-        - PolicyName: LambdaInvokePolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: lambda:InvokeFunction
-                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:evolving-mind-ai-*'
 
   # --- SQS QUEUES ---
-  SchemaQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: SYSSQSSchema  # This gives it the concise name you want
-      # DeletionPolicy is 'Delete' by default now, so it won't "ghost" anymore
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt SchemaDLQ.Arn
-        maxReceiveCount: 3
-
   SlackResultsQueue:
     Type: AWS::SQS::Queue
     Properties:
@@ -116,12 +101,6 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
         maxReceiveCount: 3
-
-  SchemaDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: SYSSQSSchemaDLQ
-      MessageRetentionPeriod: 1209600
 
   SlackResultsDLQ:
     Type: AWS::SQS::Queue
@@ -324,7 +303,7 @@ Resources:
         Variables:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
-          PROC_FUNCTION_NAME:   !Ref ProcFunction
+          PROC_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching
@@ -369,7 +348,6 @@ Resources:
           LLM_CHAT_URL:         'https://api.perplexity.ai/chat/completions'
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
-          SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       Events:
         ProcProxy:
           Type: Api
@@ -448,7 +426,6 @@ Resources:
       Environment:
         Variables:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
-          SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
       Events:
         SlackResultsTrigger:
           Type: SQS

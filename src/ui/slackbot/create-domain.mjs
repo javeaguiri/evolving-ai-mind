@@ -15,7 +15,7 @@
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
-import { err }                           from '../../shared/ping-utils.mjs';
+import { err }                           from '../../shared/lambda-utils.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
