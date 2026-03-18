@@ -10,21 +10,25 @@
 // Flow:
 //   1. Slack POSTs URL-encoded payload to this endpoint
 //   2. Parse payload JSON — extract workflowRunId + action from button value
-//   3. Enqueue WORKFLOW_STEP resume_gate message to SQS WorkflowQueue
-//   4. Return 200 immediately — Slack requires response within 3s
+//   3. Replace the Block Kit buttons with a static confirmation (chat.update)
+//      — prevents the user clicking the same button multiple times
+//   4. Enqueue WORKFLOW_STEP resume_gate message to SQS WorkflowQueue
+//   5. Return 200 immediately — Slack requires response within 3s
 //
 // Button value encoding: JSON.stringify({ workflowRunId, action })
 // e.g. '{"workflowRunId":42,"action":"confirm"}'
 // This makes the handler stateless — no DB lookup needed to route the response.
 //
 // Security: signature verified by handler.mjs before this function is called.
-// Experience tier only — no business logic, no DB calls, no LLM calls.
+// Experience tier — WebClient used only to disable buttons via chat.update.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
 
-const sqs = new SQSClient({});
+const sqs   = new SQSClient({});
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 export async function handle(req) {
   if (req.method !== 'POST') {
@@ -88,6 +92,33 @@ export async function handle(req) {
     channel,
     traceId,
   });
+
+  // Replace buttons with a static confirmation — prevents duplicate clicks.
+  // chat.update replaces the original message in-place. If this fails we still
+  // enqueue the resume_gate — a cosmetic failure should not block the workflow.
+  const confirmationText = userResponse === 'confirm'
+    ? '✅ Got it — processing your response...'
+    : '❌ Cancelled.';
+
+  try {
+    await slack.chat.update({
+      channel,
+      ts:     threadId,
+      text:   confirmationText,
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: confirmationText },
+        },
+      ],
+    });
+  } catch (error) {
+    // Log but do not fail — button replacement is cosmetic
+    console.warn('interactive: chat.update failed (non-fatal)', {
+      error: error.message,
+      traceId,
+    });
+  }
 
   // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up
   try {
