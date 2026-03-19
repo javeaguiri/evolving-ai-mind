@@ -16,7 +16,7 @@ A self-evolving, low-cost cognitive automation brain that:
 - Uses LLM sparingly — only for novel intents, workflow generation, and schema creation
 - Persists generated workflows in PostgreSQL and reuses them — LLM is not called twice for the same problem
 - Evolves its own workflows and schemas over time
-- Runs at ~$0.03–$0.05/month — 95% of operations are Lambda + PostgreSQL with zero LLM cost
+- Runs at approximately $8–$13/month at household scale — see Section 14 for full cost breakdown
 
 ---
 
@@ -287,6 +287,7 @@ evolving-mind-ai/
   is imported in `ProcFunction`. Isolated here so endpoint modules stay AWS-agnostic.
 - `llm-client.mjs` — `callLlm()`, `callLlmWithCorrection()` — shared LLM caller
 - `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client
+```
 
 ### 3.5a Inter-module call rules — FINAL
 
@@ -334,7 +335,7 @@ path and the SlackCallbackListenerFunction will receive `provider: undefined`.
 4. Document in `openapi.yaml` spec-first
 5. Never import AWS SDK in the endpoint module
 6. Read callback as `req.callback ?? req.body?.callback ?? null` — never `req.body.callback`
-```
+
 
 ### 3.6 Transport-agnostic endpoint pattern — IMPORTANT
 
@@ -2101,14 +2102,122 @@ All Phase 1 refactoring is complete as of `v3.2-clean-baseline`.
 | `SchemaQueue` + `LambdaInvokePolicy` removed from `template.yaml` | Orphaned resources — no trigger, no application references | ✅ complete |
 | `PROC_FUNCTION_NAME` + stale env vars removed | Lambda invoke pattern gone — env vars were dead references | ✅ complete |
 
-**Planned PROC endpoints** (documented in `openapi.yaml` — not yet implemented):
+**Planned PROC endpoints** (documented in `openapi.yaml`):
 
 | Endpoint | Description |
 |---|---|
-| `POST /proc/create-domain` | ✅ Live — LLM schema design + DDL execution |
-| `POST /proc/design-domain` | ⬜ Phase 3 — LLM call only, no DB writes (pre-gate step) |
+| `POST /proc/create-domain` | ✅ Live — monolithic LLM schema design + DDL execution |
+| `POST /proc/design-domain` | ✅ Live — LLM design + validation + WorkflowRun lifecycle (Phase 2 item 3a) |
+| `POST /proc/review-output` | ✅ Live — Ajv + semantic validation, 2-attempt correction loop |
+| `POST /proc/shutdown` | ✅ Live — emergency stop, cancel active runs |
 | `POST /proc/classify-intent` | ⬜ Phase 2 item 4 — Intent Preprocessor |
 | `POST /proc/run-workflow` | ⬜ Phase 2 item 5 — Step Processor |
-| `POST /proc/review-output` | ⬜ Phase 2 item 3a — Ajv + JS sandbox validation |
-| `POST /proc/shutdown` | ⬜ Phase 2 item 2 — emergency stop |
 | `POST /proc/improve-prompt` | ⬜ Phase 3 — prompt evolution |
+
+---
+
+## 14. Cost of Ownership
+
+### 14.1 Actual March 2026 Charges (us-east-2, household-scale dev)
+
+Based on actual AWS billing data for March 2026 with the current infrastructure:
+
+| Service | Usage | Raw Cost | Notes |
+|---|---|---|---|
+| RDS db.t4g.micro | ~294 hours | $4.71 | PostgreSQL 16.6, arm64 |
+| RDS Storage | 20 GB gp2 | $0.91 | PGC + PGD databases |
+| VPC Public IPv4 | ~563 hours | $2.82 | $0.005/hr per address — Bastion + RDS |
+| EC2 (Bastion t3.nano) | ~294 hours | $1.78 | SSH access host |
+| Secrets Manager | — | $0.16 | SSM parameters |
+| Lambda | ~1M requests | ~$0.00 | Well within free tier |
+| API Gateway | ~10K requests | ~$0.00 | Well within free tier |
+| SQS | ~50K messages | ~$0.00 | Well within free tier |
+| **Raw total** | | **~$10.38/month** | Before credits |
+| AWS Free Tier / Promotional credits | | ($10.38) | Applied automatically |
+| **Net payable** | | **$0.00** | During credit period |
+
+**Key insight:** Lambda, API Gateway, and SQS are effectively free at household scale.
+The dominant costs are the always-on infrastructure: RDS instance, Bastion host, and
+the AWS public IPv4 charge introduced in 2024 ($0.005/hr per address).
+
+### 14.2 Cost Breakdown by Component
+
+| Component | Monthly Cost | Scales With |
+|---|---|---|
+| RDS db.t4g.micro (compute) | $4.71 | Instance class only — flat rate |
+| RDS Storage | $0.91 | Data volume — $0.115/GB/month (gp2) |
+| Bastion Host (t3.nano) | $1.78 | Instance running hours |
+| Public IPv4 addresses | $2.82 | Number of attached IPs × hours |
+| Lambda (4 functions) | ~$0.00 | Invocation count + duration |
+| API Gateway | ~$0.00 | Request count |
+| SQS (2 queues + 2 DLQs) | ~$0.00 | Message count |
+| SSM Parameters | $0.16 | Number of SecureString parameters |
+| **Total infrastructure** | **~$10.38** | |
+
+### 14.3 Database Size Scenarios
+
+evolving-mind-ai stores **structured relational data only** — rows of text, numbers,
+dates, and jsonb. It does not store files, images, documents, or binary content.
+For context: 1 GB of relational data holds roughly 5–10 million typical rows.
+The 20 GB minimum RDS allocation is sufficient for years of household-scale use
+across any realistic domain combination.
+
+Storage scales at $0.115/GB/month (gp2, us-east-2).
+
+| Scenario | Example Domains | Typical Data | Est. DB Size | Storage Cost | Total Monthly |
+|---|---|---|---|---|---|
+| Small | Recipes, golf scores | Hundreds of records per domain. A full recipe collection with ingredients and tasting notes — maybe 5,000 rows total | Under 1 GB | $0.23 | ~$10 |
+| Medium | Inventory, budgets, stock portfolio, fitness tracking | Tens of thousands of records. A year of daily stock prices across 500 tickers is ~180K rows | 1–5 GB | $0.23–$0.58 | ~$10–$11 |
+| Large | High-frequency data: sensor readings, transaction logs, web analytics | Millions of rows. 3 years of hourly readings across 100 sensors is ~2.6M rows | 5–15 GB | $0.58–$1.73 | ~$11–$13 |
+
+**The 20 GB minimum allocation covers all three scenarios with room to spare.**
+RDS storage only needs to grow beyond 20 GB when storing millions of rows of
+high-frequency time-series data — a level of volume that household use rarely reaches.
+
+For comparison: images, videos, and documents should never be stored in RDS.
+Those belong in S3 — $0.023/GB/month, effectively unlimited. If evolving-mind-ai
+ever needs to reference media files, the pattern is to store the S3 key in a
+text column, not the file itself.
+
+### 14.4 LLM Cost Estimates (Perplexity)
+
+LLM is called **only for novel intents** — once per new domain design, once per
+new workflow generation. Repeat operations use cached `PGC_Workflow` rows and cost $0.
+
+Perplexity pricing (claude-sonnet-4-5 via Agent API, approximate):
+
+| Operation | Tokens (approx) | Cost per call | Monthly estimate |
+|---|---|---|---|
+| `/create-domain` (design) | ~3K in / ~2K out | ~$0.025 | $0.25 (10 new domains/month) |
+| `/create-domain` (correction attempt 2) | ~4K in / ~2K out | ~$0.035 | Occasional — <$0.10 |
+| Workflow generation (future) | ~5K in / ~3K out | ~$0.045 | $0.45 (10 new workflows/month) |
+| **Total LLM** | | | **~$0.50–$1.00/month** |
+
+LLM cost is negligible at household scale. The design decision to cache workflows
+in `PGC_Workflow` and reuse them means the LLM bill does not grow with usage —
+only with novelty.
+
+### 14.5 Total Cost of Ownership Summary
+
+| Scenario | AWS Infrastructure | LLM | Total/Month |
+|---|---|---|---|
+| Small (recipes, golf, 2-3 domains) | ~$10 | $0.50 | ~$10–11/month |
+| Medium (inventory, budgets, stock portfolio) | ~$10–11 | $0.75 | ~$11–12/month |
+| Large (high-frequency time-series, 10+ domains) | ~$11–13 | $1.00 | ~$12–14/month |
+
+Storage cost is nearly flat across all scenarios because structured relational data
+is compact. The dominant cost driver at every scale is the always-on RDS instance
+and Bastion host — not data volume.
+
+### 14.6 Cost Reduction Opportunities
+
+| Action | Monthly Saving | When to Apply |
+|---|---|---|
+| Replace Bastion with AWS SSM Session Manager | ~$1.78 + $0.94 IPv4 | When promotional credits near exhaustion |
+| Switch RDS to Graviton2 Reserved Instance (1yr) | ~30% on compute (~$1.40) | After system stabilises |
+| Stop RDS when not in use (dev only) | Up to $4.71 | Dev/test environments only — not production |
+| Use RDS Aurora Serverless v2 | Variable — cheaper at low use | Phase 3 if usage patterns justify it |
+
+**Highest impact action today:** Replacing the Bastion with SSM Session Manager
+eliminates the EC2 instance ($1.78) and one public IPv4 address ($0.94) — saving
+~$2.72/month with no loss of functionality. Tracked in tech debt register.
