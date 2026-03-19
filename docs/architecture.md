@@ -67,15 +67,18 @@ if (event.httpMethod) → HTTP dispatch path → switch(req.route)
 This eliminates the Lambda-to-Lambda hop, reduces cold start surface, and keeps all
 process-tier logic in one deployable unit.
 
-### Three-tier architecture — Mulesoft model
+### 3.1 Three-tier architecture — Mulesoft model
 
 The system follows a strict three-tier separation inspired by Mulesoft's API-led connectivity.
 The system is designed for household-scale private deployment — PII is segmented per instance,
 not shared across users of a multi-tenant service.
 
 **Experience tier** (`SlackbotFunction`, `SlackCallbackListenerFunction`)
-- Owned by UI concerns — Slack parsing, ACK messages, thread formatting
+- Owned by UI concerns — Slack parsing, ACK messages, thread formatting, Block Kit rendering
 - Never contains business logic
+- `SlackbotFunction` handles inbound HTTP — slash commands and `/interactive` button clicks
+- `SlackCallbackListenerFunction` handles outbound — consumes `SYSSQSSlackResults` and posts
+  threaded Slack replies. Routes on `callback.provider` so adding a new UI is one new `case`
 - Today: Slack. Tomorrow: Teams, webhook, or any other UI — swap the experience layer only
 
 **Process tier** (`ProcFunction`)
@@ -92,12 +95,95 @@ not shared across users of a multi-tenant service.
 - No business logic — pure data access
 - All endpoints documented in `openapi.yaml`
 
-**SQS listener** (`SlackCallbackListenerFunction`)
-- AWS + Slack specific — contains ONLY AWS SDK + Slack SDK code
-- Routes on `callback.provider` — adding a new UI is one new `case`
-- Cloud portability: replacing AWS SQS with Azure Service Bus only touches this file
+---
 
-### Route dispatch pattern
+### 3.2 SQS Queue Architecture
+
+Two SQS standard queues carry all async traffic in the system. Every queue has a
+Dead Letter Queue (DLQ) with a 14-day retention period for debugging failed messages.
+
+#### WorkflowQueue (`SYSSQSWorkflow`)
+
+**Purpose:** The async backbone of the system. Carries all workflow execution messages
+from the Experience tier to the Process tier, and human gate resume messages from
+`/interactive` back to ProcFunction.
+
+**Producers:**
+- `SlackbotFunction` — enqueues on every slash command (`CREATE_DOMAIN`, `HELP`, future commands)
+- `interactive.mjs` — enqueues `WORKFLOW_STEP / resume_gate` when user clicks a Block Kit button
+- `ProcFunction` itself — re-enqueues `WORKFLOW_STEP / execute_top` to advance the execution stack
+  (Step Processor pattern — one SQS message per stack frame)
+
+**Consumer:** `ProcFunction` (SQS trigger, `BatchSize: 10`, `ReportBatchItemFailures`)
+
+**Message types today:**
+
+| type | action | Sent by | Handled by |
+|---|---|---|---|
+| `PING_SQS` | — | SlackbotFunction | proc/handler inline |
+| `PING_E2E` | — | SlackbotFunction | proc/handler inline |
+| `CREATE_DOMAIN` | — | SlackbotFunction | proc/create-domain.mjs |
+| `HELP` | — | SlackbotFunction | proc/help.mjs |
+| `WORKFLOW_STEP` | `resume_gate` | interactive.mjs | proc/help.mjs (temporary — see tech debt) |
+| `WORKFLOW_STEP` | `execute_top` | ProcFunction | proc/run-workflow.mjs (Phase 2 item 5) |
+| `WORKFLOW_STEP` | `cancel` | ProcFunction /shutdown | proc/run-workflow.mjs (Phase 2 item 2) |
+
+**Design decisions:**
+- `BatchSize: 10` — Lambda event source mapping setting. Up to 10 messages delivered
+  per invocation as a cost optimisation. One SQS message per `workflowRunId` is always
+  in flight — batching handles concurrent runs across different workflow runs, never
+  parallel steps within a single run.
+- `ReportBatchItemFailures` — only failed records return to queue. Successful records
+  in the same batch are not reprocessed.
+- Standard queue (not FIFO) — ordering within a workflow run is enforced by the
+  execution stack in `PGC_WorkflowRun`, not by the queue.
+
+#### SlackResultsQueue (`SYSSQSSlackResults`)
+
+**Purpose:** Carries result and notification messages from ProcFunction back to the
+Experience tier for posting to Slack. Decouples business logic from UI delivery —
+PROC never calls Slack directly.
+
+**Producer:** `ProcFunction` via `enqueueCallback()` in `src/shared/sqs-callback.mjs` —
+the ONLY place `@aws-sdk/client-sqs` is imported in the Process tier.
+
+**Message envelope:** Every message carries `callback: { provider, channel, threadId }` —
+the provider-agnostic routing object that makes the UI layer swappable.
+
+**Consumer:** `SlackCallbackListenerFunction` — Lambda event source mapping with `BatchSize: 1`.
+Each invocation receives and processes exactly one message, posting one Slack reply per call.
+
+**Message types today:**
+
+| type | Posted by callback.mjs as |
+|---|---|
+| `PING_SQS_RESULT` | Plain text threaded reply |
+| `PING_E2E_RESULT` | Plain text threaded reply with RDS version |
+| `CREATE_DOMAIN_RESULT` | Plain text threaded reply with table list |
+| `HELP_GATE` | Block Kit message with confirm/cancel buttons |
+| `HELP_RESULT` | Plain text threaded reply |
+| `SERV_NOTIFICATION` | Plain text threaded reply |
+
+**Design decisions:**
+- `BatchSize: 1` — one message per invocation keeps Slack post ordering clean
+  and avoids hitting the Slack API rate limit under burst conditions.
+- `callback.provider` routing — `routeCallback()` in `callback.mjs` switches on
+  provider. Adding Teams or webhook support is one new `case` with no other changes.
+- PROC never imports `@slack/web-api` — all Slack SDK code is isolated to
+  `SlackCallbackListenerFunction` and `SlackbotFunction`.
+
+#### DLQs
+
+| Queue | DLQ Name | Retention | Action on message |
+|---|---|---|---|
+| WorkflowQueue | `SYSSQSWorkflowDLQ` | 14 days | Inspect via AWS Console — indicates ProcFunction crash or unhandled message type |
+| SlackResultsQueue | `SYSSQSSlackResultsDLQ` | 14 days | Inspect — indicates Slack API failure or malformed callback payload |
+
+Both DLQs have `maxReceiveCount: 3` — a message is moved to the DLQ after 3 failed
+processing attempts.
+
+
+### 3.3 Route dispatch pattern
 
 ```
 ProcFunction handler.mjs
@@ -112,7 +198,8 @@ ProcFunction handler.mjs
 All other Lambda handlers follow the same HTTP dispatch pattern.
 ```
 
-### Directory structure and file partitioning rules
+### 3.4 Directory structure and file partitioning rules
+
 
 ```
 evolving-mind-ai/
@@ -167,7 +254,7 @@ evolving-mind-ai/
 └── .samignore
 ```
 
-### File partitioning rules — where does new code go?
+### 3.5 File partitioning rules — where does new code go?
 
 ```
 **Experience tier (`src/ui/`):**
@@ -207,7 +294,7 @@ evolving-mind-ai/
 5. Never import AWS SDK in the endpoint module
 ```
 
-### Transport-agnostic endpoint pattern — IMPORTANT
+### 3.6 Transport-agnostic endpoint pattern — IMPORTANT
 
 `ProcFunction` endpoint modules are called identically whether the request
 arrived via HTTP (API Gateway) or SQS (WorkflowQueue). This is the core of
