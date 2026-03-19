@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Phase 3 next  
-Last updated: 2026-03-19
+Last updated: 2026-03-19 (session 2)
 
 ---
 
@@ -285,6 +285,29 @@ evolving-mind-ai/
 - `lambda-utils.mjs` — `parseEvent`, `ok`, `err`, `buildReqFromSqs`
 - `sqs-callback.mjs` — `enqueueCallback()` — the ONLY place `@aws-sdk/client-sqs`
   is imported in `ProcFunction`. Isolated here so endpoint modules stay AWS-agnostic.
+- `llm-client.mjs` — `callLlm()`, `callLlmWithCorrection()` — shared LLM caller
+- `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client
+
+### 3.5a Inter-module call rules — FINAL
+
+These rules govern how modules call each other. They are final and must not be violated.
+
+| Call direction | Mechanism | Reason |
+|---|---|---|
+| exp → exp | Direct import | Same Lambda, same tier |
+| proc → proc | Direct import | Same Lambda, same tier |
+| serv → serv | Direct import | Same Lambda, same tier |
+| any → shared | Direct import | Shared utilities, available to all |
+| exp → proc | HTTP fetch to API Gateway | Cross-tier — keeps PROC independently testable |
+| proc → serv | HTTP fetch to API Gateway | Cross-tier — keeps SERV independently swappable |
+| SQS → proc | `buildReqFromSqs()` normalisation in `handler.mjs` | Async cross-tier delivery |
+| proc → exp | Never | PROC never calls EXP — results go via SQS callback |
+| serv → proc/exp | Never | SERV is the bottom tier — no upward calls |
+
+**Why exp→proc and proc→serv go through HTTP fetch:**
+If PROC and SERV were in the same Lambda, direct imports would be fine.
+Because they are separate Lambdas, HTTP fetch through API Gateway is the only
+transport-agnostic option that keeps PROC testable via curl without AWS infrastructure.
 
 **When adding a new PROC endpoint:**
 1. Create `src/proc/<endpoint-name>.mjs` — export `handle(req)`
@@ -1758,7 +1781,7 @@ structured context to learn from.
 | Item | Priority | Notes |
 |---|---|---|
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
-| Semantic validation rules for create_domain scaffold | High | Three rules defined in Section 6.10: (1) every table must have set_updated_at() trigger, (2) upsert_key columns must have matching UNIQUE constraint, (3) FK parent tables must exist in scaffold. Not yet enforced in /proc/review-output — LLM omissions are currently silent |
+| Semantic validation rules for create_domain scaffold | ~~High~~ | ✅ Implemented in `src/proc/review-output.mjs` — all three rules enforced in `runSemanticRules()` |
 | `resume_gate` routes to HELP workflow only | High | `proc/handler.mjs` routes all `resume_gate` messages to `handleHelpResume`. Replace with `PGC_WorkflowRun` lookup when Step Processor is built |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
@@ -1770,10 +1793,66 @@ structured context to learn from.
 | CI/CD GitHub Actions | Low | Deliberately deferred until `template.yaml` stabilises |
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
 | PROC/SERV API Gateway resource policy | Medium | Restrict to AWS account-scoped requests before any public exposure — see Section 12.3 |
+| Refactor `proc/create-domain.mjs` private `servFetch` + `callLlm` | Low | Extract to `src/shared/serv-client.mjs` and `src/shared/llm-client.mjs` — duplicates shared implementations added in v3.2-design-domain-foundation |
 
 ---
 
-## 8. Completed Milestones
+## 7a. Dependency Policy
+
+Every npm dependency added to this project must be evaluated against the following
+criteria before merging. A one-line registry entry is required in the table below.
+
+### Evaluation criteria
+
+**1. Download volume** — npm weekly downloads. Floor: 1M+/week for production use.
+High download count indicates broad ecosystem adoption and active maintenance pressure.
+
+**2. Maintenance cadence** — last publish date and open GitHub issues.
+No commits in 2+ years or unresolved security issues is a blocking concern.
+
+**3. Single-purpose** — prefer libraries that do one thing well.
+Frameworks that want to own architecture (ORMs, HTTP frameworks, full validators)
+are a poor fit — they duplicate existing SERV/PROC abstractions and add upgrade risk.
+
+**4. Dependency footprint** — run `npm ls <package>` before installing.
+Each transitive dependency is an additional attack surface and upgrade obligation.
+For Lambda, it also affects cold start time and bundle size. Reject if >20 transitive deps
+without compelling justification.
+
+**5. License** — must be MIT, Apache 2.0, or BSD.
+GPL/LGPL creates licensing complications for the AGPL-3.0 project.
+Check `license` field in the package's `package.json`.
+
+**6. Security record** — run `npm audit` after install.
+Any high/critical CVE in the package or its transitive deps blocks the addition
+unless a patch is available and pinned.
+
+### What to avoid for this project
+
+- **ORMs** (Prisma, Sequelize, TypeORM) — SERV is the DB abstraction layer. An ORM
+  duplicates PGC_TableMap gating and fights the three-tier design.
+- **HTTP frameworks** (Express, Fastify, Hapi) — API Gateway + `parseEvent` already
+  handles routing. A framework adds cold start weight with no benefit.
+- **Duplicate validators** (Zod, Yup) — `ajv` is the chosen validator. One is enough.
+- **Any package with >20 transitive deps** without documented justification.
+
+### Approved dependency registry
+
+| Package | Version | Weekly DL | License | Purpose | Added |
+|---|---|---|---|---|---|
+| `pg` | ^8 | ~3M | MIT | PostgreSQL client — PGC + PGD connections in ServFunction | bootstrap |
+| `@aws-sdk/client-sqs` | ^3 | ~5M | Apache-2.0 | SQS SendMessage — WorkflowQueue + SlackResultsQueue | bootstrap |
+| `@slack/web-api` | ^7 | ~1M | MIT | Slack API — chat.postMessage, chat.update, Block Kit | bootstrap |
+| `ajv` | ^8 | ~100M | MIT | JSON Schema validation — right-brain output validation loop | v3.2-design-domain-foundation |
+
+### Candidates approved for future addition
+
+| Package | Weekly DL | License | Purpose | When |
+|---|---|---|---|---|
+| `acorn` | ~50M | MIT | AST parser for `js_transform` sandbox gate (Section 6.10) | Phase 2 item 3a JS validation |
+| `ajv-formats` | ~20M | MIT | Adds `date-time`, `uuid` format validators to Ajv | When output schemas use format keywords |
+
+---
 
 | Tag | What was completed |
 |---|---|
@@ -1794,6 +1873,8 @@ structured context to learn from.
 | `v3.2-shutdown-complete` | /shutdown command — SlackbotFunction + ProcFunction, ephemeral Slack response |
 | `v3.2-serv-entity-complete` | SERV-Entity all six routes complete. PGC_EntitySchema upsert_key added. openapi.yaml v3.3.3 |
 | `v3.2-bootstrap-clean` | init-brain installs set_updated_at() on PGD. seed_PGC_Schema upsert_key synced |
+| `v3.2-architecture-semantic-validation` | Semantic validation rules documented in Section 6.10. Tech debt entry added |
+| `v3.2-design-domain-foundation` | shared/llm-client + shared/serv-client extracted. proc/review-output (Ajv + semantic rules). proc/design-domain first pass (LLM + validation + WorkflowRun lifecycle). openapi.yaml v3.3.4 |
 
 ---
 
@@ -1840,8 +1921,9 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 | 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction | ✅ complete — v3.2-shutdown-complete |
 | 2a | SERV-Table updateRows + deleteRows | ✅ complete — v3.2-serv-table-complete |
 | 2b | SERV-Entity — six routes, PGC_EntitySchema upsert_key | ✅ complete — v3.2-serv-entity-complete |
-| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN | ⬜ next |
-| 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) | ⬜ |
+| 3a | shared/llm-client + shared/serv-client + proc/review-output (Ajv + semantic rules) + proc/design-domain foundation (LLM + validation + WorkflowRun lifecycle) | ✅ complete — v3.2-design-domain-foundation |
+| 3b | proc/design-domain — Block Kit review message, in-place table remove, human gate pause | ⬜ next |
+| 3c | proc/create-domain — wired to WorkflowRun state from design-domain, PGC_EntitySchema registration | ⬜ |
 | 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ |
 | 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ⬜ |
 |   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) | |
