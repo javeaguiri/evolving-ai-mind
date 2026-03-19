@@ -63,8 +63,8 @@ async function processRecord(record) {
   }
 
   console.info('callback received', {
-    type:       message.type,
-    traceId: message.traceId,
+    type:      message.type,
+    traceId:   message.traceId,
     messageId,
   });
 
@@ -78,13 +78,21 @@ async function processRecord(record) {
       case 'PING_E2E_RESULT':
         await postPingE2eResult(message);
         break;
-		
-	  case 'SERV_NOTIFICATION':
+
+      case 'SERV_NOTIFICATION':
         await postServNotification(message);
         break;
 
       case 'CREATE_DOMAIN_RESULT':
         await postCreateDomainResult(message);
+        break;
+
+      case 'DESIGN_DOMAIN_RESULT':
+        await postDesignDomainResult(message);
+        break;
+
+      case 'DESIGN_DOMAIN_ERROR':
+        await postDesignDomainError(message);
         break;
 
       case 'HELP_GATE':
@@ -106,9 +114,9 @@ async function processRecord(record) {
 
   } catch (error) {
     console.error('callback: Slack post error', {
-      type:       message.type,
+      type:    message.type,
       traceId: message.traceId,
-      error:      error.message,
+      error:   error.message,
     });
     return false; // return to queue for retry
   }
@@ -132,7 +140,7 @@ async function postPingSqsResult(message) {
     },
   ]);
   console.info('callback: Slack message posted', {
-    channel:    callback.channel,
+    channel: callback.channel,
     traceId: message.traceId,
   });
 }
@@ -155,7 +163,7 @@ async function postPingE2eResult(message) {
     },
   ]);
   console.info('callback: ping-e2e Slack message posted', {
-    channel:    callback.channel,
+    channel: callback.channel,
     traceId: message.traceId,
   });
 }
@@ -178,7 +186,7 @@ async function postServNotification(message) {
     },
   ]);
   console.info('callback: SERV notification posted', {
-    channel:    callback.channel,
+    channel: callback.channel,
     traceId: message.traceId,
   });
 }
@@ -203,6 +211,60 @@ async function postCreateDomainResult(message) {
   console.info('callback: create-domain result posted', {
     channel:    callback.channel,
     domainName: result.domainName,
+    traceId:    message.traceId,
+  });
+}
+
+// Placeholder — replaced with Block Kit review message in next iteration (Phase 2 item 3b)
+async function postDesignDomainResult(message) {
+  const { callback, result } = message;
+  const tableList = (result.tables || [])
+    .map(t => `• \`${t.tableName}\` — ${t.description}`)
+    .join('\n');
+  const text = `🧠 Domain *${result.domain}* designed — ${result.tables?.length ?? 0} table(s):\n${tableList}`;
+  await routeCallback(callback, text, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `runId: ${result.runId} | validated on attempt ${result.attempt} | traceId: ${message.traceId}`,
+        },
+      ],
+    },
+  ]);
+  console.info('callback: design-domain result posted', {
+    channel: callback.channel,
+    domain:  result.domain,
+    runId:   result.runId,
+    traceId: message.traceId,
+  });
+}
+
+async function postDesignDomainError(message) {
+  const { callback, result } = message;
+  await routeCallback(callback, result.error, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: result.error },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `runId: ${result.runId} | traceId: ${message.traceId}`,
+        },
+      ],
+    },
+  ]);
+  console.info('callback: design-domain error posted', {
+    channel: callback.channel,
+    runId:   result.runId,
     traceId: message.traceId,
   });
 }

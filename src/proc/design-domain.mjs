@@ -30,7 +30,8 @@ import { validate }           from './review-output.mjs';
 import { getRows, insertRow, updateRows } from '../shared/serv-client.mjs';
 
 export async function handle(req) {
-  const { userInput, workflowRunId, callback } = req.body ?? {};
+  const { userInput, workflowRunId } = req.body ?? {};
+  const callback = req.callback ?? req.body?.callback ?? null;
   const traceId = req.traceId ?? req.correlationId;
 
   // --- Input validation ---
