@@ -47,7 +47,7 @@ const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 // ---------------------------------------------------------------------------
 
 /**
- * @param {ReturnType<import('../shared/ping-utils.mjs').parseEvent>} req
+ * @param {ReturnType<import('../shared/lambda-utils.mjs').parseEvent>} req
  */
 export async function handle(req) {
   switch (req.subRoute) {
@@ -127,7 +127,7 @@ async function createTable(req) {
       `INSERT INTO "PGC_TableMap"
          (table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [tableName, target, domain, insert.rows[0].id, true, true, false]
+      [tableName, target, domain, insert.rows[0].id, true, true, target === 'pgd']
     );
     console.info(`schema: PGC_TableMap row inserted for ${tableName}`);
 

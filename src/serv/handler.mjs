@@ -16,6 +16,7 @@ import { handle as pingDb } from './ping-db.mjs';
 import { handle as schema }   from './schema.mjs';
 import { bootstrap }          from './init-brain.mjs';
 import { handle as table }   from './table.mjs';
+import { handle as entity } from './entity.mjs';
 
 // Bootstrap runs once per cold start — warm containers return cached result.
 let bootstrapResult = null;
@@ -59,6 +60,7 @@ export async function handler(event) {
     case 'ping-db': return pingDb(req);
     case 'schema':  return schema(req);
     case 'table':   return table(req);
+    case 'entity':  return entity(req);
     default:
       return err(404, `SERV route "${req.route}" not found`, req.correlationId);
   }

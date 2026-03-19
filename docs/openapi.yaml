@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.3.2
+  version: 3.3.3
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -170,6 +170,94 @@ components:
           type: string
           format: date-time
 
+
+    EntityJoin:
+      type: object
+      description: Defines a JOIN from the root table to a related PGD table
+      required: [table, on]
+      properties:
+        table:
+          type: string
+          description: Related PGD table name
+          example: PGD_RecipeTags
+        on:
+          type: string
+          description: >
+            JOIN condition — references root table as "r" and joined table by its alias.
+            Example: "r.id = t.recipe_id"
+          example: "r.id = t.recipe_id"
+        alias:
+          type: string
+          description: Table alias used in the ON clause and aggregation
+          example: t
+        type:
+          type: string
+          enum: [LEFT, INNER]
+          default: LEFT
+
+    EntityAggregation:
+      type: object
+      description: >
+        Defines a jsonb_agg column to include in getEntity / listEntities output.
+        Each aggregation pulls related rows from a joined table into a JSON array.
+      required: [alias, outputKey]
+      properties:
+        alias:
+          type: string
+          description: Table alias matching the join alias
+          example: t
+        outputKey:
+          type: string
+          description: Key name in the returned entity object
+          example: tags
+        columns:
+          type: array
+          description: Which columns to include in the aggregated object. Omit for all (*)
+          items:
+            type: string
+          example: [tag]
+
+    EntitySchemaRow:
+      type: object
+      description: A row from PGC_EntitySchema — defines a business entity
+      properties:
+        id:
+          type: integer
+        entity_name:
+          type: string
+          example: Recipe
+        description:
+          type: string
+        root_table:
+          type: string
+          example: PGD_Recipes
+        joins:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityJoin'
+        aggregations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EntityAggregation'
+        filters:
+          type: array
+          description: Default row-level filters always applied to this entity
+          items:
+            $ref: '#/components/schemas/FilterItem'
+        upsert_key:
+          type: array
+          description: >
+            Column name(s) forming the natural key for upsertEntity.
+            Empty or null means upsert is not supported for this entity.
+          items:
+            type: string
+          example: [ticker]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     ShutdownResult:
       type: object
@@ -901,6 +989,414 @@ paths:
           description: DELETE not permitted on this table (allow_delete is false in PGC_TableMap)
         '404':
           description: Table not registered in PGC_TableMap
+        '500':
+          description: Delete failed
+
+  # ── SERV-Entity ────────────────────────────────────────────────────────────
+  # User-facing domain data layer. Callers use entity names (Recipe, Stock),
+  # never table names. PGC_EntitySchema defines the root_table, joins,
+  # aggregations, and upsert_key for each entity.
+  # PROC uses this layer for all workflow steps that touch user domain data.
+  # SERV/table remains the layer for PGC system config operations.
+
+  /api/v1/serv/entity/getEntity:
+    post:
+      summary: Fetch a single entity by id
+      description: >
+        Fetches one entity row from its root table, with all configured joins
+        and jsonb_agg aggregations applied. Returns a rich object — e.g. a Recipe
+        with its tags array already assembled.
+
+        Lookup chain: entity_name → PGC_EntitySchema → root_table + joins + aggregations
+        → single parameterised query on PGD database.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName, id]
+              properties:
+                entityName:
+                  type: string
+                  example: Recipe
+                id:
+                  type: integer
+                  example: 5
+            example:
+              entityName: Recipe
+              id: 5
+      responses:
+        '200':
+          description: Entity found
+          content:
+            application/json:
+              example:
+                success: true
+                entityName: Recipe
+                entity:
+                  id: 5
+                  title: Spaghetti Carbonara
+                  description: Classic Roman pasta dish
+                  difficulty: medium
+                  cuisine_type: Italian
+                  tags: [pasta, italian, classic]
+                  created_at: "2026-03-19T12:00:00.000Z"
+        '404':
+          description: Entity name not registered in PGC_EntitySchema, or id not found
+        '500':
+          description: Query failed
+
+  /api/v1/serv/entity/listEntities:
+    post:
+      summary: List entities with optional filters, orderBy, limit
+      description: >
+        Returns multiple entity rows with joins and aggregations applied.
+        Filters operate on the root table columns only — validated against
+        PGC_Schema for the root_table. Default entity-level filters defined
+        in PGC_EntitySchema.filters are always applied in addition to caller filters.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName]
+              properties:
+                entityName:
+                  type: string
+                  example: Recipe
+                filters:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/FilterItem'
+                orderBy:
+                  type: object
+                  properties:
+                    column:
+                      type: string
+                    direction:
+                      type: string
+                      enum: [asc, desc]
+                      default: asc
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 100
+            example:
+              entityName: Recipe
+              filters:
+                - { column: cuisine_type, op: eq, value: Italian }
+              orderBy: { column: title, direction: asc }
+              limit: 20
+      responses:
+        '200':
+          description: Entity list returned
+          content:
+            application/json:
+              example:
+                success: true
+                entityName: Recipe
+                count: 2
+                entities:
+                  - id: 5
+                    title: Spaghetti Carbonara
+                    cuisine_type: Italian
+                    tags: [pasta, italian]
+                  - id: 7
+                    title: Cacio e Pepe
+                    cuisine_type: Italian
+                    tags: [pasta, roman]
+        '404':
+          description: Entity name not registered in PGC_EntitySchema
+        '500':
+          description: Query failed
+
+  /api/v1/serv/entity/createEntity:
+    post:
+      summary: INSERT a new entity row into the root table
+      description: >
+        Inserts a single row into the entity's root table. Column names are
+        validated against PGC_Schema for the root_table. System columns
+        (id, created_at, updated_at) are excluded from the insert — the DB
+        sets these automatically.
+
+        Child rows (e.g. RecipeIngredient) are created via their own createEntity
+        call with the parent id provided in the row data.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName, row]
+              properties:
+                entityName:
+                  type: string
+                  example: Recipe
+                row:
+                  type: object
+                  description: Column/value pairs for the root table. id, created_at, updated_at are ignored if provided.
+            example:
+              entityName: Recipe
+              row:
+                title: Cacio e Pepe
+                cuisine_type: Italian
+                difficulty: easy
+                servings: 2
+      responses:
+        '200':
+          description: Entity created
+          content:
+            application/json:
+              example:
+                success: true
+                entityName: Recipe
+                id: 8
+                row:
+                  id: 8
+                  title: Cacio e Pepe
+                  cuisine_type: Italian
+                  difficulty: easy
+                  created_at: "2026-03-19T14:00:00.000Z"
+        '400':
+          description: Validation error — unknown column or missing required field
+        '404':
+          description: Entity name not registered in PGC_EntitySchema
+        '409':
+          description: Unique constraint violation
+        '500':
+          description: Insert failed
+
+  /api/v1/serv/entity/updateEntity:
+    post:
+      summary: UPDATE an entity row — patch or full replace
+      description: >
+        Updates the entity's root table row identified by id.
+
+        Two modes:
+          patch   (default) — sets only the fields provided, leaves all others unchanged.
+                              Use for targeted field changes (e.g. change difficulty only).
+          replace           — sets ALL non-system fields from the provided data,
+                              resetting any omitted fields to null.
+                              Use when replacing an entire recipe with a new version
+                              while preserving id and child relationships (tags, ingredients).
+                              System columns (id, created_at, updated_at) are never overwritten.
+
+        id is required in both modes. Child rows are not affected — manage them
+        via their own entity operations.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName, id, updates]
+              properties:
+                entityName:
+                  type: string
+                  example: Recipe
+                id:
+                  type: integer
+                  example: 5
+                updates:
+                  type: object
+                  description: Column/value pairs to set. In replace mode, omitted non-system columns are set to null.
+                mode:
+                  type: string
+                  enum: [patch, replace]
+                  default: patch
+            examples:
+              patch:
+                summary: Change difficulty only
+                value:
+                  entityName: Recipe
+                  id: 5
+                  updates:
+                    difficulty: easy
+              replace:
+                summary: Replace entire recipe content
+                value:
+                  entityName: Recipe
+                  id: 5
+                  mode: replace
+                  updates:
+                    title: Spaghetti Carbonara (Revised)
+                    description: Lighter version with less guanciale
+                    difficulty: easy
+                    cuisine_type: Italian
+                    servings: 2
+      responses:
+        '200':
+          description: Entity updated
+          content:
+            application/json:
+              example:
+                success: true
+                entityName: Recipe
+                id: 5
+                mode: patch
+                row:
+                  id: 5
+                  title: Spaghetti Carbonara
+                  difficulty: easy
+                  updated_at: "2026-03-19T15:00:00.000Z"
+        '400':
+          description: Validation error — unknown column, missing id or updates
+        '404':
+          description: Entity not registered in PGC_EntitySchema, or id not found
+        '500':
+          description: Update failed
+
+  /api/v1/serv/entity/upsertEntity:
+    post:
+      summary: INSERT or UPDATE — current data wins on conflict
+      description: >
+        Inserts the row if it does not exist; updates all provided fields if it does.
+        Uses PostgreSQL INSERT ... ON CONFLICT (upsert_key) DO UPDATE SET.
+
+        upsert_key is defined in PGC_EntitySchema — the column(s) forming the
+        natural key for this entity (e.g. ["ticker"] for Stock, ["title"] for Recipe).
+        If PGC_EntitySchema.upsert_key is empty or null for this entity, the
+        endpoint returns 400 — upsert is not supported for that entity.
+
+        System columns (id, created_at) are never overwritten on conflict.
+        updated_at is always refreshed on conflict.
+
+        Primary use case: syncing external data where the caller does not know
+        or care whether the record already exists (e.g. stock price updates,
+        inventory level sync).
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName, row]
+              properties:
+                entityName:
+                  type: string
+                  example: Stock
+                row:
+                  type: object
+                  description: Full row data. upsert_key column(s) must be present.
+            example:
+              entityName: Stock
+              row:
+                ticker: AAPL
+                company_name: Apple Inc.
+                sector: Technology
+                last_price: 198.45
+      responses:
+        '200':
+          description: Row inserted or updated — check wasInserted field
+          content:
+            application/json:
+              examples:
+                inserted:
+                  summary: New row created
+                  value:
+                    success: true
+                    entityName: Stock
+                    wasInserted: true
+                    row:
+                      id: 12
+                      ticker: AAPL
+                      company_name: Apple Inc.
+                      last_price: 198.45
+                updated:
+                  summary: Existing row updated
+                  value:
+                    success: true
+                    entityName: Stock
+                    wasInserted: false
+                    row:
+                      id: 3
+                      ticker: AAPL
+                      company_name: Apple Inc.
+                      last_price: 198.45
+        '400':
+          description: >
+            upsert_key not defined for this entity, upsert_key column missing
+            from row, or unknown column name
+        '404':
+          description: Entity name not registered in PGC_EntitySchema
+        '500':
+          description: Upsert failed
+
+  /api/v1/serv/entity/deleteEntity:
+    post:
+      summary: DELETE an entity row by id
+      description: >
+        Deletes the root table row by id. PostgreSQL CASCADE handles all child
+        rows in related tables (e.g. deleting a Recipe cascades to
+        PGD_RecipeTags and PGD_RecipeIngredients automatically via FK constraints).
+
+        Gated by PGC_TableMap.allow_delete for the root_table — returns 403
+        if deletion is not permitted. All PGD tables have allow_delete: true
+        by default.
+
+        The caller never needs to manage child row deletion manually.
+      tags: [SERV-Entity]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entityName, id]
+              properties:
+                entityName:
+                  type: string
+                  example: Recipe
+                id:
+                  type: integer
+                  example: 5
+            example:
+              entityName: Recipe
+              id: 5
+      responses:
+        '200':
+          description: Entity deleted — deletedCount is 0 if id was not found
+          content:
+            application/json:
+              examples:
+                deleted:
+                  summary: Entity deleted
+                  value:
+                    success: true
+                    entityName: Recipe
+                    id: 5
+                    deletedCount: 1
+                not_found:
+                  summary: Id not found — not an error
+                  value:
+                    success: true
+                    entityName: Recipe
+                    id: 999
+                    deletedCount: 0
+        '403':
+          description: allow_delete is false for this entity's root table
+        '404':
+          description: Entity name not registered in PGC_EntitySchema
         '500':
           description: Delete failed
 
