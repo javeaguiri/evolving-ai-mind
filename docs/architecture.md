@@ -1667,6 +1667,72 @@ attempt 2
   if invalid → write to PGC_Prompt.error_log → halt → error_recovery gate
 ```
 
+#### Semantic validation rules — create_domain scaffold
+
+Ajv validates JSON Schema shape (required fields, types, formats). It cannot validate
+cross-field semantic contracts — rules that require reasoning across multiple fields
+in the scaffold. These are enforced as a post-Ajv validation pass inside
+`POST /proc/review-output` before any `createTable` call fires.
+
+**Rule 1 — Every table must have the `set_updated_at()` trigger**
+
+Every PGD table scaffold must include a trigger entry with
+`"function": "set_updated_at()"` and `"timing": "BEFORE UPDATE"`.
+If a table omits the trigger, `updated_at` will never be refreshed on row updates —
+a silent data integrity failure that only surfaces when querying stale timestamps.
+
+Validation check:
+```js
+for (const table of scaffold.tables) {
+  const hasUpdatedAtTrigger = (table.triggers || []).some(
+    t => t.function === 'set_updated_at()' && t.timing === 'BEFORE UPDATE'
+  );
+  if (!hasUpdatedAtTrigger) {
+    errors.push(`Table "${table.tableName}" is missing the set_updated_at() trigger`);
+  }
+}
+```
+
+**Rule 2 — upsert_key columns must have a matching UNIQUE constraint**
+
+If the LLM populates `upsert_key` in `PGC_EntitySchema` with a column name, the same
+column must appear in a `UNIQUE` constraint in the corresponding table's `constraints[]`.
+Without the constraint, `INSERT ... ON CONFLICT` will fail at runtime with a PostgreSQL
+error — the `upsert_key` entry in `PGC_EntitySchema` would be a lie.
+
+This rule applies at the entity registration step, not the DDL step. Validation check:
+```js
+for (const entity of scaffold.entities || []) {
+  for (const keyCol of entity.upsert_key || []) {
+    const table    = scaffold.tables.find(t => t.tableName === entity.root_table);
+    const hasConst = (table?.constraints || []).some(
+      c => c.type === 'unique' && (c.columns || []).includes(keyCol)
+    );
+    if (!hasConst) {
+      errors.push(
+        `Entity "${entity.entity_name}" upsert_key column "${keyCol}" ` +
+        `has no matching UNIQUE constraint on "${entity.root_table}"`
+      );
+    }
+  }
+}
+```
+
+**Rule 3 — Foreign key parent tables must exist in the same scaffold**
+
+If a table references another table via a foreign key, the referenced table must either
+exist in the current scaffold or already be registered in `PGC_Schema`. Cross-domain
+foreign keys are not permitted — all tables in a domain are created together.
+
+**Enforcement model:**
+
+These three rules fire as a named validation pass after Ajv, before any SERV call.
+Failures use the same 2-attempt correction loop — errors are injected into the
+correction prompt and logged to `PGC_Prompt.error_log` with
+`"error_type": "semantic_validation"`. The correction prompt names the specific rule
+and the offending table/entity so the LLM can fix the exact field without regenerating
+the entire scaffold.
+
 #### Where this runs
 
 Validation runs inside the Step Processor (`POST /proc/run-workflow`) immediately after
@@ -1692,6 +1758,7 @@ structured context to learn from.
 | Item | Priority | Notes |
 |---|---|---|
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
+| Semantic validation rules for create_domain scaffold | High | Three rules defined in Section 6.10: (1) every table must have set_updated_at() trigger, (2) upsert_key columns must have matching UNIQUE constraint, (3) FK parent tables must exist in scaffold. Not yet enforced in /proc/review-output — LLM omissions are currently silent |
 | `resume_gate` routes to HELP workflow only | High | `proc/handler.mjs` routes all `resume_gate` messages to `handleHelpResume`. Replace with `PGC_WorkflowRun` lookup when Step Processor is built |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
