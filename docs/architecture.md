@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Phase 3 next  
-Last updated: 2026-03-15
+Last updated: 2026-03-19
 
 ---
 
@@ -458,19 +458,21 @@ SERV-Table security gatekeeper. SERV-Table rejects writes to any table not regis
 
 ##### PGC_EntitySchema
 Defines business entities that span multiple PGD tables.
-SERV-Entity reads this to build `jsonb_agg` queries.
+SERV-Entity reads this to build `jsonb_agg` queries and execute entity-level DML.
+Populated at runtime by `/create-domain`. Empty on fresh bootstrap.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
 | entity_name | text UNIQUE | e.g. "Recipe" |
 | description | text | |
-| root_table | text | Primary table for the entity |
-| joins | jsonb | Array of join definitions |
-| aggregations | jsonb | Array of jsonb_agg definitions |
-| filters | jsonb | Available filter parameters |
+| root_table | text | Primary PGD table for the entity — e.g. `PGD_Recipes` |
+| joins | jsonb | Array of EntityJoin — related tables to LEFT/INNER JOIN for read operations |
+| aggregations | jsonb | Array of EntityAggregation — jsonb_agg columns to assemble in read results |
+| filters | jsonb | Default row-level filters always applied to this entity |
+| upsert_key | jsonb | ✦ Array of column names forming the natural unique key — e.g. `["ticker"]`. Empty array means upsert not supported. Must match an existing UNIQUE constraint on root_table |
 | created_at | timestamptz | |
-| updated_at | timestamptz | |
+| updated_at | timestamptz | Auto-updated by trigger |
 
 ##### PGC_DomainHelp
 User-facing command aliases and help text per domain.
@@ -719,7 +721,7 @@ GROUP BY workflow_id;
 |---|---|---|
 | 1 | PGC_Schema | `domain` column added |
 | 2 | PGC_TableMap | `domain` column added |
-| 3 | PGC_EntitySchema | unchanged |
+| 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | unchanged |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
 | 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added |
@@ -755,24 +757,61 @@ Security gate on `createTable`:
 - Table names must match `^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$`
 - Protected system tables (`PGC_Schema`, `PGC_TableMap`, `PGC_EntitySchema`, `PGC_DomainHelp`) cannot be dropped
 
-### 5.2 SERV-Table (partial — getRows + insertRow complete)
-DML executor gated by PGC_TableMap.
+### 5.2 SERV-Table (complete)
+DML executor gated by `PGC_TableMap`. All four operations live.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit — gated by PGC_TableMap |
-| `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by allow_insert |
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit |
+| `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
+| `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
+| `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
 
 Security gate on all operations:
-- Table must be registered in PGC_TableMap
-- Column names validated against PGC_Schema columns for that table
-- Filter operators validated against whitelist (eq, neq, gt, gte, lt, lte, like, in, is_null, not_null)
-- `insertRow` additionally checks `allow_insert = true`
+- Table must be registered in `PGC_TableMap`
+- Column names validated against `PGC_Schema.columns` for that table
+- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`)
+- `updateRows` and `deleteRows` require non-empty `filters` — unfiltered mass writes rejected at 400
+- `allow_insert`, `allow_update`, `allow_delete` checked per-table from `PGC_TableMap`
 
-### 5.3 SERV services — not yet built
-- **SERV-Table** updateRow, deleteRow — deferred, not needed until Phase 3
-- **SERV-Query** — parameterised SELECT with joins, pagination
-- **SERV-Entity** — multi-table jsonb_agg queries driven by PGC_EntitySchema
+**PGC_TableMap defaults:**
+- PGC system tables: `allow_insert` varies, `allow_update: true`, `allow_delete: false`
+- PGD domain tables: `allow_insert: true`, `allow_update: true`, `allow_delete: true`
+
+`SERV-Table` is used by PROC for all **system config** operations (e.g. `PGC_WorkflowRun`, `PGC_Prompt`).
+User domain data operations go through `SERV-Entity` instead.
+
+### 5.3 SERV-Entity (complete)
+User-facing domain data layer. Callers use entity names (`Recipe`, `Stock`) — never table names.
+`PGC_EntitySchema` defines the `root_table`, `joins`, `aggregations`, `upsert_key`, and default `filters` for each entity.
+Used by PROC when executing workflow steps that read or write user domain data.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations |
+| `/api/v1/serv/entity/listEntities` | POST | List entities — filters, orderBy, limit — entity default filters always applied |
+| `/api/v1/serv/entity/createEntity` | POST | INSERT root row — system cols (id, created_at, updated_at) stripped automatically |
+| `/api/v1/serv/entity/updateEntity` | POST | UPDATE root row — `patch` (default) or `replace` mode — children unaffected |
+| `/api/v1/serv/entity/upsertEntity` | POST | INSERT ... ON CONFLICT DO UPDATE — requires `upsert_key` defined in PGC_EntitySchema |
+| `/api/v1/serv/entity/deleteEntity` | POST | DELETE root row — CASCADE handles children via FK — gated by `allow_delete` |
+
+**Design decisions:**
+- Entity operations only touch the root table. Child rows (e.g. `RecipeIngredient`) are managed
+  via their own `createEntity` / `deleteEntity` calls with the parent `id` provided explicitly.
+- `updateEntity patch` — sets only provided fields, leaves all others unchanged.
+- `updateEntity replace` — sets ALL non-system fields from provided data, resetting omitted fields to null.
+  Use when replacing an entire entity (e.g. new recipe version) while preserving `id` and child FK relationships.
+- `upsertEntity` uses `xmax = 0` to detect true INSERT vs UPDATE without a second DB round-trip.
+  `wasInserted: true/false` returned in response.
+- `upsert_key` must correspond to an existing `UNIQUE` constraint on the physical root table.
+  `/create-domain` is responsible for setting both the DDL constraint and the `upsert_key` together.
+
+**Tier separation:**
+- `SERV/table` — system config operations on PGC tables. Used by PROC for workflow state, prompts, etc.
+- `SERV/entity` — user domain data operations on PGD tables. Used by PROC for workflow step execution.
+
+### 5.4 SERV services — not yet built
+- **SERV-Query** — cross-entity parameterised SELECT with pagination (Phase 3)
 
 ---
 
@@ -1684,6 +1723,10 @@ structured context to learn from.
 | `v3.2-template-cleanup` | SchemaQueue + DLQ removed, LambdaInvokePolicy removed, stale env vars cleaned |
 | `v3.2-clean-baseline` | All pings passing, Lambda invoke pattern fully gone, clean foundation for Phase 2 |
 | `v3.2-interactive-complete` | /interactive endpoint live, /help command proves full interactive loop end-to-end |
+| `v3.2-serv-table-complete` | SERV-Table updateRows + deleteRows complete. openapi.yaml v3.3.2 |
+| `v3.2-shutdown-complete` | /shutdown command — SlackbotFunction + ProcFunction, ephemeral Slack response |
+| `v3.2-serv-entity-complete` | SERV-Entity all six routes complete. PGC_EntitySchema upsert_key added. openapi.yaml v3.3.3 |
+| `v3.2-bootstrap-clean` | init-brain installs set_updated_at() on PGD. seed_PGC_Schema upsert_key synced |
 
 ---
 
@@ -1727,23 +1770,24 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 |---|---|---|
 | 1 | Slack /interactive endpoint + Slack signing verification (Section 12.2) | ✅ complete — v3.2-interactive-complete |
 | 1a | /help command — interactive loop proof + permanent intent pipeline foundation | ✅ complete — v3.2-interactive-complete |
-| 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction | ⬜ next |
-| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN | ⬜ |
+| 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction | ✅ complete — v3.2-shutdown-complete |
+| 2a | SERV-Table updateRows + deleteRows | ✅ complete — v3.2-serv-table-complete |
+| 2b | SERV-Entity — six routes, PGC_EntitySchema upsert_key | ✅ complete — v3.2-serv-entity-complete |
+| 3 | Domain creation review gate — DESIGN_DOMAIN → Slack review → CREATE_DOMAIN | ⬜ next |
 | 3a | Right-brain output validation — POST /proc/review-output — Ajv JSON Schema + in-situ JS sandbox (Section 6.10) | ⬜ |
 | 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ |
 | 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ⬜ |
 |   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) | |
+|   | — Step Processor MUST check PGC_WorkflowRun.status before executing any step (shutdown contract) | |
 
 ### Phase 3 — Deferred
 
 | # | Task |
 |---|---|
-| 1 | SERV-Table updateRow/deleteRow |
-| 2 | SERV-Query — parameterised SELECT with joins, pagination |
-| 3 | SERV-Entity — multi-table jsonb_agg via PGC_EntitySchema |
-| 4 | Parallel execution — fan-out/fan-in, optimistic locking |
-| 5 | Unit + integration tests — node:test, testcontainers |
-| 6 | CI/CD GitHub Actions — after template.yaml stabilises |
+| 1 | SERV-Query — cross-entity parameterised SELECT with pagination |
+| 2 | Parallel execution — fan-out/fan-in, optimistic locking |
+| 3 | Unit + integration tests — node:test, testcontainers |
+| 4 | CI/CD GitHub Actions — after template.yaml stabilises |
 
 ## 10. pgvector — Semantic Search
 
