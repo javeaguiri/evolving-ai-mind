@@ -1362,12 +1362,13 @@ Called by the iterator at step 5 — one invocation per table.
 ```
 
 The `field_editor` option type renders a Slack Block Kit message with:
+```
 - Each field shown as a row: name, type, nullable indicator
 - [✏️ Modify] button per field → opens modal with type/nullable/default inputs
 - [❌ Remove] button per field (protected: `id`, `created_at`, `updated_at` cannot be removed)
 - [➕ Add field] button → opens modal with name/type inputs
 - [✅ Done] button → confirms and pops the sub-workflow frame
-
+```
 #### Local state shape during execution
 
 ```json
