@@ -107,14 +107,18 @@ export async function bootstrap() {
   }
 
   const client = getClient(process.env.PGC_DATABASE_URL);
+  const pgdClient = getClient(process.env.PGD_DATABASE_URL);
   const tableResults = [];
 
   try {
     await client.connect();
+    await pgdClient.connect();
     console.info('init-brain: bootstrap starting');
 
-    // Step 1 — install set_updated_at() trigger function
+    // Step 1 — install set_updated_at() trigger function on both PGC and PGD.
+    // PGD needs it because all /create-domain tables include an updated_at trigger.
     await installTriggerFunction(client);
+    await installTriggerFunction(pgdClient);
 
     // Step 2 — create PGC system tables from templates, tracking new vs existing
     for (const template of PGC_TEMPLATES) {
@@ -163,6 +167,7 @@ export async function bootstrap() {
     return { ok: false, error: error.message };
   } finally {
     await client.end();
+    await pgdClient.end();
   }
 }
 
