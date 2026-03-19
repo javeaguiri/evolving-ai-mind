@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Phase 3 next  
-Last updated: 2026-03-19 (session 2)
+Last updated: 2026-03-19 (session 3)
 
 ---
 
@@ -309,12 +309,31 @@ If PROC and SERV were in the same Lambda, direct imports would be fine.
 Because they are separate Lambdas, HTTP fetch through API Gateway is the only
 transport-agnostic option that keeps PROC testable via curl without AWS infrastructure.
 
+**`req.callback` vs `req.body.callback` — critical SQS pattern:**
+
+`buildReqFromSqs()` destructures the SQS message envelope explicitly:
+```js
+const { type, traceId, callback, ...rest } = message;
+return { ..., body: rest, callback: callback ?? null, traceId, ... };
+```
+
+This means `callback` is always at `req.callback` — **never** at `req.body.callback`.
+`req.body` contains only the remaining fields after `type`, `traceId`, and `callback`
+are lifted out. Every PROC endpoint that reads callback from an SQS message must use:
+```js
+const callback = req.callback ?? req.body?.callback ?? null;
+```
+The `req.body?.callback` fallback handles HTTP test calls that include callback in the
+request body directly. Without this pattern, callback will be `undefined` on the SQS
+path and the SlackCallbackListenerFunction will receive `provider: undefined`.
+
 **When adding a new PROC endpoint:**
 1. Create `src/proc/<endpoint-name>.mjs` — export `handle(req)`
 2. Add `case '<endpoint-name>': return handle(req)` to HTTP switch in `handler.mjs`
 3. Add `case '<SQS_MESSAGE_TYPE>': return handle(buildReq(message))` to SQS switch
 4. Document in `openapi.yaml` spec-first
 5. Never import AWS SDK in the endpoint module
+6. Read callback as `req.callback ?? req.body?.callback ?? null` — never `req.body.callback`
 ```
 
 ### 3.6 Transport-agnostic endpoint pattern — IMPORTANT
@@ -1794,6 +1813,7 @@ structured context to learn from.
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
 | PROC/SERV API Gateway resource policy | Medium | Restrict to AWS account-scoped requests before any public exposure — see Section 12.3 |
 | Refactor `proc/create-domain.mjs` private `servFetch` + `callLlm` | Low | Extract to `src/shared/serv-client.mjs` and `src/shared/llm-client.mjs` — duplicates shared implementations added in v3.2-design-domain-foundation |
+| `callback` routing pattern not enforced at compile time | Low | Every PROC endpoint reading callback from SQS must use `req.callback ?? req.body?.callback ?? null`. Currently convention only — caught at runtime. Add a lint rule or helper function when unit tests are added |
 
 ---
 
@@ -1875,6 +1895,7 @@ unless a patch is available and pinned.
 | `v3.2-bootstrap-clean` | init-brain installs set_updated_at() on PGD. seed_PGC_Schema upsert_key synced |
 | `v3.2-architecture-semantic-validation` | Semantic validation rules documented in Section 6.10. Tech debt entry added |
 | `v3.2-design-domain-foundation` | shared/llm-client + shared/serv-client extracted. proc/review-output (Ajv + semantic rules). proc/design-domain first pass (LLM + validation + WorkflowRun lifecycle). openapi.yaml v3.3.4 |
+| `v3.2-design-domain-e2e` | callback routing fix (req.callback not req.body.callback). callback.mjs DESIGN_DOMAIN_RESULT + DESIGN_DOMAIN_ERROR handlers. Full Slack flow confirmed end-to-end |
 
 ---
 
@@ -1921,7 +1942,7 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 | 2 | /shutdown Slack command — emergency stop, ProcFunction + SlackbotFunction | ✅ complete — v3.2-shutdown-complete |
 | 2a | SERV-Table updateRows + deleteRows | ✅ complete — v3.2-serv-table-complete |
 | 2b | SERV-Entity — six routes, PGC_EntitySchema upsert_key | ✅ complete — v3.2-serv-entity-complete |
-| 3a | shared/llm-client + shared/serv-client + proc/review-output (Ajv + semantic rules) + proc/design-domain foundation (LLM + validation + WorkflowRun lifecycle) | ✅ complete — v3.2-design-domain-foundation |
+| 3a | shared/llm-client + shared/serv-client + proc/review-output (Ajv + semantic rules) + proc/design-domain foundation (LLM + validation + WorkflowRun lifecycle) | ✅ complete — v3.2-design-domain-e2e |
 | 3b | proc/design-domain — Block Kit review message, in-place table remove, human gate pause | ⬜ next |
 | 3c | proc/create-domain — wired to WorkflowRun state from design-domain, PGC_EntitySchema registration | ⬜ |
 | 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ |
