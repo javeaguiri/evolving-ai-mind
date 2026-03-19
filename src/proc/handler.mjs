@@ -22,6 +22,7 @@ import { parseEvent, err, buildReqFromSqs } from '../shared/lambda-utils.mjs';
 import { handle as pingLlm }  from './ping-llm.mjs';
 import { handle as createDomain } from './create-domain.mjs';
 import { handleHelp, handleHelpResume }     from './help.mjs';
+import { handle as shutdown }           from './shutdown.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -82,6 +83,15 @@ async function processSqsBatch(records) {
         await handleHelpResume(message);
         continue;
       }
+      // cancel — Step Processor will handle this when built (Phase 2 item 5).
+      // Discard silently for now — run is already marked cancelled in DB.
+      if (message.type === 'WORKFLOW_STEP' && message.action === 'cancel') {
+        console.info('proc: cancel message received — discarded (Step Processor not yet built)', {
+          workflowRunId: message.workflowRunId,
+          traceId:       message.traceId,
+        });
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -110,8 +120,11 @@ async function dispatch(req) {
     case 'create-domain':
       return createDomain(req);
 
+    case 'shutdown':
+      return shutdown(req);
+
     // Routes added here as refactor progresses:
-    // case 'run-workflow':  return runWorkflow(req);    // Phase 2
+    // case 'run-workflow':  return runWorkflow(req);    // Phase 2 item 5
 
     default:
       return err(404, `PROC route "${req.route}" not found`, req.correlationId);

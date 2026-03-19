@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.3.0
+  version: 3.3.2
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -170,6 +170,57 @@ components:
           type: string
           format: date-time
 
+
+    ShutdownResult:
+      type: object
+      description: Result of a /shutdown operation
+      properties:
+        success:
+          type: boolean
+          example: true
+        cancelledCount:
+          type: integer
+          description: Number of runs cancelled — 0 means no active runs existed
+          example: 1
+        cancelled:
+          type: array
+          items:
+            type: object
+            properties:
+              workflowRunId:
+                type: integer
+                example: 42
+              workflowName:
+                type: string
+                example: create_domain
+              stoppedAtStep:
+                type: integer
+                description: >
+                  Index of the execution stack step that was active when cancelled.
+                  Null when the run had not yet started executing steps.
+                example: 3
+
+    FilterItem:
+      type: object
+      description: >
+        A single filter predicate for SERV-Table DML operations (getRows, updateRows, deleteRows).
+        Column names are validated against PGC_Schema for the target table.
+        Operators is_null and not_null require no value field.
+        Operator in requires value to be an array.
+      required: [column, op]
+      properties:
+        column:
+          type: string
+          example: status
+        op:
+          type: string
+          enum: [eq, neq, gt, gte, lt, lte, like, in, is_null, not_null]
+          example: eq
+        value:
+          description: >
+            Required for all operators except is_null and not_null.
+            Must be an array when op is in.
+          example: active
 
     Callback:
       type: object
@@ -604,15 +655,7 @@ paths:
                 filters:
                   type: array
                   items:
-                    type: object
-                    required: [column, op]
-                    properties:
-                      column:
-                        type: string
-                      op:
-                        type: string
-                        enum: [eq, neq, gt, gte, lt, lte, like, in, is_null, not_null]
-                      value: {}
+                    $ref: '#/components/schemas/FilterItem'
                 orderBy:
                   type: object
                   properties:
@@ -713,6 +756,231 @@ paths:
           description: Table not registered in PGC_TableMap
         '500':
           description: Insert failed
+
+  /api/v1/serv/table/updateRows:
+    post:
+      summary: UPDATE rows in a registered table
+      description: >
+        Parameterised UPDATE gated by PGC_TableMap allow_update flag.
+        Column names in both updates and filters are validated against PGC_Schema.
+        filters is required and must be non-empty — unfiltered mass UPDATE is not permitted.
+        Returns all updated rows via RETURNING *.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, filters, updates]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGC_WorkflowRun
+                filters:
+                  type: array
+                  minItems: 1
+                  description: Required — must target specific rows. Unfiltered UPDATE is rejected.
+                  items:
+                    $ref: '#/components/schemas/FilterItem'
+                updates:
+                  type: object
+                  description: Column/value pairs to set. jsonb values are serialized automatically.
+                  example:
+                    status: cancelled
+            example:
+              tableName: PGC_WorkflowRun
+              filters:
+                - { column: id,     op: eq,  value: 42 }
+                - { column: status, op: eq,  value: active }
+              updates:
+                status: cancelled
+      responses:
+        '200':
+          description: Rows updated — updatedCount is 0 when filters match nothing
+          content:
+            application/json:
+              examples:
+                rows_updated:
+                  summary: One or more rows updated
+                  value:
+                    success: true
+                    tableName: PGC_WorkflowRun
+                    updatedCount: 1
+                    rows:
+                      - id: 42
+                        status: cancelled
+                        workflow_id: 3
+                        created_at: "2026-03-19T10:00:00.000Z"
+                no_match:
+                  summary: Filters matched no rows
+                  value:
+                    success: true
+                    tableName: PGC_WorkflowRun
+                    updatedCount: 0
+                    rows: []
+        '400':
+          description: >
+            Validation error — missing filters, empty filters, bad table name,
+            unknown column in updates or filters, disallowed operator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: UPDATE not permitted on this table (allow_update is false in PGC_TableMap)
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Update failed
+
+  /api/v1/serv/table/deleteRows:
+    post:
+      summary: DELETE rows from a registered table
+      description: >
+        Parameterised DELETE gated by PGC_TableMap allow_delete flag.
+        Column names in filters are validated against PGC_Schema.
+        filters is required and must be non-empty — unfiltered mass DELETE is not permitted.
+        Note: allow_delete is false on all PGC system tables in the seed data —
+        domain data tables (PGD_*) are the expected use case.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, filters]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGD_Recipes
+                filters:
+                  type: array
+                  minItems: 1
+                  description: Required — must target specific rows. Unfiltered DELETE is rejected.
+                  items:
+                    $ref: '#/components/schemas/FilterItem'
+            example:
+              tableName: PGD_Recipes
+              filters:
+                - { column: id, op: eq, value: 7 }
+      responses:
+        '200':
+          description: Rows deleted — deletedCount is 0 when filters match nothing
+          content:
+            application/json:
+              examples:
+                rows_deleted:
+                  summary: One or more rows deleted
+                  value:
+                    success: true
+                    tableName: PGD_Recipes
+                    deletedCount: 1
+                no_match:
+                  summary: Filters matched no rows
+                  value:
+                    success: true
+                    tableName: PGD_Recipes
+                    deletedCount: 0
+        '400':
+          description: >
+            Validation error — missing filters, empty filters, bad table name,
+            unknown column in filters, disallowed operator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: DELETE not permitted on this table (allow_delete is false in PGC_TableMap)
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Delete failed
+
+  /api/v1/ui/slack/shutdown:
+    post:
+      summary: Slack /shutdown command handler
+      description: >
+        Handles the /shutdown Slack slash command. Synchronous — unlike other
+        slash commands, this does NOT enqueue to SQS. SlackbotFunction calls
+        POST /proc/shutdown directly via HTTP fetch and returns the result
+        inline within Slack's 3s response window.
+
+        Slack command syntax:
+          /shutdown            — cancel all active workflow runs
+          /shutdown <runId>    — cancel a specific run by PGC_WorkflowRun.id
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret
+          3. Parses text field — empty = cancel all, integer = cancel specific run
+          4. Calls POST /proc/shutdown synchronously via HTTP fetch to PROC_API_URL
+          5. Formats ShutdownResult as a Slack message and returns inline (response_type: ephemeral)
+          6. No SQS enqueue, no thread — response is immediate and visible only to the caller
+
+        Ephemeral response — only the user who ran /shutdown sees the result.
+        This is intentional: shutdown is an operator action, not a team notification.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /shutdown
+                text:
+                  type: string
+                  description: Empty string (cancel all) or integer runId (cancel specific)
+                  example: "42"
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            Shutdown result returned inline. cancelledCount: 0 when no active runs exist —
+            this is not an error.
+          content:
+            application/json:
+              examples:
+                runs_cancelled:
+                  summary: One or more runs cancelled
+                  value:
+                    response_type: ephemeral
+                    text: "🛑 Shutdown complete — 2 run(s) cancelled: create_domain (run 42), create_domain (run 43)"
+                no_active_runs:
+                  summary: No active workflows
+                  value:
+                    response_type: ephemeral
+                    text: "✅ No active workflows to cancel"
+                specific_run_cancelled:
+                  summary: Specific run cancelled
+                  value:
+                    response_type: ephemeral
+                    text: "🛑 Run 42 cancelled (create_domain, was at step 3)"
+                specific_run_not_found:
+                  summary: Specific run not found or already inactive
+                  value:
+                    response_type: ephemeral
+                    text: "✅ Run 42 is not active (already completed, cancelled, or not found)"
+        '400':
+          description: Invalid Slack signature or text is not a valid integer when provided
+        '500':
+          description: PROC /shutdown call failed or timed out
 
   # ── UI / Slack — command + interactive ────────────────────────────────────
 
@@ -879,12 +1147,24 @@ paths:
       summary: Emergency stop — cancel active workflow runs
       description: >
         Immediately cancels all active workflow runs for this instance, or a
-        specific run by ID. Sets PGC_WorkflowRun.status = 'cancelled' and
-        enqueues a cancel message to WorkflowQueue so any in-flight SQS step
-        is discarded on next execution.
+        specific run by ID.
+
+        Steps performed:
+          1. Calls SERV getRows on PGC_WorkflowRun — filters by status=active
+             and optionally by id=workflowRunId
+          2. Calls SERV updateRows on PGC_WorkflowRun — sets status=cancelled
+             for each matching run (non-empty filters enforced by updateRows gate)
+          3. Enqueues { type: WORKFLOW_STEP, action: cancel, workflowRunId } to
+             WorkflowQueue for each cancelled run — so any in-flight SQS step
+             is discarded when the Step Processor checks status before executing
+          4. Returns ShutdownResult — cancelledCount: 0 when no active runs exist
 
         Called synchronously by SlackbotFunction on /shutdown command —
         no SQS hop. Must respond within Slack's 3s window.
+
+        NOTE: Step Processor (Phase 2 item 5) MUST check PGC_WorkflowRun.status
+        as its first action before executing any step. That check is what gives
+        the cancel signal its effect. This is a hard constraint on the Step Processor design.
       tags: [PROC]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -904,16 +1184,29 @@ paths:
                 traceId:
                   type: string
                   format: uuid
-            example:
-              callback:
-                provider: slack
-                channel: C0AEJ87JSKF
-                threadId: "1234567890.123456"
+            examples:
+              cancel_all:
+                summary: Cancel all active runs
+                value:
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              cancel_specific:
+                summary: Cancel a specific run
+                value:
+                  workflowRunId: 42
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
       responses:
         '200':
           description: Shutdown complete — cancelledCount is 0 when no active runs exist
           content:
             application/json:
+              schema:
+                $ref: '#/components/schemas/ShutdownResult'
               examples:
                 runs_cancelled:
                   summary: One or more runs cancelled
@@ -922,7 +1215,7 @@ paths:
                     cancelledCount: 2
                     cancelled:
                       - { workflowRunId: 42, workflowName: create_domain, stoppedAtStep: 3 }
-                      - { workflowRunId: 43, workflowName: deduct_inventory, stoppedAtStep: 1 }
+                      - { workflowRunId: 43, workflowName: create_domain, stoppedAtStep: 1 }
                 no_active_runs:
                   summary: No active workflows to cancel
                   value:
@@ -930,7 +1223,7 @@ paths:
                     cancelledCount: 0
                     cancelled: []
         '500':
-          description: DB update or SQS enqueue failed
+          description: SERV getRows, updateRows, or SQS enqueue failed
 
   /api/v1/proc/review-output:
     post:
