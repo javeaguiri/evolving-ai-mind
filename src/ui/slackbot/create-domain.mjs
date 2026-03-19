@@ -55,7 +55,7 @@ export async function handle(req) {
     await sqs.send(new SendMessageCommand({
       QueueUrl:    process.env.SQS_WORKFLOW_URL,
       MessageBody: JSON.stringify({
-        type:       'CREATE_DOMAIN',
+        type:       'DESIGN_DOMAIN',
         traceId,
         userInput,
         slackUser,

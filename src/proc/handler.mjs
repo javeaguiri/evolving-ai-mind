@@ -19,10 +19,12 @@
 // req.source ('http' | 'sqs') determines response path only.
 
 import { parseEvent, err, buildReqFromSqs } from '../shared/lambda-utils.mjs';
-import { handle as pingLlm }  from './ping-llm.mjs';
-import { handle as createDomain } from './create-domain.mjs';
-import { handleHelp, handleHelpResume }     from './help.mjs';
+import { handle as pingLlm }            from './ping-llm.mjs';
+import { handle as createDomain }       from './create-domain.mjs';
+import { handle as designDomain }       from './design-domain.mjs';
+import { handle as reviewOutput }       from './review-output.mjs';
 import { handle as shutdown }           from './shutdown.mjs';
+import { handleHelp, handleHelpResume } from './help.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -76,6 +78,12 @@ async function processSqsBatch(records) {
         await handleHelp(message);
         continue;
       }
+      // DESIGN_DOMAIN — Phase 2 create-domain flow, step 1
+      if (message.type === 'DESIGN_DOMAIN') {
+        const req = buildReqFromSqs(message);
+        await designDomain(req);
+        continue;
+      }
       // resume_gate — routes to the correct workflow handler.
       // TODO: replace with PGC_WorkflowRun lookup when Step Processor is built.
       // For now: all resume_gate messages are routed to the HELP workflow.
@@ -120,6 +128,12 @@ async function dispatch(req) {
     case 'create-domain':
       return createDomain(req);
 
+    case 'design-domain':
+      return designDomain(req);
+
+    case 'review-output':
+      return reviewOutput(req);
+
     case 'shutdown':
       return shutdown(req);
 
@@ -142,14 +156,14 @@ async function dispatch(req) {
  */
 async function handlePingSqs(message) {
   await enqueueSlackResult({
-    type:      'PING_SQS_RESULT',
-    traceId: message.traceId,
-    callback:   message.callback,
-    hop:        2,
+    type:     'PING_SQS_RESULT',
+    traceId:  message.traceId,
+    callback: message.callback,
+    hop:      2,
     result: {
       success:         true,
       message:         '📬 ping-sqs complete — 2 SQS hops confirmed ✅',
-      traceId:      message.traceId,
+      traceId:         message.traceId,
       hop1EnqueuedAt:  message.enqueuedAt,
       hop2ProcessedAt: new Date().toISOString(),
     },
@@ -169,13 +183,13 @@ async function handlePingE2e(message) {
   const version = payload?.pgc?.version ?? payload?.pgd?.version ?? 'unknown';
 
   await enqueueSlackResult({
-    type:      'PING_E2E_RESULT',
-    traceId: message.traceId,
-    callback:   message.callback,
+    type:     'PING_E2E_RESULT',
+    traceId:  message.traceId,
+    callback: message.callback,
     result: {
       success:     true,
       message:     `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
-      traceId:  message.traceId,
+      traceId:     message.traceId,
       enqueuedAt:  message.enqueuedAt,
       completedAt: new Date().toISOString(),
     },
