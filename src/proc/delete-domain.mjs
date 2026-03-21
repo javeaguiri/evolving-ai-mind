@@ -5,11 +5,15 @@
 // Handles POST /api/v1/proc/delete-domain (HTTP) and
 //         DELETE_DOMAIN SQS WorkflowQueue messages (async).
 //
-// Permanently deletes a domain — drops all PGD tables and removes all
-// PGC registry entries (PGC_Schema, PGC_TableMap, PGC_DomainHelp).
+// Permanently deletes a domain and all its registry entries:
+//   1. PGD tables        — DROP TABLE CASCADE via serv/schema/deleteTable
+//                          (also removes PGC_Schema + PGC_TableMap rows per table)
+//   2. PGC_EntitySchema  — rows where root_table is one of the domain's tables
+//   3. PGC_DomainHelp    — single row for the domain
 //
-// Intended primarily for development and testing cleanup.
 // Idempotent — if the domain is already absent, returns success with a warning.
+// Requires PGC_TableMap.allow_delete = true for PGC_EntitySchema and PGC_DomainHelp.
+// Both are set in seed_PGC_TableMap.json — apply via init-brain bootstrap.
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK imports.
 // req.source determines response path only.
@@ -18,7 +22,6 @@ import { ok, err }         from '../shared/lambda-utils.mjs';
 import { enqueueCallback } from '../shared/sqs-callback.mjs';
 import { getRows }         from '../shared/serv-client.mjs';
 
-// SERV base URL — deleteTable and DomainHelp removal go through SERV HTTP endpoints
 const SERV_URL = process.env.SERV_API_URL;
 
 export async function handle(req) {
@@ -64,31 +67,28 @@ async function runDeleteDomain({ domain, traceId }) {
   const schemaResp = await getRows(
     'PGC_Schema',
     [
-      { column: 'domain', op: 'eq',  value: domain },
-      { column: 'target', op: 'eq',  value: 'pgd'  },
+      { column: 'domain', op: 'eq', value: domain },
+      { column: 'target', op: 'eq', value: 'pgd'  },
     ],
     null,
-    100  // reasonable upper bound — no domain should have 100+ tables
+    100
   );
 
   if (!schemaResp.success) {
     throw new Error(`Failed to query PGC_Schema for domain "${domain}": ${schemaResp.error}`);
   }
 
-  const tables       = schemaResp.rows ?? [];
+  const tables        = schemaResp.rows ?? [];
+  const tableNames    = tables.map(r => r.table_name);
   const deletedTables = [];
 
   console.info('delete-domain: found tables', { domain, count: tables.length, traceId });
 
-  // --- Step 2: Drop each PGD table via SERV deleteTable ---
-  // deleteTable handles: DROP TABLE CASCADE, DELETE FROM PGC_TableMap, DELETE FROM PGC_Schema
-  for (const tableRow of tables) {
-    const tableName = tableRow.table_name;
-    const resp      = await servDeleteTable(tableName, traceId);
-
+  // --- Step 2: Drop each PGD table ---
+  // serv/schema/deleteTable handles: DROP TABLE CASCADE + PGC_Schema row + PGC_TableMap row
+  for (const tableName of tableNames) {
+    const resp = await servPost('/api/v1/serv/schema/deleteTable', { tableName }, traceId);
     if (!resp.success) {
-      // Log but continue — partial cleanup is better than full abort.
-      // The table may have already been dropped manually.
       console.warn('delete-domain: deleteTable failed (continuing)', { tableName, error: resp.error, traceId });
     } else {
       deletedTables.push(tableName);
@@ -96,66 +96,73 @@ async function runDeleteDomain({ domain, traceId }) {
     }
   }
 
-  // --- Step 3: Remove PGC_DomainHelp row ---
-  const domainHelpRemoved = await servDeleteDomainHelp(domain, traceId);
+  // --- Step 3: Remove PGC_EntitySchema rows for this domain ---
+  // Matches on root_table — any entity whose root table was one of this domain's tables.
+  // PGC_TableMap.allow_delete must be true for PGC_EntitySchema (set in seed).
+  let deletedEntityCount = 0;
+  if (tableNames.length > 0) {
+    const entityResp = await servPost('/api/v1/serv/table/deleteRows', {
+      tableName: 'PGC_EntitySchema',
+      filters:   [{ column: 'root_table', op: 'in', value: tableNames }],
+    }, traceId);
+
+    if (!entityResp.success) {
+      console.warn('delete-domain: PGC_EntitySchema delete failed', { domain, error: entityResp.error, traceId });
+    } else {
+      deletedEntityCount = entityResp.deletedCount ?? 0;
+      console.info('delete-domain: PGC_EntitySchema rows removed', { domain, deletedEntityCount, traceId });
+    }
+  }
+
+  // --- Step 4: Remove PGC_DomainHelp row ---
+  // PGC_TableMap.allow_delete must be true for PGC_DomainHelp (set in seed).
+  const domainHelpResp = await servPost('/api/v1/serv/table/deleteRows', {
+    tableName: 'PGC_DomainHelp',
+    filters:   [{ column: 'domain', op: 'eq', value: domain }],
+  }, traceId);
+
+  let domainHelpRemoved = false;
+  if (!domainHelpResp.success) {
+    console.warn('delete-domain: PGC_DomainHelp delete failed', { domain, error: domainHelpResp.error, traceId });
+  } else {
+    domainHelpRemoved = (domainHelpResp.deletedCount ?? 0) > 0;
+    console.info('delete-domain: PGC_DomainHelp row', { domain, removed: domainHelpRemoved, traceId });
+  }
+
+  // --- Build result ---
+  const nothingFound = tables.length === 0 && !domainHelpRemoved && deletedEntityCount === 0;
 
   const result = {
-    success:            true,
+    success:              true,
     domain,
-    deletedTables,
-    domainHelpRemoved,
+    deletedTables,        // PGD tables dropped (PGC_Schema + PGC_TableMap rows also removed)
+    deletedEntityCount,   // PGC_EntitySchema rows removed
+    domainHelpRemoved,    // PGC_DomainHelp row removed
   };
 
-  if (tables.length === 0 && !domainHelpRemoved) {
+  if (nothingFound) {
     result.warning = `No tables or registry entries found for domain "${domain}"`;
     console.info('delete-domain: domain already absent', { domain, traceId });
   } else {
-    console.info('delete-domain: complete', { domain, deletedTables, domainHelpRemoved, traceId });
+    console.info('delete-domain: complete', { domain, deletedTables, deletedEntityCount, domainHelpRemoved, traceId });
   }
 
   return result;
 }
 
 // ---------------------------------------------------------------------------
-// SERV calls — HTTP fetch to ServFunction (proc→serv rule, Section 3.5a)
+// SERV HTTP client (proc→serv rule, Section 3.5a)
 // ---------------------------------------------------------------------------
 
-async function servDeleteTable(tableName, traceId) {
+async function servPost(path, body, traceId) {
   try {
-    const resp = await fetch(`${SERV_URL}/api/v1/serv/schema/deleteTable`, {
+    const resp = await fetch(`${SERV_URL}${path}`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'x-correlation-id': traceId },
-      body:    JSON.stringify({ tableName }),
+      body:    JSON.stringify(body),
     });
     return await resp.json();
   } catch (error) {
     return { success: false, error: error.message };
-  }
-}
-
-async function servDeleteDomainHelp(domain, traceId) {
-  // PGC_DomainHelp has allow_delete: false in the default seed — use direct SERV call.
-  // We need a raw deleteRows call here since the standard gating would block this.
-  // The domain name is the natural key (UNIQUE constraint on domain column).
-  try {
-    const resp = await fetch(`${SERV_URL}/api/v1/serv/table/deleteRows`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-correlation-id': traceId },
-      body:    JSON.stringify({
-        tableName: 'PGC_DomainHelp',
-        filters:   [{ column: 'domain', op: 'eq', value: domain }],
-      }),
-    });
-    const result = await resp.json();
-    if (!result.success) {
-      console.warn('delete-domain: DomainHelp delete failed', { domain, error: result.error, traceId });
-      return false;
-    }
-    const removed = result.deletedCount > 0;
-    console.info('delete-domain: DomainHelp row', { domain, removed, traceId });
-    return removed;
-  } catch (error) {
-    console.warn('delete-domain: DomainHelp delete error (non-fatal)', { domain, error: error.message, traceId });
-    return false;
   }
 }
