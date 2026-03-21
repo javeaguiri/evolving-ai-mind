@@ -333,7 +333,7 @@ path and the SlackCallbackListenerFunction will receive `provider: undefined`.
 4. Document in `openapi.yaml` spec-first
 5. Never import AWS SDK in the endpoint module
 6. Read callback as `req.callback ?? req.body?.callback ?? null` — never `req.body.callback`
-```
+
 
 ### 3.6 Transport-agnostic endpoint pattern — IMPORTANT
 
