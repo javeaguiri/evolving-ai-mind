@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Phase 3 next  
-Last updated: 2026-03-19 (session 3)
+Status: Active development — Step Processor next  
+Last updated: 2026-03-21 (session 4)
 
 ---
 
@@ -221,8 +221,11 @@ evolving-mind-ai/
 │   │   ├── ping-llm.mjs              /proc/ping-llm
 │   │   ├── create-domain.mjs         /proc/create-domain — transport-agnostic
 │   │   ├── design-domain.mjs         /proc/design-domain — LLM call, no DB writes
+│   │   ├── run-workflow.mjs          /proc/run-workflow — Step Processor entry point
+│   │   ├── step-executor.mjs         Step type handlers — llm_call, human_gate, serv_schema, etc.
+│   │   ├── template-resolver.mjs     Resolves {{key.path}} against local_state
 │   │   ├── classify-intent.mjs       /proc/classify-intent
-│   │   ├── run-workflow.mjs          /proc/run-workflow — Step Processor
+│   │   ├── delete-domain.mjs         /proc/delete-domain — drops PGD tables + registry
 │   │   ├── shutdown.mjs              /proc/shutdown
 │   │   ├── migrations/               One-time DB seed scripts — run manually
 │   │   │   └── seed-*.mjs
@@ -1087,63 +1090,80 @@ resumes or branches accordingly.
 ```json
 {
   "type":             "human_gate",
-  "gate_type":        "confirm | review_tables | review_fields | merge_tables | add_table | choose | error_recovery",
-  "message_template": "Template string with {{variable}} substitution from local_state",
-  "context_key":      "local_state key containing data to display",
+  "gate_type":        "confirm | select_one | select_many | edit_list | text_input | review_object",
+  "message_template": "Plain text with {{variable}} substitution from local_state. No markup, no emoji.",
+  "context_key":      "dot-path into local_state — data source for the dialog",
+  "item_primary_key": "field name on each item to use as primary label (edit_list, select_one, select_many)",
+  "item_secondary_key": "field name on each item to use as secondary text — must be a real field, derived by a preceding js_transform step if needed",
+  "item_action": {
+    "condition":       "boolean expression per item — items where false get no action button",
+    "action":          "userResponse value sent on click",
+    "action_data_key": "field on the item that becomes responseData",
+    "confirm_template": "optional confirmation prompt, resolved per item"
+  },
   "options": [
-    { "label": "✅ Confirm",  "action": "confirm",  "on_select": "next"      },
-    { "label": "❌ Cancel",   "action": "cancel",   "on_select": "cancel"    },
-    { "label": "🔀 Modify",   "action": "branch",   "on_select": "step:3"    }
+    { "label": "Confirm",  "action": "confirm",  "on_select": "next"   },
+    { "label": "Cancel",   "action": "cancel",   "on_select": "cancel" }
   ],
   "on_timeout":       "cancel",
   "timeout_seconds":  3600
 }
 ```
 
+`options` labels are plain text — no emoji, no markup. The renderer adds all
+formatting. `action` values are the primitive `userResponse` strings the Step
+Processor receives.
+
 When a `human_gate` step is reached:
 1. Step Processor pushes a `human_gate` frame onto the stack
 2. Sets `PGC_WorkflowRun.status = 'awaiting_human_gate'`
-3. Posts interactive Slack message via SQS CallbackResults
-4. SQS message processing completes — stack suspended, no timeout on Lambda
-5. User responds → Slack sends to `/interactive` endpoint on SlackbotFunction
-6. SlackbotFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'resume_gate', response: '...' }`
-7. Step Processor resumes — pops gate frame, routes based on user response
+3. Builds a concrete `WORKFLOW_GATE` dialog from `gate_type` + binding metadata + resolved `local_state` data
+4. Enqueues `WORKFLOW_GATE` to `SYSSQSCallbackResults`
+5. SQS message processing completes — stack suspended, no timeout on Lambda
+6. User responds → Slack sends to `/interactive` endpoint on SlackbotFunction
+7. SlackbotFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'resume_gate', response: '...' }`
+8. Step Processor resumes — pops gate frame, routes based on user response
 
 ### Gate type catalogue
 
-| Gate type | When used | User sees |
+Six primitive types — UI-agnostic, independent of any workflow domain.
+The Step Processor has one `buildDialog()` handler per type.
+
+| gate_type | Interaction | Dialog fields produced |
 |---|---|---|
-| `confirm` | Destructive operations, final approval | Single confirmation message + [Confirm] [Cancel] |
-| `review_tables` | After LLM proposes domain schema | Table list with relationships + action buttons |
-| `review_fields` | Per-table field review | All fields for one table + modify/add/remove controls |
-| `merge_tables` | User requests table merge | Picker for two tables + [Merge] [Cancel] |
-| `add_table` | User requests new table | Text input for description → LLM designs fields |
-| `choose` | Multi-path branching | Labelled options mapping to workflow branches |
-| `error_recovery` | Step execution failed | Error details + [Fix schema] [Fix data] [Skip] [Cancel] |
-| `execution_limit` | Execution accumulator tripped | Elapsed time + cost + [Continue] [Stop] [Disable timer] |
-| `velocity_limit` | Velocity detector tripped | Step count + last step + [Show workflow] [Delete] [Dismiss] |
+| `confirm` | Read a proposal, accept or reject | `typography` + `actions` |
+| `select_one` | Pick exactly one item | `typography` + `radio` or `select` + `actions` |
+| `select_many` | Pick zero or more items | `typography` + `checkbox` + `actions` |
+| `edit_list` | View a collection, optionally remove items, confirm | `typography` + `list` with per-row actions + `actions` |
+| `text_input` | Provide free text | `typography` + `textbox` + `actions` |
+| `review_object` | Review a structured summary, accept or reject | `typography` + structured summary + `actions` |
+
+System gate types (not user-dialog):
+
+| gate_type | When triggered | User sees |
+|---|---|---|
+| `error_recovery` | Step execution failed | Error details + fix/skip/cancel options |
+| `execution_limit` | Execution accumulator tripped | Elapsed time + cost + continue/stop options |
+| `velocity_limit` | Velocity detector tripped | Step count + last step + show/delete/dismiss options |
 
 ### Gate instances
 
-**Destructive operation gate**
+**Destructive operation gate** (`confirm`)
 ```
-⚠️ You are about to drop table PGD_Recipes and all its data.
-This cannot be undone.
+You are about to drop table PGD_Recipes and all its data. This cannot be undone.
 [Confirm]  [Cancel]
 ```
-Stack operation on Confirm: pop gate frame, continue.
-Stack operation on Cancel: unwind stack to root, set status=cancelled.
 
-**Error recovery gate**
+**Error recovery gate** (`error_recovery`)
 ```
-⚠️ Step 3 of "deduct_inventory" failed.
+Step 3 of "deduct_inventory" failed.
 Error: Column "quantity" not found in PGD_Inventory.
 
-[A] Fix the schema    [B] Fix the data    [C] Skip step    [D] Cancel
+[Fix the schema]  [Fix the data]  [Skip step]  [Cancel]
 ```
-Stack operations: A/B → push sub-workflow frame. C → pop failed frame, advance. D → cancel.
+Stack operations: Fix → push sub-workflow frame. Skip → pop failed frame, advance. Cancel → cancel.
 
-**Domain review gates** — see Section 20 for full create-domain workflow.
+**Domain review gates** — see Section 6.8 and Section 6.11 for full create-domain workflow.
 
 ---
 
@@ -1188,183 +1208,111 @@ executed generically — no special-case code in PROC.
 
 #### Declarative step definitions
 
+Note: all `step` keys are strings. All `message_template` and `option.label`
+values are plain text — no emoji, no markup. The renderer adds all formatting.
+`gate_type` values are primitive UI types from the catalogue in Section 6.6.
+
+Step 2 (`js_transform`) is the canonical example of the **data preparation
+pattern**: the LLM scaffold produces `columns` as a raw array of objects.
+The `edit_list` gate needs a `columnSummary` string per table (e.g.
+`"name, description, prep_time_minutes"`). Rather than coupling `buildDialog()`
+to domain-specific field derivation, a `js_transform` step enriches
+`proposed_scaffold.tables` with a `columnSummary` field before the gate runs.
+`buildDialog()` then does a plain field lookup: `item["columnSummary"]`.
+This pattern applies generally — any `human_gate` that needs derived display
+fields must be preceded by a `js_transform` that adds them to `local_state`.
+
 ```json
 [
   {
-    "step": 1,
+    "step": "1",
     "type": "llm_call",
-    "description": "LLM designs full domain schema from user description",
+    "description": "LLM designs full domain schema. Must produce one primary table (no FK references) and zero or more child tables referencing it.",
     "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
     "output_key": "proposed_scaffold",
     "on_success": "next",
     "on_failure": "human_feedback"
   },
   {
-    "step": 2,
-    "type": "human_gate",
-    "gate_type": "review_tables",
-    "description": "User reviews proposed table list and high-level relationships",
-    "context_key": "proposed_scaffold",
-    "message_template": "🧠 Here's my plan for domain *{{proposed_scaffold.domain}}*:\n\n{{proposed_scaffold.table_summary}}\n\nDoes this look right?",
-    "options": [
-      { "label": "✅ Review fields",  "action": "confirm",  "on_select": "next"   },
-      { "label": "🔀 Merge tables",   "action": "branch",   "on_select": "step:3" },
-      { "label": "➕ Add a table",    "action": "branch",   "on_select": "step:4" },
-      { "label": "🔄 Start over",     "action": "branch",   "on_select": "step:1" },
-      { "label": "❌ Cancel",         "action": "cancel",   "on_select": "cancel" }
-    ],
+    "step": "2",
+    "type": "js_transform",
+    "description": "Enrich each table in proposed_scaffold.tables with a columnSummary string — first 4 non-system column names joined with ', '. Required by the edit_list gate at step 3.",
+    "input_key": "proposed_scaffold.tables",
+    "output_key": "proposed_scaffold.tables",
     "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": 3,
-    "type": "human_gate",
-    "gate_type": "merge_tables",
-    "description": "User selects two tables to merge",
-    "context_key": "proposed_scaffold.tables",
-    "message_template": "Which two tables would you like to merge?",
-    "options": "dynamic",
-    "on_success": "step:3b",
-    "on_failure": "step:2"
-  },
-  {
-    "step": "3b",
-    "type": "llm_call",
-    "description": "LLM redesigns the merged table from the two inputs",
-    "input": { "prompt": "merge_tables", "tables": "{{gate.selected_tables}}" },
-    "output_key": "merged_table",
-    "on_success": "step:3c",
-    "on_failure": "step:2"
-  },
-  {
-    "step": "3c",
-    "type": "js_transform",
-    "description": "Replace two source tables with merged table in proposed_scaffold",
-    "on_success": "step:2",
-    "on_failure": "step:2"
-  },
-  {
-    "step": 4,
-    "type": "human_gate",
-    "gate_type": "add_table",
-    "description": "User describes the new table they want",
-    "message_template": "Describe the new table you'd like to add:",
-    "options": "text_input",
-    "on_success": "step:4b",
-    "on_failure": "step:2"
-  },
-  {
-    "step": "4b",
-    "type": "llm_call",
-    "description": "LLM designs fields for the new table",
-    "input": { "prompt": "design_table", "description": "{{gate.text_input}}" },
-    "output_key": "new_table",
-    "on_success": "step:4c",
-    "on_failure": "step:2"
-  },
-  {
-    "step": "4c",
-    "type": "human_gate",
-    "gate_type": "review_fields",
-    "description": "User reviews and modifies fields for the new table",
-    "context_key": "new_table",
-    "message_template": "Here are the proposed fields for *{{new_table.tableName}}*:",
-    "options": "field_editor",
-    "on_success": "step:4d",
-    "on_failure": "step:2"
-  },
-  {
-    "step": "4d",
-    "type": "js_transform",
-    "description": "Append confirmed new table to proposed_scaffold.tables",
-    "on_success": "step:2",
-    "on_failure": "step:2"
-  },
-  {
-    "step": 5,
-    "type": "iterator",
-    "description": "For each table: review and modify fields",
-    "items_key": "proposed_scaffold.tables",
-    "item_workflow": "review_table_fields",
-    "execution_mode": "sequential",
-    "on_complete": "next",
     "on_failure": "human_feedback"
   },
   {
-    "step": 6,
+    "step": "3",
     "type": "human_gate",
-    "gate_type": "confirm",
-    "description": "Final confirmation before DDL execution",
-    "context_key": "proposed_scaffold",
-    "message_template": "✅ Ready to create domain *{{proposed_scaffold.domain}}* with {{proposed_scaffold.tables.length}} tables. Proceed?",
+    "gate_type": "edit_list",
+    "description": "User reviews proposed table list. Child tables (FK references > 0) may be removed. Primary table cannot be removed.",
+    "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove any child tables you don't need.",
+    "context_key": "proposed_scaffold.tables",
+    "item_primary_key": "tableName",
+    "item_secondary_key": "columnSummary",
+    "item_action": {
+      "condition": "item.foreignKeys.length > 0",
+      "action": "remove_item",
+      "action_data_key": "tableName",
+      "confirm_template": "Remove {{item.tableName}} from this domain?"
+    },
     "options": [
-      { "label": "✅ Create it", "action": "confirm", "on_select": "next"   },
-      { "label": "❌ Cancel",    "action": "cancel",  "on_select": "cancel" }
+      { "label": "Looks good", "action": "confirm", "on_select": "next"   },
+      { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
     ],
     "on_success": "next",
     "on_failure": "cancel"
   },
   {
-    "step": 7,
+    "step": "4",
+    "type": "human_gate",
+    "gate_type": "confirm",
+    "description": "Final confirmation before DDL execution.",
+    "message_template": "Ready to create domain {{proposed_scaffold.domain}} with {{proposed_scaffold.tables.length}} tables. This will create the physical database tables.",
+    "options": [
+      { "label": "Create it", "action": "confirm", "on_select": "next"   },
+      { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+    ],
+    "on_success": "next",
+    "on_failure": "cancel"
+  },
+  {
+    "step": "5",
     "type": "iterator",
-    "description": "Create each confirmed PGD table via SERV-Schema",
+    "description": "Create each confirmed PGD table via SERV-Schema createTable.",
     "items_key": "proposed_scaffold.tables",
     "item_step": {
       "type": "serv_schema",
       "input": "{{item}}",
       "on_failure": "human_feedback"
     },
+    "execution_mode": "sequential",
+    "output_key": "created_tables",
     "on_complete": "next",
     "on_failure": "human_feedback"
   },
   {
-    "step": 8,
+    "step": "6",
     "type": "serv_insert",
-    "description": "Register domain in PGC_DomainHelp",
+    "description": "Register domain aliases and help text in PGC_DomainHelp.",
     "input": { "tableName": "PGC_DomainHelp", "row": "{{proposed_scaffold.domainHelp}}" },
     "on_success": "next",
     "on_failure": "human_feedback"
   },
   {
-    "step": 9,
+    "step": "7",
     "type": "notify",
-    "description": "Confirm domain creation to user",
-    "message_template": "🧠 Domain *{{proposed_scaffold.domain}}* is ready!\n\n{{created_tables_summary}}",
+    "description": "Confirm domain creation to user.",
+    "message_template": "Domain {{proposed_scaffold.domain}} is ready. {{created_tables_summary}}",
     "on_success": "end"
   },
   {
-    "step": 10,
+    "step": "8",
     "type": "end"
   }
 ]
 ```
-
-#### `review_table_fields` sub-workflow
-
-Called by the iterator at step 5 — one invocation per table.
-
-```json
-[
-  {
-    "step": 1,
-    "type": "human_gate",
-    "gate_type": "review_fields",
-    "description": "Show all fields for this table — user can modify, add, or remove",
-    "context_key": "item",
-    "message_template": "📋 *{{item.tableName}}* — review fields:",
-    "options": "field_editor",
-    "on_success": "end",
-    "on_failure": "end"
-  }
-]
-```
-
-The `field_editor` option type renders a Slack Block Kit message with:
-- Each field shown as a row: name, type, nullable indicator
-- [✏️ Modify] button per field → opens modal with type/nullable/default inputs
-- [❌ Remove] button per field (protected: `id`, `created_at`, `updated_at` cannot be removed)
-- [➕ Add field] button → opens modal with name/type inputs
-- [✅ Done] button → confirms and pops the sub-workflow frame
 
 #### Local state shape during execution
 
@@ -1813,15 +1761,496 @@ structured context to learn from.
 
 ---
 
+### 6.11 UI Dialog Contract — WORKFLOW_GATE Message
+
+#### Purpose
+
+When the Step Processor hits a `human_gate` step it must communicate to the
+Experience tier what the user needs to see and respond to. This communication
+must be UI-agnostic — the PROC layer has no knowledge of Slack Block Kit,
+Teams Adaptive Cards, or any other UI framework. The Experience tier
+translates the contract into whatever format its medium requires.
+
+This section defines that contract: the `WORKFLOW_GATE` SQS message shape,
+the `dialog` field type system, and the enforcement model.
+
+#### Design decisions — final
+
+**UI-neutral field types grounded in standard component vocabulary.**
+Field type names are taken from Material UI (React) and Angular Material —
+the two dominant component libraries — so that any frontend developer
+immediately understands the rendering intent without reading documentation.
+
+**Plain text only in workflow definitions.**
+`message_template` and option `label` fields in `PGC_Workflow.steps` contain
+plain text only — no Slack `mrkdwn`, no emoji, no markdown. The Experience
+tier adds all formatting, emoji, and markup appropriate to its medium.
+A Slack renderer adds `*bold*` and emoji. A Teams renderer adds Adaptive Card
+formatting. A CLI renderer adds nothing. The workflow definition is the same
+in all cases.
+
+**`style` hints are retained in the contract.**
+`style: "primary" | "danger" | "default"` appears on buttons and per-row
+actions. It is a semantic hint about visual weight and intent, not a Slack
+colour instruction. Material UI uses `color="error"`, Slack uses
+`style: "danger"`, a CLI might render it in red. The hint travels in the
+contract; each renderer maps it appropriately. Renderers are free to ignore it.
+
+**`secondaryAction` is a single action per list item.**
+Material UI `ListItem` has one `secondaryAction` slot. Angular Material
+`mat-list-item` has one action slot. Our contract mirrors this — one optional
+action per row. If multiple per-row actions are ever needed (edit + delete),
+the renderer wraps them; the contract field becomes an array at that point
+(Phase 3 decision).
+
+**`confirm` is a plain string.**
+A confirmation prompt before a destructive action. The renderer decides how
+to present it — Slack uses a confirmation dialog modal, a web UI uses
+`window.confirm()`, a CLI prompts inline. Plain string is sufficient today;
+a structured `{ title, message }` object is Phase 3 when modal dialogs need
+separate title and body.
+
+**`step` keys in `PGC_Workflow.steps` are strings throughout.**
+Mixed integer/string keys (`3` vs `"3b"`) create lookup ambiguity in the
+Step Processor. All step keys are strings: `"1"`, `"2"`, `"3"`, `"3b"`.
+Stored as-is in the jsonb array; the Step Processor indexes by string key.
+
+#### WORKFLOW_GATE SQS message
+
+Enqueued by the Step Processor to `SYSSQSSlackResults` when a `human_gate`
+step is reached. Consumed by `SlackCallbackListenerFunction` (`callback.mjs`).
+
+`gate_type` in this message is the primitive type from the step definition
+(`"edit_list"`, `"confirm"`, etc.) — never a domain-specific value like
+`"review_tables"`. `callback.mjs` uses `gate_type` only as a layout hint
+(e.g. whether to use `chat.update` in-place or post a new thread message).
+All rendering information is in the `dialog` object.
+
+```json
+{
+  "type":          "WORKFLOW_GATE",
+  "workflowRunId": 42,
+  "gate_type":     "edit_list",
+  "dialog": {
+    "title": "Review domain plan",
+    "fields": [ ...fully resolved field objects... ]
+  },
+  "callback": { "provider": "slack", "channel": "C0AEJ87JSKF", "threadId": "..." },
+  "traceId": "uuid"
+}
+```
+
+The `dialog` is fully resolved before enqueuing — all `{{variable}}`
+substitutions applied, all `items_key` arrays expanded to concrete `items`
+arrays, all `item_action.condition` expressions evaluated per row.
+`callback.mjs` receives a ready-to-render structure with no unresolved paths.
+
+#### Dialog field type system
+
+The `dialog.fields` array is an ordered list of field objects. Each has a
+`type` that maps directly to a standard UI component.
+
+**`typography`** — read-only display text. No user interaction.
+Equivalent to `<p>` / MUI `Typography` / Angular `mat-hint`.
+```json
+{ "type": "typography", "value": "Here's my plan for domain recipes." }
+```
+
+**`textbox`** — single-line free text input.
+Equivalent to `<input type="text">` / MUI `TextField` / `mat-form-field input`.
+```json
+{ "type": "textbox", "name": "table_description", "label": "Describe the new table", "placeholder": "e.g. stores daily stock prices", "required": true }
+```
+
+**`textarea`** — multi-line free text input.
+Equivalent to `<textarea>` / MUI `TextField multiline` / `mat-form-field textarea`.
+```json
+{ "type": "textarea", "name": "instructions", "label": "Cooking instructions", "required": false }
+```
+
+**`radio`** — mutually exclusive single selection from a fixed set.
+Equivalent to `<input type="radio">` / MUI `RadioGroup` / `mat-radio-group`.
+```json
+{
+  "type": "radio",
+  "name": "table_choice",
+  "label": "Select a table",
+  "options": [
+    { "value": "PGD_Recipes",     "label": "Recipes" },
+    { "value": "PGD_Ingredients", "label": "Ingredients" }
+  ]
+}
+```
+
+**`select`** — single selection from a drop-down list. Use when the option
+set is too long for radio buttons (more than ~5 items).
+Equivalent to `<select>` / MUI `Select` / `mat-select`.
+```json
+{
+  "type": "select",
+  "name": "difficulty",
+  "label": "Difficulty",
+  "options": [
+    { "value": "easy",   "label": "Easy" },
+    { "value": "medium", "label": "Medium" },
+    { "value": "hard",   "label": "Hard" }
+  ]
+}
+```
+
+**`checkbox`** — multi-select from a fixed set. Zero or more values.
+Equivalent to `<input type="checkbox">` group / MUI `Checkbox` group /
+`mat-checkbox` group.
+```json
+{
+  "type": "checkbox",
+  "name": "selected_tables",
+  "label": "Select tables to include",
+  "options": [
+    { "value": "PGD_Recipes",     "label": "Recipes" },
+    { "value": "PGD_Ingredients", "label": "Ingredients" }
+  ]
+}
+```
+
+**`list`** — a vertical stack of items, each with a primary label, optional
+secondary text, and an optional single inline action button.
+Equivalent to MUI `List` + `ListItem` with `secondaryAction` /
+Angular Material `mat-list` + `mat-list-item` with action slot.
+
+Use when displaying a collection of named items where the user may act on
+individual items (remove, select, edit). Not a table — no column headers,
+no sortable columns. If tabular structure is needed, use `table` (Phase 3).
+
+```json
+{
+  "type": "list",
+  "name": "tables",
+  "label": "Domain recipes — 3 tables selected",
+  "items": [
+    {
+      "id": "PGD_Recipes",
+      "primary": "PGD_Recipes",
+      "secondary": "name, description, prep_time_minutes",
+      "secondaryAction": null
+    },
+    {
+      "id": "PGD_RecipeIngredients",
+      "primary": "PGD_RecipeIngredients",
+      "secondary": "recipe_id, ingredient_id, quantity",
+      "secondaryAction": {
+        "action": "remove_table",
+        "label": "Remove",
+        "style": "danger",
+        "confirm": "Remove PGD_RecipeIngredients from this domain?"
+      }
+    }
+  ]
+}
+```
+
+`secondaryAction: null` means no action for this item (e.g. a parent table
+that cannot be removed while child tables reference it). The renderer omits
+the button entirely — it does not render a disabled button.
+
+**`actions`** — the form's submit/dismiss buttons. Always the last field in
+`dialog.fields`. Equivalent to a `<div>` of `<button>` elements /
+MUI `Button` group / `mat-button` group.
+```json
+{
+  "type": "actions",
+  "buttons": [
+    { "action": "confirm", "label": "Looks good", "style": "primary" },
+    { "action": "cancel",  "label": "Cancel",     "style": "default" }
+  ]
+}
+```
+
+`action` is the value the Step Processor receives in `userResponse` when
+the user clicks this button. `label` is plain text — no emoji, no markup.
+
+#### Intent-based human_gate steps — FINAL
+
+`human_gate` step definitions express **intent**, not UI structure. The LLM
+designing a workflow declares what kind of interaction is needed and what data
+to bind — the Step Processor translates that intent into a concrete
+`WORKFLOW_GATE` dialog at runtime.
+
+**Three layers of translation:**
+
+```
+PGC_Workflow.steps  →  Step Processor  →  WORKFLOW_GATE  →  callback.mjs
+(intent)               (translation)      (concrete dialog)  (rendering)
+```
+
+1. The LLM produces intent: `gate_type` + binding metadata + `message_template` + `options`
+2. The Step Processor translates intent to a concrete `dialog` object using a
+   `buildDialog()` handler keyed on `gate_type`
+3. `callback.mjs` renders the `dialog` as Slack Block Kit (or any other UI format)
+
+**Why `gate_type` is correct here:** the set of primitive dialog styles is
+finite and bounded by what `callback.mjs` can render. An LLM cannot invent a
+`gate_type` the Step Processor doesn't know how to translate —
+`workflow_steps.schema.json` enforces `gate_type` as an enum. This is
+intentionally different from arbitrary `js_transform` — dialog styles are
+a closed set, not open-ended code.
+
+#### Primitive gate_type catalogue
+
+Six primitive types cover all human interaction patterns:
+
+| gate_type | Interaction | Dialog produced by Step Processor |
+|---|---|---|
+| `confirm` | Read a proposal, accept or reject | `typography` + `actions` |
+| `select_one` | Pick exactly one item from a list | `typography` + `radio` or `select` + `actions` |
+| `select_many` | Pick zero or more items | `typography` + `checkbox` + `actions` |
+| `edit_list` | View a collection, optionally remove items, confirm | `typography` + `list` with per-row actions + `actions` |
+| `text_input` | Provide free text | `typography` + `textbox` + `actions` |
+| `review_object` | Review a structured summary, accept or reject | `typography` + structured summary + `actions` |
+
+These types are UI-primitive — they map to standard component patterns
+(MUI / Angular Material) and are independent of any workflow domain.
+`edit_list` is used wherever a user needs to remove items from a collection,
+regardless of whether those items are tables, ingredients, workflow steps,
+or anything else.
+
+#### Data preparation pattern — js_transform before human_gate
+
+`item_secondary_key` (and `item_primary_key`) must be real fields on each item
+in the `context_key` array at the time the gate executes. The Step Processor
+does a plain field lookup — `item[item_secondary_key]` — with no derivation.
+
+If the display field does not exist on the raw data (e.g. a `columnSummary`
+string derived from a `columns` array), a `js_transform` step must precede
+the gate to enrich the data. The LLM designing a workflow is responsible for
+inserting this step — it is not an implicit Step Processor behaviour.
+
+**Example:** the `create_domain` `edit_list` gate needs `columnSummary` per
+table. The LLM scaffold produces `columns: [{ name, type, ... }]`. Step 2
+(`js_transform`) filters system columns (`id`, `created_at`, `updated_at`),
+takes the first 4 remaining names, and writes `columnSummary` back onto each
+table object in `proposed_scaffold.tables`. Step 3 (`edit_list` gate) then
+reads `item_secondary_key: "columnSummary"` as a plain field lookup.
+
+This pattern is general: any `human_gate` that needs a derived or formatted
+display field must be preceded by a `js_transform` that produces it. The
+`create_workflow` LLM prompt documents this requirement explicitly.
+
+#### human_gate step fields
+
+```json
+{
+  "step": "3",
+  "type": "human_gate",
+  "gate_type": "edit_list",
+  "description": "User reviews proposed table list. Child tables may be removed.",
+  "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove any child tables you don't need.",
+  "context_key": "proposed_scaffold.tables",
+  "item_primary_key": "tableName",
+  "item_secondary_key": "columnSummary",
+  "item_action": {
+    "condition": "item.foreignKeys.length > 0",
+    "action": "remove_item",
+    "action_data_key": "tableName",
+    "confirm_template": "Remove {{item.tableName}} from this domain?"
+  },
+  "options": [
+    { "label": "Looks good", "action": "confirm", "on_select": "next" },
+    { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+  ],
+  "on_success": "next",
+  "on_failure": "cancel"
+}
+```
+
+`columnSummary` exists on each item because Step 2 (`js_transform`) added it.
+Without that step this gate would render empty secondary text.
+
+#### Full dialog field type reference
+
+This is the complete catalogue of field types the Step Processor produces in
+`WORKFLOW_GATE` messages and `callback.mjs` must render. This catalogue is
+the reference when writing the `create_workflow` LLM prompt and when building
+`workflow_steps.schema.json`.
+
+**`typography`** — read-only text. No user interaction.
+`<p>` / MUI `Typography` / Angular `mat-hint`.
+```json
+{ "type": "typography", "value": "Here's my plan for domain recipes." }
+```
+
+**`textbox`** — single-line text input.
+`<input type="text">` / MUI `TextField` / `mat-form-field input`.
+```json
+{ "type": "textbox", "name": "new_table_description", "label": "Describe the new table", "placeholder": "e.g. stores daily stock prices", "required": true }
+```
+
+**`textarea`** — multi-line text input.
+`<textarea>` / MUI `TextField multiline` / `mat-form-field textarea`.
+```json
+{ "type": "textarea", "name": "notes", "label": "Additional notes", "required": false }
+```
+
+**`radio`** — mutually exclusive single selection. Use for ≤5 options.
+`<input type="radio">` / MUI `RadioGroup` / `mat-radio-group`.
+```json
+{
+  "type": "radio",
+  "name": "table_choice",
+  "label": "Select a table",
+  "options": [
+    { "value": "PGD_Recipes",     "label": "Recipes" },
+    { "value": "PGD_Ingredients", "label": "Ingredients" }
+  ]
+}
+```
+
+**`select`** — single selection drop-down. Use for >5 options.
+`<select>` / MUI `Select` / `mat-select`.
+```json
+{
+  "type": "select",
+  "name": "difficulty",
+  "label": "Difficulty",
+  "options": [
+    { "value": "easy",   "label": "Easy" },
+    { "value": "medium", "label": "Medium" },
+    { "value": "hard",   "label": "Hard" }
+  ]
+}
+```
+
+**`checkbox`** — multi-select, zero or more values.
+`<input type="checkbox">` group / MUI `Checkbox` group / `mat-checkbox` group.
+```json
+{
+  "type": "checkbox",
+  "name": "features",
+  "label": "Select features to include",
+  "options": [
+    { "value": "tags",    "label": "Tags" },
+    { "value": "ratings", "label": "Ratings" }
+  ]
+}
+```
+
+**`list`** — vertical stack of items, each with primary label, optional
+secondary text, and an optional single inline action button.
+MUI `List` + `ListItem` with `secondaryAction` /
+Angular `mat-list` + `mat-list-item` with action slot.
+`secondaryAction: null` — renderer omits the button entirely for that row.
+```json
+{
+  "type": "list",
+  "name": "tables",
+  "label": "3 tables selected",
+  "items": [
+    {
+      "id": "PGD_Recipes",
+      "primary": "PGD_Recipes",
+      "secondary": "name, description, prep_time_minutes",
+      "secondaryAction": null
+    },
+    {
+      "id": "PGD_RecipeIngredients",
+      "primary": "PGD_RecipeIngredients",
+      "secondary": "recipe_id, ingredient_id, quantity",
+      "secondaryAction": {
+        "action": "remove_item",
+        "label": "Remove",
+        "style": "danger",
+        "confirm": "Remove PGD_RecipeIngredients from this domain?"
+      }
+    }
+  ]
+}
+```
+
+**`actions`** — form submit/dismiss buttons. Always the last field in a dialog.
+MUI `Button` group / `mat-button` group.
+`action` is the `userResponse` value received by the Step Processor.
+`label` is plain text only — no emoji, no markup.
+```json
+{
+  "type": "actions",
+  "buttons": [
+    { "action": "confirm", "label": "Looks good", "style": "primary" },
+    { "action": "cancel",  "label": "Cancel",     "style": "default" }
+  ]
+}
+```
+
+**`style` hint values:** `"primary"` | `"danger"` | `"default"`.
+Renderers map to their medium: Slack `style: "danger"`, MUI `color="error"`,
+CLI red text. Renderers may ignore the hint.
+
+#### Domain design constraint — primary table + child tables
+
+When the LLM designs a new domain via `create_domain`, it must produce exactly
+one primary (root) table with no foreign key references, and zero or more child
+tables that reference the primary table via FK. Cross-domain foreign keys are
+not permitted. This constraint is enforced in `review-output.mjs` semantic
+rules and in the `create_domain` prompt.
+
+**Rationale:** a single primary table per domain keeps the entity model simple,
+makes the `edit_list` gate straightforward (Remove is safe on any child
+table — condition `item.foreignKeys.length > 0` naturally excludes the primary),
+and ensures SERV-Entity always has a clear `root_table`. Multi-root domains
+are Phase 3 when the entity model is extended.
+
+This constraint is documented in the `create_domain` prompt text and validated
+by semantic Rule 3 (FK parent tables must exist in the scaffold). A scaffold
+with two tables that have no FK relationship between them fails validation —
+it implies two roots, which is not permitted.
+
+#### Enforcement model — schema sources
+
+All JSON Schema definitions used for LLM output validation are stored in
+`PGC_Prompt.output_schema` alongside the prompt that produced them. The schema
+evolves with the prompt version. `review-output.mjs` fetches both together.
+No separate `contracts/` directory is needed — there are no schemas that
+belong outside the DB.
+
+**Schema locations:**
+
+| Schema | Lives in | Used by |
+|---|---|---|
+| `create_domain_scaffold` | `PGC_Prompt.output_schema` (intent: `create_domain`) | `review-output.mjs` after Step 1 `llm_call` |
+| `workflow_steps` | `PGC_Prompt.output_schema` (intent: `create_workflow`) | `review-output.mjs` after `create_workflow` LLM call |
+| `merge_tables_scaffold` | `PGC_Prompt.output_schema` (intent: `merge_tables`) | `review-output.mjs` after Step 3b `llm_call` |
+| `design_table_scaffold` | `PGC_Prompt.output_schema` (intent: `design_table`) | `review-output.mjs` after Step 4b `llm_call` |
+
+The `workflow_steps` schema includes the full `dialog` field type definitions
+inline as `$ref` definitions — it is the authoritative reference for what a
+valid `human_gate` dialog looks like. When the `create_workflow` LLM generates
+a new workflow, `review-output.mjs` validates the entire `steps` array
+including all inline `dialog` objects against this schema.
+
+The Step Processor does not self-validate its dialog output with Ajv. It builds
+the dialog from deterministic code (`buildDialog()`) and relies on the Slack API
+to reject malformed payloads. A `callback.mjs` rendering error is a cleaner
+failure signal for a code bug than a silent Ajv pass. Ajv validation of
+self-built output is deferred until the Step Processor is production-stable.
+
+**Rule:** all schemas live in `PGC_Prompt.output_schema`. If a schema validates
+LLM output, it belongs there versioned with the prompt. The `workflow_steps`
+schema is the one that embeds the dialog field type definitions — keeping
+the dialog contract co-located with the workflow structure contract that
+references it.
+
+---
+
 ## 7. Tech Debt Register
 
 | Item | Priority | Notes |
 |---|---|---|
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
 | Semantic validation rules for create_domain scaffold | ~~High~~ | ✅ Implemented in `src/proc/review-output.mjs` — all three rules enforced in `runSemanticRules()` |
-| `resume_gate` routes to HELP workflow only | High | `proc/handler.mjs` routes all `resume_gate` messages to `handleHelpResume`. Replace with `PGC_WorkflowRun` lookup when Step Processor is built |
+| `resume_gate` routes to HELP workflow only | ~~High~~ | ✅ Resolved — `run-workflow.mjs` dispatches by workflow name via `RESUME_GATE_HANDLERS` map; replaced by generic Step Processor in next milestone |
+| `create-domain.mjs` ignores scaffold from design-domain and calls LLM again | High | Removed tables are recreated; fixed when Step Processor drives `create_domain` declaratively |
+| Gate re-renders post new Slack messages instead of `chat.update` in-place | Medium | Stale buttons remain live after remove; resolves naturally when Step Processor owns gate re-render |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
-| Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — only manual `deleteTable` today |
+| Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — `delete-domain` covers full domains; per-table orphan cleanup is manual |
 | AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager when promotional credits near exhaustion. No application code changes needed. |
 | W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |

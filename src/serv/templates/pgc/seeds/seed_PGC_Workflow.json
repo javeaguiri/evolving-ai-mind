@@ -2,156 +2,97 @@
   {
     "name": "create_domain",
     "domain": null,
-    "description": "Designs and creates a new user domain: LLM proposes schema, user reviews and approves, DDL is executed, domain is registered.",
+    "description": "Designs and creates a new user domain. LLM proposes a schema with one primary table and child tables. User reviews and optionally removes child tables. DDL is executed and domain is registered after final confirmation.",
     "intent_keywords": ["create domain", "new domain", "build domain", "add domain"],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
     "version": 1,
     "steps": [
       {
-        "step": 1,
+        "step": "1",
         "type": "llm_call",
-        "description": "LLM designs full domain schema from user description",
+        "description": "LLM designs full domain schema. Must produce one primary table (no FK references) and zero or more child tables referencing it.",
         "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
         "output_key": "proposed_scaffold",
         "on_success": "next",
         "on_failure": "human_feedback"
       },
       {
-        "step": 2,
-        "type": "human_gate",
-        "gate_type": "review_tables",
-        "description": "User reviews proposed table list and high-level relationships",
-        "context_key": "proposed_scaffold",
-        "message_template": "🧠 Here's my plan for domain *{{proposed_scaffold.domain}}*:\n\n{{proposed_scaffold.table_summary}}\n\nDoes this look right?",
-        "options": [
-          { "label": "✅ Review fields",  "action": "confirm",  "on_select": "next"   },
-          { "label": "🔀 Merge tables",   "action": "branch",   "on_select": "step:3" },
-          { "label": "➕ Add a table",    "action": "branch",   "on_select": "step:4" },
-          { "label": "🔄 Start over",     "action": "branch",   "on_select": "step:1" },
-          { "label": "❌ Cancel",         "action": "cancel",   "on_select": "cancel" }
-        ],
+        "step": "2",
+        "type": "js_transform",
+        "description": "Enrich each table in proposed_scaffold.tables with a columnSummary string — first 4 non-system column names (excluding id, created_at, updated_at) joined with ', '. Required by the edit_list gate at step 3 which does a plain field lookup on item.columnSummary.",
+        "input_key": "proposed_scaffold.tables",
+        "output_key": "proposed_scaffold.tables",
         "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": 3,
-        "type": "human_gate",
-        "gate_type": "merge_tables",
-        "description": "User selects two tables to merge",
-        "context_key": "proposed_scaffold.tables",
-        "message_template": "Which two tables would you like to merge?",
-        "options": "dynamic",
-        "on_success": "step:3b",
-        "on_failure": "step:2"
-      },
-      {
-        "step": "3b",
-        "type": "llm_call",
-        "description": "LLM redesigns the merged table from the two inputs",
-        "input": { "prompt": "merge_tables", "tables": "{{gate.selected_tables}}" },
-        "output_key": "merged_table",
-        "on_success": "step:3c",
-        "on_failure": "step:2"
-      },
-      {
-        "step": "3c",
-        "type": "js_transform",
-        "description": "Replace two source tables with merged table in proposed_scaffold",
-        "on_success": "step:2",
-        "on_failure": "step:2"
-      },
-      {
-        "step": 4,
-        "type": "human_gate",
-        "gate_type": "add_table",
-        "description": "User describes the new table they want",
-        "message_template": "Describe the new table you'd like to add:",
-        "options": "text_input",
-        "on_success": "step:4b",
-        "on_failure": "step:2"
-      },
-      {
-        "step": "4b",
-        "type": "llm_call",
-        "description": "LLM designs fields for the new table",
-        "input": { "prompt": "design_table", "description": "{{gate.text_input}}" },
-        "output_key": "new_table",
-        "on_success": "step:4c",
-        "on_failure": "step:2"
-      },
-      {
-        "step": "4c",
-        "type": "human_gate",
-        "gate_type": "review_fields",
-        "description": "User reviews and modifies fields for the new table",
-        "context_key": "new_table",
-        "message_template": "Here are the proposed fields for *{{new_table.tableName}}*:",
-        "options": "field_editor",
-        "on_success": "step:4d",
-        "on_failure": "step:2"
-      },
-      {
-        "step": "4d",
-        "type": "js_transform",
-        "description": "Append confirmed new table to proposed_scaffold.tables",
-        "on_success": "step:2",
-        "on_failure": "step:2"
-      },
-      {
-        "step": 5,
-        "type": "iterator",
-        "description": "For each table: review and modify fields",
-        "items_key": "proposed_scaffold.tables",
-        "item_workflow": "review_table_fields",
-        "execution_mode": "sequential",
-        "on_complete": "next",
         "on_failure": "human_feedback"
       },
       {
-        "step": 6,
+        "step": "3",
         "type": "human_gate",
-        "gate_type": "confirm",
-        "description": "Final confirmation before DDL execution",
-        "context_key": "proposed_scaffold",
-        "message_template": "✅ Ready to create domain *{{proposed_scaffold.domain}}* with {{proposed_scaffold.tables.length}} tables. Proceed?",
+        "gate_type": "edit_list",
+        "description": "User reviews proposed table list. Child tables (foreignKeys.length > 0) may be removed. Primary table cannot be removed.",
+        "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove any child tables you don't need.",
+        "context_key": "proposed_scaffold.tables",
+        "item_primary_key": "tableName",
+        "item_secondary_key": "columnSummary",
+        "item_action": {
+          "condition": "item.foreignKeys.length > 0",
+          "action": "remove_item",
+          "action_data_key": "tableName",
+          "confirm_template": "Remove {{item.tableName}} from this domain?"
+        },
         "options": [
-          { "label": "✅ Create it", "action": "confirm", "on_select": "next"   },
-          { "label": "❌ Cancel",    "action": "cancel",  "on_select": "cancel" }
+          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
         ],
         "on_success": "next",
         "on_failure": "cancel"
       },
       {
-        "step": 7,
+        "step": "4",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Final confirmation before DDL execution.",
+        "message_template": "Ready to create domain {{proposed_scaffold.domain}} with {{proposed_scaffold.tables.length}} tables. This will create the physical database tables.",
+        "options": [
+          { "label": "Create it", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5",
         "type": "iterator",
-        "description": "Create each confirmed PGD table via SERV-Schema",
+        "description": "Create each confirmed PGD table via SERV-Schema createTable.",
         "items_key": "proposed_scaffold.tables",
         "item_step": {
           "type": "serv_schema",
           "input": "{{item}}",
           "on_failure": "human_feedback"
         },
+        "execution_mode": "sequential",
+        "output_key": "created_tables",
         "on_complete": "next",
         "on_failure": "human_feedback"
       },
       {
-        "step": 8,
+        "step": "6",
         "type": "serv_insert",
-        "description": "Register domain in PGC_DomainHelp",
+        "description": "Register domain aliases and help text in PGC_DomainHelp.",
         "input": { "tableName": "PGC_DomainHelp", "row": "{{proposed_scaffold.domainHelp}}" },
         "on_success": "next",
         "on_failure": "human_feedback"
       },
       {
-        "step": 9,
+        "step": "7",
         "type": "notify",
-        "description": "Confirm domain creation to user",
-        "message_template": "🧠 Domain *{{proposed_scaffold.domain}}* is ready!\n\n{{created_tables_summary}}",
+        "description": "Confirm domain creation to user.",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready. {{created_tables_summary}}",
         "on_success": "end"
       },
       {
-        "step": 10,
+        "step": "8",
         "type": "end"
       }
     ]
@@ -159,7 +100,7 @@
   {
     "name": "create_workflow",
     "domain": null,
-    "description": "Stub — designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition to be implemented in Phase 3.",
+    "description": "Stub — designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition implemented in Phase 3.",
     "intent_keywords": ["create workflow", "new workflow", "build workflow", "add workflow"],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
