@@ -31,7 +31,7 @@
 // PGC_Workflow.steps declarative definitions.
 
 import { ok, err }            from '../shared/lambda-utils.mjs';
-import { enqueueCallback }    from '../shared/sqs-callback.mjs';
+import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import { callLlm }            from '../shared/llm-client.mjs';
 import { validate }           from './review-output.mjs';
 import { getRows, insertRow, updateRows } from '../shared/serv-client.mjs';
@@ -91,7 +91,7 @@ export async function handle(req) {
 // execution from PGC_Workflow.steps declarative definitions.
 // ---------------------------------------------------------------------------
 
-export async function handleResumeGate({ run, userResponse, responseData, callback, traceId, req }) {
+export async function handleResumeGate({ run, userResponse, responseData, gateType, callback, traceId, req }) {
   const workflowRunId = run.id;
 
   switch (userResponse) {
@@ -155,7 +155,39 @@ export async function handleResumeGate({ run, userResponse, responseData, callba
     }
 
     case 'confirm': {
-      // User satisfied with table list — advance to Step 6 (final confirmation gate)
+      if (gateType === 'final_confirm') {
+        // User confirmed final gate — hand off to create-domain to execute DDL.
+        // Must go to WorkflowQueue so ProcFunction handles it, not SlackResultsQueue.
+        // Tech debt: Phase 2 item 5 drives this generically from PGC_Workflow.steps.
+        const scaffold = run.state?.proposed_scaffold;
+        if (!scaffold) throw new Error(`WorkflowRun ${workflowRunId} has no proposed_scaffold in state`);
+
+        await updateRows(
+          'PGC_WorkflowRun',
+          [{ column: 'id', op: 'eq', value: workflowRunId }],
+          { status: 'running', step_count: (run.step_count ?? 0) + 1 }
+        );
+
+        console.info('design-domain: final confirmed — enqueuing CREATE_DOMAIN', { workflowRunId, traceId });
+
+        if (req.source === 'http') {
+          return ok({ success: true, action: 'resume_gate', workflowRunId, gateStatus: 'creating' }, req.correlationId);
+        }
+
+        // Enqueue to WorkflowQueue — proc/handler.mjs routes CREATE_DOMAIN → create-domain.mjs
+        await enqueueWorkflow({
+          type:         'CREATE_DOMAIN',
+          traceId,
+          workflowRunId,
+          userInput:    scaffold.domain,
+          scaffold,
+          callback,
+        });
+        return;
+      }
+
+      // gateType === 'review_tables' (or unset) — user happy with table list,
+      // advance to Step 6 (final confirmation gate)
       const scaffold = run.state?.proposed_scaffold;
       if (!scaffold) throw new Error(`WorkflowRun ${workflowRunId} has no proposed_scaffold in state`);
 

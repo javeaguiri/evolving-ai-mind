@@ -13,6 +13,8 @@
 // Actions:
 //   resume_gate  — Human gate responded to. Loads run, dispatches to the
 //                  correct workflow handler based on workflow name.
+//                  gateType is forwarded so handlers can distinguish which
+//                  gate is being resumed (review_tables vs final_confirm etc.)
 //                  Idempotency guard: 409/silent-consume if run not awaiting_human_gate.
 //   execute_top  — Execute step at top of execution stack. Phase 2 item 5 stub.
 //   cancel       — Immediately cancel the run regardless of current state.
@@ -35,7 +37,7 @@ const RESUME_GATE_HANDLERS = {
 };
 
 export async function handle(req) {
-  const { action, workflowRunId, userResponse, responseData } = req.body ?? {};
+  const { action, workflowRunId, userResponse, responseData, gateType } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId ?? req.correlationId;
 
@@ -44,7 +46,7 @@ export async function handle(req) {
 
   switch (action) {
     case 'resume_gate':
-      return resumeGate({ workflowRunId, userResponse, responseData, callback, traceId, req });
+      return resumeGate({ workflowRunId, userResponse, responseData, gateType, callback, traceId, req });
 
     case 'execute_top':
       // Phase 2 item 5 — Step Processor full implementation
@@ -64,7 +66,7 @@ export async function handle(req) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, userResponse, responseData, callback, traceId, req }) {
+async function resumeGate({ workflowRunId, userResponse, responseData, gateType, callback, traceId, req }) {
   if (!userResponse) return err(400, 'userResponse is required for resume_gate', req.correlationId);
 
   const runResp = await getRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: workflowRunId }], null, 1);
@@ -100,8 +102,8 @@ async function resumeGate({ workflowRunId, userResponse, responseData, callback,
     return;
   }
 
-  console.info('run-workflow: dispatching resume_gate', { workflowName, workflowRunId, userResponse, traceId });
-  return handler({ run, userResponse, responseData, callback, traceId, req });
+  console.info('run-workflow: dispatching resume_gate', { workflowName, workflowRunId, userResponse, gateType, traceId });
+  return handler({ run, userResponse, responseData, gateType, callback, traceId, req });
 }
 
 // ---------------------------------------------------------------------------
