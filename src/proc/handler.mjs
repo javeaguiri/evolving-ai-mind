@@ -24,7 +24,9 @@ import { handle as createDomain }       from './create-domain.mjs';
 import { handle as designDomain }       from './design-domain.mjs';
 import { handle as reviewOutput }       from './review-output.mjs';
 import { handle as shutdown }           from './shutdown.mjs';
-import { handleHelp, handleHelpResume } from './help.mjs';
+import { handle as runWorkflow }        from './run-workflow.mjs';
+import { handle as deleteDomain }       from './delete-domain.mjs';
+import { handleHelp }                   from './help.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -84,20 +86,17 @@ async function processSqsBatch(records) {
         await designDomain(req);
         continue;
       }
-      // resume_gate — routes to the correct workflow handler.
-      // TODO: replace with PGC_WorkflowRun lookup when Step Processor is built.
-      // For now: all resume_gate messages are routed to the HELP workflow.
-      if (message.type === 'WORKFLOW_STEP' && message.action === 'resume_gate') {
-        await handleHelpResume(message);
+      // WORKFLOW_STEP — all actions (resume_gate, execute_top, cancel) route to
+      // run-workflow.mjs which dispatches generically based on workflow name.
+      if (message.type === 'WORKFLOW_STEP') {
+        const req = buildReqFromSqs(message);
+        await runWorkflow(req);
         continue;
       }
-      // cancel — Step Processor will handle this when built (Phase 2 item 5).
-      // Discard silently for now — run is already marked cancelled in DB.
-      if (message.type === 'WORKFLOW_STEP' && message.action === 'cancel') {
-        console.info('proc: cancel message received — discarded (Step Processor not yet built)', {
-          workflowRunId: message.workflowRunId,
-          traceId:       message.traceId,
-        });
+      // DELETE_DOMAIN — development/testing cleanup
+      if (message.type === 'DELETE_DOMAIN') {
+        const req = buildReqFromSqs(message);
+        await deleteDomain(req);
         continue;
       }
 
@@ -137,8 +136,13 @@ async function dispatch(req) {
     case 'shutdown':
       return shutdown(req);
 
+    case 'run-workflow':
+      return runWorkflow(req);
+
+    case 'delete-domain':
+      return deleteDomain(req);
+
     // Routes added here as refactor progresses:
-    // case 'run-workflow':  return runWorkflow(req);    // Phase 2 item 5
 
     default:
       return err(404, `PROC route "${req.route}" not found`, req.correlationId);

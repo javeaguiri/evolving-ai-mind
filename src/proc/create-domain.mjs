@@ -99,7 +99,7 @@ async function runCreateDomain(userInput, traceId) {
   // FK and constraint normalisation is handled inside buildCreateTableSQL (SERV layer).
   const createdTables = [];
   for (const table of scaffold.tables) {
-    const resp = await servFetch('POST', '/api/v1/serv/schema/createTable', table);
+    const resp = await servFetch('POST', '/api/v1/serv/schema/createTable', { ...table, domain: domainName });
     if (!resp.success) {
       if (resp.statusCode === 409) {
         console.info('create-domain: table already exists, skipping', { tableName: table.tableName });

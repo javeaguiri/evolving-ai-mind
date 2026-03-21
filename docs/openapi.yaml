@@ -1585,6 +1585,236 @@ paths:
 
   # ── PROC — business logic endpoints ───────────────────────────────────────
 
+  /api/v1/proc/run-workflow:
+    post:
+      summary: Step Processor — advance or resume a workflow run
+      description: >
+        The central workflow execution endpoint. Handles all WORKFLOW_STEP
+        messages from the SQS WorkflowQueue and is directly testable via HTTP.
+
+        Three actions are supported:
+
+        **resume_gate** — A human gate has been responded to.
+        Loads PGC_WorkflowRun, finds the suspended gate frame on the execution
+        stack, matches userResponse to the gate options, and routes accordingly.
+        For remove_table responses: splices the table from state.proposed_scaffold
+        and re-posts the updated review message. For confirm/cancel: advances or
+        terminates the workflow.
+
+        **execute_top** — Execute the step at the top of the execution stack.
+        Phase 2 item 5 — not yet implemented. Returns 501 stub today.
+
+        **cancel** — Immediately cancel the workflow run regardless of current
+        state. Sets PGC_WorkflowRun.status = cancelled.
+
+        Transport-agnostic — business logic is identical whether the message
+        arrives via SQS WorkflowQueue or direct HTTP POST.
+
+        On SQS delivery: result is enqueued to SYSSQSCallbackResults.
+        On HTTP delivery: result returned directly for testing.
+
+        This endpoint is workflow-agnostic — it dispatches based on the
+        declarative step definition in PGC_Workflow.steps, not on workflow name.
+        User-defined workflows are handled identically to system workflows.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, workflowRunId]
+              properties:
+                action:
+                  type: string
+                  enum: [resume_gate, execute_top, cancel]
+                  description: Which step processor action to perform
+                workflowRunId:
+                  type: integer
+                  description: PGC_WorkflowRun.id of the run to advance
+                userResponse:
+                  type: string
+                  description: >
+                    Required for resume_gate. Must match one of the action values
+                    in the suspended gate frame's options array.
+                    Built-in values: confirm, cancel, remove_table.
+                    User-defined workflows may define their own action values.
+                  example: confirm
+                responseData:
+                  type: object
+                  description: >
+                    Optional structured data accompanying the user response.
+                    Content is gate-type specific — interpreted by the Step
+                    Processor based on the gate frame definition.
+                  example:
+                    tableName: PGD_Holdings
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            examples:
+              resume_confirm:
+                summary: User confirmed the review gate
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: confirm
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              resume_remove_table:
+                summary: User removed a table from the proposed scaffold
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: remove_table
+                  responseData:
+                    tableName: PGD_Holdings
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              resume_cancel:
+                summary: User cancelled the workflow
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: cancel
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              cancel_run:
+                summary: Cancel a specific run (same as shutdown by runId)
+                value:
+                  action: cancel
+                  workflowRunId: 42
+      responses:
+        '200':
+          description: >
+            Action processed. On SQS delivery: empty body, result posted async
+            to callback channel. On HTTP delivery: result returned directly.
+          content:
+            application/json:
+              examples:
+                resume_gate_remove:
+                  summary: Table removed — updated scaffold returned
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: open
+                    domain: stock_portfolio
+                    tableCount: 2
+                resume_gate_confirm:
+                  summary: Gate confirmed — workflow advancing to next step
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: confirmed
+                resume_gate_cancel:
+                  summary: Run cancelled
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: cancelled
+        '400':
+          description: Missing action, workflowRunId, or userResponse for resume_gate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: workflowRunId not found in PGC_WorkflowRun
+        '409':
+          description: >
+            Run is not in awaiting_human_gate status — duplicate resume_gate
+            delivery (SQS at-least-once) or stale button click
+        '501':
+          description: execute_top — Step Processor not yet implemented (Phase 2 item 5)
+        '500':
+          description: DB read, state mutation, or SQS enqueue failed
+
+  /api/v1/proc/delete-domain:
+    post:
+      summary: Delete a domain — drops PGD tables, removes all registry entries
+      description: >
+        Permanently deletes a domain by name. Intended primarily for development
+        and testing cleanup. Use with caution — all domain data is destroyed.
+
+        Steps performed:
+          1. Look up all PGC_Schema rows where domain = domainName and target = pgd
+          2. For each table: call SERV deleteTable (DROP TABLE CASCADE + remove
+             PGC_Schema + PGC_TableMap rows)
+          3. Remove PGC_DomainHelp row for the domain
+          4. Return summary of what was deleted
+
+        If the domain has no tables in PGC_Schema and no PGC_DomainHelp row,
+        returns success with deletedTables: [] and a warning — not an error,
+        since the desired end state (domain absent) is already true.
+
+        Transport-agnostic — callable via HTTP (curl) or SQS.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain:
+                  type: string
+                  description: Snake_case domain name as stored in PGC_Schema.domain
+                  example: stock_portfolio
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              domain: stock_portfolio
+      responses:
+        '200':
+          description: Domain deleted (or was already absent)
+          content:
+            application/json:
+              examples:
+                deleted:
+                  summary: Domain fully deleted
+                  value:
+                    success: true
+                    domain: stock_portfolio
+                    deletedTables:
+                      - PGD_Portfolios
+                      - PGD_Holdings
+                      - PGD_StockPrices
+                    domainHelpRemoved: true
+                already_absent:
+                  summary: Domain had no tables or registry entries
+                  value:
+                    success: true
+                    domain: stock_portfolio
+                    deletedTables: []
+                    domainHelpRemoved: false
+                    warning: "No tables or registry entries found for domain \"stock_portfolio\""
+        '400':
+          description: domain is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SERV deleteTable or PGC_DomainHelp removal failed
+
   /api/v1/proc/design-domain:
     post:
       summary: LLM domain design — no DB writes, returns scaffold for human review
