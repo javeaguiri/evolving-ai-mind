@@ -24,7 +24,7 @@ import { handle as createDomain }       from './create-domain.mjs';
 import { handle as designDomain }       from './design-domain.mjs';
 import { handle as reviewOutput }       from './review-output.mjs';
 import { handle as shutdown }           from './shutdown.mjs';
-import { handle as runWorkflow }        from './run-workflow.mjs';
+import { handle as runWorkflow, dispatchSqs } from './run-workflow.mjs';
 import { handle as deleteDomain }       from './delete-domain.mjs';
 import { handleHelp }                   from './help.mjs';
 
@@ -86,11 +86,11 @@ async function processSqsBatch(records) {
         await designDomain(req);
         continue;
       }
-      // WORKFLOW_STEP — all actions (resume_gate, execute_top, cancel) route to
-      // run-workflow.mjs which dispatches generically based on workflow name.
+      // WORKFLOW_STEP — all actions (execute_top, resume_gate, cancel) route to
+      // run-workflow.mjs dispatchSqs which handles them generically.
+      // Replaces the old per-action dispatch via buildReqFromSqs + runWorkflow.
       if (message.type === 'WORKFLOW_STEP') {
-        const req = buildReqFromSqs(message);
-        await runWorkflow(req);
+        await dispatchSqs(message);
         continue;
       }
       // DELETE_DOMAIN — development/testing cleanup

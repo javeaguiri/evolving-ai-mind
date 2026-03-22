@@ -87,6 +87,18 @@ async function processRecord(record) {
         await postCreateDomainResult(message);
         break;
 
+      case 'WORKFLOW_GATE':
+        await postWorkflowGate(message);
+        break;
+
+      case 'WORKFLOW_ERROR':
+        await postWorkflowError(message);
+        break;
+
+      case 'WORKFLOW_CANCELLED':
+        await postWorkflowCancelled(message);
+        break;
+
       case 'DESIGN_DOMAIN_GATE':
         await postDesignDomainGate(message);
         break;
@@ -192,176 +204,43 @@ async function postServNotification(message) {
 }
 
 async function postCreateDomainResult(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.message, [
+  // Step Processor sends: { type, workflowRunId, message, callback, traceId }
+  // Legacy shape:         { type, callback, result: { message, ... }, traceId }
+  const text     = message.message ?? message.result?.message ?? 'Domain created.';
+  const callback = message.callback;
+  await routeCallback(callback, text, [
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: result.message },
+      text: { type: 'mrkdwn', text },
     },
     {
       type: 'context',
       elements: [
         {
           type: 'mrkdwn',
-          text: `traceId: ${message.traceId} | completed: ${result.completedAt}`,
+          text: `traceId: ${message.traceId}`,
         },
       ],
     },
   ]);
-  console.info('callback: create-domain result posted', {
-    channel:    callback.channel,
-    domainName: result.domainName,
-    traceId:    message.traceId,
+  console.info('callback: CREATE_DOMAIN_RESULT posted', {
+    channel: callback.channel,
+    traceId: message.traceId,
   });
 }
 
-// ---------------------------------------------------------------------------
-// DESIGN_DOMAIN_GATE — renders the UI-neutral gate payload from design-domain.mjs
-// into Slack Block Kit. All Slack-specific constructs live here, not in PROC.
-//
-// Handles two gateType values:
-//   review_tables — initial and re-rendered table review (includes Remove buttons)
-//   final_confirm — final creation confirmation (Proceed / Cancel)
-// ---------------------------------------------------------------------------
-
+// Replaced placeholder postDesignDomainResult — now receives pre-built blocks
+// from design-domain.mjs. callback.mjs formats for the UI; block building is PROC's concern.
 async function postDesignDomainGate(message) {
   const { callback, result } = message;
-
-  if (result.gateType === 'final_confirm') {
-    await postDesignDomainFinalConfirm(callback, result, message.traceId);
-    return;
-  }
-
-  // Default: review_tables gate
-  await postDesignDomainReviewTables(callback, result, message.traceId);
-}
-
-async function postDesignDomainReviewTables(callback, result, traceId) {
-  const { workflowRunId, domain, tableCount, tables, warning } = result;
-
-  const blocks = [];
-
-  // Live header — table count updates with each removal
-  blocks.push({
-    type: 'section',
-    text: { type: 'mrkdwn', text: `🧠 Domain *${domain}* — ${tableCount} table${tableCount === 1 ? '' : 's'} selected` },
-  });
-
-  if (warning) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: `⚠️ ${warning}` },
-    });
-  }
-
-  blocks.push({ type: 'divider' });
-
-  // One section per table: name + column summary + optional Remove button
-  for (const table of tables) {
-    const summaryLine = table.columnSummary
-      ? `_${table.columnSummary}_`
-      : '_no user columns_';
-
-    const sectionBlock = {
-      type: 'section',
-      text: { type: 'mrkdwn', text: `*${table.tableName}*\n${summaryLine}` },
-    };
-
-    // Parent tables (isParent: true) get no Remove button — child must be removed first
-    if (!table.isParent) {
-      sectionBlock.accessory = {
-        type:      'button',
-        style:     'danger',
-        text:      { type: 'plain_text', text: '🗑️ Remove' },
-        action_id: `remove_${table.tableName}`,
-        value:     JSON.stringify({
-          workflowRunId,
-          action:    'remove_table',
-          gateType:  'review_tables',
-          tableName: table.tableName,
-        }),
-        confirm: {
-          title:   { type: 'plain_text', text: 'Remove table?' },
-          text:    { type: 'mrkdwn',     text: `Remove *${table.tableName}* from this domain?` },
-          confirm: { type: 'plain_text', text: 'Remove' },
-          deny:    { type: 'plain_text', text: 'Keep' },
-        },
-      };
-    }
-
-    blocks.push(sectionBlock);
-  }
-
-  blocks.push({ type: 'divider' });
-
-  blocks.push({
-    type: 'actions',
-    elements: [
-      {
-        type:      'button',
-        style:     'primary',
-        text:      { type: 'plain_text', text: '✅ Looks good' },
-        action_id: 'review_confirm',
-        value:     JSON.stringify({ workflowRunId, action: 'confirm', gateType: 'review_tables' }),
-      },
-      {
-        type:      'button',
-        text:      { type: 'plain_text', text: '❌ Cancel' },
-        action_id: 'review_cancel',
-        value:     JSON.stringify({ workflowRunId, action: 'cancel', gateType: 'review_tables' }),
-      },
-    ],
-  });
-
-  blocks.push({
-    type: 'context',
-    elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }],
-  });
-
-  const fallbackText = `🧠 Domain *${domain}* — ${tableCount} table(s). Review and confirm.`;
-  await routeCallback(callback, fallbackText, blocks);
-  console.info('callback: DESIGN_DOMAIN_GATE review_tables posted', {
-    channel: callback.channel, domain, tableCount, workflowRunId, traceId,
-  });
-}
-
-async function postDesignDomainFinalConfirm(callback, result, traceId) {
-  const { workflowRunId, domain, tableCount } = result;
-
-  const text   = `✅ Ready to create domain *${domain}* with ${tableCount} table${tableCount === 1 ? '' : 's'}. Proceed?`;
-  const blocks = [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text },
-    },
-    {
-      type: 'actions',
-      elements: [
-        {
-          type:      'button',
-          style:     'primary',
-          text:      { type: 'plain_text', text: '✅ Create it' },
-          action_id: 'final_create',
-          value:     JSON.stringify({ workflowRunId, action: 'confirm', gateType: 'final_confirm' }),
-        },
-        {
-          type:      'button',
-          style:     'danger',
-          text:      { type: 'plain_text', text: '❌ Cancel' },
-          action_id: 'final_cancel',
-          value:     JSON.stringify({ workflowRunId, action: 'cancel', gateType: 'final_confirm' }),
-        },
-      ],
-    },
-    {
-      type: 'context',
-      elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }],
-    },
-  ];
-
-  await routeCallback(callback, text, blocks);
-  console.info('callback: DESIGN_DOMAIN_GATE final_confirm posted', {
-    channel: callback.channel, domain, tableCount, workflowRunId, traceId,
+  const fallbackText = `🧠 Domain *${result.domain}* — ${result.tableCount} table(s) selected. Review and confirm.`;
+  await routeCallback(callback, fallbackText, result.blocks);
+  console.info('callback: DESIGN_DOMAIN_GATE posted', {
+    channel:      callback.channel,
+    domain:       result.domain,
+    tableCount:   result.tableCount,
+    workflowRunId: result.workflowRunId,
+    traceId:      message.traceId,
   });
 }
 
@@ -387,6 +266,166 @@ async function postDesignDomainError(message) {
     runId:   result.runId,
     traceId: message.traceId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// WORKFLOW_GATE — renders human_gate dialog as Slack Block Kit
+// Translates the UI-neutral dialog (from Step Processor) to Block Kit blocks.
+// gate_type is used as a layout hint only (e.g. whether to use chat.update).
+// ---------------------------------------------------------------------------
+
+async function postWorkflowGate(message) {
+  const { callback, gate_type: gateType, dialog, workflowRunId, traceId } = message;
+
+  const blocks = dialogToBlocks(dialog, workflowRunId);
+  const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
+    ?? 'Workflow gate — please review and respond.';
+
+  await routeCallback(callback, fallbackText, blocks);
+
+  console.info('callback: WORKFLOW_GATE posted', {
+    channel:       callback.channel,
+    gateType,
+    workflowRunId,
+    traceId,
+  });
+}
+
+/**
+ * Translate a UI-neutral dialog object into Slack Block Kit blocks.
+ * Each field type maps to one or more Block Kit blocks.
+ *
+ * @param {object} dialog           Resolved dialog from Step Processor
+ * @param {number} workflowRunId    For encoding into button values
+ * @returns {Array}                 Slack Block Kit blocks array
+ */
+function dialogToBlocks(dialog, workflowRunId) {
+  const blocks = [];
+
+  for (const field of (dialog?.fields ?? [])) {
+    switch (field.type) {
+
+      case 'typography':
+        blocks.push({
+          type: 'section',
+          text: { type: 'mrkdwn', text: `🧠 ${field.value}` },
+        });
+        break;
+
+      case 'list': {
+        // Header showing item count (from label)
+        if (field.label) {
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: `*${field.label}*` },
+          });
+        }
+        // One section block per list item, with optional Remove button
+        for (const item of (field.items ?? [])) {
+          const sectionBlock = {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `*${item.primary}*${item.secondary ? `\n${item.secondary}` : ''}`,
+            },
+          };
+          if (item.secondaryAction) {
+            sectionBlock.accessory = {
+              type:      'button',
+              style:     item.secondaryAction.style === 'danger' ? 'danger' : 'default',
+              text:      { type: 'plain_text', text: item.secondaryAction.label },
+              action_id: `workflow_action_${item.id}`,
+              value:     JSON.stringify({
+                workflowRunId,
+                action:       item.secondaryAction.action,
+                responseData: { tableName: item.id },
+              }),
+              ...(item.secondaryAction.confirm ? {
+                confirm: {
+                  title:   { type: 'plain_text', text: 'Are you sure?' },
+                  text:    { type: 'plain_text', text: item.secondaryAction.confirm },
+                  confirm: { type: 'plain_text', text: 'Remove' },
+                  deny:    { type: 'plain_text', text: 'Cancel' },
+                },
+              } : {}),
+            };
+          }
+          blocks.push(sectionBlock);
+        }
+        break;
+      }
+
+      case 'textbox':
+        blocks.push({
+          type:    'input',
+          label:   { type: 'plain_text', text: field.label ?? 'Input' },
+          element: {
+            type:        'plain_text_input',
+            action_id:   field.name ?? 'text_input',
+            placeholder: field.placeholder
+              ? { type: 'plain_text', text: field.placeholder }
+              : undefined,
+          },
+        });
+        break;
+
+      case 'radio': {
+        const options = (field.options ?? []).map(o => ({
+          text:  { type: 'plain_text', text: o.label },
+          value: o.value,
+        }));
+        blocks.push({
+          type: 'section',
+          text: { type: 'mrkdwn', text: field.label ?? 'Select one:' },
+          accessory: {
+            type:      'radio_buttons',
+            action_id: field.name ?? 'radio',
+            options,
+          },
+        });
+        break;
+      }
+
+      case 'actions': {
+        const elements = (field.buttons ?? []).map(btn => ({
+          type:      'button',
+          style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
+          text:      { type: 'plain_text', text: btn.label },
+          action_id: `workflow_action_${btn.action}`,
+          value:     JSON.stringify({ workflowRunId, action: btn.action }),
+        }));
+        if (elements.length > 0) {
+          blocks.push({ type: 'actions', elements });
+        }
+        break;
+      }
+
+      default:
+        console.warn('callback: unknown dialog field type', { type: field.type });
+    }
+  }
+
+  return blocks;
+}
+
+async function postWorkflowError(message) {
+  const { callback, step, message: errMessage, traceId, workflowRunId } = message;
+  const text = `⚠️ Workflow step ${step} failed: ${errMessage}`;
+  await routeCallback(callback, text, [
+    { type: 'section', text: { type: 'mrkdwn', text } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }] },
+  ]);
+  console.info('callback: WORKFLOW_ERROR posted', { channel: callback.channel, traceId });
+}
+
+async function postWorkflowCancelled(message) {
+  const { callback, traceId, workflowRunId } = message;
+  const text = message.message ?? 'Workflow cancelled.';
+  await routeCallback(callback, text, [
+    { type: 'section', text: { type: 'mrkdwn', text } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }] },
+  ]);
+  console.info('callback: WORKFLOW_CANCELLED posted', { channel: callback.channel, traceId });
 }
 
 // ---------------------------------------------------------------------------
