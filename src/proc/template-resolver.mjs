@@ -77,7 +77,17 @@ export function resolveTemplate(template, localState) {
  * @returns {object|string|*}       Input with all template variables resolved
  */
 export function resolveInput(input, localState) {
-  if (typeof input === 'string') return resolveTemplate(input, localState);
+  // Single {{path}} token — if it resolves to a non-primitive, return the
+  // raw value directly. This handles input: "{{item}}" in iterator steps
+  // where item is a full object that must be passed through intact.
+  if (typeof input === 'string') {
+    const singleToken = input.match(/^\{\{([^}]+)\}\}$/);
+    if (singleToken) {
+      const val = resolvePath(localState, singleToken[1].trim());
+      if (val !== undefined && val !== null) return val;
+    }
+    return resolveTemplate(input, localState);
+  }
   if (Array.isArray(input))     return input.map(i => resolveInput(i, localState));
   if (input && typeof input === 'object') {
     return Object.fromEntries(

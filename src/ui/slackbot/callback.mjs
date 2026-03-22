@@ -304,18 +304,30 @@ async function postDesignDomainError(message) {
 // ---------------------------------------------------------------------------
 
 async function postWorkflowGate(message) {
-  const { callback, gate_type: gateType, dialog, workflowRunId, traceId } = message;
+  const { callback, gate_type: gateType, dialog, workflowRunId, message_ts, traceId } = message;
 
   const blocks = dialogToBlocks(dialog, workflowRunId);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate — please review and respond.';
 
-  await routeCallback(callback, fallbackText, blocks);
+  if (message_ts) {
+    // remove_item re-render — update the existing message in-place
+    await slack.chat.update({
+      channel: callback.channel,
+      ts:      message_ts,
+      text:    fallbackText,
+      blocks,
+    });
+  } else {
+    // Initial gate post — new threaded message
+    await routeCallback(callback, fallbackText, blocks);
+  }
 
   console.info('callback: WORKFLOW_GATE posted', {
     channel:       callback.channel,
     gateType,
     workflowRunId,
+    inPlace:       !!message_ts,
     traceId,
   });
 }

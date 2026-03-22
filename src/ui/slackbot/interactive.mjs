@@ -137,6 +137,10 @@ export async function handle(req) {
         workflowRunId,
         userResponse,
         ...(responseData && { responseData }),
+        // message_ts is the ts of the gate message being interacted with.
+        // Forwarded so run-workflow can pass it to the re-render WORKFLOW_GATE
+        // payload, enabling callback.mjs to chat.update in-place on remove_item.
+        message_ts:    threadId,
         slackUserId,
         callback: {
           provider: 'slack',

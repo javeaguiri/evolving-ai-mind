@@ -75,18 +75,18 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, userResponse, responseData, traceId } = message;
-  return dispatch({ action, workflowRunId, userResponse, responseData, traceId, source: 'sqs' });
+  const { action, workflowRunId, userResponse, responseData, message_ts, traceId } = message;
+  return dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source: 'sqs' });
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, userResponse, responseData, traceId, source }) {
+async function dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source }) {
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source });
-    case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, traceId, source });
+    case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
       throw new Error(`run-workflow: unknown action "${action}"`);
@@ -277,7 +277,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
 // resume_gate
 // ---------------------------------------------------------------------------
 
-async function resumeGate({ workflowRunId, userResponse, responseData, traceId, source }) {
+async function resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source }) {
 
   const run   = await loadRun(workflowRunId, traceId);
   const frame = topFrame(run);
@@ -327,6 +327,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, traceId, 
       gate_type:     gateType,
       dialog:        updatedDialog,
       callback:      run.callback,
+      message_ts,    // present on remove_item — signals callback.mjs to chat.update in-place
       traceId,
     });
 
