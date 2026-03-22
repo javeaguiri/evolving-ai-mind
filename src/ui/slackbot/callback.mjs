@@ -83,6 +83,10 @@ async function processRecord(record) {
         await postServNotification(message);
         break;
 
+      case 'WORKFLOW_NOTIFY':
+        await postWorkflowNotify(message);
+        break;
+
       case 'CREATE_DOMAIN_RESULT':
         await postCreateDomainResult(message);
         break;
@@ -200,6 +204,31 @@ async function postServNotification(message) {
   console.info('callback: SERV notification posted', {
     channel: callback.channel,
     traceId: message.traceId,
+  });
+}
+
+// Generic workflow notification — used by any workflow notify step
+// that does not set a custom notify_type.
+async function postWorkflowNotify(message) {
+  const { callback, message: text, traceId, workflowRunId } = message;
+  await routeCallback(callback, text, [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text },
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `runId: ${workflowRunId} | traceId: ${traceId}`,
+        },
+      ],
+    },
+  ]);
+  console.info('callback: WORKFLOW_NOTIFY posted', {
+    channel: callback.channel,
+    traceId,
   });
 }
 
@@ -457,13 +486,13 @@ async function postHelpGate(message) {
           style:     'primary',
           text:      { type: 'plain_text', text: '✅ Yes, show me' },
           action_id: 'help_confirm',
-          value:     JSON.stringify({ workflowRunId, action: 'confirm' }),
+          value:     JSON.stringify({ workflowRunId, action: 'confirm', legacy: true }),
         },
         {
           type:      'button',
           text:      { type: 'plain_text', text: '❌ Not now' },
           action_id: 'help_cancel',
-          value:     JSON.stringify({ workflowRunId, action: 'cancel' }),
+          value:     JSON.stringify({ workflowRunId, action: 'cancel', legacy: true }),
         },
       ],
     },

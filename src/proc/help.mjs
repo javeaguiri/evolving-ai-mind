@@ -2,72 +2,69 @@
 // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 // See LICENSE file in the project root for full license terms.
 // src/proc/help.mjs
-// Handles the HELP workflow — both phases.
+// Handles the HELP workflow entry point.
 //
-// Phase 1 — initial HELP message arrives from WorkflowQueue:
-//   Enqueues HELP_GATE to CallbackResults so callback.mjs posts the
-//   Block Kit question with confirm/cancel buttons to the Slack thread.
+// Creates a PGC_WorkflowRun row for the 'help' workflow and enqueues
+// WORKFLOW_STEP / execute_top to the WorkflowQueue. The Step Processor
+// (run-workflow.mjs) then drives all steps declaratively — human_gate,
+// notify, end — with no special-case code here.
 //
-// Phase 2 — resume_gate arrives after user clicks a button:
-//   Reads userResponse from the resume message, enqueues HELP_RESULT
-//   to CallbackResults with the appropriate completion message.
-//
-// Transport-agnostic — no AWS SDK imports here.
-// enqueueCallback() from sqs-callback.mjs handles all SQS writes.
-//
-// Today: simple confirm/cancel loop proving the interactive pipeline.
-// Future: Phase 1 will query PGC_DomainHelp + PGC_Capability and return
-//         dynamic buttons for available commands on this instance.
+// Transport-agnostic — no AWS SDK, no Slack SDK imports.
+// All SQS writes go through sqs-callback.mjs.
 
-import { enqueueCallback } from '../shared/sqs-callback.mjs';
+import { ok, err }                          from '../shared/lambda-utils.mjs';
+import { enqueueWorkflow }                  from '../shared/sqs-callback.mjs';
+import { getRows, insertRow }               from '../shared/serv-client.mjs';
 
-/**
- * Phase 1 — called when HELP SQS message arrives.
- * Sends a HELP_GATE to CallbackResults so the Block Kit question is posted.
- *
- * @param {object} message  Raw SQS message body
- */
-export async function handleHelp(message) {
-  const { traceId, callback } = message;
+export async function handle(req) {
+  const callback = req.callback ?? req.body?.callback ?? null;
+  const traceId  = req.traceId  ?? req.correlationId;
 
-  console.info('proc/help: phase 1 — posting help gate', { traceId });
+  console.info('proc/help: received', { traceId });
 
-  await enqueueCallback(callback, {
-    type:    'HELP_GATE',
-    traceId,
-    result: {
-      traceId,
-      // traceId doubles as workflowRunId for now —
-      // Step Processor will replace this with PGC_WorkflowRun.id
-      workflowRunId: traceId,
-    },
+  // Resolve help workflow_id
+  const wfResp = await getRows(
+    'PGC_Workflow',
+    [{ column: 'name', op: 'eq', value: 'help' }],
+    undefined, 1
+  );
+  if (!wfResp.success || wfResp.count === 0) {
+    const msg = 'help workflow not found in PGC_Workflow';
+    console.error('proc/help:', msg);
+    if (req.source === 'http') return err(500, msg, req.correlationId);
+    throw new Error(msg);
+  }
+  const workflowId = wfResp.rows[0].id;
+
+  // Insert PGC_WorkflowRun row
+  const runResp = await insertRow('PGC_WorkflowRun', {
+    workflow_id:  workflowId,
+    trace_id:     traceId,
+    triggered_by: req.source === 'sqs' ? 'slack' : 'api',
+    status:       'running',
+    input:        {},
+    callback:     callback ?? null,
+    started_at:   new Date().toISOString(),
   });
-}
+  if (!runResp.success) {
+    const msg = `Failed to insert PGC_WorkflowRun: ${runResp.error}`;
+    console.error('proc/help:', msg);
+    if (req.source === 'http') return err(500, msg, req.correlationId);
+    throw new Error(msg);
+  }
+  const workflowRunId = runResp.row.id;
 
-/**
- * Phase 2 — called when resume_gate SQS message arrives.
- * Routes on userResponse and enqueues the completion message.
- *
- * @param {object} message  Raw SQS resume_gate message body
- */
-export async function handleHelpResume(message) {
-  const { traceId, userResponse, callback } = message;
+  console.info('proc/help: WorkflowRun created', { workflowRunId, traceId });
 
-  console.info('proc/help: phase 2 — resume_gate received', { traceId, userResponse });
-
-  const responseText = userResponse === 'confirm'
-    ? '✅ Great! Here\'s what evolving-mind can do:\n\n• `/create-domain <description>` — design and build a new data domain\n• `/help` — show this message\n\nMore commands coming as the brain evolves 🧠'
-    : '👋 No problem — just type `/help` any time you need me.';
-
-  await enqueueCallback(callback, {
-    type:    'HELP_RESULT',
+  // Enqueue execute_top — Step Processor drives the rest
+  await enqueueWorkflow({
+    type:          'WORKFLOW_STEP',
+    action:        'execute_top',
+    workflowRunId,
     traceId,
-    result: {
-      success:      true,
-      message:      responseText,
-      userResponse,
-      traceId,
-      completedAt:  new Date().toISOString(),
-    },
   });
+
+  if (req.source === 'http') {
+    return ok({ workflowRunId, status: 'running' }, req.correlationId);
+  }
 }

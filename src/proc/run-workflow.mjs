@@ -230,7 +230,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
   // ── Handle notify ──────────────────────────────────────────────────────
   if (step.type === 'notify' && result.notifyMessage) {
     await enqueueCallback(run.callback, {
-      type:          'CREATE_DOMAIN_RESULT',
+      type:          step.notify_type ?? 'WORKFLOW_NOTIFY',
       workflowRunId: run.id,
       message:       result.notifyMessage,
       traceId,
