@@ -12,7 +12,7 @@
 
 evolving-mind is a serverless cognitive automation system that accepts natural language intent from users — via Slack today, and any UI tomorrow — and turns that intent into persistent, reusable, self-improving workflows.
 
-The design philosophy is strict: **LLMs are used sparingly.** Once a workflow is generated, it is stored in PostgreSQL and reused forever. The system costs approximately **$0.03–$0.05 per month** in AWS infrastructure because 95% of all operations are Lambda + PostgreSQL with zero LLM calls. LLMs are only invoked for genuinely novel problems.
+The design philosophy is strict: **LLMs are used sparingly.** Once a workflow is generated, it is stored in PostgreSQL and reused forever. The system costs approximately **$10–$14/month** in AWS infrastructure (RDS + Bastion host) because 95% of all operations are Lambda + PostgreSQL with zero LLM calls. LLMs are only invoked for genuinely novel problems.
 
 Over time the brain becomes smarter. It generates new schemas, new workflows, new prompts — and records the quality of its own outputs so it can improve them. This is what makes it self-evolving.
 
@@ -69,7 +69,7 @@ When a user types a natural language command into Slack, the evolving mind can:
   - 🏆 **Sports & Entertainment** — standings, schedules, player stats, watchlists
   - 🎯 Any domain the user can describe in plain language
 
-- **Self-aware domain management** — the brain knows which domains it has already built (via `PGC_Schema` and `PGC_DomainHelp`), can answer `/help recipes`, list available commands, and evolve the schema when needs change.
+- **Self-aware domain management** — the brain knows which domains it has already built (via `PGC_Schema` and `PGC_DomainHelp`), can answer `/help`, list available commands, and evolve the schema when needs change.
 
 ---
 
@@ -124,10 +124,10 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 
 | Function | Trigger | Tier | Purpose |
 |---|---|---|---|
-| `evolving-mind-ai-slackbot` | API Gateway | Experience | Receives Slack slash commands, enqueues to WorkflowQueue |
-| `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | Intent pipeline, domain creation, workflow orchestration |
+| `evolving-mind-ai-slackbot` | API Gateway | Experience | Receives Slack slash commands + interactive button clicks, enqueues to WorkflowQueue |
+| `evolving-mind-ai-proc` | API Gateway + SQS WorkflowQueue | Process | Step Processor, intent pipeline, workflow orchestration |
 | `evolving-mind-ai-serv` | API Gateway | Service | DDL executor, table CRUD, PGC bootstrap |
-| `evolving-mind-ai-slack-callback-listener` | SQS SlackResultsQueue | Experience | Posts threaded Slack replies |
+| `evolving-mind-ai-slack-callback-listener` | SQS SlackResultsQueue | Experience | Posts threaded Slack replies, renders Block Kit dialogs |
 
 `evolving-mind-ai-proc` has a dual trigger — HTTP for direct API calls and SQS for async workflow execution. The same endpoint modules handle both transports identically. `req.source` (`'http'` or `'sqs'`) determines the response path only.
 
@@ -163,7 +163,9 @@ A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical
 | File | Purpose |
 |---|---|
 | `src/shared/lambda-utils.mjs` | `parseEvent()`, `buildReqFromSqs()`, `ok()`, `err()` — used by all Lambda handlers |
-| `src/shared/sqs-callback.mjs` | `enqueueCallback()` — the only place `@aws-sdk/client-sqs` lives in ProcFunction |
+| `src/shared/sqs-callback.mjs` | `enqueueCallback()`, `enqueueWorkflow()` — sole SQS client in ProcFunction |
+| `src/shared/llm-client.mjs` | `callLlm()`, `callLlmWithCorrection()` — shared LLM caller |
+| `src/shared/serv-client.mjs` | `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client |
 
 ### Semantic Search — pgvector (Designed, Not Yet Enabled)
 
@@ -182,35 +184,52 @@ Enable with: `CREATE EXTENSION IF NOT EXISTS vector;` on RDS PostgreSQL 15+.
 evolving-mind-ai/
 ├── template.yaml                     # SAM / CloudFormation — all infrastructure
 ├── openapi.yaml                      # API Gateway OpenAPI definition
-├── architecture.md                   # Architectural decision log — read first
+├── docs/
+│   └── architecture.md               # Architectural decision log — read first
+├── dev_scripts/
+│   └── upsert-workflow.mjs           # Push workflow definitions to PGC_Workflow via SERV
 ├── package.json
 ├── .samignore
 │
 ├── src/
 │   ├── shared/                       # Cross-cutting utilities — no business logic
 │   │   ├── lambda-utils.mjs          # parseEvent, buildReqFromSqs, ok, err
-│   │   └── sqs-callback.mjs          # enqueueCallback — sole SQS client in ProcFunction
+│   │   ├── sqs-callback.mjs          # enqueueCallback, enqueueWorkflow — sole SQS client
+│   │   ├── llm-client.mjs            # callLlm, callLlmWithCorrection
+│   │   └── serv-client.mjs           # servPost, getRows, insertRow, updateRows
 │   │
 │   ├── ui/
 │   │   └── slackbot/                 # Experience tier — Slack only
-│   │       ├── handler.mjs           # Route dispatcher — HTTP only
+│   │       ├── handler.mjs           # Route dispatcher — HTTP only, Slack signature verification
 │   │       ├── ping.mjs              # /ping-api
 │   │       ├── ping-sqs.mjs          # /ping-sqs — enqueues PING_SQS to WorkflowQueue
 │   │       ├── ping-llm.mjs          # /ping-llm — direct LLM connectivity check
 │   │       ├── ping-e2e.mjs          # /ping-e2e — full round trip via SQS
-│   │       ├── create-domain.mjs     # /create-domain — ACK + SQS enqueue only
-│   │       └── callback.mjs          # SQS SlackResultsQueue consumer — routes on callback.provider
+│   │       ├── create-domain.mjs     # /create-domain — ACK + enqueues CREATE_DOMAIN to WorkflowQueue
+│   │       ├── help.mjs              # /help — ACK + enqueues HELP to WorkflowQueue
+│   │       ├── shutdown.mjs          # /shutdown — calls PROC synchronously, cancels active runs
+│   │       ├── interactive.mjs       # /interactive — Block Kit button clicks → resume_gate SQS
+│   │       └── callback.mjs          # SQS SlackResultsQueue consumer — routes on message type
 │   │
 │   ├── proc/                         # Process tier — all business logic
 │   │   ├── handler.mjs               # Dual HTTP + SQS dispatch — no AWS SDK
 │   │   ├── ping-llm.mjs              # /proc/ping-llm
-│   │   └── create-domain.mjs         # /proc/create-domain — transport-agnostic
+│   │   ├── create-domain.mjs         # /proc/create-domain — Step Processor entry point
+│   │   ├── design-domain.mjs         # Legacy — no longer receives traffic, pending removal
+│   │   ├── help.mjs                  # /proc/help — Step Processor entry point for help workflow
+│   │   ├── run-workflow.mjs          # Step Processor — generic declarative workflow execution
+│   │   ├── step-executor.mjs         # Per-step-type handlers (llm_call, human_gate, serv_*, etc.)
+│   │   ├── template-resolver.mjs     # Pure functions — {{variable}} resolution, path traversal
+│   │   ├── review-output.mjs         # Ajv + semantic validation, 2-attempt correction loop
+│   │   ├── shutdown.mjs              # /proc/shutdown — cancel active WorkflowRuns
+│   │   └── delete-domain.mjs         # /proc/delete-domain — drop PGD tables + deregister
 │   │
 │   └── serv/                         # Service tier — DB access only
 │       ├── handler.mjs               # Route dispatcher
 │       ├── ping-db.mjs               # /serv/ping-db
 │       ├── schema.mjs                # SERV-Schema — DDL + PGC_Schema registry
 │       ├── table.mjs                 # SERV-Table — DML gated by PGC_TableMap
+│       ├── entity.mjs                # SERV-Entity — multi-table jsonb_agg queries
 │       ├── init-brain.mjs            # Bootstrap — PGC table creation + seeding
 │       └── templates/
 │           └── pgc/                  # PGC table definition JSON (static ES imports)
@@ -230,7 +249,7 @@ evolving-mind-ai/
 │               └── seeds/
 │                   ├── seed_PGC_Schema.json
 │                   ├── seed_PGC_TableMap.json
-│                   ├── seed_PGC_Workflow.json
+│                   ├── seed_PGC_Workflow.json    # create_domain (v2, 8 steps) + help + create_workflow
 │                   ├── seed_PGC_IntentMap.json
 │                   └── seed_PGC_Prompt.json
 ```
@@ -248,31 +267,45 @@ evolving-mind-ai/
 | SERV-Schema CRUD | ✅ Complete | createTable, listTables, getTable, updateTable, deleteTable |
 | SERV-Table getRows | ✅ Complete | 10 filter operators, PGC_TableMap gated |
 | SERV-Table insertRow | ✅ Complete | PGC_TableMap gated, unique constraint → 409 |
+| SERV-Table updateRows | ✅ Complete | Non-empty filter enforced |
 | PGC bootstrap | ✅ Complete | 13 tables + 1 view, idempotent cold-start seeding |
-| `/create-domain` | ✅ Working | End-to-end: Slack → SQS → LLM → PGD tables → Slack reply |
+| Step Processor | ✅ Complete | Generic declarative execution — `run-workflow.mjs` |
+| `/create-domain` | ✅ Working | Full Step Processor flow: LLM → js_transform → edit_list gate → confirm gate → DDL iterator → register → notify |
+| `/help` | ✅ Working | confirm gate → notify — proven end-to-end through Step Processor |
+| `/shutdown` | ✅ Working | Cancels active WorkflowRuns, enqueues cancel to WorkflowQueue |
+| Human gate — confirm | ✅ Working | Suspend, resume, advance |
+| Human gate — edit_list | ✅ Working | Table removal with in-place chat.update re-render |
+| Block Kit dialog rendering | ✅ Working | `dialogToBlocks()` in callback.mjs — confirm + edit_list gate types |
 | Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
 | Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
-| traceId | ✅ Complete | Renamed from workflowId across all SQS payloads |
+| Workflow versioning | ✅ Working | `dev_scripts/upsert-workflow.mjs` — push new versions without deploy |
 
-### Known Limitations and Honest Behaviour
+### Step Types
 
-**`/create-domain` — SQS retry behaviour**
+| Type | Status | Notes |
+|---|---|---|
+| `llm_call` | ✅ Implemented | Loads prompt from PGC_Prompt, calls LLM, runs review-output validation |
+| `js_transform` | ✅ Implemented | Built-in `columnSummary` enrichment only — generic sandboxed JS deferred to Phase 3 |
+| `human_gate` | ✅ Implemented | confirm + edit_list gate types proven |
+| `serv_schema` | ✅ Implemented | createTable via SERV |
+| `serv_insert` | ✅ Implemented | insertRow via SERV |
+| `notify` | ✅ Implemented | Resolves `message_template`, enqueues `WORKFLOW_NOTIFY` |
+| `end` | ✅ Implemented | Marks run completed |
+| `iterator` | ✅ Implemented | Sequential only — one SQS hop per item |
+| `serv_query` | ⏳ Deferred | Phase 3 |
+| `serv_update` | ⏳ Deferred | Phase 3 |
+| `serv_delete` | ⏳ Deferred | Phase 3 |
+| `sub_workflow` | ⏳ Deferred | Phase 3 |
+| `condition` | ⏳ Deferred | Phase 3 |
 
-The most important thing to understand about how `/create-domain` currently works:
+### Known Limitations
 
-When the LLM occasionally returns a malformed column (missing `name` field), `createTable` fails with a PostgreSQL error. SQS retries the message up to 3 times (`maxReceiveCount: 3`). On retry, the LLM is called **again** — and because LLM output is non-deterministic, the second call may return a different (valid) scaffold. Tables created in the first partial attempt are skipped gracefully (409 → `already_existed`). The workflow completes on the second or third attempt.
-
-This was observed in testing — a first attempt created 3 of 4 tables before failing on `PGD_RecipeRatings` (malformed column). The retry produced a different scaffold without `PGD_RecipeRatings`, found the 3 existing tables, created the new 4th table `PGD_RecipeTags`, and succeeded.
-
-**This works but is not correct by design.** Recovery happened by accident — non-deterministic LLM retry producing a different result, not idempotent re-execution of the same intent. The correct fix requires the right brain (see below) — not more defensive code in `create-domain.mjs`.
-
-**Other known limitations:**
-- `updateTable` in SERV-Schema updates metadata only — does not execute `ALTER TABLE`
-- `PGC_Prompt` has no unique constraint on `(intent_category, version)` — seeding uses `WHERE NOT EXISTS`
-- FK normalisation code in `create-domain.mjs` is a temporary workaround — belongs in right-brain output validation
-- `PGC_WorkflowRun` lifecycle is not yet implemented — `/create-domain` does not write run records
-- No human gate on domain creation — LLM schema goes straight to DDL without user review
-- `workflowId: undefined` appeared in early Slack context blocks — fixed in R12 (traceId rename)
+- **Duplicate domain detection** — `/create-domain recipes` runs the LLM every time even if the domain already exists. A `serv_query` pre-check step will fix this once that step type is implemented.
+- **`js_transform`** — only built-in `columnSummary` enrichment is supported. LLM-generated transforms require the AST sandbox (Phase 3).
+- **`PGC_WorkflowRunStep` idempotency** — step number stored as integer; string step keys like `"3b"` resolve to `0`. Will be addressed when branch steps are implemented.
+- **Domain column** — `PGC_Schema` and `PGC_TableMap` rows created during DDL iterator show `domain: null`. The domain name needs to be threaded through the serv_schema step input.
+- **`design-domain.mjs`** — dead code, no longer receives traffic. Pending removal in cleanup pass.
+- **`updateTable`** in SERV-Schema updates metadata only — does not execute `ALTER TABLE`.
 
 ---
 
@@ -297,8 +330,8 @@ You will also need:
 ### Step 1 — Clone and Install Dependencies
 
 ```bash
-git clone https://github.com/your-org/evolving-mind-ai.git
-cd evolving-mind-ai
+git clone https://github.com/javeaguiri/evolving-ai-mind.git
+cd evolving-ai-mind
 npm install
 ```
 
@@ -318,15 +351,10 @@ aws sts get-caller-identity  # verify
 
 evolving-mind does **not** use `.env` files at runtime. All secrets are stored in SSM and resolved by CloudFormation at deploy time.
 
-```powershell
-# Slack
+```cmd
 aws ssm put-parameter --name "/evolving-mind-ai/slack-bot-token" --value "xoxb-..." --type SecureString --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/slack-signing-secret" --value "..." --type SecureString --region us-east-2
-
-# LLM
 aws ssm put-parameter --name "/evolving-mind-ai/llm-api-key" --value "..." --type SecureString --region us-east-2
-
-# Database connection strings
 aws ssm put-parameter --name "/evolving-mind-ai/pgc-database-url" --value "postgresql://..." --type SecureString --region us-east-2
 aws ssm put-parameter --name "/evolving-mind-ai/pgd-database-url" --value "postgresql://..." --type SecureString --region us-east-2
 ```
@@ -348,7 +376,24 @@ On first deploy SAM will prompt for stack parameters:
 
 ---
 
-### Step 5 — Verify Pings Pass
+### Step 5 — Bootstrap the Brain
+
+After first deploy, trigger the PGC bootstrap by calling ping-db:
+
+```bash
+curl https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/ping-db
+```
+
+Then seed the workflows:
+
+```cmd
+set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-workflow.mjs create_domain
+set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-workflow.mjs help
+```
+
+---
+
+### Step 6 — Verify Pings Pass
 
 ```bash
 # curl ping-db directly
@@ -371,22 +416,28 @@ aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --re
 
 ---
 
-### Step 6 — Configure Slack App
+### Step 7 — Configure Slack App
 
 In the [Slack API dashboard](https://api.slack.com/apps):
 
-1. **Slash Commands** → each pointing to:
-   ```
-   https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/command
-   ```
-   Commands: `/ping-api`, `/ping-sqs`, `/ping-llm`, `/ping-e2e`, `/create-domain`
+1. **Slash Commands** → each pointing to `https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/command`
 
-2. **Interactivity** → Request URL (required for human gates — Phase 2):
+   | Command | Purpose |
+   |---|---|
+   | `/ping-api` | Slackbot health check |
+   | `/ping-sqs` | SQS round-trip check |
+   | `/ping-llm` | LLM connectivity check |
+   | `/ping-e2e` | Full end-to-end check |
+   | `/create-domain` | Design and create a new data domain |
+   | `/help` | Show available commands |
+   | `/shutdown` | Emergency stop — cancel all active workflow runs |
+
+2. **Interactivity** → Request URL:
    ```
    https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/interactive
    ```
 
-3. **OAuth Scopes** → `chat:write`, `commands`, `app_mentions:read`, `im:history`
+3. **OAuth Scopes** → `chat:write`, `chat:write.public`, `commands`, `app_mentions:read`, `im:history`
 
 ---
 
@@ -403,6 +454,11 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 | `/create-domain` live LLM | `v3.2-create-domain-live-llm` | ✅ Done |
 | PGC schema v2 — 13 tables + seeds | `v3.2-pgc-schema-v2-complete` | ✅ Done |
 | Phase 1 refactoring complete | `v3.2-refactor-complete` | ✅ Done |
+| Interactive Slack loop (Block Kit) | `v3.2-interactive-complete` | ✅ Done |
+| Step Processor — design-domain gate | `v3.2-design-domain-gate-complete` | ✅ Done |
+| Step Processor — core engine | `v3.2-step-processor-complete` | ✅ Done |
+| `/create-domain` through Step Processor | `v3.2-tangential-features` | ✅ Done |
+| `/help` through Step Processor | (this session) | ✅ Done |
 
 ---
 
