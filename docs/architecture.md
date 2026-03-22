@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Step Processor next  
-Last updated: 2026-03-21 (session 4)
+Status: Active development — Intent Preprocessor next  
+Last updated: 2026-03-22 (session 5)
 
 ---
 
@@ -2244,23 +2244,35 @@ references it.
 
 | Item | Priority | Notes |
 |---|---|---|
-| Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9 |
+| Workflow safety guards (velocity detector, execution accumulator, cycle detector) | High | Required before Step Processor is production-ready — see Section 6.9. Right-brain can monitor `PGC_WorkflowStats` for anomalous run patterns and flag suspect workflows proactively |
 | Semantic validation rules for create_domain scaffold | ~~High~~ | ✅ Implemented in `src/proc/review-output.mjs` — all three rules enforced in `runSemanticRules()` |
-| `resume_gate` routes to HELP workflow only | ~~High~~ | ✅ Resolved — `run-workflow.mjs` dispatches by workflow name via `RESUME_GATE_HANDLERS` map; replaced by generic Step Processor in next milestone |
-| `create-domain.mjs` ignores scaffold from design-domain and calls LLM again | High | Removed tables are recreated; fixed when Step Processor drives `create_domain` declaratively |
-| Gate re-renders post new Slack messages instead of `chat.update` in-place | Medium | Stale buttons remain live after remove; resolves naturally when Step Processor owns gate re-render |
+| `resume_gate` routes to HELP workflow only | ~~High~~ | ✅ Resolved — Step Processor dispatches generically via `run-workflow.mjs dispatchSqs()`. No per-workflow routing in handler |
+| `create-domain.mjs` ignores scaffold from design-domain and calls LLM again | ~~High~~ | ✅ Resolved — Step Processor drives `create_domain` declaratively from `PGC_Workflow.steps` |
+| Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `WORKFLOW_GATE` → `callback.mjs` `chat.update` |
+| Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists, producing different tables each run due to LLM variance. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — if domain already exists in `PGC_DomainHelp`, load existing schema from `PGC_Schema` and skip LLM entirely. This is the "LLM called only once per novel intent" principle. Blocked on `serv_query` step type (Phase 3). Right-brain can also detect repeated identical intents via `PGC_WorkflowStats` and short-circuit proactively |
+| `create_domain` prompt produces varying schemas — right-brain fix needed | Medium | LLM variance at `temperature: 0.2` produces inconsistent domain schemas across runs (e.g. recipe steps table present on some runs, absent on others). Short-term defensive option: make prompt more prescriptive per domain type. Correct fix: right-brain prompt evolution — `PGC_WorkflowStats` accumulates run data, right-brain analyses `PGC_Prompt.error_log` and `output_sample` to detect schema variance, and generates an improved prompt version. Do not invest in defensive patching before the feedback loop exists — patching symptoms is the wrong investment when the right-brain architecture already has the scaffolding (`PGC_Prompt.output_sample`, `PGC_Prompt.error_log`, `PGC_WorkflowStats`) to solve this correctly |
+| `create_domain` prompt produces varying schemas across runs | Medium | LLM variance at `temperature: 0.2` — e.g. recipe steps table omitted on some runs. Defensive fix: more prescriptive prompt. Correct fix: right-brain prompt evolution via `PGC_WorkflowStats` + `PGC_Prompt.error_log`. Do not invest in defensive patching before the feedback loop exists |
+| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. All `js_transform` steps currently require a registered built-in. Blocked on Phase 3 JS sandbox |
+| `PGC_WorkflowRunStep` idempotency uses `parseInt(stepNumber)` | Medium | String step keys like `"3b"` resolve to `0` — idempotency check will be incorrect when branch/conditional steps with string keys are introduced. Fix when `condition` step type is implemented |
+| `created_tables_summary` hardcoded in iterator | Low | Iterator completion in `run-workflow.mjs` writes `created_tables_summary` via a domain-specific string. Should be generic — driven by step definition |
+| `domain: null` on DDL-created tables | Medium | `PGC_Schema` and `PGC_TableMap` rows inserted by the DDL iterator have `domain: null`. Domain name needs to be threaded through `serv_schema` step input. Fix in next `create_domain` workflow version |
+| `design-domain.mjs` dead code | Low | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — `delete-domain` covers full domains; per-table orphan cleanup is manual |
-| AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager when promotional credits near exhaustion. No application code changes needed. |
+| AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager when promotional credits near exhaustion. No application code changes needed |
 | W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
-| Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`. Use `node:test` built-in |
-| Integration tests | Low | Defer until PROC/Schema complete — use `testcontainers` + PostgreSQL |
-| CI/CD GitHub Actions | Low | Deliberately deferred until `template.yaml` stabilises |
+| Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`, `resolveTemplate`, `evalItemCondition`. Use `node:test` built-in |
+| Integration tests | Low | Defer until intent pipeline complete — use `testcontainers` + PostgreSQL |
+| CI/CD GitHub Actions | Low | Deliberately deferred until `template.yaml` stabilises — options: GitHub Actions on push to main, SAM pipeline, CodePipeline |
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
 | PROC/SERV API Gateway resource policy | Medium | Restrict to AWS account-scoped requests before any public exposure — see Section 12.3 |
-| Refactor `proc/create-domain.mjs` private `servFetch` + `callLlm` | Low | Extract to `src/shared/serv-client.mjs` and `src/shared/llm-client.mjs` — duplicates shared implementations added in v3.2-design-domain-foundation |
+| Refactor `proc/create-domain.mjs` private `servFetch` + `callLlm` | ~~Low~~ | ✅ Resolved — extracted to `src/shared/serv-client.mjs` and `src/shared/llm-client.mjs` |
 | `callback` routing pattern not enforced at compile time | Low | Every PROC endpoint reading callback from SQS must use `req.callback ?? req.body?.callback ?? null`. Currently convention only — caught at runtime. Add a lint rule or helper function when unit tests are added |
+| Terraform state — legacy infrastructure | Low | Terraform config in `terraform-aws/` predates SAM migration. Check for orphaned AWS resources not tracked by SAM before decommissioning. Run `terraform state list` and reconcile against `template.yaml` |
+| Azure MSAL token utility (`src/lib/getAccessToken.js`) | Low | Vercel-era artifact. May be part of a Microsoft Graph / Teams integration. Assess for Teams Experience tier or decommission. Azure app credentials may still be active |
+| `upsert-workflow.mjs` required on fresh deploys | Low | `help` workflow is in `seed_PGC_Workflow.json` but `init-brain` uses `ON CONFLICT DO NOTHING` — a fresh deploy will not update the steps if the row already exists. Must run `upsert-workflow.mjs help` after any workflow step changes |
+| `create_workflow` workflow steps empty | Low | `PGC_Workflow` row for `create_workflow` has `steps: []` — stub only. Full implementation is Phase 3 |
 
 ---
 
@@ -2343,6 +2355,10 @@ unless a patch is available and pinned.
 | `v3.2-architecture-semantic-validation` | Semantic validation rules documented in Section 6.10. Tech debt entry added |
 | `v3.2-design-domain-foundation` | shared/llm-client + shared/serv-client extracted. proc/review-output (Ajv + semantic rules). proc/design-domain first pass (LLM + validation + WorkflowRun lifecycle). openapi.yaml v3.3.4 |
 | `v3.2-design-domain-e2e` | callback routing fix (req.callback not req.body.callback). callback.mjs DESIGN_DOMAIN_RESULT + DESIGN_DOMAIN_ERROR handlers. Full Slack flow confirmed end-to-end |
+| `v3.2-refactor-complete` | Phase 1 refactoring closed out. All pings passing. v3.2-clean-baseline re-tagged |
+| `v3.2-design-domain-gate-complete` | proc/design-domain Block Kit review gate + in-place remove. human_gate suspend/resume wired |
+| `v3.2-step-processor-complete` | Step Processor fully operational: run-workflow.mjs, step-executor.mjs, template-resolver.mjs. First successful create_domain end-to-end (WorkflowRun 12 — PGD_Recipes, PGD_Ingredients, PGD_RecipeTags). help workflow through Step Processor |
+| `v3.2-tangential-features` | /create-domain + /help fully wired to Step Processor. proc/create-domain.mjs as Step Processor entry point. dev_scripts/upsert-workflow.mjs. seed_PGC_Workflow.json: create_domain v2 (8 steps) + help (3 steps) + create_workflow stub |
 
 ---
 
@@ -2390,22 +2406,69 @@ Steps R6–R7 are highest risk: two Lambdas competing for WorkflowQueue. Move th
 | 2a | SERV-Table updateRows + deleteRows | ✅ complete — v3.2-serv-table-complete |
 | 2b | SERV-Entity — six routes, PGC_EntitySchema upsert_key | ✅ complete — v3.2-serv-entity-complete |
 | 3a | shared/llm-client + shared/serv-client + proc/review-output (Ajv + semantic rules) + proc/design-domain foundation (LLM + validation + WorkflowRun lifecycle) | ✅ complete — v3.2-design-domain-e2e |
-| 3b | proc/design-domain — Block Kit review message, in-place table remove, human gate pause | ⬜ next |
-| 3c | proc/create-domain — wired to WorkflowRun state from design-domain, PGC_EntitySchema registration | ⬜ |
-| 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ |
-| 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ⬜ |
-|   | — include velocity detector, execution accumulator, cycle detector (Section 6.9) | |
-|   | — Step Processor MUST check PGC_WorkflowRun.status before executing any step (shutdown contract) | |
+| 3b | proc/design-domain — Block Kit review message, in-place table remove, human gate pause | ✅ complete — v3.2-step-processor-complete |
+| 3c | proc/create-domain — Step Processor entry point, full WorkflowRun lifecycle | ✅ complete — v3.2-step-processor-complete |
+| 4 | PROC — Intent Preprocessor — coded logic + cheap LLM classification | ⬜ **next** |
+| 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ✅ complete — v3.2-step-processor-complete |
+|   | — `run-workflow.mjs`: execute_top, resume_gate, cancel, iterator, human_gate suspend/resume | ✅ |
+|   | — `step-executor.mjs`: llm_call, js_transform (built-in), human_gate (confirm + edit_list), serv_schema, serv_insert, notify, end, iterator | ✅ |
+|   | — `template-resolver.mjs`: {{dot.path}} resolution, single-token raw-value fix | ✅ |
+|   | — velocity detector, execution accumulator, cycle detector (Section 6.9) | ⬜ deferred — see tech debt register |
+|   | — Step Processor checks PGC_WorkflowRun.status before executing (shutdown contract) | ✅ implemented |
+
+**Step types — implemented vs deferred:**
+
+| Type | Status | Notes |
+|---|---|---|
+| `llm_call` | ✅ live | Loads prompt from `PGC_Prompt`, calls LLM, runs `review-output` validation |
+| `js_transform` | ✅ live (built-in only) | Built-in `columnSummary` enrichment only — generic AST sandbox Phase 3 |
+| `human_gate` | ✅ live | `confirm` + `edit_list` proven end-to-end |
+| `serv_schema` | ✅ live | `createTable` via SERV |
+| `serv_insert` | ✅ live | `insertRow` via SERV |
+| `notify` | ✅ live | Resolves `message_template`, enqueues `WORKFLOW_NOTIFY` |
+| `end` | ✅ live | Marks run completed |
+| `iterator` | ✅ live | Sequential only — one SQS hop per item |
+| `serv_query` | ⬜ Phase 3 | Needed for duplicate domain detection pre-check |
+| `serv_update` | ⬜ Phase 3 | |
+| `serv_delete` | ⬜ Phase 3 | |
+| `sub_workflow` | ⬜ Phase 3 | |
+| `condition` | ⬜ Phase 3 | |
+| `capability_call` | ⬜ Phase 3 | Not yet defined — see Section 15.1 |
+
+**Gate types — implemented in `dialogToBlocks()` vs deferred:**
+
+| Gate type | Status |
+|---|---|
+| `confirm` | ✅ live |
+| `edit_list` | ✅ live — per-row Remove button, in-place `chat.update` re-render |
+| `select_one` | ⬜ Phase 3 — `buildDialog()` stub exists |
+| `select_many` | ⬜ Phase 3 — `buildDialog()` stub exists |
+| `text_input` | ⬜ Phase 3 |
+| `review_object` | ⬜ Phase 3 |
 
 ### Phase 3 — Deferred
 
 | # | Task |
 |---|---|
 | 1 | SERV-Query — cross-entity parameterised SELECT with pagination |
-| 2 | Parallel execution — fan-out/fan-in, optimistic locking |
-| 3 | Unit + integration tests — node:test, testcontainers |
-| 4 | Unit + integration tests — node:test, testcontainers |
-| 5 | CI/CD GitHub Actions — after template.yaml stabilises |
+| 2 | Generic `js_transform` sandbox — acorn AST gate + `vm.runInNewContext` |
+| 3 | `serv_query`, `serv_update`, `serv_delete` step types |
+| 4 | `sub_workflow` and `condition` step types |
+| 5 | `capability_call` step type + External API Registry (Section 15.1) |
+| 6 | Remaining gate types: `select_one`, `select_many`, `text_input`, `review_object` |
+| 7 | pgvector semantic search — intent classification + prompt deduplication (Section 10) |
+| 8 | Right brain — workflow improvement loop using `PGC_WorkflowStats` + `PGC_Prompt.error_log` |
+| 9 | `create_workflow` workflow — LLM designs and stores a new `PGC_Workflow` row from natural language |
+| 10 | Parallel execution — fan-out/fan-in, optimistic locking |
+| 11 | Unit + integration tests — node:test, testcontainers |
+| 12 | CI/CD — GitHub Actions / SAM pipeline / CodePipeline (after template.yaml stabilises) |
+
+**Phase 2 remaining (before Phase 3):**
+
+| # | Task |
+|---|---|
+| 4 | Intent Preprocessor (`classify-intent.mjs`) — three-tier: coded exact match → cheap LLM → heavy lift |
+| 6 | `create_workflow` workflow stub — LLM designs and stores a new `PGC_Workflow` row |
 
 ## 10. pgvector — Semantic Search
 
