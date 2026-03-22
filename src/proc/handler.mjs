@@ -26,7 +26,7 @@ import { handle as reviewOutput }       from './review-output.mjs';
 import { handle as shutdown }           from './shutdown.mjs';
 import { handle as runWorkflow, dispatchSqs } from './run-workflow.mjs';
 import { handle as deleteDomain }       from './delete-domain.mjs';
-import { handleHelp }                   from './help.mjs';
+import { handle as help }                from './help.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -77,7 +77,8 @@ async function processSqsBatch(records) {
         continue;
       }
       if (message.type === 'HELP') {
-        await handleHelp(message);
+        const req = buildReqFromSqs(message);
+        await help(req);
         continue;
       }
       // DESIGN_DOMAIN — Phase 2 create-domain flow, step 1
