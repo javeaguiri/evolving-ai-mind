@@ -26,7 +26,8 @@ import { handle as reviewOutput }       from './review-output.mjs';
 import { handle as shutdown }           from './shutdown.mjs';
 import { handle as runWorkflow, dispatchSqs } from './run-workflow.mjs';
 import { handle as deleteDomain }       from './delete-domain.mjs';
-import { handle as help }                from './help.mjs';
+import { handle as help }               from './help.mjs';
+import { handle as classifyIntent }     from './classify-intent.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -89,7 +90,6 @@ async function processSqsBatch(records) {
       }
       // WORKFLOW_STEP — all actions (execute_top, resume_gate, cancel) route to
       // run-workflow.mjs dispatchSqs which handles them generically.
-      // Replaces the old per-action dispatch via buildReqFromSqs + runWorkflow.
       if (message.type === 'WORKFLOW_STEP') {
         await dispatchSqs(message);
         continue;
@@ -98,6 +98,12 @@ async function processSqsBatch(records) {
       if (message.type === 'DELETE_DOMAIN') {
         const req = buildReqFromSqs(message);
         await deleteDomain(req);
+        continue;
+      }
+      // CLASSIFY_INTENT — natural language input from /mind Slack command
+      if (message.type === 'CLASSIFY_INTENT') {
+        const req = buildReqFromSqs(message);
+        await classifyIntent(req);
         continue;
       }
 
@@ -142,6 +148,9 @@ async function dispatch(req) {
 
     case 'delete-domain':
       return deleteDomain(req);
+
+    case 'classify-intent':
+      return classifyIntent(req);
 
     // Routes added here as refactor progresses:
 

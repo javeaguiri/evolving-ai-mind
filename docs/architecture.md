@@ -104,40 +104,67 @@ Dead Letter Queue (DLQ) with a 14-day retention period for debugging failed mess
 
 #### WorkflowQueue (`SYSSQSWorkflow`)
 
-**Purpose:** The async backbone of the system. Carries all workflow execution messages
-from the Experience tier to the Process tier, and human gate resume messages from
-`/interactive` back to ProcFunction.
+**Purpose:** The single async channel between the Experience tier and the Process
+tier. Every slash command that cannot be handled within Slack's 3-second ACK window
+enqueues a message here. SlackbotFunction always returns immediately — all real work
+happens asynchronously via this queue.
+
+The queue carries two distinct categories of message that share this channel for the
+same reason: neither can block the Experience tier.
+
+**Two message categories:**
+
+**Category 1 — Fire-and-forget entry messages**
+Enqueued by `SlackbotFunction` on receipt of a slash command. No `workflowRunId` —
+the workflow run does not exist yet when these are sent. PROC receives the message,
+performs its work (classification, domain creation, help lookup), and routes results
+back via the SlackResultsQueue. These messages *may* spawn a workflow run, but they
+are not themselves workflow execution messages.
+
+If a fire-and-forget message does spawn a workflow run, it transitions cleanly: PROC
+creates the `PGC_WorkflowRun` row and enqueues the first `WORKFLOW_STEP execute_top`
+to continue. The entry message is consumed and gone — workflow execution messages take
+over from that point. For example: `CLASSIFY_INTENT` arrives fire-and-forget,
+`classify-intent.mjs` resolves the intent, and if it matches a named workflow it
+enqueues `WORKFLOW_STEP execute_top` with the new `workflowRunId`. The
+`CLASSIFY_INTENT` message never directly drives the Step Processor stack.
+
+**Category 2 — Workflow execution messages**
+All have `type: WORKFLOW_STEP` and always carry a `workflowRunId`. Drive the Step
+Processor's execution stack one frame at a time. The one-SQS-message-per-`workflowRunId`
+rule applies exclusively to this category — it has no meaning for fire-and-forget
+entry messages, which carry no run ID and are consumed once.
 
 **Producers:**
-- `SlackbotFunction` — enqueues on every slash command (`CREATE_DOMAIN`, `HELP`, `CLASSIFY_INTENT`, future commands)
-- `interactive.mjs` — enqueues `WORKFLOW_STEP / resume_gate` when user clicks a Block Kit button
-- `ProcFunction` itself — re-enqueues `WORKFLOW_STEP / execute_top` to advance the execution stack
-  (Step Processor pattern — one SQS message per stack frame)
+- `SlackbotFunction` — enqueues Category 1 on every slash command
+- `interactive.mjs` — enqueues `WORKFLOW_STEP / resume_gate` (Category 2) when user clicks a Block Kit button
+- `ProcFunction` itself — re-enqueues `WORKFLOW_STEP / execute_top` (Category 2) to advance the execution stack
 
 **Consumer:** `ProcFunction` (SQS trigger, `BatchSize: 10`, `ReportBatchItemFailures`)
 
 **Message types today:**
 
-| type | action | Sent by | Handled by |
-|---|---|---|---|
-| `PING_SQS` | — | SlackbotFunction | proc/handler inline |
-| `PING_E2E` | — | SlackbotFunction | proc/handler inline |
-| `CREATE_DOMAIN` | — | SlackbotFunction | proc/create-domain.mjs |
-| `HELP` | — | SlackbotFunction | proc/help.mjs |
-| `CLASSIFY_INTENT` | — | SlackbotFunction (mind.mjs) | proc/classify-intent.mjs |
-| `WORKFLOW_STEP` | `resume_gate` | interactive.mjs | proc/run-workflow.mjs |
-| `WORKFLOW_STEP` | `execute_top` | ProcFunction | proc/run-workflow.mjs |
-| `WORKFLOW_STEP` | `cancel` | ProcFunction /shutdown | proc/run-workflow.mjs |
+| type | action | Category | Sent by | Handled by |
+|---|---|---|---|---|
+| `PING_SQS` | — | 1 — fire-and-forget | SlackbotFunction | proc/handler inline |
+| `PING_E2E` | — | 1 — fire-and-forget | SlackbotFunction | proc/handler inline |
+| `CREATE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction | proc/create-domain.mjs |
+| `HELP` | — | 1 — fire-and-forget | SlackbotFunction | proc/help.mjs |
+| `CLASSIFY_INTENT` | — | 1 — fire-and-forget | SlackbotFunction (mind.mjs) | proc/classify-intent.mjs |
+| `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
+| `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
+| `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
 
 **Design decisions:**
-- `BatchSize: 10` — Lambda event source mapping setting. Up to 10 messages delivered
-  per invocation as a cost optimisation. One SQS message per `workflowRunId` is always
-  in flight — batching handles concurrent runs across different workflow runs, never
-  parallel steps within a single run.
+- `BatchSize: 10` — cost optimisation. Up to 10 messages delivered per invocation.
+  The one-SQS-message-per-`workflowRunId` rule (Category 2) means batching only ever
+  handles *concurrent runs across different workflow runs* — never parallel steps within
+  a single run. Category 1 messages have no run ID and are unaffected by this rule.
 - `ReportBatchItemFailures` — only failed records return to queue. Successful records
   in the same batch are not reprocessed.
 - Standard queue (not FIFO) — ordering within a workflow run is enforced by the
-  execution stack in `PGC_WorkflowRun`, not by the queue.
+  execution stack in `PGC_WorkflowRun`, not by the queue. Category 1 messages are
+  stateless and order-independent by nature.
 
 #### SlackResultsQueue (`SYSSQSSlackResults`)
 
