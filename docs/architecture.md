@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Intent Preprocessor next  
-Last updated: 2026-03-23 (session 7)
+Status: Active development — create_workflow next  
+Last updated: 2026-03-23 (session 8)
 
 ---
 
@@ -2634,6 +2634,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-design-domain-gate-complete` | proc/design-domain Block Kit review gate + in-place remove. human_gate suspend/resume wired |
 | `v3.2-step-processor-complete` | Step Processor fully operational: run-workflow.mjs, step-executor.mjs, template-resolver.mjs. First successful create_domain end-to-end (WorkflowRun 12 — PGD_Recipes, PGD_Ingredients, PGD_RecipeTags). help workflow through Step Processor |
 | `v3.2-tangential-features` | /create-domain + /help fully wired to Step Processor. proc/create-domain.mjs as Step Processor entry point. dev_scripts/upsert-workflow.mjs. seed_PGC_Workflow.json: create_domain v2 (8 steps) + help (3 steps) + create_workflow stub |
+| `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational end-to-end. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs. Three-tier pipeline verified: Pass 1a (exact), Pass 1b+1c (alias+CRUD with PGC_Schema fallback), Tier 2 (sonar via LLM_CHAT_URL, prompt from PGC_Prompt). Tier 3 routes to CREATE_DOMAIN / CREATE_WORKFLOW / WORKFLOW_NOTIFY. /mind and /m verified in Slack. openapi.yaml v3.3.5. seed_PGC_Prompt.json: classify_intent_tier2 row added. callback.mjs: runId suppressed when absent. Architecture session 7: WorkflowQueue two-category framing, PGC_Session + PGC_SessionEntry design, intent tuning surface, session architecture Section 6.13 |
 
 ---
 
@@ -2662,13 +2663,15 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | 3a | shared/llm-client + shared/serv-client + proc/review-output (Ajv + semantic rules) + proc/design-domain foundation | ✅ complete — v3.2-design-domain-e2e |
 | 3b | proc/design-domain — Block Kit review message, in-place table remove, human gate pause | ✅ complete — v3.2-step-processor-complete |
 | 3c | proc/create-domain — Step Processor entry point, full WorkflowRun lifecycle | ✅ complete — v3.2-step-processor-complete |
-| 4 | PROC — Intent Preprocessor | ⬜ **next** |
-| | — `src/ui/slackbot/mind.mjs` — /mind Slack command, ACK + CLASSIFY_INTENT enqueue | ⬜ |
-| | — `src/proc/classify-intent.mjs` + `classify-intent-tiers.mjs` — three-tier pipeline | ⬜ |
-| | — Tier 1: Pass 1a (PGC_IntentMap regex), Pass 1b (PGC_DomainHelp alias), Pass 1c (CRUD verb) | ⬜ |
-| | — Tier 2: perplexity/sonar via LLM_CHAT_URL, domain hint injection | ⬜ |
-| | — Tier 3: enqueue CREATE_DOMAIN / CREATE_WORKFLOW, WORKFLOW_NOTIFY for unknowns | ⬜ |
-| | — openapi.yaml: add /ui/slack/mind and /proc/classify-intent | ⬜ |
+| 4 | PROC — Intent Preprocessor | ✅ complete — v3.2-intent-preprocessor-complete |
+| | — `src/ui/slackbot/mind.mjs` — /mind Slack command, ACK + CLASSIFY_INTENT enqueue | ✅ |
+| | — `src/proc/classify-intent.mjs` + `classify-intent-tiers.mjs` — three-tier pipeline | ✅ |
+| | — Tier 1: Pass 1a (PGC_IntentMap regex), Pass 1b (PGC_DomainHelp alias), Pass 1c (CRUD verb) | ✅ |
+| | — Tier 2: perplexity/sonar via LLM_CHAT_URL, domain hint injection, prompt loaded from PGC_Prompt | ✅ |
+| | — Tier 3: enqueue CREATE_DOMAIN / CREATE_WORKFLOW, WORKFLOW_NOTIFY for unknowns | ✅ |
+| | — openapi.yaml v3.3.5: /ui/slack/mind and /proc/classify-intent | ✅ |
+| | — Pass 1c PGC_Schema fallback when PGC_EntitySchema not populated | ✅ |
+| | — /m alias wired to /mind in Slack app | ✅ |
 | 4a | create_domain workflow revision | ⬜ |
 | | — seed_PGC_Prompt.json: add design_table prompt | ⬜ |
 | | — seed_PGC_Workflow.json: update create_domain to 9-step definition with add-table branch | ⬜ |
