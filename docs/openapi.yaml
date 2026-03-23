@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.3.4
+  version: 3.3.5
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -391,6 +391,102 @@ components:
         errorLogged:
           type: boolean
           description: Whether the failure was written to PGC_Prompt.error_log
+        traceId:
+          type: string
+          format: uuid
+
+    ReferencedEntity:
+      type: object
+      description: >
+        An entity from session context identified as relevant to the classified intent.
+        Returned by Tier 2 classification when session context is available (Phase 3).
+        Used to pre-seed local_state.context in the enqueued workflow run.
+      properties:
+        entity:
+          type: string
+          description: PGC_EntitySchema.entity_name
+          example: Recipe
+        id:
+          type: integer
+          description: PGC entity primary key — null if not yet persisted
+          example: 42
+        name:
+          type: string
+          description: Human-readable identifier for context — e.g. recipe name
+          example: Carbonara
+
+    ClassifyIntentRequest:
+      type: object
+      required: [userInput]
+      properties:
+        userInput:
+          type: string
+          description: Free-form natural language input from the user
+          example: show me my pasta recipes
+        sessionId:
+          type: string
+          description: >
+            PGC_Session.session_id UUID. Present when the request arrived via
+            /mind in an existing thread. Omit on fresh /mind calls and direct
+            HTTP test calls. When present, classify-intent reads recent
+            PGC_SessionEntry rows for context injection into Tier 1c and Tier 2.
+          format: uuid
+        callback:
+          $ref: '#/components/schemas/Callback'
+        traceId:
+          type: string
+          format: uuid
+
+    ClassifyIntentResponse:
+      type: object
+      properties:
+        intent_category:
+          type: string
+          description: Classified intent category
+          example: create_domain
+        action_type:
+          type: string
+          enum: [crud, workflow, heavy_lift]
+          description: >
+            crud — known CRUD verb against a resolved domain.
+            workflow — a named PGC_Workflow was matched.
+            heavy_lift — requires LLM-driven workflow creation or domain creation.
+        confidence:
+          type: string
+          enum: [exact, alias, crud, llm_classified, heavy_lift]
+          description: >
+            exact — Pass 1a PGC_IntentMap regex matched. Zero LLM cost.
+            alias — Pass 1b PGC_DomainHelp alias matched. Zero LLM cost.
+            crud — Pass 1c CRUD verb detected against resolved domain. Zero LLM cost.
+            llm_classified — Tier 2 sonar call produced the classification.
+            heavy_lift — Tier 3 routed to create_domain or create_workflow.
+        workflow_name:
+          type: string
+          description: PGC_Workflow.name if a workflow was matched — null otherwise
+          example: meal_planner
+        domain:
+          type: string
+          description: Resolved domain name if Pass 1b alias matched — null otherwise
+          example: recipes
+        ad_hoc_step:
+          type: object
+          description: >
+            CRUD step definition built by Pass 1c. Built but not yet executed —
+            execution requires serv_query/serv_update/serv_delete step types (Phase 3).
+          example:
+            type: serv_query
+            input:
+              tableName: PGD_Recipes
+              filters: [{ column: name, op: like, value: "%pasta%" }]
+        referenced_entities:
+          type: array
+          description: >
+            Phase 3 — entities from session context identified as relevant
+            to this classification by Tier 2. Used to pre-seed local_state.context
+            in the enqueued workflow run. Null or absent when no session context
+            is available or no entities were identified.
+          items:
+            $ref: '#/components/schemas/ReferencedEntity'
         traceId:
           type: string
           format: uuid
@@ -1583,6 +1679,85 @@ paths:
         '500':
           description: Failed to enqueue resume_gate message to WorkflowQueue
 
+  /api/v1/ui/slack/mind:
+    post:
+      summary: /mind slash command — natural language intent entry point
+      description: >
+        Receives the /mind Slack slash command. This is the primary entry point
+        for all natural language interaction with the brain — workflow invocation,
+        domain CRUD, and heavy-lift creation requests all flow through here.
+
+        Validates the Slack signing secret (HMAC-SHA256 + replay protection),
+        then performs a session lookup before enqueuing:
+
+          1. If thread_ts is present (reply in existing thread):
+               → getRows PGC_Session where callback->>'threadId' = thread_ts
+               → found: retrieve session_id, include in CLASSIFY_INTENT message
+               → not found: generate new session_id UUID, PROC creates PGC_Session on receipt
+          2. If thread_ts is absent (fresh /mind, no existing thread):
+               → generate new session_id UUID
+          3. Post ACK message to Slack (chat.postMessage) — ackTs becomes the thread root
+          4. Enqueue CLASSIFY_INTENT to SQS WorkflowQueue:
+               { type: CLASSIFY_INTENT, userInput, sessionId, callback: { provider, channel, threadId: ackTs } }
+          5. Return 200 immediately — Slack 3s window
+
+        The session lookup (step 1) is one getRows call to SERV.
+        The session layer (PGC_Session, PGC_SessionEntry) is Phase 3 — until then,
+        sessionId is generated fresh on every call and PROC ignores it.
+
+        classify-intent.mjs picks up the CLASSIFY_INTENT message and runs the
+        three-tier classification pipeline (Section 6.4).
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /mind
+                text:
+                  type: string
+                  description: Free-form natural language input
+                  example: show me my pasta recipes
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+                thread_ts:
+                  type: string
+                  description: >
+                    Present when the user typed /mind as a reply in an existing thread.
+                    Used for session lookup. Absent on fresh /mind calls.
+                  example: "1234567890.123456"
+      responses:
+        '200':
+          description: >
+            ACK — intent received. Classification and routing will be posted
+            to the Slack thread asynchronously via SlackCallbackListenerFunction.
+          content:
+            application/json:
+              examples:
+                fresh_thread:
+                  summary: Fresh /mind — new thread started
+                  value:
+                    response_type: in_channel
+                    text: "Got it — thinking..."
+                existing_thread:
+                  summary: /mind in existing thread — session continues
+                  value:
+                    response_type: in_channel
+                    text: "On it..."
+        '400':
+          description: Invalid Slack signature, missing text, or empty input
+        '500':
+          description: Session lookup, ACK post, or SQS enqueue failed
+
   # ── PROC — business logic endpoints ───────────────────────────────────────
 
   /api/v1/proc/run-workflow:
@@ -1740,6 +1915,176 @@ paths:
           description: execute_top — Step Processor not yet implemented (Phase 2 item 5)
         '500':
           description: DB read, state mutation, or SQS enqueue failed
+
+  /api/v1/proc/classify-intent:
+    post:
+      summary: Intent Preprocessor — three-tier natural language classification
+      description: >
+        Classifies free-form user input into a routable intent using a cost-ordered
+        three-tier pipeline. LLM is only invoked when coded logic cannot classify.
+
+        **Tier 1 — Coded logic (zero LLM cost):**
+
+          Pass 1a — regex test against PGC_IntentMap.pattern rows.
+          All rows loaded once. Input lowercased and tested against each pattern.
+          First match returns intent_category + action_type + workflow_id.
+          SHORT-CIRCUIT — PGC_DomainHelp never read if this matches.
+          confidence: exact
+
+          Pass 1b — tokenise input, scan PGC_DomainHelp.aliases arrays.
+          Resolves a domain name. Only reached if Pass 1a missed.
+          confidence: alias
+
+          Pass 1c — CRUD verb detection (list, add, update, delete, show).
+          Only reached if Pass 1b resolved a domain.
+          Builds ad_hoc_step. confidence: crud
+          Session fallback (Phase 3): if no alias token in input, check recent
+          PGC_SessionEntry rows for the most recently active domain.
+
+        **Tier 2 — Cheap LLM classification (perplexity/sonar):**
+
+          Called when Tier 1 produces no match.
+          Domain hint from Pass 1b injected if available.
+          Session context block injected if sessionId present (Phase 3) —
+          assembled from last 20 PGC_SessionEntry.content rows, plain text.
+          Returns: { intent_category, workflow_name, action_type, referenced_entities }
+          confidence: llm_classified
+
+        **Tier 3 — Heavy lift handoff (no additional LLM call):**
+
+          Routes to existing workflow entry points:
+            create_domain   → enqueue CREATE_DOMAIN
+            create_workflow → enqueue CREATE_WORKFLOW
+            unknown         → WORKFLOW_NOTIFY with guidance
+          confidence: heavy_lift
+
+        Transport-agnostic — identical logic whether request arrives via
+        HTTP (curl test) or SQS (CLASSIFY_INTENT from WorkflowQueue).
+
+        On HTTP delivery: classification result returned directly.
+        On SQS delivery: result handed off to downstream — workflow enqueued
+        or WORKFLOW_NOTIFY posted to Slack thread.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyIntentRequest'
+            examples:
+              tier1a_test:
+                summary: Tier 1a — exact pattern match (no LLM)
+                value:
+                  userInput: build me a new domain for tracking stocks
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier1b_test:
+                summary: Tier 1b — alias match, Tier 1c — CRUD verb
+                value:
+                  userInput: list my recipes
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier2_test:
+                summary: Tier 2 — sonar classification (no domain alias, no exact match)
+                value:
+                  userInput: plan my meals for next week
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier2_with_session:
+                summary: Tier 2 — ambiguous input resolved with session context (Phase 3)
+                value:
+                  userInput: make that a three-course meal plan
+                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              sqs_delivery:
+                summary: SQS CLASSIFY_INTENT delivery from /mind
+                value:
+                  userInput: show me my pasta recipes
+                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+      responses:
+        '200':
+          description: >
+            Classification result on HTTP delivery.
+            On SQS delivery: empty body — result handed off to downstream workflow
+            or posted to Slack thread as WORKFLOW_NOTIFY.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyIntentResponse'
+              examples:
+                exact_match:
+                  summary: Tier 1a exact match — create_domain intent
+                  value:
+                    intent_category: create_domain
+                    action_type: heavy_lift
+                    confidence: exact
+                    workflow_name: null
+                    domain: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                crud_match:
+                  summary: Tier 1b+1c — alias + CRUD verb — ad_hoc_step built
+                  value:
+                    intent_category: domain_crud
+                    action_type: crud
+                    confidence: crud
+                    workflow_name: null
+                    domain: recipes
+                    ad_hoc_step:
+                      type: serv_query
+                      input:
+                        tableName: PGD_Recipes
+                        filters: [{ column: name, op: like, value: "%pasta%" }]
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                workflow_matched:
+                  summary: Tier 2 — sonar matched a named workflow
+                  value:
+                    intent_category: meal_planner
+                    action_type: workflow
+                    confidence: llm_classified
+                    workflow_name: meal_planner
+                    domain: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                workflow_with_entities:
+                  summary: Tier 2 — workflow matched with session referenced_entities (Phase 3)
+                  value:
+                    intent_category: meal_planner
+                    action_type: workflow
+                    confidence: llm_classified
+                    workflow_name: meal_planner
+                    domain: recipes
+                    ad_hoc_step: null
+                    referenced_entities:
+                      - { entity: Recipe, id: 42, name: Carbonara }
+                      - { entity: Recipe, id: 43, name: "Cacio e Pepe" }
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                heavy_lift_unknown:
+                  summary: Tier 3 — unknown heavy lift — WORKFLOW_NOTIFY posted
+                  value:
+                    intent_category: unknown
+                    action_type: heavy_lift
+                    confidence: heavy_lift
+                    workflow_name: null
+                    domain: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+        '400':
+          description: userInput is missing or empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: PGC_IntentMap or PGC_DomainHelp read failed, or Tier 2 LLM call failed
 
   /api/v1/proc/delete-domain:
     post:
