@@ -124,13 +124,31 @@ async function classify(userInput, sessionId, traceId) {
     console.info('classify-intent: Pass 1b match', { domain: domainMatch.domain, traceId });
 
     // ── Pass 1c — CRUD verb detection ──────────────────────────────────────
-    // Fetch the root table for this domain from PGC_EntitySchema
+    // Fetch the root table for this domain — try PGC_EntitySchema first,
+    // fall back to PGC_Schema (domain tables registered but entity not yet defined).
     const entityResp = await getRows('PGC_EntitySchema', [
       { column: 'entity_name', op: 'like', value: `%${titleCase(domainMatch.domain)}%` },
     ]);
 
-    // Best-effort — if entity not found, fall through to Tier 2 with domain hint
-    const rootTable = entityResp.rows?.[0]?.root_table ?? null;
+    let rootTable = entityResp.rows?.[0]?.root_table ?? null;
+
+    // Fallback — entity not registered yet, derive root table from PGC_Schema.
+    // Root table = the one with no foreign keys (no FK references to other tables).
+    if (!rootTable) {
+      const schemaResp = await getRows('PGC_Schema', [
+        { column: 'domain', op: 'eq', value: domainMatch.domain },
+        { column: 'target', op: 'eq', value: 'pgd' },
+      ]);
+      const tables = schemaResp.rows ?? [];
+      // Primary table has empty or null foreign_keys array
+      const primary = tables.find(t => !t.foreign_keys || t.foreign_keys.length === 0);
+      rootTable = primary?.table_name ?? (tables[0]?.table_name ?? null);
+      if (rootTable) {
+        console.info('classify-intent: Pass 1c entity fallback via PGC_Schema', {
+          domain: domainMatch.domain, rootTable, traceId,
+        });
+      }
+    }
 
     if (rootTable) {
       const crudMatch = matchCrudVerb(userInput, domainMatch, rootTable);
@@ -181,7 +199,7 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
       'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      model:       'perplexity/sonar',
+      model:       'sonar',
       messages,
       temperature: 0.1,
     }),
