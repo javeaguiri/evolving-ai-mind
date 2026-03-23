@@ -5,5 +5,25 @@
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "prompt_text": "You are a PostgreSQL schema designer for a system called evolving-mind-ai.\n\nThe user wants to create a new data domain. Their description is: \"{{userInput}}\"\n\nFrom this description, infer a short, lowercase, snake_case domain name (e.g. \"stock_portfolio\", \"recipes\", \"fitness\").\nUse that inferred name as the \"domain\" field in your response.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"domain\": \"<inferred short snake_case domain name>\",\n  \"tables\": [\n    {\n      \"tableName\": \"<PGD_TableName>\",\n      \"target\": \"pgd\",\n      \"description\": \"<what this table stores>\",\n      \"columns\": [\n        { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n        { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n        { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n      ],\n      \"foreignKeys\": [\n        {\n          \"name\": \"fk_<child_table>_<parent_table>\",\n          \"column\": \"<foreign_key_column>\",\n          \"references\": { \"table\": \"<PGD_ParentTable>\", \"column\": \"id\" },\n          \"onDelete\": \"CASCADE\"\n        }\n      ],\n      \"constraints\": [\n        { \"type\": \"unique\", \"name\": \"uq_<table>_<columns>\", \"columns\": [\"<column>\"] }\n      ],\n      \"triggers\": [\n        { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n      ]\n    }\n  ],\n  \"domainHelp\": {\n    \"domain\": \"<same inferred snake_case domain name>\",\n    \"aliases\": [\"<alias1>\", \"<alias2>\"],\n    \"description\": \"<one sentence describing the domain>\",\n    \"commands\": [\n      { \"command\": \"/create-domain <description>\", \"description\": \"Create the domain\" },\n      { \"command\": \"list <domain>\", \"description\": \"List all records\" }\n    ]\n  }\n}\n\nRules:\n- \"domain\" field must be a short, lowercase, snake_case name inferred from the user description\n- Table names must start with PGD_ followed by PascalCase (e.g. PGD_Recipes, PGD_StockPrices)\n- Column types must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger\n- Foreign keys MUST use the nested object format: \"references\": { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Foreign key \"name\" field is required — use format: fk_<childtable_lower>_<parenttable_lower>\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- Constraint \"name\" field is required\n- Generate 2-4 tables appropriate for the domain\n- Return ONLY the JSON object, nothing else"
+  },
+  {
+    "intent_category": "classify_intent_tier2",
+    "version": 1,
+    "model": "sonar",
+    "was_successful": null,
+    "input_variables": [
+      { "name": "knownWorkflows", "description": "Comma-separated list of registered PGC_Workflow names, or a message stating none exist", "required": true },
+      { "name": "domainContext",  "description": "A sentence naming the resolved domain if Pass 1b matched, or empty string", "required": false }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": ["intent_category", "action_type"],
+      "properties": {
+        "intent_category": { "type": "string" },
+        "workflow_name":   { "type": ["string", "null"] },
+        "action_type":     { "type": "string", "enum": ["crud", "workflow", "heavy_lift"] }
+      }
+    },
+    "prompt_text": "You are an intent classifier for a personal automation system.\nClassify the user input and return JSON only — no prose, no markdown fences.\n{{knownWorkflows}}\n{{domainContext}}\n\nReturn exactly this shape:\n{\n  \"intent_category\": \"<short snake_case label e.g. list_recipes, meal_planner, create_domain>\",\n  \"workflow_name\": \"<workflow name from the known list, or null>\",\n  \"action_type\": \"crud\" | \"workflow\" | \"heavy_lift\"\n}\n\nRules:\n- If the input matches a known workflow name, set action_type = \"workflow\" and workflow_name = that name.\n- If the input is a data operation (list, add, update, delete, find) on a personal domain, set action_type = \"crud\".\n- If the input requires building something new (new domain, new workflow, new capability), set action_type = \"heavy_lift\".\n- intent_category should be a short snake_case label.\n- workflow_name must be null unless it exactly matches a name from the known workflows list."
   }
 ]

@@ -181,13 +181,21 @@ async function classify(userInput, sessionId, traceId) {
 // ---------------------------------------------------------------------------
 
 async function tier2(userInput, domainHint, intentRows, traceId) {
+  // Load prompt from PGC_Prompt — consistent with all other LLM calls in the system.
+  // Gives Tier 2 versioning, error_log, and the right-brain improvement loop.
+  const promptResp = await getRows('PGC_Prompt', [
+    { column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' },
+  ]);
+  const promptRow = promptResp.rows?.[0];
+  if (!promptRow) throw new Error('PGC_Prompt row missing for classify_intent_tier2 — run init-brain');
+
   // Load all workflow names so sonar can match against them
-  const workflowResp = await getRows('PGC_Workflow');
+  const workflowResp  = await getRows('PGC_Workflow');
   const workflowNames = (workflowResp.rows ?? []).map(r => r.name);
 
-  const messages = buildTier2Prompt(userInput, domainHint, workflowNames);
+  const messages = buildTier2Prompt(userInput, domainHint, workflowNames, promptRow.prompt_text);
 
-  console.info('classify-intent: Tier 2 sonar call', { traceId, domainHint });
+  console.info('classify-intent: Tier 2 sonar call', { traceId, domainHint, promptVersion: promptRow.version });
 
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
@@ -199,7 +207,7 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
       'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      model:       'sonar',
+      model:       promptRow.model ?? 'sonar',
       messages,
       temperature: 0.1,
     }),
@@ -207,6 +215,27 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 
   if (!response.ok) {
     const text = await response.text();
+    // Log failure to PGC_Prompt.error_log — same pattern as review-output.mjs
+    const errorEntry = {
+      at:             new Date().toISOString(),
+      error_type:     'llm_http_error',
+      error_message:  `Tier 2 LLM error ${response.status}: ${text}`,
+      llm_raw_output: text,
+      recovery_action: 'halt',
+    };
+    console.error('classify-intent: Tier 2 LLM HTTP error', { traceId, status: response.status });
+    // Best-effort error log write — do not throw on log failure
+    try {
+      const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
+      await import('../shared/serv-client.mjs').then(({ updateRows }) =>
+        updateRows('PGC_Prompt',
+          [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
+          { error_log: { attempts: [...existingLog, errorEntry] } }
+        )
+      );
+    } catch (logErr) {
+      console.warn('classify-intent: error_log write failed', logErr.message);
+    }
     throw new Error(`Tier 2 LLM error ${response.status}: ${text}`);
   }
 
@@ -220,6 +249,26 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
     const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     parsed = JSON.parse(clean);
   } catch (error) {
+    // Log parse failure to PGC_Prompt.error_log
+    const errorEntry = {
+      at:              new Date().toISOString(),
+      error_type:      'invalid_json',
+      error_message:   error.message,
+      llm_raw_output:  rawText.slice(0, 500),
+      recovery_action: 'halt',
+    };
+    console.error('classify-intent: Tier 2 JSON parse failed', { traceId, raw: rawText.slice(0, 200) });
+    try {
+      const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
+      await import('../shared/serv-client.mjs').then(({ updateRows }) =>
+        updateRows('PGC_Prompt',
+          [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
+          { error_log: { attempts: [...existingLog, errorEntry] } }
+        )
+      );
+    } catch (logErr) {
+      console.warn('classify-intent: error_log write failed', logErr.message);
+    }
     throw new Error(`Tier 2 LLM returned invalid JSON: ${error.message}`);
   }
 

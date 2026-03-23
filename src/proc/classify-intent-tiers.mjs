@@ -137,9 +137,10 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
  * @param {string}      userInput       Raw user input
  * @param {string|null} domainHint      Resolved domain name from Pass 1b, or null
  * @param {string[]}    workflowNames   All workflow names from PGC_Workflow — sonar picks from this list
+ * @param {string}      promptText      System prompt text from PGC_Prompt.prompt_text
  * @returns {object[]}  messages array for chat completions body
  */
-export function buildTier2Prompt(userInput, domainHint, workflowNames) {
+export function buildTier2Prompt(userInput, domainHint, workflowNames, promptText) {
   const knownWorkflows = workflowNames.length > 0
     ? `Known workflows: ${workflowNames.join(', ')}.`
     : 'No named workflows are registered yet.';
@@ -148,30 +149,14 @@ export function buildTier2Prompt(userInput, domainHint, workflowNames) {
     ? `The user is working with the "${domainHint}" domain.`
     : '';
 
-  const system = [
-    'You are an intent classifier for a personal automation system.',
-    'Classify the user input and return JSON only — no prose, no markdown fences.',
-    knownWorkflows,
-    domainContext,
-    '',
-    'Return exactly this shape:',
-    '{',
-    '  "intent_category": "<string>",',
-    '  "workflow_name": "<workflow name from the known list, or null>",',
-    '  "action_type": "crud" | "workflow" | "heavy_lift"',
-    '}',
-    '',
-    'Rules:',
-    '- If the input matches a known workflow name, set action_type = "workflow" and workflow_name = that name.',
-    '- If the input is a data operation (list, add, update, delete, find) on a personal domain, set action_type = "crud".',
-    '- If the input requires building something new (new domain, new workflow, new capability), set action_type = "heavy_lift".',
-    '- intent_category should be a short snake_case label e.g. "list_recipes", "meal_planner", "create_domain".',
-    '- workflow_name must be null unless it exactly matches a name from the known workflows list.',
-  ].join('\n');
+  // Inject runtime context into the stored prompt text using {{variable}} substitution
+  const system = promptText
+    .replace('{{knownWorkflows}}', knownWorkflows)
+    .replace('{{domainContext}}', domainContext);
 
   return [
-    { role: 'system',    content: system    },
-    { role: 'user',      content: userInput },
+    { role: 'system', content: system    },
+    { role: 'user',   content: userInput },
   ];
 }
 
