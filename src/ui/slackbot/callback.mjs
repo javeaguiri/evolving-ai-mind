@@ -211,6 +211,9 @@ async function postServNotification(message) {
 // that does not set a custom notify_type.
 async function postWorkflowNotify(message) {
   const { callback, message: text, traceId, workflowRunId } = message;
+  const contextText = workflowRunId
+    ? `runId: ${workflowRunId} | traceId: ${traceId}`
+    : `traceId: ${traceId}`;
   await routeCallback(callback, text, [
     {
       type: 'section',
@@ -221,7 +224,7 @@ async function postWorkflowNotify(message) {
       elements: [
         {
           type: 'mrkdwn',
-          text: `runId: ${workflowRunId} | traceId: ${traceId}`,
+          text: contextText,
         },
       ],
     },
