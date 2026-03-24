@@ -400,18 +400,38 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'textbox':
+        // Slack does not support input blocks in regular messages — only modals.
+        // Use a plain_text_input element inside an actions block alongside Submit/Cancel.
+        // The typed value arrives in payload.state.values in the block_actions payload.
+        // action_id on the input element must be unique so interactive.mjs can read it.
         blocks.push({
-          type:    'input',
-          label:   { type: 'plain_text', text: field.label ?? 'Input' },
-          element: {
-            type:        'plain_text_input',
-            action_id:   field.name ?? 'text_input',
-            placeholder: field.placeholder
-              ? { type: 'plain_text', text: field.placeholder }
-              : undefined,
-          },
+          type: 'actions',
+          elements: [
+            {
+              type:        'plain_text_input',
+              action_id:   field.name ?? 'text_input_value',
+              placeholder: { type: 'plain_text', text: field.label ?? 'Type here...' },
+              multiline:   false,
+            },
+          ],
         });
         break;
+
+      case 'review_object': {
+        // Render the context object as formatted key-value pairs.
+        // Expects field.items to be an array of { key, value } pairs built by
+        // the Step Processor from the context_key object in local_state.
+        const reviewLines = (field.items ?? [])
+          .map(item => `*${item.key}:* ${Array.isArray(item.value) ? item.value.join(', ') : item.value}`)
+          .join('\n');
+        if (reviewLines) {
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: reviewLines },
+          });
+        }
+        break;
+      }
 
       case 'radio': {
         const options = (field.options ?? []).map(o => ({

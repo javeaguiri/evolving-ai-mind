@@ -2,11 +2,11 @@
   {
     "name": "create_domain",
     "domain": null,
-    "description": "Designs and creates a new user domain. LLM proposes a schema with one primary table and child tables. User reviews and optionally removes child tables. DDL is executed and domain is registered after final confirmation.",
+    "description": "Designs and creates a new user domain. LLM proposes a schema. User reviews, optionally adds tables, and confirms. DDL is executed, CRUD workflows are generated, and the domain is registered and immediately usable from /mind.",
     "intent_keywords": ["create domain", "new domain", "build domain", "add domain"],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 2,
+    "version": 3,
     "steps": [
       {
         "step": "1",
@@ -20,7 +20,8 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Enrich each table in proposed_scaffold.tables with a columnSummary string — first 4 non-system column names (excluding id, created_at, updated_at) joined with ', '. Required by the edit_list gate at step 3 which does a plain field lookup on item.columnSummary.",
+        "transform_type": "columnSummary",
+        "description": "Enrich each table with columnSummary (display) and domain field (fixes domain:null on DDL rows).",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "next",
@@ -30,23 +31,62 @@
         "step": "3",
         "type": "human_gate",
         "gate_type": "edit_list",
-        "description": "User reviews proposed table list. Child tables (foreignKeys.length > 0) may be removed. Primary table cannot be removed.",
-        "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove any child tables you don't need.",
+        "description": "User reviews proposed table list. Child tables may be removed. User may also add a table.",
+        "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove child tables you don't need, or add one that's missing.",
         "context_key": "proposed_scaffold.tables",
         "item_primary_key": "tableName",
         "item_secondary_key": "columnSummary",
         "item_action": {
-          "condition": "item.foreignKeys.length > 0",
+          "condition": "item.foreignKeys && item.foreignKeys.length > 0",
           "action": "remove_item",
           "action_data_key": "tableName",
           "confirm_template": "Remove {{item.tableName}} from this domain?"
         },
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+          { "label": "Looks good",  "action": "confirm",   "on_select": "next"    },
+          { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
+          { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
         ],
         "on_success": "next",
         "on_failure": "cancel"
+      },
+      {
+        "step": "3a",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "User describes the table they want to add.",
+        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+        ],
+        "output_key": "new_table_description",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "3b",
+        "type": "llm_call",
+        "description": "LLM designs the new table from user description.",
+        "input": {
+          "prompt": "design_table",
+          "domain": "{{proposed_scaffold.domain}}",
+          "existing_tables": "{{proposed_scaffold.tables}}",
+          "user_input": "{{new_table_description}}"
+        },
+        "output_key": "new_table",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "3c",
+        "type": "js_transform",
+        "transform_type": "columnSummary",
+        "description": "Merge new table into proposed_scaffold.tables and re-enrich. on_success loops back to step 3.",
+        "input_key": "proposed_scaffold.tables",
+        "output_key": "proposed_scaffold.tables",
+        "on_success": "step:3",
+        "on_failure": "human_feedback"
       },
       {
         "step": "4",
@@ -64,7 +104,7 @@
       {
         "step": "5",
         "type": "iterator",
-        "description": "Create each confirmed PGD table via SERV-Schema createTable.",
+        "description": "Create each confirmed PGD table via SERV-Schema createTable. Each table object carries domain field so PGC_Schema rows have domain populated.",
         "items_key": "proposed_scaffold.tables",
         "item_step": {
           "type": "serv_schema",
@@ -78,21 +118,96 @@
       },
       {
         "step": "6",
-        "type": "serv_insert",
-        "description": "Register domain aliases and help text in PGC_DomainHelp.",
-        "input": { "tableName": "PGC_DomainHelp", "row": "{{proposed_scaffold.domainHelp}}" },
+        "type": "js_transform",
+        "transform_type": "buildDomainHelp",
+        "description": "Build domainHelp object: derive singular alias, generate CRUD command examples with real field names.",
+        "input_key": "proposed_scaffold",
+        "output_key": "proposed_scaffold.domainHelp",
         "on_success": "next",
         "on_failure": "human_feedback"
       },
       {
         "step": "7",
-        "type": "notify",
-        "description": "Confirm domain creation to user.",
-        "message_template": "Domain {{proposed_scaffold.domain}} is ready. {{created_tables_summary}}",
-        "on_success": "end"
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User reviews and confirms aliases and CRUD commands before they are written to PGC_DomainHelp.",
+        "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Confirm to proceed.",
+        "context_key": "proposed_scaffold.domainHelp",
+        "options": [
+          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+        ],
+        "output_key": "confirmed_domain_help",
+        "on_success": "next",
+        "on_failure": "cancel"
       },
       {
         "step": "8",
+        "type": "serv_insert",
+        "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
+        "input": { "tableName": "PGC_DomainHelp", "row": "{{confirmed_domain_help}}" },
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "9",
+        "type": "js_transform",
+        "transform_type": "buildCrudWorkflows",
+        "description": "Generate 4 CRUD workflow definitions (list, add, update, delete) from proposed_scaffold. No LLM — deterministic from column list.",
+        "input_key": "proposed_scaffold",
+        "output_key": "crud_workflows",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "10",
+        "type": "iterator",
+        "description": "Insert each generated CRUD workflow into PGC_Workflow.",
+        "items_key": "crud_workflows",
+        "item_step": {
+          "type": "serv_insert",
+          "input": { "tableName": "PGC_Workflow", "row": "{{item}}" },
+          "on_failure": "human_feedback"
+        },
+        "execution_mode": "sequential",
+        "output_key": "registered_workflows",
+        "on_complete": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "11",
+        "type": "js_transform",
+        "transform_type": "buildIntentMapRows",
+        "description": "Build PGC_IntentMap rows from registered_workflows IDs. Pattern: verb.domain|verb domain|verb my domain.",
+        "input_key": "registered_workflows",
+        "output_key": "intent_map_rows",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "12",
+        "type": "iterator",
+        "description": "Insert each IntentMap row into PGC_IntentMap.",
+        "items_key": "intent_map_rows",
+        "item_step": {
+          "type": "serv_insert",
+          "input": { "tableName": "PGC_IntentMap", "row": "{{item}}" },
+          "on_failure": "human_feedback"
+        },
+        "execution_mode": "sequential",
+        "output_key": "registered_intent_rows",
+        "on_complete": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "13",
+        "type": "notify",
+        "description": "Confirm domain creation with concrete command examples.",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables and 4 CRUD workflows.\n\nTry:\n/mind list my {{proposed_scaffold.domain}}\n/mind add my {{proposed_scaffold.domain}} <field>=<value>\n/mind update my {{proposed_scaffold.domain}} id=<number> <field>=<value>\n/mind delete my {{proposed_scaffold.domain}} id=<number>",
+        "on_success": "end"
+      },
+      {
+        "step": "14",
         "type": "end"
       }
     ]

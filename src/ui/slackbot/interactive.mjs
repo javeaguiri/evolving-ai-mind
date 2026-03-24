@@ -81,6 +81,28 @@ export async function handle(req) {
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
   }
 
+  // Extract any plain_text_input value typed by the user.
+  // Slack puts these in payload.state.values keyed by block_id → action_id → value.
+  // We flatten all values and take the first non-empty one — text_input gates
+  // have exactly one input element per dialog.
+  let inputValue = null;
+  const stateValues = payload.state?.values ?? {};
+  for (const blockValues of Object.values(stateValues)) {
+    for (const actionValue of Object.values(blockValues)) {
+      const text = actionValue?.value?.trim();
+      if (text) {
+        inputValue = text;
+        break;
+      }
+    }
+    if (inputValue) break;
+  }
+
+  // Merge inputValue into responseData so run-workflow can write it to local_state
+  const mergedResponseData = inputValue
+    ? { ...(responseData ?? {}), inputValue }
+    : responseData;
+
   const slackUserId = payload.user?.id;
   const channel     = payload.channel?.id;
   const threadId    = payload.message?.ts;
@@ -136,7 +158,7 @@ export async function handle(req) {
         action:        'resume_gate',
         workflowRunId,
         userResponse,
-        ...(responseData && { responseData }),
+        ...(mergedResponseData && { responseData: mergedResponseData }),
         // message_ts is the ts of the gate message being interacted with.
         // Forwarded so run-workflow can pass it to the re-render WORKFLOW_GATE
         // payload, enabling callback.mjs to chat.update in-place on remove_item.

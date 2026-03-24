@@ -365,6 +365,19 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   const matchedOption = (stepRef.options ?? []).find(o => o.action === userResponse);
   const onSelect      = matchedOption?.on_select ?? 'next';
 
+  // For text_input gates, write the typed value to local_state[output_key]
+  // before popping the frame. The value arrives in responseData.inputValue
+  // (extracted from payload.state.values by interactive.mjs).
+  if (gateType === 'text_input' && responseData?.inputValue && stepRef.output_key) {
+    setPath(localState, stepRef.output_key, responseData.inputValue);
+    frame.local_state = localState;
+    console.info('run-workflow: text_input value written to local_state', {
+      output_key: stepRef.output_key,
+      valueLength: responseData.inputValue.length,
+      traceId,
+    });
+  }
+
   // Pop gate frame
   run.stack.pop();
   const parentFrame = topFrame(run);
@@ -451,12 +464,6 @@ async function executeIteratorItem({ run, traceId }) {
 
     if (parentFrame && frame.output_key) {
       setPath(parentFrame.local_state, frame.output_key, results);
-      // Also write created_tables_summary if this is the schema iterator
-      if (frame.output_key === 'created_tables') {
-        parentFrame.local_state.created_tables_summary = results
-          .map(r => `${r.tableName} — ${r.status}`)
-          .join(', ');
-      }
     }
 
     if (parentFrame) {
