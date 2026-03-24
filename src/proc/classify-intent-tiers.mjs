@@ -132,6 +132,7 @@ export function hasCrudVerb(userInput) {
  * @param {string} rootTable    PGD root table name for this domain
  * @returns {{ action: string, stepType: string, adHocStep: object }
  *         | { action: 'delete', ambiguous: true }
+ *         | { action: 'update', ambiguous: true, reason: 'no_id' | 'no_fields' }
  *         | null}
  */
 export function matchCrudVerb(userInput, domainRow, rootTable) {
@@ -179,6 +180,36 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
               input: {
                 tableName: rootTable,
                 filters:   [{ column: 'id', op: 'eq', value: id }],
+              },
+            },
+          };
+        }
+
+        // Update requires both an explicit ID and at least one field=value pair.
+        // Missing ID → ambiguous with reason 'no_id'
+        // Missing fields → ambiguous with reason 'no_fields'
+        if (pattern.action === 'update') {
+          const idMatch = userInput.match(/\bid\s*[=:]\s*(\d+)\b/i)
+                       ?? userInput.match(/\bid\s+(\d+)\b/i);
+          if (!idMatch) {
+            return { action: 'update', ambiguous: true, reason: 'no_id' };
+          }
+          const updates = parseFieldValues(userInput);
+          // Remove 'id' from updates if the user included it — id is filter only
+          delete updates.id;
+          if (Object.keys(updates).length === 0) {
+            return { action: 'update', ambiguous: true, reason: 'no_fields' };
+          }
+          const id = parseInt(idMatch[1], 10);
+          return {
+            action:   'update',
+            stepType: 'serv_update',
+            adHocStep: {
+              type:  'serv_update',
+              input: {
+                tableName: rootTable,
+                filters:   [{ column: 'id', op: 'eq', value: id }],
+                updates,
               },
             },
           };

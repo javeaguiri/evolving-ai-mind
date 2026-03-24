@@ -183,6 +183,31 @@ async function classify(userInput, sessionId, traceId) {
           };
         }
 
+        // Update verb found — missing ID or missing field=value pairs.
+        // Fetch column names for the error message in both cases.
+        if (crudMatch.ambiguous && crudMatch.action === 'update') {
+          const schemaRow = await getRows('PGC_Schema', [
+            { column: 'table_name', op: 'eq', value: rootTable },
+          ]);
+          const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+          const columns = (schemaRow.rows?.[0]?.columns ?? [])
+            .filter(c => !SYSTEM_COLS.has(c.name))
+            .map(c => c.name);
+          return {
+            intent_category: `update_${domainMatch.domain}`,
+            action_type:     'crud_ambiguous',
+            confidence:      'crud',
+            workflow_name:   null,
+            workflow_id:     null,
+            domain:          domainMatch.domain,
+            ad_hoc_step:     null,
+            known_domains:   domainRows.map(r => r.domain),
+            table_columns:   columns,
+            root_table:      rootTable,
+            ambiguous_reason: crudMatch.reason,
+          };
+        }
+
         // Delete verb found but no ID — return ambiguous so handoff() can
         // send an instructive error. Do not fall to Tier 2 (it would
         // misclassify "delete my recipes" as a heavy_lift or crud intent).
@@ -415,32 +440,47 @@ async function handoff(result, callback, traceId, userInput) {
   }
 
   // CRUD verb present but request is ambiguous — return instructive error.
-  // Three sub-cases:
-  //   insert verb, no field=value pairs  → list the table's fields
-  //   domain known, delete verb, no ID   → tell user to include id=<number>
-  //   domain unknown, any CRUD verb      → list registered domains
+  // Sub-cases:
+  //   insert, no field=value pairs         → list table fields
+  //   update, no ID                        → ask for id=<number>
+  //   update, no field=value pairs         → list table fields
+  //   delete, no ID                        → ask for id=<number>
+  //   unknown domain, any CRUD verb        → list registered domains
   if (result.action_type === 'crud_ambiguous') {
-    const domainList = formatKnownDomains(result.known_domains);
+    const domainList  = formatKnownDomains(result.known_domains);
+    const fieldList   = result.table_columns?.length
+      ? `\n\nAvailable fields: ${result.table_columns.join(', ')}`
+      : '';
+    const firstField  = result.table_columns?.[0] ?? 'name';
 
     if (result.domain && result.intent_category.startsWith('insert_')) {
-      // Insert with no field=value pairs — list the table's columns
-      const fieldList = result.table_columns?.length
-        ? `\n\nAvailable fields: ${result.table_columns.join(', ')}`
-        : '';
       await enqueueCallback(callback, {
         type:    'WORKFLOW_NOTIFY',
         traceId,
-        message: `To add a ${result.domain} record I need field values.${fieldList}\n\nTry: /mind add my ${result.domain} field=value field2=value2\n\nExample: /mind add my ${result.domain} ${result.table_columns?.[0] ?? 'name'}=My New Item`,
+        message: `To add a ${result.domain} record I need field values.${fieldList}\n\nTry: /mind add my ${result.domain} field=value field2=value2\n\nExample: /mind add my ${result.domain} ${firstField}=My New Item`,
       });
+    } else if (result.domain && result.intent_category.startsWith('update_')) {
+      if (result.ambiguous_reason === 'no_id') {
+        await enqueueCallback(callback, {
+          type:    'WORKFLOW_NOTIFY',
+          traceId,
+          message: `To update a ${result.domain} record I need an explicit ID.${fieldList}\n\nTry: /mind update my ${result.domain} id=<number> ${firstField}=New Value\n\nTo find the ID first, use: /mind list my ${result.domain}`,
+        });
+      } else {
+        // no_fields — ID was present but no field=value pairs
+        await enqueueCallback(callback, {
+          type:    'WORKFLOW_NOTIFY',
+          traceId,
+          message: `To update a ${result.domain} record I need at least one field value.${fieldList}\n\nTry: /mind update my ${result.domain} id=<number> ${firstField}=New Value`,
+        });
+      }
     } else if (result.domain && result.intent_category.startsWith('delete_')) {
-      // Domain resolved but ID missing
       await enqueueCallback(callback, {
         type:    'WORKFLOW_NOTIFY',
         traceId,
         message: `To delete a ${result.domain} record I need an explicit ID.\n\nTry: /mind delete my ${result.domain} id=<number>\n\nTo find the ID first, use: /mind list my ${result.domain}`,
       });
     } else {
-      // No domain resolved — CRUD verb present but target unrecognised
       await enqueueCallback(callback, {
         type:    'WORKFLOW_NOTIFY',
         traceId,
@@ -589,6 +629,13 @@ function formatCrudResult(stepType, domain, outputValue, insertedRow = {}) {
       .join(', ');
     const detail = summary ? ` (${summary})` : '';
     return `Added to ${domain ?? 'your data'}${detail}${id ? ` — id: ${id}` : ''}.`;
+  }
+
+  if (stepType === 'serv_update') {
+    const count = outputValue?.updatedCount ?? 0;
+    return count > 0
+      ? `Updated ${count} ${domain ?? 'record'}${domain ? '' : count !== 1 ? 's' : ''}.`
+      : `Nothing updated — no matching record found.`;
   }
 
   if (stepType === 'serv_delete') {
