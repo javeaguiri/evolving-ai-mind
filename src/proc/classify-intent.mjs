@@ -535,7 +535,7 @@ function formatCrudResult(stepType, domain, outputValue) {
     }
     // Show up to 10 rows. Use 'name' field if present, otherwise first non-system field.
     const SYSTEM_FIELDS = new Set(['id', 'created_at', 'updated_at']);
-    const labelField = rows[0] && Object.keys(rows[0]).find(k => k === 'name')
+    const labelField = (rows[0] && Object.keys(rows[0]).find(k => k === 'name'))
       ?? Object.keys(rows[0] ?? {}).find(k => !SYSTEM_FIELDS.has(k))
       ?? 'id';
     const preview = rows.slice(0, 10).map((r, i) => `${i + 1}. ${r[labelField] ?? r.id}`).join('\n');

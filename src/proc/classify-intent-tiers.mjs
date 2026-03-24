@@ -109,7 +109,7 @@ export function hasCrudVerb(userInput) {
 }
 
 
- *
+/**
  * For non-delete verbs: returns the ad_hoc_step immediately on match.
  *
  * For delete verbs: requires an explicit ID in the input.
