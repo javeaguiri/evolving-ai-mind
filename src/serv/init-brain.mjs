@@ -349,14 +349,7 @@ async function seedPGCSchema(client) {
       `INSERT INTO "PGC_Schema"
          (table_name, target, domain, description, columns, foreign_keys, constraints, triggers)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (table_name) DO UPDATE SET
-         domain       = EXCLUDED.domain,
-         description  = EXCLUDED.description,
-         columns      = EXCLUDED.columns,
-         foreign_keys = EXCLUDED.foreign_keys,
-         constraints  = EXCLUDED.constraints,
-         triggers     = EXCLUDED.triggers,
-         updated_at   = now()`,
+       ON CONFLICT (table_name) DO NOTHING`,
       [
         row.table_name, row.target, row.domain ?? null, row.description,
         JSON.stringify(row.columns),
