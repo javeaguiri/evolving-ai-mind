@@ -91,16 +91,42 @@ const CRUD_PATTERNS = [
 ];
 
 /**
- * Detect a CRUD verb in userInput against a resolved domain.
- * Returns an ad_hoc_step definition if matched, or null.
+ * Returns true if userInput contains any CRUD verb from CRUD_PATTERNS.
+ * Used by classify-intent.mjs to detect CRUD intent before falling to Tier 2
+ * when Pass 1b found no domain match.
  *
- * The ad_hoc_step is built but not yet executed — execution requires
- * serv_query/serv_update/serv_delete step types (Phase 3).
+ * @param {string} userInput
+ * @returns {boolean}
+ */
+export function hasCrudVerb(userInput) {
+  const input = userInput.toLowerCase();
+  for (const pattern of CRUD_PATTERNS) {
+    for (const verb of pattern.verbs) {
+      if (input.includes(verb)) return true;
+    }
+  }
+  return false;
+}
+
+
+ *
+ * For non-delete verbs: returns the ad_hoc_step immediately on match.
+ *
+ * For delete verbs: requires an explicit ID in the input.
+ *   Accepted formats: "id=42", "id= 42", "id 42", "id:42"
+ *   - ID found    → returns ad_hoc_step with id filter pre-populated
+ *   - ID missing  → returns { action: 'delete', ambiguous: true }
+ *                   so classify-intent.mjs can return an instructive error
+ *                   without falling through to Tier 2
+ *
+ * Returns null if no CRUD verb matched at all.
  *
  * @param {string} userInput    Raw user input
  * @param {object} domainRow    Matched PGC_DomainHelp row — needs { domain }
- * @param {string} rootTable    PGD root table name for this domain from PGC_EntitySchema
- * @returns {{ action: string, stepType: string, adHocStep: object }|null}
+ * @param {string} rootTable    PGD root table name for this domain
+ * @returns {{ action: string, stepType: string, adHocStep: object }
+ *         | { action: 'delete', ambiguous: true }
+ *         | null}
  */
 export function matchCrudVerb(userInput, domainRow, rootTable) {
   const input = userInput.toLowerCase();
@@ -108,6 +134,30 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
   for (const pattern of CRUD_PATTERNS) {
     for (const verb of pattern.verbs) {
       if (input.includes(verb)) {
+
+        // Delete requires an explicit ID — formats: id=42  id= 42  id 42  id:42
+        if (pattern.action === 'delete') {
+          const idMatch = userInput.match(/\bid\s*[=:]\s*(\d+)\b/i)
+                       ?? userInput.match(/\bid\s+(\d+)\b/i);
+          if (!idMatch) {
+            return { action: 'delete', ambiguous: true };
+          }
+          const id = parseInt(idMatch[1], 10);
+          return {
+            action:   'delete',
+            stepType: 'serv_delete',
+            adHocStep: {
+              type:  'serv_delete',
+              input: {
+                tableName: rootTable,
+                filters:   [{ column: 'id', op: 'eq', value: id }],
+              },
+            },
+          };
+        }
+
+        // All other verbs — return step without filters (list/show queries
+        // return all rows; insert/update are handled by Tier 2 or full workflow)
         return {
           action:   pattern.action,
           stepType: pattern.stepType,

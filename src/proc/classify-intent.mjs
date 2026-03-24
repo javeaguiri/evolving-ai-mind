@@ -22,15 +22,17 @@
 // All business logic is identical for both transports.
 
 import { ok, err }             from '../shared/lambda-utils.mjs';
-import { getRows, updateRows }             from '../shared/serv-client.mjs';
+import { getRows, insertRow, updateRows } from '../shared/serv-client.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import {
   matchIntentMap,
   matchDomainAlias,
   matchCrudVerb,
+  hasCrudVerb,
   buildTier2Prompt,
   resolveTier3Route,
 } from './classify-intent-tiers.mjs';
+import { executeStep } from './step-executor.mjs';
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -156,6 +158,23 @@ async function classify(userInput, sessionId, traceId) {
         console.info('classify-intent: Pass 1c match', {
           action: crudMatch.action, domain: domainMatch.domain, traceId,
         });
+
+        // Delete verb found but no ID — return ambiguous so handoff() can
+        // send an instructive error. Do not fall to Tier 2 (it would
+        // misclassify "delete my recipes" as a heavy_lift or crud intent).
+        if (crudMatch.ambiguous) {
+          return {
+            intent_category: `delete_${domainMatch.domain}`,
+            action_type:     'crud_ambiguous',
+            confidence:      'crud',
+            workflow_name:   null,
+            workflow_id:     null,
+            domain:          domainMatch.domain,
+            ad_hoc_step:     null,
+            known_domains:   domainRows.map(r => r.domain),
+          };
+        }
+
         return {
           intent_category: `${crudMatch.action}_${domainMatch.domain}`,
           action_type:     'crud',
@@ -170,6 +189,26 @@ async function classify(userInput, sessionId, traceId) {
 
     // Domain resolved but no CRUD verb — fall to Tier 2 with domain hint
     return await tier2(userInput, domainMatch.domain, intentRows, traceId);
+  }
+
+  // ── Pass 1b failed — no domain matched ───────────────────────────────────
+  // If the input contains a CRUD verb, the user is almost certainly trying to
+  // operate on a domain they own but phrased it in a way we don't recognise.
+  // Short-circuit here with an instructive error listing their registered
+  // domains — no value in sending this to Tier 2 (it would misclassify it
+  // or burn an LLM call to reach the same conclusion).
+  if (hasCrudVerb(userInput)) {
+    console.info('classify-intent: CRUD verb with no domain match — short-circuit', { traceId });
+    return {
+      intent_category: 'unknown_domain_crud',
+      action_type:     'crud_ambiguous',
+      confidence:      'crud',
+      workflow_name:   null,
+      workflow_id:     null,
+      domain:          null,
+      ad_hoc_step:     null,
+      known_domains:   domainRows.map(r => r.domain),
+    };
   }
 
   // ── Tier 2 — no Tier 1 match ─────────────────────────────────────────────
@@ -349,13 +388,44 @@ async function handoff(result, callback, traceId, userInput) {
     return;
   }
 
-  // CRUD — ad_hoc_step built but not yet executable (Phase 3)
+  // CRUD verb present but request is ambiguous — return instructive error.
+  // Two sub-cases:
+  //   domain known, delete verb, no ID  → tell user to include id=<number>
+  //   domain unknown, any CRUD verb     → list registered domains
+  if (result.action_type === 'crud_ambiguous') {
+    const domainList = formatKnownDomains(result.known_domains);
+
+    if (result.domain && result.intent_category.startsWith('delete_')) {
+      // Domain resolved but ID missing
+      await enqueueCallback(callback, {
+        type:    'WORKFLOW_NOTIFY',
+        traceId,
+        message: `To delete a ${result.domain} record I need an explicit ID.\n\nTry: /mind delete my ${result.domain} id=<number>\n\nTo find the ID first, use: /mind list my ${result.domain}`,
+      });
+    } else {
+      // No domain resolved — CRUD verb present but target unrecognised
+      await enqueueCallback(callback, {
+        type:    'WORKFLOW_NOTIFY',
+        traceId,
+        message: `I could not find a matching domain for that request.${domainList}\n\nTo add a new domain, use: /create-domain`,
+      });
+    }
+    return;
+  }
+
+  // CRUD — execute ad_hoc_step directly and post result as WORKFLOW_NOTIFY.
+  if (result.action_type === 'crud' && result.ad_hoc_step) {
+    await executeCrudStep(result, callback, traceId, userInput);
+    return;
+  }
+
+  // CRUD with no ad_hoc_step (Tier 2 path — domain resolved but no root table)
   if (result.action_type === 'crud') {
     const domainText = result.domain ? ` in your ${result.domain} domain` : '';
     await enqueueCallback(callback, {
       type:    'WORKFLOW_NOTIFY',
       traceId,
-      message: `I understood you want to ${result.intent_category.replace(/_/g, ' ')}${domainText}. CRUD execution coming in Phase 3.`,
+      message: `I understood you want to ${result.intent_category.replace(/_/g, ' ')}${domainText}, but I could not determine which table to use. Try being more specific or use /create-domain to register this domain.`,
     });
     return;
   }
@@ -395,9 +465,116 @@ async function handoff(result, callback, traceId, userInput) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// CRUD ad_hoc_step execution
 // ---------------------------------------------------------------------------
+
+// Executes a single ad_hoc_step built by Pass 1c directly, without a full
+// PGC_WorkflowRun lifecycle. A minimal run context is constructed in-memory
+// so executeStep receives the shape it expects.
+//
+// Supported step types: serv_query, serv_insert, serv_delete (ID required —
+//   enforced upstream in matchCrudVerb; ambiguous deletes never reach here).
+// serv_update is not produced by Pass 1c today (no ad_hoc update pattern).
+
+async function executeCrudStep(result, callback, traceId, userInput) {
+  const step = result.ad_hoc_step;
+
+  // Minimal run context — executeStep only reads run.id, run.callback, run.workflow_name
+  // for logging and gate payloads. Ad_hoc steps never suspend (no human_gate type here).
+  const minimalRun = {
+    id:            0,
+    workflow_name: `ad_hoc_${result.intent_category}`,
+    callback,
+  };
+
+  // local_state carries userInput so any {{input.userInput}} refs in the step resolve.
+  const localState = { input: { userInput } };
+
+  console.info('classify-intent: executeCrudStep', {
+    stepType: step.type,
+    domain:   result.domain,
+    traceId,
+  });
+
+  let stepResult;
+  try {
+    stepResult = await executeStep({ step, localState, run: minimalRun, traceId });
+  } catch (stepError) {
+    console.error('classify-intent: executeCrudStep failed', {
+      stepType: step.type, error: stepError.message, traceId,
+    });
+    await enqueueCallback(callback, {
+      type:    'WORKFLOW_NOTIFY',
+      traceId,
+      message: `Something went wrong with your ${result.domain ?? ''} ${step.type.replace('serv_', '')} request: ${stepError.message}`,
+    });
+    return;
+  }
+
+  const message = formatCrudResult(step.type, result.domain, stepResult.outputValue);
+
+  await enqueueCallback(callback, {
+    type:    'WORKFLOW_NOTIFY',
+    traceId,
+    message,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CRUD result formatting
+// ---------------------------------------------------------------------------
+
+// Produces a plain-text summary of an ad_hoc CRUD step result for the user.
+// Keeps responses concise — detailed data views are for full workflow results.
+
+function formatCrudResult(stepType, domain, outputValue) {
+  if (stepType === 'serv_query') {
+    const rows = Array.isArray(outputValue) ? outputValue : [];
+    if (rows.length === 0) {
+      return `No ${domain ?? 'records'} found.`;
+    }
+    // Show up to 10 rows. Use 'name' field if present, otherwise first non-system field.
+    const SYSTEM_FIELDS = new Set(['id', 'created_at', 'updated_at']);
+    const labelField = rows[0] && Object.keys(rows[0]).find(k => k === 'name')
+      ?? Object.keys(rows[0] ?? {}).find(k => !SYSTEM_FIELDS.has(k))
+      ?? 'id';
+    const preview = rows.slice(0, 10).map((r, i) => `${i + 1}. ${r[labelField] ?? r.id}`).join('\n');
+    const suffix  = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
+    return `Found ${rows.length} ${domain ?? 'record'}${rows.length !== 1 ? 's' : ''}:\n${preview}${suffix}`;
+  }
+
+  if (stepType === 'serv_insert') {
+    const id = outputValue?.id ?? null;
+    return `Added to ${domain ?? 'your data'}${id ? ` (id: ${id})` : ''}.`;
+  }
+
+  if (stepType === 'serv_delete') {
+    const count = outputValue?.deletedCount ?? 0;
+    return count > 0
+      ? `Deleted ${count} ${domain ?? 'record'}${count !== 1 ? 's' : ''}.`
+      : `Nothing deleted — no matching record found.`;
+  }
+
+  // Fallback for any future step types routed here
+  return `Done. ${JSON.stringify(outputValue ?? {}).slice(0, 200)}`;
+}
+
+
 
 function titleCase(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+/**
+ * Format a list of known domain names for display in an error message.
+ * Returns an empty string when no domains are registered yet.
+ *
+ * @param {string[]|null} domains
+ * @returns {string}
+ */
+function formatKnownDomains(domains) {
+  if (!Array.isArray(domains) || domains.length === 0) {
+    return '\n\nYou have no domains registered yet. Use /create-domain to create one.';
+  }
+  return `\n\nYour registered domains are: ${domains.join(', ')}`;
 }
