@@ -47,12 +47,23 @@ export async function handle(req) {
   // Until Phase 3 lands, always generate a fresh UUID.
   const sessionId = randomUUID();
 
-  // Post ACK — becomes the thread root for all async replies from this intent
+  // Post ACK — becomes the thread root for all async replies from this intent.
+  // Echo the user's input (truncated to 100 chars) so the thread is self-describing.
+  // Strip Slack file/attachment tokens (<@U...>, <http...>, <!...>) — these are
+  // references to uploads or special mentions that have no useful text representation.
+  const sanitised = userInput
+    .replace(/<[^>]+>/g, '')   // remove Slack angle-bracket tokens (files, links, mentions)
+    .replace(/\s+/g, ' ')      // collapse whitespace left by removed tokens
+    .trim();
+  const ackText = sanitised.length > 100
+    ? `🧠 "${sanitised.slice(0, 100)}…"`
+    : `🧠 "${sanitised}"`;
+
   let ackTs;
   try {
     const ack = await slack.chat.postMessage({
       channel: slackChannel,
-      text:    '🧠 On it...',
+      text:    ackText,
     });
     ackTs = ack.ts;
   } catch (error) {

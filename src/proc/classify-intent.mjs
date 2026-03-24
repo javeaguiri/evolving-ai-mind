@@ -159,10 +159,34 @@ async function classify(userInput, sessionId, traceId) {
           action: crudMatch.action, domain: domainMatch.domain, traceId,
         });
 
+        // Insert verb found but no field=value pairs — fetch column names from
+        // PGC_Schema and return ambiguous so handoff() can show the correct syntax.
+        if (crudMatch.ambiguous && crudMatch.action === 'insert') {
+          const schemaRow = await getRows('PGC_Schema', [
+            { column: 'table_name', op: 'eq', value: rootTable },
+          ]);
+          const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+          const columns = (schemaRow.rows?.[0]?.columns ?? [])
+            .filter(c => !SYSTEM_COLS.has(c.name))
+            .map(c => c.name);
+          return {
+            intent_category: `insert_${domainMatch.domain}`,
+            action_type:     'crud_ambiguous',
+            confidence:      'crud',
+            workflow_name:   null,
+            workflow_id:     null,
+            domain:          domainMatch.domain,
+            ad_hoc_step:     null,
+            known_domains:   domainRows.map(r => r.domain),
+            table_columns:   columns,
+            root_table:      rootTable,
+          };
+        }
+
         // Delete verb found but no ID — return ambiguous so handoff() can
         // send an instructive error. Do not fall to Tier 2 (it would
         // misclassify "delete my recipes" as a heavy_lift or crud intent).
-        if (crudMatch.ambiguous) {
+        if (crudMatch.ambiguous && crudMatch.action === 'delete') {
           return {
             intent_category: `delete_${domainMatch.domain}`,
             action_type:     'crud_ambiguous',
@@ -172,6 +196,8 @@ async function classify(userInput, sessionId, traceId) {
             domain:          domainMatch.domain,
             ad_hoc_step:     null,
             known_domains:   domainRows.map(r => r.domain),
+            table_columns:   [],
+            root_table:      rootTable,
           };
         }
 
@@ -389,13 +415,24 @@ async function handoff(result, callback, traceId, userInput) {
   }
 
   // CRUD verb present but request is ambiguous — return instructive error.
-  // Two sub-cases:
-  //   domain known, delete verb, no ID  → tell user to include id=<number>
-  //   domain unknown, any CRUD verb     → list registered domains
+  // Three sub-cases:
+  //   insert verb, no field=value pairs  → list the table's fields
+  //   domain known, delete verb, no ID   → tell user to include id=<number>
+  //   domain unknown, any CRUD verb      → list registered domains
   if (result.action_type === 'crud_ambiguous') {
     const domainList = formatKnownDomains(result.known_domains);
 
-    if (result.domain && result.intent_category.startsWith('delete_')) {
+    if (result.domain && result.intent_category.startsWith('insert_')) {
+      // Insert with no field=value pairs — list the table's columns
+      const fieldList = result.table_columns?.length
+        ? `\n\nAvailable fields: ${result.table_columns.join(', ')}`
+        : '';
+      await enqueueCallback(callback, {
+        type:    'WORKFLOW_NOTIFY',
+        traceId,
+        message: `To add a ${result.domain} record I need field values.${fieldList}\n\nTry: /mind add my ${result.domain} field=value field2=value2\n\nExample: /mind add my ${result.domain} ${result.table_columns?.[0] ?? 'name'}=My New Item`,
+      });
+    } else if (result.domain && result.intent_category.startsWith('delete_')) {
       // Domain resolved but ID missing
       await enqueueCallback(callback, {
         type:    'WORKFLOW_NOTIFY',
@@ -511,7 +548,7 @@ async function executeCrudStep(result, callback, traceId, userInput) {
     return;
   }
 
-  const message = formatCrudResult(step.type, result.domain, stepResult.outputValue);
+  const message = formatCrudResult(step.type, result.domain, stepResult.outputValue, step.input?.row);
 
   await enqueueCallback(callback, {
     type:    'WORKFLOW_NOTIFY',
@@ -527,7 +564,7 @@ async function executeCrudStep(result, callback, traceId, userInput) {
 // Produces a plain-text summary of an ad_hoc CRUD step result for the user.
 // Keeps responses concise — detailed data views are for full workflow results.
 
-function formatCrudResult(stepType, domain, outputValue) {
+function formatCrudResult(stepType, domain, outputValue, insertedRow = {}) {
   if (stepType === 'serv_query') {
     const rows = Array.isArray(outputValue) ? outputValue : [];
     if (rows.length === 0) {
@@ -538,20 +575,26 @@ function formatCrudResult(stepType, domain, outputValue) {
     const labelField = (rows[0] && Object.keys(rows[0]).find(k => k === 'name'))
       ?? Object.keys(rows[0] ?? {}).find(k => !SYSTEM_FIELDS.has(k))
       ?? 'id';
-    const preview = rows.slice(0, 10).map((r, i) => `${i + 1}. ${r[labelField] ?? r.id}`).join('\n');
+    const preview = rows.slice(0, 10).map((r, i) => `${i + 1}. ${r[labelField] ?? r.id} (id: ${r.id})`).join('\n');
     const suffix  = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
-    return `Found ${rows.length} ${domain ?? 'record'}${rows.length !== 1 ? 's' : ''}:\n${preview}${suffix}`;
+    return `Found ${rows.length} ${domain ?? 'record'}${domain ? '' : rows.length !== 1 ? 's' : ''}:\n${preview}${suffix}`;
   }
 
   if (stepType === 'serv_insert') {
-    const id = outputValue?.id ?? null;
-    return `Added to ${domain ?? 'your data'}${id ? ` (id: ${id})` : ''}.`;
+    const id  = outputValue?.id ?? null;
+    const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+    const summary = Object.entries(insertedRow ?? {})
+      .filter(([k]) => !SYSTEM_COLS.has(k))
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ');
+    const detail = summary ? ` (${summary})` : '';
+    return `Added to ${domain ?? 'your data'}${detail}${id ? ` — id: ${id}` : ''}.`;
   }
 
   if (stepType === 'serv_delete') {
     const count = outputValue?.deletedCount ?? 0;
     return count > 0
-      ? `Deleted ${count} ${domain ?? 'record'}${count !== 1 ? 's' : ''}.`
+      ? `Deleted ${count} ${domain ?? 'record'}${domain ? '' : count !== 1 ? 's' : ''}.`
       : `Nothing deleted — no matching record found.`;
   }
 

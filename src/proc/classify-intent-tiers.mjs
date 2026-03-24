@@ -141,6 +141,28 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
     for (const verb of pattern.verbs) {
       if (input.includes(verb)) {
 
+        // Insert requires at least one field=value pair.
+        // Accepted format: field=value  field="multi word value"
+        // If none found, return ambiguous so the caller can list the table's
+        // columns and show the correct syntax.
+        if (pattern.action === 'insert') {
+          const row = parseFieldValues(userInput);
+          if (Object.keys(row).length === 0) {
+            return { action: 'insert', ambiguous: true };
+          }
+          return {
+            action:   'insert',
+            stepType: 'serv_insert',
+            adHocStep: {
+              type:  'serv_insert',
+              input: {
+                tableName: rootTable,
+                row,
+              },
+            },
+          };
+        }
+
         // Delete requires an explicit ID — formats: id=42  id= 42  id 42  id:42
         if (pattern.action === 'delete') {
           const idMatch = userInput.match(/\bid\s*[=:]\s*(\d+)\b/i)
@@ -239,4 +261,41 @@ export function resolveTier3Route(intentCategory) {
     sqsType:    'WORKFLOW_NOTIFY',
     notifyText: 'I understood this but have no workflow for it yet. Use /create-workflow to build one.',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse field=value pairs from a user input string.
+ * Supports:
+ *   name=Eggs Benedict          → { name: 'Eggs Benedict' }  (unquoted, space-terminated by next key=)
+ *   name="Eggs Benedict"        → { name: 'Eggs Benedict' }  (double-quoted)
+ *   name='Eggs Benedict'        → { name: 'Eggs Benedict' }  (single-quoted)
+ *   servings=4                  → { servings: '4' }
+ *
+ * All values are returned as strings — SERV and PostgreSQL handle type coercion.
+ * System columns (id, created_at, updated_at) are excluded even if provided.
+ *
+ * @param {string} userInput
+ * @returns {object}  Plain object of field→value pairs, may be empty
+ */
+function parseFieldValues(userInput) {
+  const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+  const row = {};
+
+  // Match: word=  optionally followed by quoted or unquoted value
+  // Quoted:   field="value with spaces"  or  field='value with spaces'
+  // Unquoted: field=value  (terminates at next word= or end of string)
+  const pattern = /(\w+)\s*=\s*(?:"([^"]*?)"|'([^']*?)'|([^=\s]+(?:\s+(?!\w+=)[^=\s]+)*))/g;
+  let match;
+  while ((match = pattern.exec(userInput)) !== null) {
+    const key   = match[1];
+    const value = (match[2] ?? match[3] ?? match[4] ?? '').trim();
+    if (!SYSTEM_COLS.has(key) && value !== '') {
+      row[key] = value;
+    }
+  }
+  return row;
 }
