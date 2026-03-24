@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — create_workflow next  
-Last updated: 2026-03-23 (session 8)
+Status: Active development — create_domain revision (Phase 2 item 4a) next  
+Last updated: 2026-03-24 (session 9)
 
 ---
 
@@ -485,10 +485,13 @@ On every Lambda cold start, `bootstrap()` runs and is idempotent:
 2. `CREATE TABLE IF NOT EXISTS` for all PGC system tables (from imported JSON templates)
 3. Seed self-referential rows into `PGC_Schema` (`ON CONFLICT DO NOTHING`)
 4. Seed gatekeeper rows into `PGC_TableMap` (`ON CONFLICT DO NOTHING`)
-5. Seed `PGC_Prompt` rows for system workflows (`ON CONFLICT DO NOTHING`)
+5. Seed `PGC_Prompt` rows for system workflows (`ON CONFLICT DO NOTHING` via `WHERE NOT EXISTS`)
 6. Seed `PGC_Workflow` rows for system workflows (`ON CONFLICT DO NOTHING`)
 7. Seed `PGC_IntentMap` rows (`ON CONFLICT DO NOTHING`)
 8. Set `bootstrapComplete = true` — skipped on warm containers
+
+All seed operations use `ON CONFLICT DO NOTHING` or `WHERE NOT EXISTS` — never `DO UPDATE`.
+This ensures concurrent cold-start bootstraps are fully idempotent and cannot race on the same rows.
 
 Bootstrap template files live in `src/serv/templates/pgc/` and are imported as ES module
 static imports — NOT read via `fs.readFile` at runtime.
@@ -1227,7 +1230,7 @@ Tier 2 — Cheap LLM classification (perplexity/sonar via LLM_CHAT_URL)
   meal plan" classifiable by giving sonar the prior context that the user was working
   with recipes.
   ├── workflow_name found in PGC_Workflow → load workflow → enqueue WORKFLOW_STEP execute_top
-  ├── action_type = 'crud'               → build ad_hoc_step → WORKFLOW_NOTIFY today (Phase 3 to execute)
+  ├── action_type = 'crud'               → execute ad_hoc_step (serv_query/insert/update/delete) → WORKFLOW_NOTIFY with result
   └── action_type = 'heavy_lift'         → Tier 3
   │
   ▼
@@ -1238,14 +1241,14 @@ Tier 3 — Heavy lift handoff (no additional LLM call — routes to existing ent
                                              Use /create-workflow to build one."
 ```
 
-**CRUD ad_hoc_step execution status:** The preprocessor correctly classifies CRUD intents
-and builds the right `ad_hoc_step` (e.g. `{ type: "serv_query", input: { tableName: "PGD_Recipes" } }`).
-However, `serv_query`, `serv_update`, and `serv_delete` step types are not yet implemented
-in `step-executor.mjs`. Today the response for unexecutable CRUD intents is a `WORKFLOW_NOTIFY`
-acknowledging the intent. Execution is the same Phase 3 work as implementing those step types
-for LLM-generated workflows — they are the same item viewed from two angles. When those three
-Step Processor cases are built in Phase 3, both CRUD ad_hoc_steps and LLM-generated workflow
-steps that use them will start working simultaneously.
+**CRUD ad_hoc_step execution status:** The preprocessor classifies CRUD intents,
+enforces structured input (field=value for insert/update, id=<number> for delete/update),
+builds the correct ad_hoc_step, and executes it directly via `executeStep` in `executeCrudStep()`.
+Results are posted as `WORKFLOW_NOTIFY`. All four verbs (list, add, update, delete) are live.
+Delete and update require explicit `id=<number>`. Insert and update require `field=value` pairs.
+Ambiguous requests return instructive errors listing available fields and correct syntax.
+Named workflow CRUD operations (multi-step, child table support) are built by `create_domain`
+as part of Phase 2 item 4a.
 
 #### PGC_IntentMap bootstrap rows (seeded at init-brain bootstrap)
 
@@ -1428,6 +1431,11 @@ It demonstrates the full capability of the Step Processor — LLM calls, multi-s
 human review gates with branching, iterators, and service calls — all driven by
 the declarative step schema in Section 6.2.
 
+After domain creation, the workflow automatically generates four named CRUD workflows
+(`list_<domain>`, `add_<domain>`, `update_<domain>`, `delete_<domain>`) and registers
+them in `PGC_Workflow`, `PGC_IntentMap`, and `PGC_DomainHelp`. This makes the domain
+immediately usable from `/mind` without any additional setup.
+
 #### Bootstrap seeds required (in `init-brain.mjs`)
 
 **`PGC_Prompt` rows:**
@@ -1439,23 +1447,49 @@ the declarative step schema in Section 6.2.
 
 **`PGC_IntentMap` row:** pattern `create.domain|new.domain|build.domain`, workflow_id → create_domain
 
+#### Step numbering note
+
+Step keys are strings throughout. The add-table branch uses steps `3a`, `3b`, `3c`.
+Steps 8 and 9 are new in this revision — CRUD workflow generation and IntentMap registration.
+Total: 11 main-path steps plus the 3-step add-table branch.
+
+The `create_domain` workflow contains the first backward step reference in the system:
+step 3c uses `on_success: "step:3"` to loop back to the `edit_list` gate after adding a table.
+
+#### CRUD workflow generation — deterministic, no LLM
+
+Steps 8 and 9 generate four named workflows from the domain's root table and column
+definitions. Generation is deterministic — the column list is already known from the
+LLM scaffold. No additional LLM call is needed. The four workflows are:
+
+| Workflow name | Steps | Purpose |
+|---|---|---|
+| `list_<domain>` | serv_query → notify | List all records |
+| `add_<domain>` | human_gate (text_input for each field) → serv_insert → notify | Add a record with field guidance |
+| `update_<domain>` | serv_query → human_gate (select_one) → human_gate (edit fields) → serv_update → notify | Update a specific record |
+| `delete_<domain>` | serv_query → human_gate (select_one, confirm) → serv_delete → notify | Delete with confirmation |
+
+These workflows are inserted via a `js_transform` step that builds the workflow definitions
+from `proposed_scaffold`, followed by an `iterator` of `serv_insert` steps.
+
+#### Alias generation — rule-based, no LLM
+
+The domain name is always included as an alias. Singular form is derived by stripping
+a trailing 's' if present (e.g. "recipes" → "recipe"). Both forms plus the domain name
+are included in `PGC_DomainHelp.aliases`. This covers the common case without an LLM call.
+Edge cases (irregular plurals) can be corrected via the alias management workflow (Phase 3).
+
 #### Declarative step definitions
 
 Note: all `step` keys are strings. All `message_template` and `option.label`
 values are plain text — no emoji, no markup. The renderer adds all formatting.
-`gate_type` values are primitive UI types from the catalogue in Section 6.6.
-
-The `create_domain` workflow contains the first backward step reference in the
-system: step 3c uses `on_success: "step:3"` to loop back to the `edit_list`
-gate after adding a table. This is supported by the existing Step Processor's
-`resolveNextStep` logic via the `step:N` routing syntax.
 
 ```json
 [
   {
     "step": "1",
     "type": "llm_call",
-    "description": "LLM designs full domain schema. Must produce one primary table (no FK references) and zero or more child tables referencing it.",
+    "description": "LLM designs full domain schema.",
     "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
     "output_key": "proposed_scaffold",
     "on_success": "next",
@@ -1464,7 +1498,7 @@ gate after adding a table. This is supported by the existing Step Processor's
   {
     "step": "2",
     "type": "js_transform",
-    "description": "Enrich each table in proposed_scaffold.tables with a columnSummary string — first 4 non-system column names joined with ', '. Required by the edit_list gate at step 3.",
+    "description": "Enrich each table with columnSummary for the edit_list gate.",
     "input_key": "proposed_scaffold.tables",
     "output_key": "proposed_scaffold.tables",
     "on_success": "next",
@@ -1474,7 +1508,7 @@ gate after adding a table. This is supported by the existing Step Processor's
     "step": "3",
     "type": "human_gate",
     "gate_type": "edit_list",
-    "description": "User reviews proposed table list. Child tables (FK references > 0) may be removed. Primary table cannot be removed. User may also add a child table.",
+    "description": "User reviews proposed table list.",
     "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove child tables you don't need, or add one that's missing.",
     "context_key": "proposed_scaffold.tables",
     "item_primary_key": "tableName",
@@ -1509,7 +1543,7 @@ gate after adding a table. This is supported by the existing Step Processor's
   {
     "step": "3b",
     "type": "llm_call",
-    "description": "LLM designs the new table based on user description. Uses design_table prompt which receives domain name, existing table list (for FK context), and user description.",
+    "description": "LLM designs the new table from user description.",
     "input": {
       "prompt": "design_table",
       "domain": "{{proposed_scaffold.domain}}",
@@ -1523,7 +1557,7 @@ gate after adding a table. This is supported by the existing Step Processor's
   {
     "step": "3c",
     "type": "js_transform",
-    "description": "Merge new table into proposed_scaffold.tables and enrich with columnSummary. on_success loops back to step 3 so the user sees the updated list.",
+    "description": "Merge new table into proposed_scaffold.tables and re-enrich. Loops back to step 3.",
     "input_key": "proposed_scaffold.tables",
     "output_key": "proposed_scaffold.tables",
     "on_success": "step:3",
@@ -1545,7 +1579,7 @@ gate after adding a table. This is supported by the existing Step Processor's
   {
     "step": "5",
     "type": "iterator",
-    "description": "Create each confirmed PGD table via SERV-Schema createTable.",
+    "description": "Create each confirmed PGD table via SERV-Schema createTable. Domain name threaded through so PGC_Schema rows have domain populated.",
     "items_key": "proposed_scaffold.tables",
     "item_step": {
       "type": "serv_schema",
@@ -1559,10 +1593,19 @@ gate after adding a table. This is supported by the existing Step Processor's
   },
   {
     "step": "6",
+    "type": "js_transform",
+    "description": "Build domain help object: derive singular alias, generate CRUD command examples using real column names from proposed_scaffold.",
+    "input_key": "proposed_scaffold",
+    "output_key": "proposed_scaffold.domainHelp",
+    "on_success": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": "7",
     "type": "human_gate",
     "gate_type": "review_object",
-    "description": "User reviews and confirms the proposed domain aliases and description before they are written to PGC_DomainHelp. Aliases drive Tier 1b intent matching — they must be human-approved.",
-    "message_template": "Almost done. Here are the aliases and description I'll use so you can find this domain later. Edit them if needed.",
+    "description": "User reviews and confirms aliases and CRUD command examples before they are written to PGC_DomainHelp.",
+    "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Edit them if needed.",
     "context_key": "proposed_scaffold.domainHelp",
     "options": [
       { "label": "Looks good", "action": "confirm", "on_select": "next"   },
@@ -1573,35 +1616,69 @@ gate after adding a table. This is supported by the existing Step Processor's
     "on_failure": "cancel"
   },
   {
-    "step": "7",
+    "step": "8",
     "type": "serv_insert",
-    "description": "Register confirmed domain aliases and help text in PGC_DomainHelp.",
+    "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
     "input": { "tableName": "PGC_DomainHelp", "row": "{{confirmed_domain_help}}" },
     "on_success": "next",
     "on_failure": "human_feedback"
   },
   {
-    "step": "8",
+    "step": "9",
+    "type": "js_transform",
+    "description": "Build four CRUD workflow definitions (list, add, update, delete) from proposed_scaffold root table and columns. No LLM call — deterministic from column list.",
+    "input_key": "proposed_scaffold",
+    "output_key": "crud_workflows",
+    "on_success": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": "10",
+    "type": "iterator",
+    "description": "Insert each generated CRUD workflow into PGC_Workflow and PGC_IntentMap.",
+    "items_key": "crud_workflows",
+    "item_step": {
+      "type": "serv_insert",
+      "input": "{{item}}",
+      "on_failure": "human_feedback"
+    },
+    "execution_mode": "sequential",
+    "output_key": "registered_workflows",
+    "on_complete": "next",
+    "on_failure": "human_feedback"
+  },
+  {
+    "step": "11",
     "type": "notify",
-    "description": "Confirm domain creation to user.",
-    "message_template": "Domain {{proposed_scaffold.domain}} is ready. {{created_tables_summary}}",
+    "description": "Confirm domain creation with concrete command examples.",
+    "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry these commands:\n/mind list my {{proposed_scaffold.domain}}\n/mind add my {{proposed_scaffold.domain}} <field>=<value>\n/mind update my {{proposed_scaffold.domain}} id=<number> <field>=<value>\n/mind delete my {{proposed_scaffold.domain}} id=<number>",
     "on_success": "end"
   },
   {
-    "step": "9",
+    "step": "12",
     "type": "end"
   }
 ]
 ```
 
-#### Step numbering note
+#### Note on step 5 — domain: null fix
 
-The current deployed `seed_PGC_Workflow.json` has 8 steps (steps 1–8). The revised
-definition above has 9 main-path steps plus the 3-step add-table branch (3a, 3b, 3c).
-After deploying the updated seed file, run `upsert-workflow.mjs create_domain` to
-update the stored workflow. All existing WorkflowRun rows from before this change
-reference step keys by string — they will continue to execute correctly against the
-old step list until they complete.
+The iterator's `item_step` receives `{{item}}` which is the full table object from
+`proposed_scaffold.tables`. Each table object must include a `domain` field so that
+`serv_schema createTable` writes `domain` to both `PGC_Schema` and `PGC_TableMap`.
+The `js_transform` at step 2 is responsible for enriching each table object with
+`domain: proposed_scaffold.domain` alongside `columnSummary`.
+This fixes the `domain: null` tech debt item for all DDL-created tables.
+
+#### Note on steps 6 and 9 — js_transform built-ins required
+
+Steps 6 and 9 use `js_transform`. Both require registered built-ins:
+- **Step 6 built-in: `buildDomainHelp`** — derives singular alias, builds `commands` array
+  with concrete field examples from `proposed_scaffold.tables[0].columns`
+- **Step 9 built-in: `buildCrudWorkflows`** — generates four workflow definitions and
+  four `PGC_IntentMap` rows from root table name and column list
+
+Both are added to `step-executor.mjs` alongside the existing `columnSummary` built-in.
 
 #### Local state shape during execution
 
@@ -1610,14 +1687,26 @@ old step list until they complete.
   "input": { "userInput": "stock portfolio with price history" },
   "proposed_scaffold": {
     "domain": "stock_portfolio",
-    "tables": [...],
-    "domainHelp": { "domain": "stock_portfolio", "aliases": ["stocks", "portfolio", "holdings"], "description": "..." }
+    "tables": [{ "tableName": "PGD_Portfolios", "domain": "stock_portfolio", "columnSummary": "name, description", ... }],
+    "domainHelp": {
+      "domain": "stock_portfolio",
+      "aliases": ["stock_portfolio", "stock", "portfolio", "holdings"],
+      "description": "...",
+      "commands": [
+        { "verb": "list",   "example": "/mind list my stock_portfolio" },
+        { "verb": "add",    "example": "/mind add my stock_portfolio name=My Portfolio" },
+        { "verb": "update", "example": "/mind update my stock_portfolio id=1 name=Updated" },
+        { "verb": "delete", "example": "/mind delete my stock_portfolio id=1" }
+      ]
+    }
   },
-  "new_table_description": "a table to track analyst ratings for each stock",
-  "new_table": { "tableName": "PGD_AnalystRatings", ... },
+  "confirmed_domain_help": { ... },
   "created_tables": [...],
-  "created_tables_summary": "PGD_Portfolios — created, PGD_Holdings — created ...",
-  "confirmed_domain_help": { "domain": "stock_portfolio", "aliases": ["stocks", "portfolio"], "description": "..." }
+  "crud_workflows": [
+    { "workflow": { "name": "list_stock_portfolio", ... }, "intent_map": { "pattern": "list.stock_portfolio|show.stock_portfolio", ... } },
+    ...
+  ],
+  "registered_workflows": [...]
 }
 ```
 
@@ -2532,37 +2621,40 @@ from within Slack without touching the database.
 | `resume_gate` routes to HELP workflow only | ~~High~~ | ✅ Resolved — Step Processor dispatches generically via `run-workflow.mjs dispatchSqs()`. No per-workflow routing in handler |
 | `create-domain.mjs` ignores scaffold from design-domain and calls LLM again | ~~High~~ | ✅ Resolved — Step Processor drives `create_domain` declaratively from `PGC_Workflow.steps` |
 | Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `WORKFLOW_GATE` → `callback.mjs` `chat.update` |
-| Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — blocked on `serv_query` step type (Phase 3) |
+| Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — now unblocked, fix in Phase 2 item 4a |
 | `create_domain` prompt produces varying schemas across runs | Medium | LLM variance at `temperature: 0.2`. Correct fix: right-brain prompt evolution via `PGC_WorkflowStats` + `PGC_Prompt.error_log`. Do not invest in defensive patching before the feedback loop exists |
-| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. All `js_transform` steps currently require a registered built-in. Blocked on Phase 3 JS sandbox |
+| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. New built-ins `buildDomainHelp` and `buildCrudWorkflows` added for Phase 2 item 4a. Generic sandbox deferred to Phase 3 |
 | `PGC_WorkflowRunStep` idempotency uses `parseInt(stepNumber)` | Medium | String step keys like `"3b"` resolve to `0` — idempotency check will be incorrect when branch steps with string keys execute. Fix when `condition` step type is implemented or when the add-table branch is first tested |
-| `created_tables_summary` hardcoded in iterator | Low | Iterator completion in `run-workflow.mjs` writes `created_tables_summary` via a domain-specific string. Should be generic — driven by step definition |
-| `domain: null` on DDL-created tables | Medium | `PGC_Schema` and `PGC_TableMap` rows inserted by the DDL iterator have `domain: null`. Domain name needs to be threaded through `serv_schema` step input. Fix in next `create_domain` workflow version |
+| `created_tables_summary` hardcoded in iterator | ~~Low~~ | ✅ Resolved — `notify` step message_template now uses `proposed_scaffold.domain` and explicit command examples instead of the hardcoded iterator summary |
+| `domain: null` on DDL-created tables | ~~Medium~~ | ✅ Resolved in Phase 2 item 4a — `js_transform` at step 2 enriches each table object with `domain: proposed_scaffold.domain` before the DDL iterator runs. `serv_schema createTable` writes domain to both `PGC_Schema` and `PGC_TableMap` |
 | `design-domain.mjs` dead code | Low | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — `delete-domain` covers full domains; per-table orphan cleanup is manual |
 | AWS infrastructure cost — Bastion Host public IPv4 | Low | EC2 Bastion accrues ~$2.82/month in public IPv4 charges. Replace with AWS SSM Session Manager when promotional credits near exhaustion |
 | W3C `traceparent` format for `traceId` | Low | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
 | `updateTable` ALTER TABLE | Medium | Currently metadata only — does not execute ALTER TABLE |
-| Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`, `resolveTemplate`, `evalItemCondition`, `matchIntentMap`, `matchDomainAlias`, `matchCrudPattern`. Use `node:test` built-in |
+| Unit tests | Medium | Test pure functions first: `buildCreateTableSQL`, `validateCreatePayload`, `parseEvent`, `resolveTemplate`, `evalItemCondition`, `matchIntentMap`, `matchDomainAlias`, `matchCrudPattern`, `parseFieldValues`, `hasCrudVerb`. Use `node:test` built-in |
 | Integration tests | Low | Defer until intent pipeline complete — use `testcontainers` + PostgreSQL |
 | CI/CD GitHub Actions | Low | Deliberately deferred until `template.yaml` stabilises |
 | Dependency injection for DB clients | Medium | Needed for unit testability — clients currently instantiated at module level |
 | PROC/SERV API Gateway resource policy | Medium | Restrict to AWS account-scoped requests before any public exposure — see Section 12.3 |
-| Refactor `proc/create-domain.mjs` private `servFetch` + `callLlm` | ~~Low~~ | ✅ Resolved — extracted to `src/shared/serv-client.mjs` and `src/shared/llm-client.mjs` |
 | `callback` routing pattern not enforced at compile time | Low | Every PROC endpoint reading callback from SQS must use `req.callback ?? req.body?.callback ?? null`. Currently convention only |
 | Terraform state — legacy infrastructure | Low | Terraform config in `terraform-aws/` predates SAM migration. Check for orphaned AWS resources before decommissioning |
 | Azure MSAL token utility (`src/lib/getAccessToken.js`) | Low | Vercel-era artifact. Assess for Teams Experience tier or decommission |
-| `upsert-workflow.mjs` required on fresh deploys | Low | `init-brain` uses `ON CONFLICT DO NOTHING` — must run `upsert-workflow.mjs <name>` after any workflow step changes. Required after deploying the revised `create_domain` 9-step definition |
+| `upsert-workflow.mjs` required on fresh deploys | Low | `init-brain` uses `ON CONFLICT DO NOTHING` — must run `upsert-workflow.mjs <name>` after any workflow step changes. Required after deploying the revised `create_domain` 12-step definition |
 | `create_workflow` workflow steps empty | ~~Low~~ | Full step definition added in Section 6.9 — Phase 2 implementation item |
-| Tier 1 sub-pass 2b — intent_keywords keyword scan | Low | After Pass 1b resolves a domain, scan `PGC_Workflow.intent_keywords` for workflows whose `domain` column matches. Zero LLM cost. Designed this session, deferred to Phase 3. Will be superseded by pgvector semantic search. `intent_keywords` column already exists on `PGC_Workflow` — no schema change needed |
-| CRUD ad_hoc_step execution | Medium | `classify-intent.mjs` correctly classifies CRUD intents and builds `ad_hoc_step`. Execution requires `serv_query`, `serv_update`, `serv_delete` step types in `step-executor.mjs`. This is the same Phase 3 work as those step types — one combined item. When they land, both LLM-generated workflow steps and preprocessor ad_hoc_steps start working simultaneously |
-| `design_table` prompt not yet seeded | High | Required by `create_domain` Step 3b (add-table branch). Must be added to `seed_PGC_Prompt.json` before the revised `create_domain` workflow is deployed. Blocked if missing |
+| Tier 1 sub-pass 2b — intent_keywords keyword scan | Low | After Pass 1b resolves a domain, scan `PGC_Workflow.intent_keywords` for workflows whose `domain` column matches. Zero LLM cost. Deferred to Phase 3. Will be superseded by pgvector semantic search. `intent_keywords` column already exists on `PGC_Workflow` — no schema change needed |
+| CRUD ad_hoc_step execution | ~~Medium~~ | ✅ Resolved — `serv_query`, `serv_update`, `serv_delete` step types live in `step-executor.mjs`. `executeCrudStep()` in `classify-intent.mjs` executes ad_hoc steps directly. All four verbs (list, add, update, delete) working. Structured input enforced: `id=<number>` for delete/update, `field=value` pairs for insert/update |
+| `design_table` prompt not yet seeded | High | Required by `create_domain` Step 3b (add-table branch). Must be added to `seed_PGC_Prompt.json` before the revised `create_domain` workflow is deployed |
 | Guard 3 cycle detector — backward reference handling | Medium | Guard 3 must distinguish intentional gate-bounded loops (e.g. step 3c → step 3 in create_domain) from tight computational loops. Rule: a backward reference is safe if the path from target back to source contains at least one `human_gate` step |
 | Session layer — PGC_Session + PGC_SessionEntry | Medium | Phase 3. Requires `PGC_WorkflowRun.session_id` FK column migration. `mind.mjs` session lookup via `getRows` on `callback.threadId`. Step Processor writes activity entries at `end` steps and `confirm` gate resolutions. `classify-intent.mjs` writes message entries. See Section 4.3.4 and 6.13 |
 | `PGC_WorkflowRun.session_id` FK column | Medium | Phase 3 — add `session_id integer FK → PGC_Session.id nullable` to `PGC_WorkflowRun`. Required by session layer. Migration script needed — column did not exist at bootstrap |
-| Alias management workflow `/mind edit aliases for <domain>` | Low | Phase 2 item 4c. Allows users to update `PGC_DomainHelp.aliases` from Slack without touching the DB. Until this exists, aliases must be updated via SERV table endpoint directly |
+| Alias management workflow `/mind edit aliases for <domain>` | Low | Phase 3. Allows users to view and update `PGC_DomainHelp.aliases` from Slack without touching the DB. Until this exists, aliases can be corrected directly via SERV table endpoint. Rule-based singular/plural derivation in Phase 2 item 4a covers the common case |
 | Session context window size configurable | Low | `chat_defaults` key in `PGC_SystemContext` should define `session_context_limit` (default 20). Currently hardcoded in classify-intent.mjs spec — externalise when session layer is built |
+| Concurrent bootstrap race — `tuple concurrently updated` | ~~High~~ | ✅ Resolved — `seedPGCSchema` changed from `ON CONFLICT DO UPDATE` to `ON CONFLICT DO NOTHING`. All seed functions now use `DO NOTHING` or `WHERE NOT EXISTS`. Concurrent cold-start bootstraps are fully idempotent |
+| `/mind` ACK non-descriptive | ~~Low~~ | ✅ Resolved — ACK now echoes user input truncated to 100 chars. Slack angle-bracket tokens stripped |
+| `matchDomainAlias` did not match domain name itself | ~~Medium~~ | ✅ Resolved — domain name checked as implicit alias before scanning aliases array |
+| CRUD verb ambiguity not enforced uniformly | ~~Medium~~ | ✅ Resolved — insert requires `field=value` pairs, update requires `id=<number>` + `field=value`, delete requires `id=<number>`. Ambiguous requests return instructive errors listing available fields |
 
 ---
 
@@ -2640,6 +2732,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-step-processor-complete` | Step Processor fully operational: run-workflow.mjs, step-executor.mjs, template-resolver.mjs. First successful create_domain end-to-end (WorkflowRun 12 — PGD_Recipes, PGD_Ingredients, PGD_RecipeTags). help workflow through Step Processor |
 | `v3.2-tangential-features` | /create-domain + /help fully wired to Step Processor. proc/create-domain.mjs as Step Processor entry point. dev_scripts/upsert-workflow.mjs. seed_PGC_Workflow.json: create_domain v2 (8 steps) + help (3 steps) + create_workflow stub |
 | `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational end-to-end. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs. Three-tier pipeline verified: Pass 1a (exact), Pass 1b+1c (alias+CRUD with PGC_Schema fallback), Tier 2 (sonar via LLM_CHAT_URL, prompt from PGC_Prompt). Tier 3 routes to CREATE_DOMAIN / CREATE_WORKFLOW / WORKFLOW_NOTIFY. /mind and /m verified in Slack. openapi.yaml v3.3.5. seed_PGC_Prompt.json: classify_intent_tier2 row added. callback.mjs: runId suppressed when absent. Architecture session 7: WorkflowQueue two-category framing, PGC_Session + PGC_SessionEntry design, intent tuning surface, session architecture Section 6.13 |
+| `v3.2-crud-adhoc-complete` | Ad_hoc CRUD execution from /mind fully operational. serv_query/update/delete step types live in step-executor.mjs. deleteRows wrapper in serv-client.mjs. executeCrudStep() in classify-intent.mjs executes ad_hoc steps directly for all four verbs. Structured input enforcement: id=N for delete/update, field=value for insert/update. Ambiguity errors with table field listing. Domain name as implicit alias in matchDomainAlias. matchCrudVerb returns ambiguous with reason for insert/update/delete. /mind ACK echoes truncated user input. init-brain concurrent cold-start race fixed (DO NOTHING). Code review fixes: cancelled status check, dynamic imports eliminated, callLlm user-turn resolved generically. Architecture session 9 |
 
 ---
 
@@ -2671,17 +2764,27 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | 4 | PROC — Intent Preprocessor | ✅ complete — v3.2-intent-preprocessor-complete |
 | | — `src/ui/slackbot/mind.mjs` — /mind Slack command, ACK + CLASSIFY_INTENT enqueue | ✅ |
 | | — `src/proc/classify-intent.mjs` + `classify-intent-tiers.mjs` — three-tier pipeline | ✅ |
-| | — Tier 1: Pass 1a (PGC_IntentMap regex), Pass 1b (PGC_DomainHelp alias), Pass 1c (CRUD verb) | ✅ |
+| | — Tier 1: Pass 1a (PGC_IntentMap regex), Pass 1b (PGC_DomainHelp alias + domain name), Pass 1c (CRUD verb) | ✅ |
 | | — Tier 2: perplexity/sonar via LLM_CHAT_URL, domain hint injection, prompt loaded from PGC_Prompt | ✅ |
 | | — Tier 3: enqueue CREATE_DOMAIN / CREATE_WORKFLOW, WORKFLOW_NOTIFY for unknowns | ✅ |
 | | — openapi.yaml v3.3.5: /ui/slack/mind and /proc/classify-intent | ✅ |
 | | — Pass 1c PGC_Schema fallback when PGC_EntitySchema not populated | ✅ |
 | | — /m alias wired to /mind in Slack app | ✅ |
+| 4 | PROC — Ad_hoc CRUD execution | ✅ complete — v3.2-crud-adhoc-complete |
+| | — serv_query, serv_update, serv_delete step types in step-executor.mjs | ✅ |
+| | — deleteRows convenience wrapper in serv-client.mjs | ✅ |
+| | — executeCrudStep() in classify-intent.mjs — all four verbs live | ✅ |
+| | — Structured input enforcement: id=N, field=value, ambiguity errors with field listing | ✅ |
+| | — matchDomainAlias matches domain name as implicit alias | ✅ |
+| | — init-brain concurrent cold-start race fixed | ✅ |
+| | — /mind ACK echoes user input | ✅ |
 | 4a | create_domain workflow revision | ⬜ |
+| | — callback.mjs: add text_input and review_object gate types to dialogToBlocks() | ⬜ |
 | | — seed_PGC_Prompt.json: add design_table prompt | ⬜ |
-| | — seed_PGC_Workflow.json: update create_domain to 9-step definition with add-table branch | ⬜ |
+| | — seed_PGC_Workflow.json: update create_domain to 12-step definition (Section 6.8) | ⬜ |
+| | — step-executor.mjs: add buildDomainHelp and buildCrudWorkflows js_transform built-ins | ⬜ |
 | | — step-executor.mjs: handle add_table action in edit_list resume_gate | ⬜ |
-| | — step 6 review_object gate for aliases confirmation | ⬜ |
+| | — run-workflow.mjs: thread domain through serv_schema step (fixes domain: null) | ⬜ |
 | | — run upsert-workflow.mjs create_domain after deploy | ⬜ |
 | 4b | create_workflow workflow full implementation | ⬜ |
 | | — seed_PGC_Prompt.json: add create_workflow prompt | ⬜ |
@@ -2707,9 +2810,9 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `notify` | ✅ live | Resolves `message_template`, enqueues `WORKFLOW_NOTIFY` |
 | `end` | ✅ live | Marks run completed |
 | `iterator` | ✅ live | Sequential only — one SQS hop per item |
-| `serv_query` | ⬜ Phase 3 | Required for duplicate domain detection pre-check and CRUD ad_hoc_step execution |
-| `serv_update` | ⬜ Phase 3 | |
-| `serv_delete` | ⬜ Phase 3 | |
+| `serv_query` | ✅ live | Resolves template vars in filters/orderBy/limit, writes rows array to output_key |
+| `serv_update` | ✅ live | Generic filter + updates shape, full template resolution, enforces non-empty filters |
+| `serv_delete` | ✅ live | Generic filter shape, full template resolution, enforces non-empty filters |
 | `sub_workflow` | ⬜ Phase 3 | |
 | `condition` | ⬜ Phase 3 | |
 | `capability_call` | ⬜ Phase 3 | Not yet defined — see Section 15.1 |
@@ -2720,8 +2823,8 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 |---|---|
 | `confirm` | ✅ live |
 | `edit_list` | ✅ live — per-row Remove button, in-place `chat.update` re-render, Add table branch (Phase 2 item 4a) |
-| `text_input` | ⬜ Phase 2 item 4a — needed for add-table branch step 3a |
-| `review_object` | ⬜ Phase 2 item 4a — needed for aliases confirmation step 6 |
+| `text_input` | ⬜ Phase 2 item 4a — needed for add-table branch step 3a — next to implement |
+| `review_object` | ⬜ Phase 2 item 4a — needed for domain help confirmation step 7 — next to implement |
 | `select_one` | ⬜ Phase 3 — `buildDialog()` stub exists |
 | `select_many` | ⬜ Phase 3 — `buildDialog()` stub exists |
 
@@ -2735,8 +2838,9 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | 4 | `sub_workflow` and `condition` step types |
 | 5 | `capability_call` step type + External API Registry (Section 15.1) |
 | 6 | Remaining gate types: `select_one`, `select_many` |
-| 7 | pgvector semantic search — intent classification + prompt deduplication (Section 10) |
-| 7a | Tier 1 sub-pass 2b — `PGC_Workflow.intent_keywords` keyword scan after domain alias match |
+| 7 | pgvector semantic search — intent classification + prompt deduplication (Section 10). Does not block any Phase 2 feature. Reduces Tier 2 LLM call frequency for domain workflows once CRUD workflows are registered in PGC_IntentMap by Phase 2 item 4a. Until Phase 3, Pass 1a regex + Tier 2 sonar handle novel phrasings correctly |
+| 7a | Tier 1 sub-pass 2b — `PGC_Workflow.intent_keywords` keyword scan after domain alias match. Superseded by pgvector when Phase 3 lands |
+| 7b | Alias management workflow `/mind edit aliases for <domain>` — update PGC_DomainHelp.aliases from Slack. Until live, rule-based singular/plural derivation from Phase 2 item 4a covers the common case |
 | 8 | Right brain — workflow improvement loop using `PGC_WorkflowStats` + `PGC_Prompt.error_log` |
 | 8a | Session layer — PGC_Session + PGC_SessionEntry tables + bootstrap migration (Section 4.3.4) |
 | 8b | mind.mjs session lookup — getRows by callback.threadId before CLASSIFY_INTENT enqueue |
@@ -2762,7 +2866,15 @@ Primary use cases:
 - /help search — find domain by natural language description
 - Prompt deduplication — avoid generating duplicate prompts
 
-Status: Designed, not yet implemented. Add to ALLOWED_TYPES in schema.mjs
+**Phase 3 — no Phase 2 feature is blocked by its absence.**
+
+The system works correctly without pgvector. Phase 2 item 4a populates `PGC_IntentMap` with
+domain CRUD patterns (e.g. `list.recipes|show.recipes`) so Pass 1a handles common phrasings
+at zero LLM cost. Tier 2 (sonar) handles novel phrasings for a few cents per call. pgvector
+would reduce Tier 2 call frequency further but is not the correct investment before the CRUD
+workflow generation and session layer are stable.
+
+Status: Designed, not yet implemented. Add `vector` to ALLOWED_TYPES in schema.mjs
         when pgvector extension is enabled on RDS.
 
 ---
