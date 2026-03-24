@@ -19,18 +19,21 @@
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
+//   serv_query   — calls SERV getRows, writes rows array to output_key
+//   serv_update  — calls SERV updateRows, generic filter + updates shape
+//   serv_delete  — calls SERV deleteRows, generic filter shape
 //   notify       — enqueues result message to SlackResults
 //   end          — signals workflow complete
 //
-// Deferred step types (return 501 NotImplemented):
-//   sub_workflow, condition, serv_query, serv_update, serv_delete
+// Deferred step types (return NotImplemented error):
+//   sub_workflow, condition
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 // All SQS enqueue calls go through sqs-callback.mjs (imported by run-workflow.mjs).
 
 import { callLlm }          from '../shared/llm-client.mjs';
 import { validate }         from './review-output.mjs';
-import { servPost }         from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, updateRows, deleteRows } from '../shared/serv-client.mjs';
 import {
   resolvePath,
   resolveTemplate,
@@ -62,15 +65,15 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'human_gate':   return executeHumanGate({ step, localState, run, traceId });
     case 'serv_schema':  return executeServSchema({ step, localState, traceId });
     case 'serv_insert':  return executeServInsert({ step, localState, traceId });
+    case 'serv_query':   return executeServQuery({ step, localState, traceId });
+    case 'serv_update':  return executeServUpdate({ step, localState, traceId });
+    case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
 
     case 'sub_workflow':
     case 'condition':
-    case 'serv_query':
-    case 'serv_update':
-    case 'serv_delete':
       throw new Error(`step type "${step.type}" not yet implemented (Phase 3)`);
 
     default:
@@ -83,8 +86,6 @@ export async function executeStep({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 async function executeLlmCall({ step, localState, run, traceId }) {
-  // Load prompt from PGC_Prompt — fetch by intent_category from step.input.prompt
-  const { getRows } = await import('../shared/serv-client.mjs');
   const intentCategory = step.input?.prompt;
   if (!intentCategory) throw new Error('llm_call step missing input.prompt');
 
@@ -99,14 +100,24 @@ async function executeLlmCall({ step, localState, run, traceId }) {
   }
   const promptRow = promptResp.rows[0];
 
-  // Resolve user_input template variable
+  // Resolve all template variables in the step input so the prompt has
+  // access to domain, existing_tables, and any other input fields.
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+
+  // Resolve user_input — the primary free-text variable in every llm_call step.
   const userInput = resolveTemplate(
     step.input?.user_input ?? '',
     localState,
   );
 
-  // Substitute {{userInput}} in prompt_text
-  const instructions = (promptRow.prompt_text ?? '').replace('{{userInput}}', userInput);
+  // Substitute {{userInput}} in prompt_text.
+  // Additional variables (e.g. {{domain}}, {{existingTables}}) are substituted
+  // using the full resolvedInput so the prompt gets complete context.
+  const instructions = Object.entries(resolvedInput).reduce((text, [key, val]) => {
+    const placeholder = `{{${key}}}`;
+    const substitution = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
+    return text.split(placeholder).join(substitution);
+  }, promptRow.prompt_text ?? '');
 
   console.info('step-executor: llm_call', {
     intentCategory,
@@ -118,7 +129,7 @@ async function executeLlmCall({ step, localState, run, traceId }) {
   const rawOutput = await callLlm(
     promptRow.model,
     instructions,
-    `Design a database domain for: "${userInput}"`,
+    userInput || JSON.stringify(resolvedInput),
     promptRow.output_schema,
     traceId,
   );
@@ -390,7 +401,6 @@ async function executeServInsert({ step, localState, traceId }) {
 
   console.info('step-executor: serv_insert', { tableName, traceId });
 
-  const { insertRow } = await import('../shared/serv-client.mjs');
   const resp = await insertRow(tableName, row);
 
   if (!resp.success) {
@@ -404,7 +414,129 @@ async function executeServInsert({ step, localState, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
-// notify — resolves message template and signals run-workflow to enqueue
+// serv_query — SELECT rows from a PGC/PGD table
+// ---------------------------------------------------------------------------
+
+// Step input shape:
+//   {
+//     "tableName": "PGD_Recipes",
+//     "filters":   [ { "column": "name", "op": "like", "value": "{{state.search}}" } ],
+//     "orderBy":   { "column": "created_at", "direction": "desc" },
+//     "limit":     20
+//   }
+//
+// filters, orderBy, and limit are all optional.
+// Template variables in filter values are resolved via resolveInput before the SERV call.
+// Rows array is written to local_state[output_key].
+
+async function executeServQuery({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { tableName, filters, orderBy, limit } = resolvedInput;
+
+  if (!tableName) throw new Error('serv_query step missing input.tableName');
+
+  console.info('step-executor: serv_query', {
+    tableName,
+    filterCount: filters?.length ?? 0,
+    traceId,
+  });
+
+  const resp = await getRows(tableName, filters ?? [], orderBy, limit);
+
+  if (!resp.success) {
+    throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: resp.rows ?? [],
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_update — UPDATE rows in a PGC/PGD table
+// ---------------------------------------------------------------------------
+
+// Step input shape (generic — mirrors SERV updateRows contract):
+//   {
+//     "tableName": "PGD_Recipes",
+//     "filters":   [ { "column": "id", "op": "eq", "value": "{{selected_record.id}}" } ],
+//     "updates":   { "name": "{{new_name}}" }
+//   }
+//
+// filters must be non-empty — SERV rejects unfiltered mass updates.
+// Template variables in both filters and updates are resolved via resolveInput.
+// The right brain is responsible for ensuring filters are PK-scoped before
+// this workflow is stored — the executor does not add safety constraints here.
+
+async function executeServUpdate({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { tableName, filters, updates } = resolvedInput;
+
+  if (!tableName) throw new Error('serv_update step missing input.tableName');
+  if (!filters || filters.length === 0) throw new Error('serv_update step missing or empty input.filters');
+  if (!updates || Object.keys(updates).length === 0) throw new Error('serv_update step missing input.updates');
+
+  console.info('step-executor: serv_update', {
+    tableName,
+    filterCount: filters.length,
+    updateKeys:  Object.keys(updates),
+    traceId,
+  });
+
+  const resp = await updateRows(tableName, filters, updates);
+
+  if (!resp.success) {
+    throw new Error(`serv_update failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: { tableName, updatedCount: resp.updatedCount ?? 0, rows: resp.rows ?? [] },
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_delete — DELETE rows from a PGC/PGD table
+// ---------------------------------------------------------------------------
+
+// Step input shape (generic — mirrors SERV deleteRows contract):
+//   {
+//     "tableName": "PGD_Recipes",
+//     "filters":   [ { "column": "id", "op": "eq", "value": "{{selected_record.id}}" } ]
+//   }
+//
+// filters must be non-empty — SERV rejects unfiltered mass deletes.
+// Template variables in filters are resolved via resolveInput.
+// Intended to be preceded by serv_query + human_gate so the user has
+// confirmed which record(s) are being deleted before this step executes.
+
+async function executeServDelete({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { tableName, filters } = resolvedInput;
+
+  if (!tableName) throw new Error('serv_delete step missing input.tableName');
+  if (!filters || filters.length === 0) throw new Error('serv_delete step missing or empty input.filters');
+
+  console.info('step-executor: serv_delete', {
+    tableName,
+    filterCount: filters.length,
+    traceId,
+  });
+
+  const resp = await deleteRows(tableName, filters);
+
+  if (!resp.success) {
+    throw new Error(`serv_delete failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: { tableName, deletedCount: resp.deletedCount ?? 0 },
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 async function executeNotify({ step, localState, traceId }) {

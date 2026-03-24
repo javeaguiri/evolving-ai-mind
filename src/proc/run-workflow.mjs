@@ -101,6 +101,13 @@ async function executeTop({ workflowRunId, traceId, source }) {
 
   const run = await loadRun(workflowRunId, traceId);
 
+  // Shutdown contract — Step Processor must check status before executing any step.
+  // If /shutdown fired while this message was in-flight, discard without executing.
+  if (run.status === 'cancelled') {
+    console.info('run-workflow: run cancelled — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'cancelled' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {

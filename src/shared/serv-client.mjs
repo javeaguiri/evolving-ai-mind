@@ -74,3 +74,11 @@ export async function insertRow(tableName, row) {
 export async function updateRows(tableName, filters, updates) {
   return servPost('/api/v1/serv/table/updateRows', { tableName, filters, updates });
 }
+
+/**
+ * Delete rows from a PGC/PGD table via SERV-Table deleteRows.
+ * filters is required and must be non-empty — SERV rejects unfiltered deletes.
+ */
+export async function deleteRows(tableName, filters) {
+  return servPost('/api/v1/serv/table/deleteRows', { tableName, filters });
+}

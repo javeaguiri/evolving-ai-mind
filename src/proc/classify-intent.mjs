@@ -22,7 +22,7 @@
 // All business logic is identical for both transports.
 
 import { ok, err }             from '../shared/lambda-utils.mjs';
-import { getRows }             from '../shared/serv-client.mjs';
+import { getRows, updateRows }             from '../shared/serv-client.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import {
   matchIntentMap,
@@ -191,7 +191,8 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 
   // Load all workflow names so sonar can match against them
   const workflowResp  = await getRows('PGC_Workflow');
-  const workflowNames = (workflowResp.rows ?? []).map(r => r.name);
+  const workflowRows  = workflowResp.rows ?? [];
+  const workflowNames = workflowRows.map(r => r.name);
 
   const messages = buildTier2Prompt(userInput, domainHint, workflowNames, promptRow.prompt_text);
 
@@ -227,11 +228,9 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
     // Best-effort error log write — do not throw on log failure
     try {
       const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
-      await import('../shared/serv-client.mjs').then(({ updateRows }) =>
-        updateRows('PGC_Prompt',
-          [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
-          { error_log: { attempts: [...existingLog, errorEntry] } }
-        )
+      await updateRows('PGC_Prompt',
+        [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
+        { error_log: { attempts: [...existingLog, errorEntry] } }
       );
     } catch (logErr) {
       console.warn('classify-intent: error_log write failed', logErr.message);
@@ -260,11 +259,9 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
     console.error('classify-intent: Tier 2 JSON parse failed', { traceId, raw: rawText.slice(0, 200) });
     try {
       const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
-      await import('../shared/serv-client.mjs').then(({ updateRows }) =>
-        updateRows('PGC_Prompt',
-          [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
-          { error_log: { attempts: [...existingLog, errorEntry] } }
-        )
+      await updateRows('PGC_Prompt',
+        [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
+        { error_log: { attempts: [...existingLog, errorEntry] } }
       );
     } catch (logErr) {
       console.warn('classify-intent: error_log write failed', logErr.message);
@@ -293,11 +290,8 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 
   // Named workflow matched
   if (workflow_name) {
-    // Look up workflow_id from the rows we already loaded
-    const workflowResp2 = await getRows('PGC_Workflow', [
-      { column: 'name', op: 'eq', value: workflow_name },
-    ]);
-    const workflowId = workflowResp2.rows?.[0]?.id ?? null;
+    // Look up workflow_id from the rows already loaded above — avoids a second DB round-trip
+    const workflowId = workflowRows.find(r => r.name === workflow_name)?.id ?? null;
 
     return {
       intent_category: intent_category ?? workflow_name,
@@ -327,16 +321,30 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 // ---------------------------------------------------------------------------
 
 async function handoff(result, callback, traceId, userInput) {
-  // Named workflow matched — enqueue WORKFLOW_STEP execute_top
+  // Named workflow matched — create PGC_WorkflowRun row, then enqueue WORKFLOW_STEP execute_top.
+  // A WORKFLOW_STEP message must always carry a valid workflowRunId (architecture Section 3.2).
   if (result.action_type === 'workflow' && result.workflow_id) {
+    const runResp = await insertRow('PGC_WorkflowRun', {
+      workflow_id:  result.workflow_id,
+      trace_id:     traceId,
+      triggered_by: 'slack',
+      status:       'pending',
+      input:        { userInput },
+      stack:        [],
+      state:        {},
+      callback,
+    });
+    if (!runResp.success) {
+      throw new Error(`handoff: failed to create PGC_WorkflowRun: ${runResp.error}`);
+    }
+    const workflowRunId = runResp.row.id;
+    console.info('classify-intent: handoff — WorkflowRun created', { workflowRunId, traceId });
+
     await enqueueWorkflow({
       type:          'WORKFLOW_STEP',
       action:        'execute_top',
-      workflowRunId: null,          // run-workflow.mjs creates the PGC_WorkflowRun row
-      workflowId:    result.workflow_id,
-      userInput,
+      workflowRunId,
       traceId,
-      callback,
     });
     return;
   }
