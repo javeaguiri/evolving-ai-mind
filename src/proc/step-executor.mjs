@@ -15,7 +15,8 @@
 //
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
-//   js_transform — safe synchronous data transformation
+//   js_transform — columnSummary built-in only; transform_type required;
+//                  generic sandbox is Phase 3
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
@@ -165,10 +166,13 @@ async function executeLlmCall({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 async function executeJsTransform({ step, localState, traceId }) {
-  // Dispatch to named built-in by transform_type field.
-  // If absent, fall back to 'columnSummary' for backward compatibility
-  // with the existing deployed create_domain workflow (steps 1–8, no transform_type).
-  const transformType = step.transform_type ?? 'columnSummary';
+  // transform_type is required — no fallback. A missing or unrecognised
+  // transform_type is a step definition error and must surface immediately.
+  // Generic sandboxed JS (acorn AST gate + vm.runInNewContext) is Phase 3.
+  const transformType = step.transform_type;
+  if (!transformType) {
+    throw new Error('js_transform step missing transform_type — generic sandbox is Phase 3');
+  }
 
   switch (transformType) {
 
@@ -197,148 +201,6 @@ async function executeJsTransform({ step, localState, traceId }) {
         itemCount: enriched.length, domain, traceId,
       });
       return { outputValue: enriched, nextAction: resolveNextAction(step.on_success, null) };
-    }
-
-    case 'buildDomainHelp': {
-      // Build the domainHelp object from proposed_scaffold.
-      // Derives singular alias by stripping trailing 's' if present.
-      // Generates commands array with real field examples from root table columns.
-      // input_key must resolve to proposed_scaffold (the whole object).
-      const scaffold = resolvePath(localState, step.input_key);
-      if (!scaffold?.domain || !Array.isArray(scaffold.tables)) {
-        throw new Error('js_transform buildDomainHelp: proposed_scaffold missing domain or tables');
-      }
-      const domain   = scaffold.domain;
-      const singular = domain.endsWith('s') ? domain.slice(0, -1) : domain;
-      // Root table = first table with no foreign keys
-      const rootTable = scaffold.tables.find(t => !t.foreignKeys || t.foreignKeys.length === 0)
-                     ?? scaffold.tables[0];
-      const userCols  = (rootTable?.columns ?? [])
-        .filter(c => !SYSTEM_COLS.has(c.name))
-        .slice(0, 3)
-        .map(c => c.name);
-      const exampleFields = userCols.map(c => `${c}=value`).join(' ');
-      const firstCol = userCols[0] ?? 'name';
-
-      const domainHelp = {
-        domain,
-        aliases:     [domain, singular, ...((scaffold.domainHelp?.aliases) ?? [])].filter((a, i, arr) => arr.indexOf(a) === i),
-        description: scaffold.domainHelp?.description ?? `${domain} domain`,
-        commands: [
-          { verb: 'list',   syntax: `/mind list my ${domain}`,                          description: `List all ${domain} records` },
-          { verb: 'add',    syntax: `/mind add my ${domain} ${exampleFields}`,           description: `Add a new ${singular}` },
-          { verb: 'update', syntax: `/mind update my ${domain} id=<number> ${firstCol}=new value`, description: `Update a ${singular} by id` },
-          { verb: 'delete', syntax: `/mind delete my ${domain} id=<number>`,             description: `Delete a ${singular} by id` },
-        ],
-      };
-
-      console.info('step-executor: js_transform — buildDomainHelp', { domain, traceId });
-      return { outputValue: domainHelp, nextAction: resolveNextAction(step.on_success, null) };
-    }
-
-    case 'buildCrudWorkflows': {
-      // Generate 4 PGC_Workflow row objects from proposed_scaffold.
-      // Returns array written to crud_workflows — iterated by the next serv_insert iterator.
-      // A second js_transform (buildIntentMapRows) reads registered_workflows IDs afterward.
-      const scaffold = resolvePath(localState, step.input_key);
-      if (!scaffold?.domain || !Array.isArray(scaffold.tables)) {
-        throw new Error('js_transform buildCrudWorkflows: proposed_scaffold missing domain or tables');
-      }
-      const domain    = scaffold.domain;
-      const rootTable = scaffold.tables.find(t => !t.foreignKeys || t.foreignKeys.length === 0)
-                     ?? scaffold.tables[0];
-      const tableName = rootTable?.tableName ?? `PGD_${domain}`;
-      const userCols  = (rootTable?.columns ?? [])
-        .filter(c => !SYSTEM_COLS.has(c.name))
-        .map(c => c.name);
-      const firstCol  = userCols[0] ?? 'name';
-
-      const workflows = [
-        {
-          name:             `list_${domain}`,
-          domain,
-          description:      `List all ${domain} records`,
-          intent_keywords:  [`list ${domain}`, `show ${domain}`, `get ${domain}`],
-          state_strategy:   'sequential',
-          version:          1,
-          steps: [
-            { step: '1', type: 'serv_query',  input: { tableName }, output_key: 'results', on_success: 'next', on_failure: 'human_feedback' },
-            { step: '2', type: 'notify',      message_template: `Found {{results.length}} ${domain} record(s).`, on_success: 'end' },
-            { step: '3', type: 'end' },
-          ],
-        },
-        {
-          name:             `add_${domain}`,
-          domain,
-          description:      `Add a new ${domain} record`,
-          intent_keywords:  [`add ${domain}`, `create ${domain}`, `new ${domain}`],
-          state_strategy:   'sequential_with_confirmation',
-          version:          1,
-          steps: [
-            { step: '1', type: 'serv_insert', input: { tableName, row: '{{input.row}}' }, output_key: 'new_record', on_success: 'next', on_failure: 'human_feedback' },
-            { step: '2', type: 'notify',      message_template: `Added new ${domain} record (id: {{new_record.id}}).`, on_success: 'end' },
-            { step: '3', type: 'end' },
-          ],
-        },
-        {
-          name:             `update_${domain}`,
-          domain,
-          description:      `Update a ${domain} record by id`,
-          intent_keywords:  [`update ${domain}`, `edit ${domain}`, `change ${domain}`],
-          state_strategy:   'sequential_with_confirmation',
-          version:          1,
-          steps: [
-            { step: '1', type: 'human_gate',  gate_type: 'confirm', message_template: `Update ${domain} id={{input.id}} — set ${firstCol} to {{input.${firstCol}}}?`, options: [{ label: 'Confirm', action: 'confirm', on_select: 'next' }, { label: 'Cancel', action: 'cancel', on_select: 'cancel' }], on_success: 'next', on_failure: 'cancel' },
-            { step: '2', type: 'serv_update', input: { tableName, filters: [{ column: 'id', op: 'eq', value: '{{input.id}}' }], updates: '{{input.updates}}' }, output_key: 'updated_record', on_success: 'next', on_failure: 'human_feedback' },
-            { step: '3', type: 'notify',      message_template: `Updated ${domain} record (id: {{input.id}}).`, on_success: 'end' },
-            { step: '4', type: 'end' },
-          ],
-        },
-        {
-          name:             `delete_${domain}`,
-          domain,
-          description:      `Delete a ${domain} record by id`,
-          intent_keywords:  [`delete ${domain}`, `remove ${domain}`],
-          state_strategy:   'sequential_with_confirmation',
-          version:          1,
-          steps: [
-            { step: '1', type: 'human_gate',  gate_type: 'confirm', message_template: `Delete ${domain} id={{input.id}}? This cannot be undone.`, options: [{ label: 'Confirm delete', action: 'confirm', on_select: 'next' }, { label: 'Cancel', action: 'cancel', on_select: 'cancel' }], on_success: 'next', on_failure: 'cancel' },
-            { step: '2', type: 'serv_delete', input: { tableName, filters: [{ column: 'id', op: 'eq', value: '{{input.id}}' }] }, on_success: 'next', on_failure: 'human_feedback' },
-            { step: '3', type: 'notify',      message_template: `Deleted ${domain} record (id: {{input.id}}).`, on_success: 'end' },
-            { step: '4', type: 'end' },
-          ],
-        },
-      ];
-
-      console.info('step-executor: js_transform — buildCrudWorkflows', { domain, count: workflows.length, traceId });
-      return { outputValue: workflows, nextAction: resolveNextAction(step.on_success, null) };
-    }
-
-    case 'buildIntentMapRows': {
-      // Build PGC_IntentMap rows from registered_workflows (output of the workflow iterator).
-      // Each registered workflow row has { id, name, domain }.
-      // input_key must resolve to the registered_workflows array.
-      const registered = resolvePath(localState, step.input_key);
-      if (!Array.isArray(registered)) {
-        throw new Error('js_transform buildIntentMapRows: input_key did not resolve to an array');
-      }
-      const intentRows = registered
-        .filter(w => w?.id && w?.name)
-        .map(w => {
-          const parts   = w.name.split('_');      // e.g. ['list', 'recipes']
-          const verb    = parts[0];               // 'list'
-          const domain  = parts.slice(1).join('_'); // 'recipes'
-          const pattern = `${verb}.${domain}|${verb} ${domain}|${verb} my ${domain}`;
-          return {
-            pattern,
-            intent_category: w.name,
-            workflow_id:     w.id,
-            action_type:     'workflow',
-          };
-        });
-
-      console.info('step-executor: js_transform — buildIntentMapRows', { count: intentRows.length, traceId });
-      return { outputValue: intentRows, nextAction: resolveNextAction(step.on_success, null) };
     }
 
     default:

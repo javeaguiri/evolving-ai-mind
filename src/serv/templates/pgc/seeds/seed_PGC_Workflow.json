@@ -118,11 +118,15 @@
       },
       {
         "step": "6",
-        "type": "js_transform",
-        "transform_type": "buildDomainHelp",
-        "description": "Build domainHelp object: derive singular alias, generate CRUD command examples with real field names.",
-        "input_key": "proposed_scaffold",
-        "output_key": "proposed_scaffold.domainHelp",
+        "type": "llm_call",
+        "description": "LLM generates domainHelp (aliases, commands) and 4 CRUD workflow definitions from the confirmed scaffold. Returns { domainHelp, workflows, intentMapRows }.",
+        "input": {
+          "prompt": "generate_crud_workflows",
+          "domain": "{{proposed_scaffold.domain}}",
+          "tables": "{{proposed_scaffold.tables}}",
+          "domain_help": "{{proposed_scaffold.domainHelp}}"
+        },
+        "output_key": "generated",
         "on_success": "next",
         "on_failure": "human_feedback"
       },
@@ -132,7 +136,7 @@
         "gate_type": "review_object",
         "description": "User reviews and confirms aliases and CRUD commands before they are written to PGC_DomainHelp.",
         "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Confirm to proceed.",
-        "context_key": "proposed_scaffold.domainHelp",
+        "context_key": "generated.domainHelp",
         "options": [
           { "label": "Looks good", "action": "confirm", "on_select": "next"   },
           { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
@@ -151,19 +155,9 @@
       },
       {
         "step": "9",
-        "type": "js_transform",
-        "transform_type": "buildCrudWorkflows",
-        "description": "Generate 4 CRUD workflow definitions (list, add, update, delete) from proposed_scaffold. No LLM — deterministic from column list.",
-        "input_key": "proposed_scaffold",
-        "output_key": "crud_workflows",
-        "on_success": "next",
-        "on_failure": "human_feedback"
-      },
-      {
-        "step": "10",
         "type": "iterator",
-        "description": "Insert each generated CRUD workflow into PGC_Workflow.",
-        "items_key": "crud_workflows",
+        "description": "Insert each of the 4 generated CRUD workflows into PGC_Workflow.",
+        "items_key": "generated.workflows",
         "item_step": {
           "type": "serv_insert",
           "input": { "tableName": "PGC_Workflow", "row": "{{item}}" },
@@ -175,20 +169,10 @@
         "on_failure": "human_feedback"
       },
       {
-        "step": "11",
-        "type": "js_transform",
-        "transform_type": "buildIntentMapRows",
-        "description": "Build PGC_IntentMap rows from registered_workflows IDs. Pattern: verb.domain|verb domain|verb my domain.",
-        "input_key": "registered_workflows",
-        "output_key": "intent_map_rows",
-        "on_success": "next",
-        "on_failure": "human_feedback"
-      },
-      {
-        "step": "12",
+        "step": "10",
         "type": "iterator",
-        "description": "Insert each IntentMap row into PGC_IntentMap.",
-        "items_key": "intent_map_rows",
+        "description": "Insert each of the 4 generated PGC_IntentMap rows.",
+        "items_key": "generated.intentMapRows",
         "item_step": {
           "type": "serv_insert",
           "input": { "tableName": "PGC_IntentMap", "row": "{{item}}" },
@@ -200,14 +184,14 @@
         "on_failure": "human_feedback"
       },
       {
-        "step": "13",
+        "step": "11",
         "type": "notify",
         "description": "Confirm domain creation with concrete command examples.",
         "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables and 4 CRUD workflows.\n\nTry:\n/mind list my {{proposed_scaffold.domain}}\n/mind add my {{proposed_scaffold.domain}} <field>=<value>\n/mind update my {{proposed_scaffold.domain}} id=<number> <field>=<value>\n/mind delete my {{proposed_scaffold.domain}} id=<number>",
         "on_success": "end"
       },
       {
-        "step": "14",
+        "step": "12",
         "type": "end"
       }
     ]
