@@ -74,7 +74,9 @@ The system is designed for household-scale private deployment — PII is segment
 not shared across users of a multi-tenant service.
 
 **Experience tier** (`SlackbotFunction`, `SlackCallbackListenerFunction`)
-- Owned by UI concerns — Slack parsing, ACK messages, thread formatting, Block Kit rendering
+- Owned by UI concerns — like for Slack (command parsing, ACK messages, 
+  thread formatting and Block Kit rendering) 
+  or any UI types implementation; teams, Web UIs, or PDA apps
 - Never contains business logic
 - `SlackbotFunction` handles inbound HTTP — slash commands and `/interactive` button clicks
 - `SlackCallbackListenerFunction` handles outbound — consumes `SYSSQSSlackResults` and posts
@@ -83,9 +85,10 @@ not shared across users of a multi-tenant service.
 
 **Process tier** (`ProcFunction`)
 - Contains all business logic and the true value of the system
+- Experience layer may interface directly through Process tier or through SQS Queues
 - Cloud-agnostic — no AWS SDK imports
-- Calls SERV and LLM via HTTP fetch only (API Gateway URLs)
-- Testable directly via curl without SQS or Slack
+- Calls SERV and LLM via HTTP API only (API Gateway URLs)
+- Testable directly via the HTTP API without SQS or Slack
 - Handles both HTTP (API Gateway) and async (SQS WorkflowQueue) event types
 - All endpoints documented spec-first in `openapi.yaml`
 
@@ -93,6 +96,7 @@ not shared across users of a multi-tenant service.
 - Interfaces external system touchpoints — PostgreSQL today
 - If the database changes, only this layer is refactored
 - No business logic — pure data access
+- Accessed by Process layer via HTTP API enpoints--no direct imports  
 - All endpoints documented in `openapi.yaml`
 
 ---
@@ -331,16 +335,17 @@ These rules govern how modules call each other. They are final and must not be v
 | proc → proc | Direct import | Same Lambda, same tier |
 | serv → serv | Direct import | Same Lambda, same tier |
 | any → shared | Direct import | Shared utilities, available to all |
-| exp → proc | HTTP fetch to API Gateway | Cross-tier — keeps PROC independently testable |
-| proc → serv | HTTP fetch to API Gateway | Cross-tier — keeps SERV independently swappable |
+| exp → proc | HTTP API Gateway | Cross-tier — keeps PROC independently testable |
+| proc → serv | HTTP API Gateway | Cross-tier — keeps SERV independently swappable |
 | SQS → proc | `buildReqFromSqs()` normalisation in `handler.mjs` | Async cross-tier delivery |
 | proc → exp | Never | PROC never calls EXP — results go via SQS callback |
 | serv → proc/exp | Never | SERV is the bottom tier — no upward calls |
 
-**Why exp→proc and proc→serv go through HTTP fetch:**
-If PROC and SERV were in the same Lambda, direct imports would be fine.
-Because they are separate Lambdas, HTTP fetch through API Gateway is the only
-transport-agnostic option that keeps PROC testable via curl without AWS infrastructure.
+**Why exp→proc and proc→serv go through HTTP :**
+To preserve the 3 layer Mule-soft architecture: Experience, Process and Service Layers
+In AWS, they are separate Lambdas, HTTP  through API Gateway is the only
+transport-agnostic option that keep the layers individually testable
+via testing tool like curl and Postman without AWS infrastructure.
 
 **`req.callback` vs `req.body.callback` — critical SQS pattern:**
 
@@ -450,7 +455,7 @@ export async function handle(req) {
 ```
 
 This pattern means every PROC endpoint is:
-- **Directly testable via curl** — no SQS, no Slack required
+- **Directly testable** — no SQS, no Slack required
 - **Callable from Slack** — via SQS async path
 - **Cloud-agnostic** — no AWS SDK in the endpoint module itself
 - **Single source of truth** — one function, two transports, identical business logic
@@ -999,12 +1004,12 @@ Used by PROC when executing workflow steps that read or write user domain data.
 classification, workflow execution, LLM orchestration, and domain management. It has no
 knowledge of Slack, no direct database access, and no AWS SDK imports in its endpoint
 modules. It receives normalised requests from the Experience tier (via SQS WorkflowQueue
-or HTTP), executes against SERV via HTTP fetch, and returns results either directly
+or HTTP), executes against SERV via HTTP, and returns results either directly
 (HTTP path) or via the SQS SlackResults queue (SQS path).
 
 The Process tier is designed around three principles. First, transport agnosticism —
 every endpoint module receives the same normalised `req` object whether the request
-arrived from Slack via SQS or from a developer via curl. Second, declarative execution —
+arrived from Slack via SQS or from a developer via testing tools like curl. Second, declarative execution —
 workflows are stored as JSON step definitions in `PGC_Workflow` and driven generically
 by the Step Processor; no workflow requires bespoke PROC code. Third, LLM cost discipline
 — the LLM is called only for novel intents and novel workflow or schema generation.
@@ -1163,7 +1168,7 @@ retain their direct routing and are not affected by this change.
 `classify-intent.mjs` exports `handle(req)` and is wired as both an HTTP route
 (`POST /proc/classify-intent`) and a `CLASSIFY_INTENT` SQS message type in
 `proc/handler.mjs` — following the same pattern as `create-domain.mjs`. The HTTP
-path is fully testable via curl with no Slack or SQS involvement.
+path is fully available as an API to the experience layer or for testing.
 
 Pure classification logic lives in `src/proc/classify-intent-tiers.mjs` — exported
 functions with no I/O, directly unit-testable.
@@ -1279,7 +1284,7 @@ Response: {
 }
 ```
 
-The HTTP path is fully testable via curl at every tier:
+The HTTP path is fully testable at every tier:
 - Tier 1a: inputs matching `PGC_IntentMap` patterns return `confidence: exact` with no LLM call
 - Tier 1b+1c: domain alias inputs return `confidence: alias` or `confidence: crud`
 - Tier 2: unclassified inputs call sonar and return `confidence: llm_classified`
