@@ -54,6 +54,8 @@ export function matchIntentMap(userInput, intentRows) {
 
 /**
  * Tokenise userInput and scan every domain's aliases array for a match.
+ * Also matches against the domain name itself — "recipes" always matches
+ * the recipes domain even if it is not explicitly listed in aliases.
  * Returns the first matching domain row, or null.
  *
  * Matching is case-insensitive substring — alias "portfolio" matches
@@ -66,6 +68,10 @@ export function matchIntentMap(userInput, intentRows) {
 export function matchDomainAlias(userInput, domainRows) {
   const input = userInput.toLowerCase();
   for (const row of domainRows) {
+    // Domain name is always an implicit alias — checked first
+    if (input.includes(row.domain.toLowerCase())) {
+      return row;
+    }
     const aliases = Array.isArray(row.aliases) ? row.aliases : [];
     for (const alias of aliases) {
       if (input.includes(alias.toLowerCase())) {
