@@ -279,12 +279,30 @@ export function buildCreateTableSQL(template) {
 
   // Normalise constraints — LLM may return type as "UNIQUE" instead of "unique".
   // Auto-generate name if absent.
+  // Filter undefined/null/empty values from columns array — LLM occasionally
+  // produces constraint columns that don't correspond to actual column names.
+  const knownColumnNames = new Set(columns.map(c => c.name).filter(Boolean));
   const constraints = (template.constraints || []).map((con, i) => ({
     ...con,
     type:    con.type?.toLowerCase(),
     name:    con.name || `uq_${table_name.toLowerCase()}_${i}`,
-    columns: con.columns || [],
-  }));
+    columns: (con.columns || []).filter(c => c && typeof c === 'string' && c !== 'undefined'),
+  })).filter(con => {
+    // Skip constraints whose column list is empty after filtering
+    if (con.type === 'unique' && con.columns.length === 0) {
+      console.warn(`init-brain: skipping UNIQUE constraint "${con.name}" on ${table_name} — no valid columns`);
+      return false;
+    }
+    // Warn if any constraint column doesn't exist in the table definition
+    if (con.type === 'unique') {
+      const unknown = con.columns.filter(c => !knownColumnNames.has(c));
+      if (unknown.length > 0) {
+        console.warn(`init-brain: constraint "${con.name}" on ${table_name} references unknown columns: ${unknown.join(', ')} — skipping`);
+        return false;
+      }
+    }
+    return true;
+  });
 
   const columnDefs = columns.map(col => {
     const parts = [`  ${col.name}`, resolveType(col)];
@@ -309,7 +327,17 @@ export function buildCreateTableSQL(template) {
     }
   }).filter(Boolean);
 
-  const fkDefs = foreign_keys.map(fk =>
+  const fkDefs = foreign_keys.filter(fk => {
+    if (!fk.column || fk.column === 'undefined') {
+      console.warn(`init-brain: skipping FK "${fk.name}" on ${table_name} — column is missing or undefined`);
+      return false;
+    }
+    if (!fk.references?.table || !fk.references?.column) {
+      console.warn(`init-brain: skipping FK "${fk.name}" on ${table_name} — references table/column missing`);
+      return false;
+    }
+    return true;
+  }).map(fk =>
     `  CONSTRAINT ${fk.name} FOREIGN KEY (${fk.column}) ` +
     `REFERENCES "${fk.references.table}" (${fk.references.column}) ` +
     `ON DELETE ${fk.onDelete || 'RESTRICT'}`
@@ -349,7 +377,14 @@ async function seedPGCSchema(client) {
       `INSERT INTO "PGC_Schema"
          (table_name, target, domain, description, columns, foreign_keys, constraints, triggers)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (table_name) DO NOTHING`,
+       ON CONFLICT (table_name) DO UPDATE SET
+         domain       = EXCLUDED.domain,
+         description  = EXCLUDED.description,
+         columns      = EXCLUDED.columns,
+         foreign_keys = EXCLUDED.foreign_keys,
+         constraints  = EXCLUDED.constraints,
+         triggers     = EXCLUDED.triggers,
+         updated_at   = now()`,
       [
         row.table_name, row.target, row.domain ?? null, row.description,
         JSON.stringify(row.columns),

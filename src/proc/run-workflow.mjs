@@ -552,6 +552,23 @@ async function executeIteratorItem({ run, traceId }) {
       itemStep.type, 'failed', { tableName: item.tableName }, null,
       itemError.message, Date.now() - stepStart
     );
+    // Mark the run failed and notify the user before rethrowing.
+    // Without this, the error propagates to the SQS handler, retries 3×,
+    // goes to DLQ, and the user receives no notification.
+    const msg = `Iterator step "${frame.parent_step}" failed creating table "${item.tableName}": ${itemError.message}. Run id: ${run.id}`;
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { status: 'failed', error: { step: frame.parent_step, tableName: item.tableName, message: itemError.message } }
+    );
+    if (run.callback) {
+      await enqueueCallback(run.callback, {
+        type:          'WORKFLOW_ERROR',
+        workflowRunId: run.id,
+        step:          frame.parent_step,
+        message:       msg,
+        traceId,
+      });
+    }
     throw itemError;
   }
 
