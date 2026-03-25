@@ -1008,8 +1008,9 @@ logic — intent classification, workflow execution, LLM orchestration, and doma
 management. It has no knowledge of Slack, no direct database access, and no AWS
 SDK imports in its endpoint modules. It receives normalised requests from the
 Experience tier (via SQS WorkflowQueue or HTTP), executes against SERV via HTTP,
-and routes results back to the UI either directly (HTTP path) or via the SQS
-SlackResults queue (SQS path).
+and routes results back to the UI via the SQS SlackResults queue (SQS path) or
+to a future UI HTTP entry point — direct HTTP result delivery is not currently
+allowed or implemented.
 
 ### The programming language analogy
 
@@ -1043,17 +1044,17 @@ programmer's intent.
 | 6.1 | Process Layer API — HTTP routes and SQS message types |
 | 6.2 | Process Layer config tables — PGC as the brain's system memory |
 | 6.3 | Intent Preprocessor — the kernel that routes input to programs |
-| 6.4 | Step Orchestrator overview — WorkflowRun, SQS message format |
-| 6.5 | Step types — the instruction set |
-| 6.6 | Execution Stack — the program counter and call stack |
-| 6.7 | `local_state` — the data bag / memory |
-| 6.8 | Human-in-the-Loop — blocking I/O |
-| 6.9 | Right-Brain Output Validation — correction loop |
-| 6.10 | Workflow Safety — circuit breakers and emergency shutdown |
-| 6.11 | UI Dialog Contract — WORKFLOW_GATE message format |
-| 6.12 | create_domain Workflow — full annotated example |
-| 6.13 | create_workflow Workflow — Phase 2 |
-| 6.14 | Session Architecture — conversational memory (Phase 3) |
+| 6.4 | Step Orchestrator — WorkflowRun, execution loop, and all execution subsystems |
+| 6.4.1 | Step types — the instruction set |
+| 6.4.2 | Execution Stack — the program counter and call stack |
+| 6.4.3 | `local_state` — the data bag / memory |
+| 6.4.4 | Human-in-the-Loop — blocking I/O |
+| 6.5 | Right-Brain Output Validation — correction loop |
+| 6.6 | Workflow Safety — circuit breakers and emergency shutdown |
+| 6.7 | UI Dialog Contract — WORKFLOW_GATE message format |
+| 6.8 | create_domain Workflow — full annotated example |
+| 6.9 | create_workflow Workflow — Phase 2 |
+| 6.10 | Session Architecture — conversational memory (Phase 3) |
 
 ---
 
@@ -1105,6 +1106,16 @@ instruction — analogous to a single CPU clock cycle.
 All results flow back to the UI via `callback: { provider, channel, threadId }`.
 `routeCallback()` in `callback.mjs` dispatches on `provider`. Adding a new UI
 (Teams, web) is one new `case` in that function. SERV never reads callback fields.
+
+The callback abstraction handles two distinct message types flowing back to the UI:
+
+- **WORKFLOW_NOTIFY / WORKFLOW_ERROR / WORKFLOW_CANCELLED** — completion and status
+  messages posted as Slack thread replies. These are fire-and-forget.
+- **WORKFLOW_GATE** — a human gate suspension event. The Step Processor builds a
+  structured dialog payload and enqueues it via the same callback path. `callback.mjs`
+  translates the UI-agnostic `WORKFLOW_GATE` message into Slack Block Kit blocks and
+  posts the interactive message to the thread. The user's interaction with that message
+  is what resumes the suspended stack. See Section 6.4.4 for the full gate lifecycle.
 
 ---
 
@@ -1262,8 +1273,8 @@ PGC_WorkflowRun
   workflow_id   integer        — FK to PGC_Workflow (which program to run)
   workflow_name text           — denormalised name for fast loading
   status        text           — running | awaiting_human_gate | completed | failed | cancelled
-  stack         jsonb          — execution stack (see 6.6)
-  state         jsonb          — { local_state: { ... } } — the data bag (see 6.7)
+  stack         jsonb          — execution stack (see 6.4.2)
+  state         jsonb          — { local_state: { ... } } — the data bag (see 6.4.3)
   input         jsonb          — original input passed to the run (available as input.* in local_state)
   callback      jsonb          — { provider, channel, threadId } — where to send results
   error         jsonb          — structured error if failed; also used for stuck-step detection
@@ -1302,7 +1313,7 @@ Check PGC_WorkflowRunStep for (run_id, frame_id, step_key)
   Not found → proceed
   │
   ▼
-Execute step (see 6.5 — step types)
+Execute step (see 6.4.1 — step types)
   │
   ├── on error: write PGC_WorkflowRunStep (failed), mark run failed,
   │             enqueue WORKFLOW_ERROR to callback, rethrow
@@ -1338,7 +1349,7 @@ the Lambda returns.
 
 ---
 
-### 6.5 Step types — the instruction set
+### 6.4.1 Step types — the instruction set
 
 Every step in a workflow is one instruction from this set. The Step Processor has
 one handler per type. No workflow-specific code lives in the Step Processor.
@@ -1507,7 +1518,7 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
 
 ---
 
-### 6.6 Execution Stack — program counter and call stack
+### 6.4.2 Execution Stack — program counter and call stack
 
 `PGC_WorkflowRun.stack` is a JSON array of frames. The Step Processor always
 operates on the **top frame** (last element). This is a standard call stack —
@@ -1611,7 +1622,7 @@ branching workflows. The `step_key` text column was added by `migrate-step-key.m
 
 ---
 
-### 6.7 `local_state` — the data bag
+### 6.4.3 `local_state` — the data bag
 
 `local_state` is a plain JSON object on each frame. It is the workflow's memory —
 the working set of data available to every step in the current frame. It is the
@@ -1707,7 +1718,7 @@ Step 1 reads `{{input.userInput}}` to pass the raw user description to the LLM.
 
 ---
 
-### 6.8 Human-in-the-Loop — blocking I/O
+### 6.4.4 Human-in-the-Loop — blocking I/O
 
 A `human_gate` step is the equivalent of blocking I/O in a program — the execution
 stack suspends entirely, Lambda exits, and no compute is consumed until the user
@@ -1789,7 +1800,7 @@ consecutive hits and fails the run with a Slack notification.
 
 ---
 
-### 6.9 Right-Brain Output Validation — correction loop
+### 6.5 Right-Brain Output Validation — correction loop
 
 Every `llm_call` step runs through a two-attempt validation loop before its output
 is accepted and stored in `local_state`. This is implemented in `review-output.mjs`
@@ -1838,7 +1849,7 @@ retry — it is a targeted correction.
 
 ---
 
-### 6.10 Workflow Safety — circuit breakers and Guard 1
+### 6.6 Workflow Safety — circuit breakers and Guard 1
 
 #### Guard 1 — stuck-step detector (implemented)
 
@@ -1880,7 +1891,7 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 
 ---
 
-### 6.11 UI Dialog Contract — WORKFLOW_GATE message
+### 6.7 UI Dialog Contract — WORKFLOW_GATE message
 
 The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
 translates it to Slack Block Kit. Adding a new UI is one new renderer in
@@ -1926,13 +1937,13 @@ it with `/shutdown` or for debugging.
 
 ---
 
-### 6.12 create_domain Workflow — full annotated example
+### 6.8 create_domain Workflow — full annotated example
 
 `create_domain` is the primary demonstrator workflow. It uses every major Step
 Processor capability: `llm_call`, `js_transform`, multi-step `human_gate`
 sequences with branching, `iterator`, `serv_insert`, and `notify`.
 
-Reading this workflow against sections 6.5–6.8 is the intended way to understand
+Reading this workflow against sections 6.4.1–6.4.4 is the intended way to understand
 how the Step Processor executes a real program.
 
 #### Data flow summary
@@ -2003,7 +2014,7 @@ three if the LLM output is malformed.
 
 ---
 
-### 6.13 create_workflow Workflow — Phase 2
+### 6.9 create_workflow Workflow — Phase 2
 
 Stub definition in `PGC_Workflow`. Full 8-step implementation is Phase 2 item 4b.
 When complete, `/mind create a workflow that sends me a weekly portfolio summary`
@@ -2012,7 +2023,7 @@ it immediately available via the Intent Preprocessor — without any code change
 
 ---
 
-### 6.14 Session Architecture — Conversational Memory (Phase 3)
+### 6.10 Session Architecture — Conversational Memory (Phase 3)
 
 The session layer gives the brain persistent memory across multiple `/mind`
 messages in the same Slack thread. Without it, each `/mind` call is cold — the
