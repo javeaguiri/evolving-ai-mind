@@ -7,6 +7,7 @@
     { "name": "run_id",          "type": "integer",     "nullable": false },
     { "name": "frame_id",        "type": "text",        "nullable": false },
     { "name": "step_number",     "type": "integer",     "nullable": false },
+    { "name": "step_key",        "type": "text",        "nullable": true  },
     { "name": "step_type",       "type": "text",        "nullable": false },
     { "name": "capability_key",  "type": "text",        "nullable": true },
     { "name": "status",          "type": "text",        "nullable": false },

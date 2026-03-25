@@ -21,8 +21,10 @@
 //   - Stack persisted to PGC_WorkflowRun.stack after every mutation
 //
 // Idempotency:
-//   - Before executing, check PGC_WorkflowRunStep for (run_id, frame_id, step_number)
-//   - If found — SQS redelivery — skip and re-enqueue next
+//   - Before executing, check PGC_WorkflowRunStep for (run_id, frame_id, step_key)
+//   - step_key is the string step key — "3a", "3b", "3d" etc. — stored in the
+//     step_key text column added by migrate-step-key.mjs
+//   - If found — SQS redelivery — apply stuck-step guard and re-enqueue
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 // All SQS operations go through sqs-callback.mjs.
@@ -644,13 +646,15 @@ async function persistStack(run) {
   );
 }
 
-async function checkIdempotency(runId, frameId, stepNumber) {
+async function checkIdempotency(runId, frameId, stepKey) {
+  // Use step_key (text) — step_number integer collapses "3a"/"3b"/"3d" to 3,
+  // causing false positive idempotency hits across branching workflow steps.
   const resp = await getRows(
     'PGC_WorkflowRunStep',
     [
-      { column: 'run_id',      op: 'eq', value: runId },
-      { column: 'frame_id',   op: 'eq', value: frameId },
-      { column: 'step_number', op: 'eq', value: parseInt(stepNumber, 10) || 0 },
+      { column: 'run_id',   op: 'eq', value: runId   },
+      { column: 'frame_id', op: 'eq', value: frameId },
+      { column: 'step_key', op: 'eq', value: String(stepKey) },
     ],
     undefined, 1
   );
@@ -662,7 +666,8 @@ async function recordStepAudit(runId, frameId, stepNumber, stepType,
   await insertRow('PGC_WorkflowRunStep', {
     run_id:          runId,
     frame_id:        frameId,
-    step_number:     parseInt(stepNumber, 10) || 0,
+    step_number:     parseInt(stepNumber, 10) || 0,  // kept for iterator items (integer index)
+    step_key:        String(stepNumber),              // string key — "3a", "3d", "1", etc.
     step_type:       stepType,
     status,
     input_snapshot:  inputSnapshot ?? null,
