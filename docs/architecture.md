@@ -1049,12 +1049,12 @@ programmer's intent.
 | 6.4.2 | Execution Stack — the program counter and call stack |
 | 6.4.3 | `local_state` — the data bag / memory |
 | 6.4.4 | Human-in-the-Loop — blocking I/O |
+| 6.4.4.1 | UI Dialog Contract — WORKFLOW_GATE and WORKFLOW_ERROR message shapes |
 | 6.5 | Right-Brain Output Validation — correction loop |
 | 6.6 | Workflow Safety — circuit breakers and emergency shutdown |
-| 6.7 | UI Dialog Contract — WORKFLOW_GATE message format |
-| 6.8 | create_domain Workflow — full annotated example |
-| 6.9 | create_workflow Workflow — Phase 2 |
-| 6.10 | Session Architecture — conversational memory (Phase 3) |
+| 6.7 | create_domain Workflow — full annotated example |
+| 6.8 | create_workflow Workflow — Phase 2 |
+| 6.9 | Session Architecture — conversational memory (Phase 3) |
 
 ---
 
@@ -1115,7 +1115,7 @@ The callback abstraction handles two distinct message types flowing back to the 
   structured dialog payload and enqueues it via the same callback path. `callback.mjs`
   translates the UI-agnostic `WORKFLOW_GATE` message into Slack Block Kit blocks and
   posts the interactive message to the thread. The user's interaction with that message
-  is what resumes the suspended stack. See Section 6.4.4 for the full gate lifecycle.
+  is what resumes the suspended stack. See Section 6.4.4 for the full gate lifecycle and message contract.
 
 ---
 
@@ -1766,6 +1766,50 @@ Step Processor receives resume_gate
 | `select_one` | Pick one item from a list | Phase 3 |
 | `select_many` | Pick zero or more items | Phase 3 |
 
+#### UI Dialog Contract — WORKFLOW_GATE message
+
+The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
+translates it to Slack Block Kit. Adding a new UI is one new renderer in
+`callback.mjs` — the Step Processor and all workflows are unchanged.
+
+##### WORKFLOW_GATE message shape
+
+```json
+{
+  "type":          "WORKFLOW_GATE",
+  "workflowRunId": 23,
+  "gate_type":     "edit_list",
+  "dialog": {
+    "message":  "Here's my plan for domain stock_portfolio.",
+    "fields": [
+      { "type": "list",   "items": [{ "primary": "PGD_Portfolios", "secondary": "name, currency, created_at" }] },
+      { "type": "actions","items": [{ "label": "Looks good", "action": "confirm" }, ...] }
+    ]
+  },
+  "callback": { "provider": "slack", "channel": "C0AEJ87JSKF", "threadId": "..." },
+  "message_ts": "1711358400.123"
+}
+```
+
+`message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
+to use `chat.update` (in-place edit) instead of posting a new message.
+
+##### WORKFLOW_ERROR message shape
+
+```json
+{
+  "type":          "WORKFLOW_ERROR",
+  "workflowRunId": 18,
+  "step":          "3a",
+  "message":       "Workflow stuck at step \"3a\" — possible routing error. Run id: 18",
+  "traceId":       "uuid"
+}
+```
+
+Posted to Slack when: Guard 1 fires, a step throws after exhausting retries, or
+an iterator item fails. Always includes `workflowRunId` so the user can reference
+it with `/shutdown` or for debugging.
+
 #### Mutation during gate suspension
 
 `edit_list` gates support `remove_item` — the user can remove items from the
@@ -1891,59 +1935,15 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 
 ---
 
-### 6.7 UI Dialog Contract — WORKFLOW_GATE message
-
-The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
-translates it to Slack Block Kit. Adding a new UI is one new renderer in
-`callback.mjs` — the Step Processor and all workflows are unchanged.
-
-#### WORKFLOW_GATE message shape
-
-```json
-{
-  "type":          "WORKFLOW_GATE",
-  "workflowRunId": 23,
-  "gate_type":     "edit_list",
-  "dialog": {
-    "message":  "Here's my plan for domain stock_portfolio.",
-    "fields": [
-      { "type": "list",   "items": [{ "primary": "PGD_Portfolios", "secondary": "name, currency, created_at" }] },
-      { "type": "actions","items": [{ "label": "Looks good", "action": "confirm" }, ...] }
-    ]
-  },
-  "callback": { "provider": "slack", "channel": "C0AEJ87JSKF", "threadId": "..." },
-  "message_ts": "1711358400.123"
-}
-```
-
-`message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
-to use `chat.update` (in-place edit) instead of posting a new message.
-
-#### WORKFLOW_ERROR message shape
-
-```json
-{
-  "type":          "WORKFLOW_ERROR",
-  "workflowRunId": 18,
-  "step":          "3a",
-  "message":       "Workflow stuck at step \"3a\" — possible routing error. Run id: 18",
-  "traceId":       "uuid"
-}
-```
-
-Posted to Slack when: Guard 1 fires, a step throws after exhausting retries, or
-an iterator item fails. Always includes `workflowRunId` so the user can reference
-it with `/shutdown` or for debugging.
-
 ---
 
-### 6.8 create_domain Workflow — full annotated example
+### 6.7 create_domain Workflow — full annotated example
 
 `create_domain` is the primary demonstrator workflow. It uses every major Step
 Processor capability: `llm_call`, `js_transform`, multi-step `human_gate`
 sequences with branching, `iterator`, `serv_insert`, and `notify`.
 
-Reading this workflow against sections 6.4.1–6.4.4 is the intended way to understand
+Reading this workflow against sections 6.4.1–6.4.4.1 is the intended way to understand
 how the Step Processor executes a real program.
 
 #### Data flow summary
@@ -2014,7 +2014,7 @@ three if the LLM output is malformed.
 
 ---
 
-### 6.9 create_workflow Workflow — Phase 2
+### 6.8 create_workflow Workflow — Phase 2
 
 Stub definition in `PGC_Workflow`. Full 8-step implementation is Phase 2 item 4b.
 When complete, `/mind create a workflow that sends me a weekly portfolio summary`
@@ -2023,7 +2023,7 @@ it immediately available via the Intent Preprocessor — without any code change
 
 ---
 
-### 6.10 Session Architecture — Conversational Memory (Phase 3)
+### 6.9 Session Architecture — Conversational Memory (Phase 3)
 
 The session layer gives the brain persistent memory across multiple `/mind`
 messages in the same Slack thread. Without it, each `/mind` call is cold — the
@@ -2085,6 +2085,7 @@ Turn 3  /mind make that a three-course meal plan using those recipes
   → workflow_name = 'meal_planner', referenced_entities = [Carbonara, ...]
   → execute_top, local_state.context pre-seeded with referenced_entities
 ```
+
 
 ## 7. Tech Debt Register
 
