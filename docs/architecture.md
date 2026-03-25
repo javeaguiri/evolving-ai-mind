@@ -1003,1481 +1003,1023 @@ Used by PROC when executing workflow steps that read or write user domain data.
 
 ## 6. Process Layer — PROC
 
-`ProcFunction` is the cognitive core of the system. It owns all business logic — intent
-classification, workflow execution, LLM orchestration, and domain management. It has no
-knowledge of Slack, no direct database access, and no AWS SDK imports in its endpoint
-modules. It receives normalised requests from the Experience tier (via SQS WorkflowQueue
-or HTTP), executes against SERV via HTTP, and returns results either directly
-(HTTP path) or via the SQS SlackResults queue (SQS path).
+`ProcFunction` is the cognitive core of evolving-mind-ai. It owns all business
+logic — intent classification, workflow execution, LLM orchestration, and domain
+management. It has no knowledge of Slack, no direct database access, and no AWS
+SDK imports in its endpoint modules. It receives normalised requests from the
+Experience tier (via SQS WorkflowQueue or HTTP), executes against SERV via HTTP,
+and routes results back to the UI either directly (HTTP path) or via the SQS
+SlackResults queue (SQS path).
 
-The Process tier is designed around three principles. First, transport agnosticism —
-every endpoint module receives the same normalised `req` object whether the request
-arrived from Slack via SQS or from a developer via testing tools like curl. Second, declarative execution —
-workflows are stored as JSON step definitions in `PGC_Workflow` and driven generically
-by the Step Processor; no workflow requires bespoke PROC code. Third, LLM cost discipline
-— the LLM is called only for novel intents and novel workflow or schema generation.
-Everything else runs from cached `PGC_Workflow` rows at zero LLM cost.
+### The programming language analogy
 
-This section covers the major subsystems of PROC in the order a request encounters them:
-the callback abstraction that routes results back to the UI (6.1), the Step Processor
-that executes declarative workflows (6.2–6.3), the Intent Preprocessor that classifies
-natural language input before any workflow is invoked (6.4), and the specific workflows
-built on top of these foundations (6.8 onward).
+The Step Processor and workflow system is deliberately designed to resemble a
+simple programming language and the runtime that executes it.
 
-### 6.1 Callback / Notification Abstraction — IMPLEMENTED
+| Programming concept | evolving-mind-ai equivalent |
+|---|---|
+| Program (source code) | `PGC_Workflow.steps` — a JSON array of step definitions |
+| Program counter | `frame.current_step` — the string key of the next step to execute |
+| Memory / data bag | `frame.local_state` — a plain JSON object on each frame |
+| Call stack | `PGC_WorkflowRun.stack` — a JSON array of frames |
+| Function call | PUSH a new workflow frame; POP when it returns |
+| Loop | Iterator frame — advances `current_index` until all items processed |
+| Blocking I/O | `human_gate` frame — suspends the stack until user responds |
+| CPU / machine core | Step Processor (`run-workflow.mjs`) — a generic executor with no workflow-specific logic |
+| Kernel | Intent Preprocessor (`classify-intent.mjs`) — routes user input to the right program |
+| System calls | SERV HTTP calls — the only way the Step Processor reads or writes data |
+| Instruction set | Step types — `llm_call`, `serv_query`, `human_gate`, `notify`, etc. |
 
-All SQS message payloads use `callback: { provider, channel, threadId }`.
-`routeCallback()` in `callback.mjs` dispatches on `provider` — adding a new UI is one new `case`.
-SERV is UI-agnostic — callback fields are never read in the SERV layer.
+A workflow author writes a program (a JSON step array) once. The Step Processor
+executes it identically every time, across any number of concurrent runs, with no
+knowledge of what the program does. This is the same relationship a CPU has with
+machine code — the CPU executes instructions; the instructions encode the
+programmer's intent.
+
+### Section map
+
+| Section | Topic |
+|---|---|
+| 6.1 | Process Layer API — HTTP routes and SQS message types |
+| 6.2 | Process Layer config tables — PGC as the brain's system memory |
+| 6.3 | Intent Preprocessor — the kernel that routes input to programs |
+| 6.4 | Step Orchestrator overview — WorkflowRun, SQS message format |
+| 6.5 | Step types — the instruction set |
+| 6.6 | Execution Stack — the program counter and call stack |
+| 6.7 | `local_state` — the data bag / memory |
+| 6.8 | Human-in-the-Loop — blocking I/O |
+| 6.9 | Right-Brain Output Validation — correction loop |
+| 6.10 | Workflow Safety — circuit breakers and emergency shutdown |
+| 6.11 | UI Dialog Contract — WORKFLOW_GATE message format |
+| 6.12 | create_domain Workflow — full annotated example |
+| 6.13 | create_workflow Workflow — Phase 2 |
+| 6.14 | Session Architecture — conversational memory (Phase 3) |
 
 ---
 
-### 6.2 Step Definition Schema
+### 6.1 Process Layer API
 
-Every workflow step in `PGC_Workflow.steps` follows this schema:
+Every PROC endpoint module exports `handle(req)` and is wired to both an HTTP
+route and an SQS message type in `proc/handler.mjs`. The HTTP path is available
+for direct testing with curl. The SQS path is the production path.
 
-```json
-{
-  "step":         "1",
-  "type":         "serv_query | serv_insert | serv_update | serv_delete | serv_schema | llm_call | sub_workflow | condition | human_gate | js_transform | notify | end",
-  "description":  "Human readable description",
-  "input":        {},
-  "output_key":   "key_in_local_state",
-  "on_success":   "next | end | step:N",
-  "on_failure":   "human_feedback | retry | pop | cancel",
-  "on_condition": { "if_true": "next | step:N", "if_false": "next | step:N" },
-  "confirmation_message": null
-}
-```
-
-**Step keys are strings throughout.** All step keys are strings: `"1"`, `"2"`, `"3"`, `"3a"`, `"3b"`.
-Mixed integer/string keys create lookup ambiguity in the Step Processor.
-`on_success: "step:3a"` and backward references like `on_success: "step:3"` are valid routing
-and supported by the existing Step Processor. The first backward step reference in the system
-is in the `create_domain` workflow — see Section 6.8.
-
-### `output_key` — step state hashmap
-
-`output_key` is a string key into the frame's `local_state` hashmap. When a step
-completes, the Step Processor stores the step's result at `local_state[output_key]`.
-Subsequent steps read from it using `{{output_key}}` or `{{output_key.field}}`
-template syntax in their `input`, `message_template`, and `context_key` fields.
+#### HTTP routes
 
 ```
-Step 1 executes → local_state['proposed_scaffold'] = { domain, tables, domainHelp }
-Step 2 message_template: "Plan for *{{proposed_scaffold.domain}}*"  → resolved at runtime
-Step 5 items_key: "proposed_scaffold.tables"                        → iterator seeds from it
-Step 7 input: "{{item}}"                                            → each table from iterator
+POST /proc/classify-intent     classify-intent.mjs — intent pipeline entry point
+POST /proc/run-workflow        run-workflow.mjs    — execute_top | resume_gate | cancel
+POST /proc/review-output       review-output.mjs   — right-brain validation (also intra-proc direct import)
+POST /proc/create-domain       create-domain.mjs   — direct /create-domain command entry point
+POST /proc/create-workflow     create-workflow.mjs — Phase 2
+POST /proc/shutdown            shutdown.mjs        — emergency stop
 ```
 
-`local_state` is a plain JSON object on the frame — a hashmap scoped to the current
-workflow frame. Sub-workflow frames have their own `local_state`. When a sub-workflow
-pops, its output can be written back to the parent frame's `local_state` via the
-sub-workflow's own `output_key`.
-
-### Step types
+#### SQS message types (WorkflowQueue)
 
 ```
-| Type | Description | Executes |
-|---|---|---|
-| `serv_query` | SELECT from PGD table | ServFunction direct invoke |
-| `serv_insert` | INSERT into PGD table | ServFunction direct invoke |
-| `serv_update` | UPDATE PGD table | ServFunction direct invoke |
-| `serv_delete` | DELETE from PGD table | ServFunction direct invoke |
-| `serv_schema` | Create/alter table | ServFunction direct invoke |
-| `llm_call` | Call LLM with prompt from PGC_Prompt | LLM provider |
-| `sub_workflow` | Execute child workflow | Push new frame onto stack |
-| `condition` | Evaluate expression, branch | In-process JS expression evaluator |
-| `human_gate` | Pause for user confirmation | Slack interactive message, suspend stack |
-| `js_transform` | Run sandboxed JS (Option C) | In-process sandbox with security gate |
-| `notify` | Post message to UI | SQS SlackResults → CallbackListener |
-| `end` | Terminate workflow cleanly | — |
+CLASSIFY_INTENT    → classify-intent.mjs
+WORKFLOW_STEP      → run-workflow.mjs       (actions: execute_top | resume_gate | cancel)
+CREATE_DOMAIN      → create-domain.mjs
+CREATE_WORKFLOW    → create-workflow.mjs
 ```
 
+#### SQS message format (WORKFLOW_STEP)
 
-### 6.3 Execution Stack — Frame Schema
-
-`PGC_WorkflowRun.stack` is a JSON array. The Step Processor always executes the **top frame** (last element).
-
-```json
-{
-  "frame_id":               "uuid",
-  "type":                   "workflow | iterator | human_gate | js_transform",
-  "status":                 "running | awaiting | completed | failed",
-  "workflow_name":          "string (workflow frames only)",
-  "current_step":           "1",
-  "items":                  [],
-  "current_index":          0,
-  "execution_mode":         "sequential",
-  "parallel_group_id":      null,
-  "parallel_error_strategy": "abort_all",
-  "local_state":            {},
-  "on_complete":            "next | pop | pop_to:frameId",
-  "on_error":               "human_feedback | retry | pop | cancel",
-  "pushed_at":              "ISO timestamp"
-}
-```
-
-### Stack operations
-
-| Operation | When | Effect |
-|---|---|---|
-| PUSH workflow frame | Enter sub-workflow | New frame on top, parent paused |
-| PUSH iterator frame | Start iterating a list | New iterator frame on top |
-| PUSH human_gate frame | Destructive op or user confirmation needed | Suspend stack, post Slack interactive message |
-| POP frame | Frame completes | Remove top, return output to parent |
-| POP to frame_id | User cancels at human gate | Unwind stack to target frame |
-
-### Sequential iterator rule
-**The iterator NEVER enqueues all items simultaneously.** It pushes one item frame, waits for it to pop, then pushes the next. At all times there is exactly one SQS message in flight per `workflowRunId`. This is enforced by stack discipline, not by FIFO queues or locking.
-
-### SQS message format
 ```json
 {
   "type":          "WORKFLOW_STEP",
   "workflowRunId": 42,
   "action":        "execute_top | resume_gate | cancel",
+  "userResponse":  "confirm | cancel | remove_item | ...",
+  "responseData":  { "tableName": "...", "inputValue": "..." },
   "traceId":       "uuid"
 }
 ```
 
-Note: `traceId` is a plain UUID today. W3C `traceparent` format
-(`{version}-{traceId}-{parentId}-{flags}`) is deferred to when observability
-tooling is added. See tech debt register.
+**One message per step.** Each `execute_top` message executes exactly one step,
+then enqueues the next `execute_top`. This gives the stack one SQS hop per
+instruction — analogous to a single CPU clock cycle.
 
-### Idempotency
-Before executing any step, the Step Processor checks `PGC_WorkflowRunStep` for a row with the same `run_id`, `frame_id`, and `step_number`. If found, the step already ran (SQS redelivery) — skip execution, enqueue next message based on existing stack state.
+#### Callback / notification abstraction
+
+All results flow back to the UI via `callback: { provider, channel, threadId }`.
+`routeCallback()` in `callback.mjs` dispatches on `provider`. Adding a new UI
+(Teams, web) is one new `case` in that function. SERV never reads callback fields.
 
 ---
 
-### 6.4 Intent Preprocessor
+### 6.2 Process Layer config tables — PGC as system memory
 
-#### Entry point — `/mind` Slack command
+The PGC database (`pgc`) is the brain's persistent system memory. The Step
+Processor and Intent Preprocessor are stateless Lambda functions — they carry no
+in-process memory between invocations. Everything they need to operate is loaded
+from PGC at runtime.
 
-The Intent Preprocessor is triggered by the `/mind` Slack slash command. This is a
-dedicated entry point separate from `/create-domain` and `/help` — those commands
-retain their direct routing and are not affected by this change.
+#### Tables and their roles in the Step Processor
 
-**Flow:**
-1. User types `/mind <free-form natural language>` in Slack
-2. `SlackbotFunction` (`src/ui/slackbot/mind.mjs`) validates the Slack signing secret,
-   posts an ACK message to Slack (returns `ackTs` for threading), and enqueues a
-   `CLASSIFY_INTENT` message to SQS WorkflowQueue with `callback: { provider, channel, threadId: ackTs }`
-3. `ProcFunction` receives the `CLASSIFY_INTENT` message, routes to
-   `src/proc/classify-intent.mjs`
-4. `classify-intent.mjs` runs the three-tier classification pipeline and hands off
-   to the appropriate downstream handler
+| Table | Role | Read by | Written by |
+|---|---|---|---|
+| `PGC_Workflow` | Program store — stores the step array for every workflow | Step Processor | `upsert-workflow.mjs` / create_workflow workflow |
+| `PGC_WorkflowRun` | Process control block — stack, status, state, callback for each run | Step Processor | Step Processor |
+| `PGC_WorkflowRunStep` | Audit log — one row per step execution, used for idempotency | Step Processor | Step Processor |
+| `PGC_Prompt` | Prompt store — `prompt_text`, `output_schema`, `model`, `error_log` per intent | Step Processor (llm_call steps) | `upsert-prompt.mjs` / right-brain |
+| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `workflow_id` | Intent Preprocessor | `create_domain` workflow (step 10) |
+| `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 8) |
+| `PGC_Schema` | Schema registry — column definitions per PGD table | SERV (column validation) | `create_domain` workflow (DDL iterator) |
+| `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
+| `PGC_SystemContext` | System-wide config — thresholds, defaults, feature flags | Step Processor, Preprocessor | `init-brain.mjs` / admin |
+| `PGC_StepType` | Step type registry — canonical list of valid step types | Right-brain (Phase 3) | `init-brain.mjs` |
+| `PGC_Capability` | Capability registry — available tools the brain can invoke | Right-brain (Phase 3) | `init-brain.mjs` |
+| `PGC_WorkflowStats` | Aggregate view — run counts, failure rates per workflow | Right-brain, monitoring | DB view (auto-maintained) |
 
-`classify-intent.mjs` exports `handle(req)` and is wired as both an HTTP route
-(`POST /proc/classify-intent`) and a `CLASSIFY_INTENT` SQS message type in
-`proc/handler.mjs` — following the same pattern as `create-domain.mjs`. The HTTP
-path is fully available as an API to the experience layer or for testing.
+#### How these tables are used together in a workflow run
 
-Pure classification logic lives in `src/proc/classify-intent-tiers.mjs` — exported
-functions with no I/O, directly unit-testable.
+When `create_domain` runs, the Step Processor:
 
-#### Design principles
-- Coded logic always runs first — cheap, fast, no LLM cost
-- LLM only invoked when coded logic cannot classify the intent
-- Every classified intent resolves to a `PGC_Workflow` row and is handed to the Step Processor
-- Novel intents that require new workflows or domains are `heavy_lift` — use existing workflow entry points
-- The preprocessor has no `PGC_WorkflowRun` row of its own — it is a routing function, not a workflow
+1. Reads `PGC_Workflow` once to load the step array — this is the program
+2. Reads `PGC_Prompt` at each `llm_call` step to get the prompt text and schema
+3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
+4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
+5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_Workflow` (4 CRUD workflows), and `PGC_IntentMap` (4 rows) — making the new domain available to the Intent Preprocessor
+
+The PGC tables are not just config — they are the evolving state of the brain.
+The Intent Preprocessor reads from PGC to route incoming intents. The Step
+Processor writes to PGC as a side-effect of running workflows. The right-brain
+reads PGC to understand what has happened and improve future behaviour.
+
+---
+
+### 6.3 Intent Preprocessor — the kernel
+
+The Intent Preprocessor (`classify-intent.mjs`) is the kernel of the system. It
+receives every free-form user input from the `/mind` Slack command and routes it
+to the correct program (workflow) or handler. It never executes the workflow
+itself — it only classifies and dispatches, exactly as a kernel routes a system
+call to the correct handler without executing the application code.
+
+The preprocessor is triggered only by `/mind`. The `/create-domain`, `/help`, and
+`/shutdown` commands bypass it entirely and route directly to their handlers.
 
 #### Three-tier classification pipeline
 
 ```
-User input (natural language) — arrives via /mind Slack command
+User input — arrives via /mind Slack command
   │
   ▼
 Tier 1 — Coded logic (zero LLM cost)
   │
   ├── Pass 1a: regex test against PGC_IntentMap.pattern rows
-  │     Load all rows once. Test lowercased userInput against each pattern.
-  │     First match returns intent_category + action_type + workflow_id.
-  │     SHORT-CIRCUIT — PGC_DomainHelp never read if this matches.
-  │     e.g. "build me a new domain" → create.domain pattern → heavy_lift
+  │     Load all rows. Test lowercased input against each pattern.
+  │     First match → intent_category + action_type + workflow_id.
+  │     SHORT-CIRCUIT — no further passes if matched.
+  │     e.g. "build me a new domain" → create.domain → heavy_lift
   │
   ├── Pass 1b: tokenise input, scan PGC_DomainHelp.aliases arrays
-  │     Load all domain rows. Check if any alias token appears in userInput.
-  │     Resolves a domain name. If matched, proceed to Pass 1c.
-  │     e.g. "portfolio" → stock_portfolio domain resolved
+  │     Load all domain rows. Check if any alias token appears in input.
+  │     Resolves a domain name — passes domain as hint to Pass 1c or Tier 2.
+  │     e.g. "portfolio" → domain: stock_portfolio resolved
   │
   ├── Pass 1c: CRUD verb detection against resolved domain
   │     Patterns: list, add, update, delete, show
-  │     If verb matched → build ad_hoc_step, return confidence: crud
-  │     If no verb → pass domain as hint to Tier 2 (not cold — domain already known)
-  │     e.g. "list my recipes" → serv_query ad_hoc_step built
+  │     Verb matched → build ad_hoc_step, return confidence: crud
+  │     No verb → pass domain as hint to Tier 2 (warm — domain already known)
+  │     e.g. "list my stock_portfolio" → serv_query ad_hoc_step built
   │
-  │     Session context — domain fallback (Phase 3):
-  │     If no alias token found in input text, check recent PGC_SessionEntry rows
-  │     for the most recently active domain. Allows "add carbonara" to resolve
-  │     correctly when the user was just looking at recipes — zero LLM cost.
-  │
-  └── Pass 2b (DESIGNED — deferred to Phase 3):
-        After Pass 1b resolves a domain, scan PGC_Workflow.intent_keywords
-        for workflows whose domain column matches. If a keyword appears in
-        userInput, route directly to that workflow. Zero LLM cost.
-        Superseded by pgvector semantic search when Phase 3 lands.
-        The intent_keywords column already exists on PGC_Workflow — no schema change needed.
+  └── Phase 3 — Pass 1b domain fallback from session context
+        If no alias token in input, check recent PGC_SessionEntry for active domain.
+        "add carbonara" resolves to recipes because user was just there. Zero LLM cost.
   │
   ▼ (no Tier 1 match)
-Tier 2 — Cheap LLM classification (perplexity/sonar via LLM_CHAT_URL)
-  Compact prompt: "Classify this intent. Return JSON: { intent_category, workflow_name, action_type, referenced_entities }"
-  If Pass 1b resolved a domain, that domain is passed as a hint — sonar only classifies the action.
-  If session context is available (Phase 3), recent PGC_SessionEntry rows are injected
-  into the prompt — assembled from entry.content plain text fields, last 20 entries, most
-  recent first. This makes ambiguous short-form inputs like "make that a three-course
-  meal plan" classifiable by giving sonar the prior context that the user was working
-  with recipes.
-  ├── workflow_name found in PGC_Workflow → load workflow → enqueue WORKFLOW_STEP execute_top
-  ├── action_type = 'crud'               → execute ad_hoc_step (serv_query/insert/update/delete) → WORKFLOW_NOTIFY with result
+Tier 2 — Cheap LLM classification (perplexity/sonar)
+  Compact prompt: classify intent → { intent_category, workflow_name, action_type }
+  Domain hint from Pass 1b injected if available — sonar classifies action only.
+  Session context injected (Phase 3) — enables ambiguous short-form resolution.
+  ├── workflow_name found in PGC_Workflow → enqueue WORKFLOW_STEP execute_top
+  ├── action_type = 'crud'               → build ad_hoc_step → execute
   └── action_type = 'heavy_lift'         → Tier 3
   │
   ▼
-Tier 3 — Heavy lift handoff (no additional LLM call — routes to existing entry points)
-  ├── intent_category = 'create_domain'    → enqueue CREATE_DOMAIN → existing create-domain.mjs
-  ├── intent_category = 'create_workflow'  → enqueue CREATE_WORKFLOW → create-workflow workflow (Phase 2)
-  └── unknown heavy_lift                   → WORKFLOW_NOTIFY: "I understood this but have no workflow for it yet.
-                                             Use /create-workflow to build one."
+Tier 3 — Heavy lift handoff (no additional LLM call)
+  ├── intent_category = 'create_domain'   → enqueue CREATE_DOMAIN
+  ├── intent_category = 'create_workflow' → enqueue CREATE_WORKFLOW
+  └── unknown heavy_lift                  → WORKFLOW_NOTIFY: "I understood this
+                                            but have no workflow for it yet."
 ```
 
-**CRUD ad_hoc_step execution status:** The preprocessor classifies CRUD intents,
-enforces structured input (field=value for insert/update, id=<number> for delete/update),
-builds the correct ad_hoc_step, and executes it directly via `executeStep` in `executeCrudStep()`.
-Results are posted as `WORKFLOW_NOTIFY`. All four verbs (list, add, update, delete) are live.
-Delete and update require explicit `id=<number>`. Insert and update require `field=value` pairs.
-Ambiguous requests return instructive errors listing available fields and correct syntax.
-Named workflow CRUD operations (multi-step, child table support) are built by `create_domain`
-as part of Phase 2 item 4a.
+#### Classification response shape
 
-#### PGC_IntentMap bootstrap rows (seeded at init-brain bootstrap)
-
-| pattern | intent_category | workflow_id | action_type |
-|---|---|---|---|
-| `create.domain\|new.domain\|build.domain` | `create_domain` | → create_domain workflow | `heavy_lift` |
-| `create.workflow\|new.workflow` | `create_workflow` | → create_workflow workflow | `heavy_lift` |
-| `list.domains\|show.domains` | `list_domains` | → list_domains workflow | `crud` |
-| `help` | `help` | → help workflow | `crud` |
-
-#### CRUD pattern detection (coded logic — no LLM)
-
-Patterns detected without any LLM call. Domain is resolved first via Pass 1b alias match.
-```
-list <domain>           → serv_query on root table of domain
-add <domain> <name>     → serv_insert into root table
-update <domain> <id>    → serv_update on root table
-delete <domain> <id>    → serv_delete + human confirm gate
-show <domain> <id>      → serv_query with filter
-```
-
-#### HTTP endpoint and response shape
-
-```
-POST /proc/classify-intent
-Body: { userInput, traceId }
-Response: {
-  intent_category,
-  action_type,        // 'crud' | 'workflow' | 'heavy_lift'
-  confidence,         // 'exact' | 'alias' | 'crud' | 'llm_classified' | 'heavy_lift'
-  workflow_name,      // PGC_Workflow.name if found
-  domain,             // resolved domain name if Pass 1b matched
-  ad_hoc_step,        // step definition if CRUD pattern matched — built but not yet executed
-  referenced_entities, // Phase 3 — entities from session context relevant to this classification
-  traceId
+```json
+{
+  "intent_category": "list_stock_portfolio",
+  "action_type":     "workflow",
+  "confidence":      "exact | alias | crud | llm_classified | heavy_lift",
+  "workflow_name":   "list_stock_portfolio",
+  "workflow_id":     12,
+  "domain":          "stock_portfolio",
+  "ad_hoc_step":     null,
+  "traceId":         "uuid"
 }
 ```
 
-The HTTP path is fully testable at every tier:
-- Tier 1a: inputs matching `PGC_IntentMap` patterns return `confidence: exact` with no LLM call
-- Tier 1b+1c: domain alias inputs return `confidence: alias` or `confidence: crud`
-- Tier 2: unclassified inputs call sonar and return `confidence: llm_classified`
-- Tier 3: heavy_lift intents enqueue the appropriate SQS message and return the routing decision
+`confidence` is the tier and pass that produced the result — useful for
+right-brain analysis of where classification is weak.
 
 #### LLM model selection
 
 | Task | Model | Reason |
 |---|---|---|
-| Intent classification (Tier 2) | `perplexity/sonar` via `LLM_CHAT_URL` | Fast, cheap, structured JSON — chat completions endpoint |
-| Simple workflow generation | `anthropic/claude-sonnet-4-5` | Good reasoning, moderate cost |
-| Complex domain/schema generation | `anthropic/claude-sonnet-4-5` | Best JSON output, reliable |
-| Prompt improvement | `anthropic/claude-sonnet-4-5` | Good at meta-reasoning |
-| Error analysis | `anthropic/claude-sonnet-4-5` | Good at debugging |
+| Intent classification (Tier 2) | `perplexity/sonar` via `LLM_CHAT_URL` | Fast, cheap, structured JSON |
+| Workflow / schema generation | `anthropic/claude-sonnet-4-5` | Reliable structured JSON output |
 
-Model selection is coded logic based on task category, stored in `PGC_Prompt.model`.
-
----
-
-### 6.5 Workflow as Code — Hybrid Approach
-
-Decision: Declarative JSON steps for common operations, sandboxed JS only for complex transformations.
-
-- 95% of workflows: declarative step types (`serv_query`, `serv_update`, `notify`, etc.)
-- Complex transformations: `js_transform` step with security gate before `new Function()` execution
-- Security gate for `js_transform`: static analysis, AST inspection, whitelist of allowed operations
-- All JS workflows stored in `PGC_Workflow.js_extensions` — never executed without gate check
-
----
-
-### 6.6 Human-in-the-Loop — General Pattern
-
-Any workflow step can declare itself as requiring human input before or after
-execution. The system suspends the stack at a `human_gate` frame, presents
-context to the user via the experience layer, waits for a response, then
-resumes or branches accordingly.
-
-### General `human_gate` step schema
-
-```json
-{
-  "type":             "human_gate",
-  "gate_type":        "confirm | select_one | select_many | edit_list | text_input | review_object",
-  "message_template": "Plain text with {{variable}} substitution from local_state. No markup, no emoji.",
-  "context_key":      "dot-path into local_state — data source for the dialog",
-  "item_primary_key": "field name on each item to use as primary label (edit_list, select_one, select_many)",
-  "item_secondary_key": "field name on each item to use as secondary text — must be a real field, derived by a preceding js_transform step if needed",
-  "item_action": {
-    "condition":       "boolean expression per item — items where false get no action button",
-    "action":          "userResponse value sent on click",
-    "action_data_key": "field on the item that becomes responseData",
-    "confirm_template": "optional confirmation prompt, resolved per item"
-  },
-  "options": [
-    { "label": "Confirm",  "action": "confirm",  "on_select": "next"   },
-    { "label": "Cancel",   "action": "cancel",   "on_select": "cancel" }
-  ],
-  "on_timeout":       "cancel",
-  "timeout_seconds":  3600
-}
-```
-
-`options` labels are plain text — no emoji, no markup. The renderer adds all
-formatting. `action` values are the primitive `userResponse` strings the Step
-Processor receives.
-
-When a `human_gate` step is reached:
-1. Step Processor pushes a `human_gate` frame onto the stack
-2. Sets `PGC_WorkflowRun.status = 'awaiting_human_gate'`
-3. Builds a concrete `WORKFLOW_GATE` dialog from `gate_type` + binding metadata + resolved `local_state` data
-4. Enqueues `WORKFLOW_GATE` to `SYSSQSCallbackResults`
-5. SQS message processing completes — stack suspended, no timeout on Lambda
-6. User responds → Slack sends to `/interactive` endpoint on SlackbotFunction
-7. SlackbotFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'resume_gate', response: '...' }`
-8. Step Processor resumes — pops gate frame, routes based on user response
-
-### Gate type catalogue
-
-Six primitive types — UI-agnostic, independent of any workflow domain.
-The Step Processor has one `buildDialog()` handler per type.
-
-| gate_type | Interaction | Dialog fields produced |
-|---|---|---|
-| `confirm` | Read a proposal, accept or reject | `typography` + `actions` |
-| `select_one` | Pick exactly one item | `typography` + `radio` or `select` + `actions` |
-| `select_many` | Pick zero or more items | `typography` + `checkbox` + `actions` |
-| `edit_list` | View a collection, optionally remove items, confirm | `typography` + `list` with per-row actions + `actions` |
-| `text_input` | Provide free text | `typography` + `textbox` + `actions` |
-| `review_object` | Review a structured summary, accept or reject | `typography` + structured summary + `actions` |
-
-System gate types (not user-dialog):
-
-| gate_type | When triggered | User sees |
-|---|---|---|
-| `error_recovery` | Step execution failed | Error details + fix/skip/cancel options |
-| `execution_limit` | Execution accumulator tripped | Elapsed time + cost + continue/stop options |
-| `velocity_limit` | Velocity detector tripped | Step count + last step + show/delete/dismiss options |
-
-### Gate instances
-
-**Destructive operation gate** (`confirm`)
-```
-You are about to drop table PGD_Recipes and all its data. This cannot be undone.
-[Confirm]  [Cancel]
-```
-
-**Error recovery gate** (`error_recovery`)
-```
-Step 3 of "deduct_inventory" failed.
-Error: Column "quantity" not found in PGD_Inventory.
-
-[Fix the schema]  [Fix the data]  [Skip step]  [Cancel]
-```
-Stack operations: Fix → push sub-workflow frame. Skip → pop failed frame, advance. Cancel → cancel.
-
-**Domain review gates** — see Section 6.8 for the full create_domain workflow.
-
----
-
-### 6.7 Parallel Execution — Deferred, Hooks Only
-
-Decision: Implement sequentially now. Parallel is a future nice-to-have.
-
-### Hooks baked into frame schema (fields present, ignored by sequential processor)
-- `execution_mode` on iterator frames — today always `"sequential"`
-- `parallel_group_id` on workflow frames — today always `null`
-- `parallel_error_strategy` on iterator frames — today ignored
-- `PGC_WorkflowRunLock` table — bootstrapped empty, not used
-
-### When parallel is implemented
-- `execution_mode: "parallel"` on iterator frames triggers fan-out
-- `parallel_group_id` UUID groups sibling frames
-- Fan-in watches for all group frames to reach `completed`
-- Optimistic locking via `PGC_WorkflowRunLock.version` prevents race conditions on stack writes
-
-### 6.8 create_domain Workflow — Full Definition
-
-#### Overview
-`create_domain` is the primary declarative workflow stored in `PGC_Workflow`.
-It demonstrates the full capability of the Step Processor — LLM calls, multi-step
-human review gates with branching, iterators, and service calls — all driven by
-the declarative step schema in Section 6.2.
-
-After domain creation, the workflow automatically generates four named CRUD workflows
-(`list_<domain>`, `add_<domain>`, `update_<domain>`, `delete_<domain>`) and registers
-them in `PGC_Workflow`, `PGC_IntentMap`, and `PGC_DomainHelp`. This makes the domain
-immediately usable from `/mind` without any additional setup.
-
-#### Bootstrap seeds required (in `init-brain.mjs`)
-
-**`PGC_Prompt` rows:**
-- `intent_category: 'create_domain'` — schema design prompt (version 2 already seeded)
-- `intent_category: 'design_table'` — designs a single new table when user adds one via the add-table branch. Input variables: `domain` (name), `existingTables` (array of current table names for FK context), `userDescription` (free text from the text_input gate). Returns a single table definition in identical shape to `create_domain` scaffold tables. Validated by the same Ajv schema as `create_domain` output, filtered to one table entry.
-- `intent_category: 'merge_tables'` — redesigns a merged table from two inputs
-
-**`PGC_Workflow` row:** `name: 'create_domain'`
-
-**`PGC_IntentMap` row:** pattern `create.domain|new.domain|build.domain`, workflow_id → create_domain
-
-#### Step numbering note
-
-Step keys are strings throughout. The add-table branch uses steps `3a`, `3b`, `3c`.
-Steps 8 and 9 are new in this revision — CRUD workflow generation and IntentMap registration.
-Total: 11 main-path steps plus the 3-step add-table branch.
-
-The `create_domain` workflow contains the first backward step reference in the system:
-step 3c uses `on_success: "step:3"` to loop back to the `edit_list` gate after adding a table.
-
-#### CRUD workflow generation — deterministic, no LLM
-
-Steps 8 and 9 generate four named workflows from the domain's root table and column
-definitions. Generation is deterministic — the column list is already known from the
-LLM scaffold. No additional LLM call is needed. The four workflows are:
-
-| Workflow name | Steps | Purpose |
-|---|---|---|
-| `list_<domain>` | serv_query → notify | List all records |
-| `add_<domain>` | human_gate (text_input for each field) → serv_insert → notify | Add a record with field guidance |
-| `update_<domain>` | serv_query → human_gate (select_one) → human_gate (edit fields) → serv_update → notify | Update a specific record |
-| `delete_<domain>` | serv_query → human_gate (select_one, confirm) → serv_delete → notify | Delete with confirmation |
-
-These workflows are inserted via a `js_transform` step that builds the workflow definitions
-from `proposed_scaffold`, followed by an `iterator` of `serv_insert` steps.
-
-#### Alias generation — rule-based, no LLM
-
-The domain name is always included as an alias. Singular form is derived by stripping
-a trailing 's' if present (e.g. "recipes" → "recipe"). Both forms plus the domain name
-are included in `PGC_DomainHelp.aliases`. This covers the common case without an LLM call.
-Edge cases (irregular plurals) can be corrected via the alias management workflow (Phase 3).
-
-#### Declarative step definitions
-
-Note: all `step` keys are strings. All `message_template` and `option.label`
-values are plain text — no emoji, no markup. The renderer adds all formatting.
-
-```json
-[
-  {
-    "step": "1",
-    "type": "llm_call",
-    "description": "LLM designs full domain schema.",
-    "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
-    "output_key": "proposed_scaffold",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "2",
-    "type": "js_transform",
-    "description": "Enrich each table with columnSummary for the edit_list gate.",
-    "input_key": "proposed_scaffold.tables",
-    "output_key": "proposed_scaffold.tables",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "3",
-    "type": "human_gate",
-    "gate_type": "edit_list",
-    "description": "User reviews proposed table list.",
-    "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove child tables you don't need, or add one that's missing.",
-    "context_key": "proposed_scaffold.tables",
-    "item_primary_key": "tableName",
-    "item_secondary_key": "columnSummary",
-    "item_action": {
-      "condition": "item.foreignKeys.length > 0",
-      "action": "remove_item",
-      "action_data_key": "tableName",
-      "confirm_template": "Remove {{item.tableName}} from this domain?"
-    },
-    "options": [
-      { "label": "Looks good",   "action": "confirm",    "on_select": "next"    },
-      { "label": "Add a table",  "action": "add_table",  "on_select": "step:3a" },
-      { "label": "Cancel",       "action": "cancel",     "on_select": "cancel"  }
-    ],
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "3a",
-    "type": "human_gate",
-    "gate_type": "text_input",
-    "description": "User describes the table they want to add.",
-    "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
-    "options": [
-      { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
-    ],
-    "output_key": "new_table_description",
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "3b",
-    "type": "llm_call",
-    "description": "LLM designs the new table from user description.",
-    "input": {
-      "prompt": "design_table",
-      "domain": "{{proposed_scaffold.domain}}",
-      "existing_tables": "{{proposed_scaffold.tables}}",
-      "user_input": "{{new_table_description}}"
-    },
-    "output_key": "new_table",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "3c",
-    "type": "js_transform",
-    "description": "Merge new table into proposed_scaffold.tables and re-enrich. Loops back to step 3.",
-    "input_key": "proposed_scaffold.tables",
-    "output_key": "proposed_scaffold.tables",
-    "on_success": "step:3",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "4",
-    "type": "human_gate",
-    "gate_type": "confirm",
-    "description": "Final confirmation before DDL execution.",
-    "message_template": "Ready to create domain {{proposed_scaffold.domain}} with {{proposed_scaffold.tables.length}} tables. This will create the physical database tables.",
-    "options": [
-      { "label": "Create it", "action": "confirm", "on_select": "next"   },
-      { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
-    ],
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "5",
-    "type": "iterator",
-    "description": "Create each confirmed PGD table via SERV-Schema createTable. Domain name threaded through so PGC_Schema rows have domain populated.",
-    "items_key": "proposed_scaffold.tables",
-    "item_step": {
-      "type": "serv_schema",
-      "input": "{{item}}",
-      "on_failure": "human_feedback"
-    },
-    "execution_mode": "sequential",
-    "output_key": "created_tables",
-    "on_complete": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "6",
-    "type": "js_transform",
-    "description": "Build domain help object: derive singular alias, generate CRUD command examples using real column names from proposed_scaffold.",
-    "input_key": "proposed_scaffold",
-    "output_key": "proposed_scaffold.domainHelp",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "7",
-    "type": "human_gate",
-    "gate_type": "review_object",
-    "description": "User reviews and confirms aliases and CRUD command examples before they are written to PGC_DomainHelp.",
-    "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Edit them if needed.",
-    "context_key": "proposed_scaffold.domainHelp",
-    "options": [
-      { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-      { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
-    ],
-    "output_key": "confirmed_domain_help",
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "8",
-    "type": "serv_insert",
-    "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
-    "input": { "tableName": "PGC_DomainHelp", "row": "{{confirmed_domain_help}}" },
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "9",
-    "type": "js_transform",
-    "description": "Build four CRUD workflow definitions (list, add, update, delete) from proposed_scaffold root table and columns. No LLM call — deterministic from column list.",
-    "input_key": "proposed_scaffold",
-    "output_key": "crud_workflows",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "10",
-    "type": "iterator",
-    "description": "Insert each generated CRUD workflow into PGC_Workflow and PGC_IntentMap.",
-    "items_key": "crud_workflows",
-    "item_step": {
-      "type": "serv_insert",
-      "input": "{{item}}",
-      "on_failure": "human_feedback"
-    },
-    "execution_mode": "sequential",
-    "output_key": "registered_workflows",
-    "on_complete": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "11",
-    "type": "notify",
-    "description": "Confirm domain creation with concrete command examples.",
-    "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry these commands:\n/mind list my {{proposed_scaffold.domain}}\n/mind add my {{proposed_scaffold.domain}} <field>=<value>\n/mind update my {{proposed_scaffold.domain}} id=<number> <field>=<value>\n/mind delete my {{proposed_scaffold.domain}} id=<number>",
-    "on_success": "end"
-  },
-  {
-    "step": "12",
-    "type": "end"
-  }
-]
-```
-
-#### Note on step 5 — domain: null fix
-
-The iterator's `item_step` receives `{{item}}` which is the full table object from
-`proposed_scaffold.tables`. Each table object must include a `domain` field so that
-`serv_schema createTable` writes `domain` to both `PGC_Schema` and `PGC_TableMap`.
-The `js_transform` at step 2 is responsible for enriching each table object with
-`domain: proposed_scaffold.domain` alongside `columnSummary`.
-This fixes the `domain: null` tech debt item for all DDL-created tables.
-
-#### Note on steps 6 and 9 — js_transform built-ins required
-
-Steps 6 and 9 use `js_transform`. Both require registered built-ins:
-- **Step 6 built-in: `buildDomainHelp`** — derives singular alias, builds `commands` array
-  with concrete field examples from `proposed_scaffold.tables[0].columns`
-- **Step 9 built-in: `buildCrudWorkflows`** — generates four workflow definitions and
-  four `PGC_IntentMap` rows from root table name and column list
-
-Both are added to `step-executor.mjs` alongside the existing `columnSummary` built-in.
-
-#### Local state shape during execution
-
-```json
-{
-  "input": { "userInput": "stock portfolio with price history" },
-  "proposed_scaffold": {
-    "domain": "stock_portfolio",
-    "tables": [{ "tableName": "PGD_Portfolios", "domain": "stock_portfolio", "columnSummary": "name, description", ... }],
-    "domainHelp": {
-      "domain": "stock_portfolio",
-      "aliases": ["stock_portfolio", "stock", "portfolio", "holdings"],
-      "description": "...",
-      "commands": [
-        { "verb": "list",   "example": "/mind list my stock_portfolio" },
-        { "verb": "add",    "example": "/mind add my stock_portfolio name=My Portfolio" },
-        { "verb": "update", "example": "/mind update my stock_portfolio id=1 name=Updated" },
-        { "verb": "delete", "example": "/mind delete my stock_portfolio id=1" }
-      ]
-    }
-  },
-  "confirmed_domain_help": { ... },
-  "created_tables": [...],
-  "crud_workflows": [
-    { "workflow": { "name": "list_stock_portfolio", ... }, "intent_map": { "pattern": "list.stock_portfolio|show.stock_portfolio", ... } },
-    ...
-  ],
-  "registered_workflows": [...]
-}
-```
-
-### 6.9 create_workflow Workflow — Full Definition (Phase 2)
-
-#### Overview
-
-`create_workflow` allows a user to describe a workflow in natural language, review
-and edit the proposed steps and intent keywords, and have the workflow stored in
-`PGC_Workflow` and registered in `PGC_IntentMap` — making it immediately invocable
-via `/mind` after creation.
-
-The keyword review gate (step 3) is critical: it ensures the `intent_keywords` array
-that drives Tier 1 sub-pass 2b (and immediately the `PGC_IntentMap` pattern row)
-reflects what the user actually wants to say to invoke the workflow, not just what
-the LLM guessed.
-
-#### Bootstrap seeds required
-
-**`PGC_Prompt` row:** `intent_category: 'create_workflow'` — LLM designs a full
-workflow step array and proposes `intent_keywords`. Input variables: `userDescription`
-(free text), `availableStepTypes` (injected from `PGC_StepType`). Returns
-`{ workflowName, description, steps, intent_keywords }`. Validated by
-`review-output.mjs` using the `workflow_steps` Ajv schema.
-
-#### Declarative step definitions
-
-```json
-[
-  {
-    "step": "1",
-    "type": "llm_call",
-    "description": "LLM designs full workflow step array and proposes intent keywords.",
-    "input": { "prompt": "create_workflow", "user_input": "{{input.userInput}}" },
-    "output_key": "proposed_workflow",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "2",
-    "type": "human_gate",
-    "gate_type": "edit_list",
-    "description": "User reviews proposed workflow steps. Steps may be removed.",
-    "message_template": "Here are the steps I propose for this workflow. Remove any that don't fit.",
-    "context_key": "proposed_workflow.steps",
-    "item_primary_key": "type",
-    "item_secondary_key": "description",
-    "item_action": {
-      "condition": "true",
-      "action": "remove_item",
-      "action_data_key": "step",
-      "confirm_template": "Remove step {{item.step}} ({{item.type}}) from this workflow?"
-    },
-    "options": [
-      { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-      { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
-    ],
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "3",
-    "type": "human_gate",
-    "gate_type": "edit_list",
-    "description": "User reviews proposed intent_keywords. These are the phrases that will trigger this workflow via /mind. User adds or removes keywords to match how they will naturally ask for this workflow.",
-    "message_template": "These are the phrases that will invoke this workflow when you use /mind. Add or remove them so they match how you'll actually ask.",
-    "context_key": "proposed_workflow.intent_keywords",
-    "item_primary_key": "keyword",
-    "item_action": {
-      "condition": "true",
-      "action": "remove_item",
-      "action_data_key": "keyword",
-      "confirm_template": "Remove keyword {{item.keyword}}?"
-    },
-    "options": [
-      { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-      { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
-    ],
-    "output_key": "confirmed_keywords",
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "4",
-    "type": "human_gate",
-    "gate_type": "confirm",
-    "description": "Final confirmation before writing to PGC_Workflow and PGC_IntentMap.",
-    "message_template": "Ready to save workflow {{proposed_workflow.workflowName}} with {{proposed_workflow.steps.length}} steps. Once saved, you can invoke it via /mind using the keywords you confirmed.",
-    "options": [
-      { "label": "Save it", "action": "confirm", "on_select": "next"   },
-      { "label": "Cancel",  "action": "cancel",  "on_select": "cancel" }
-    ],
-    "on_success": "next",
-    "on_failure": "cancel"
-  },
-  {
-    "step": "5",
-    "type": "serv_insert",
-    "description": "Write confirmed workflow definition to PGC_Workflow.",
-    "input": {
-      "tableName": "PGC_Workflow",
-      "row": {
-        "name": "{{proposed_workflow.workflowName}}",
-        "description": "{{proposed_workflow.description}}",
-        "steps": "{{proposed_workflow.steps}}",
-        "intent_keywords": "{{confirmed_keywords}}",
-        "state_strategy": "sequential_with_confirmation"
-      }
-    },
-    "output_key": "stored_workflow",
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "6",
-    "type": "serv_insert",
-    "description": "Write PGC_IntentMap row so Tier 1a pattern matching finds this workflow immediately.",
-    "input": {
-      "tableName": "PGC_IntentMap",
-      "row": {
-        "pattern": "{{proposed_workflow.intentPattern}}",
-        "intent_category": "{{proposed_workflow.workflowName}}",
-        "workflow_id": "{{stored_workflow.id}}",
-        "action_type": "workflow"
-      }
-    },
-    "on_success": "next",
-    "on_failure": "human_feedback"
-  },
-  {
-    "step": "7",
-    "type": "notify",
-    "description": "Tell user the workflow is live and which phrases will invoke it.",
-    "message_template": "Workflow {{proposed_workflow.workflowName}} is live. Invoke it via /mind using phrases like: {{confirmed_keywords}}",
-    "on_success": "end"
-  },
-  {
-    "step": "8",
-    "type": "end"
-  }
-]
-```
-
----
-
-### 6.10 Workflow Safety — Circuit Breakers and Emergency Shutdown
-
-Workflows generated by the LLM may contain logic errors causing infinite loops or
-runaway execution. The system protects against this at two levels: static analysis
-at workflow creation time, and runtime monitoring during execution.
-
-Legitimate long-running workflows (e.g. analysing 300 stocks) must not be blocked
-by overly restrictive limits. Guards are designed to detect abnormal behaviour
-patterns, not constrain valid workloads.
-
-#### Guard 1 — Velocity detector (runtime, kills run)
-
-Detects tight routing loops — the signature of a buggy LLM-generated step graph.
-
-**Trigger:** More than `max_steps_per_window` steps execute within `window_seconds`
-with no `human_gate` step in between.
-
-**Rationale:** A legitimate 300-stock analysis has natural pacing — each stock takes
-real time. A loop executes as fast as SQS + Lambda allows — dozens of steps per second.
-A human gate anywhere in the window resets the counter (human interaction = not a loop).
-
-**How the check runs:**
-Before enqueuing the next SQS step message, the Step Processor evaluates:
-```
-elapsed = now - PGC_WorkflowRun.window_started_at
-if elapsed <= window_seconds AND steps_in_window >= max_steps_per_window:
-    → KILL: set status = 'failed', post Slack alert, discard SQS message
-if a human_gate step just completed:
-    → RESET: steps_in_window = 0, window_started_at = now
-else:
-    → INCREMENT: steps_in_window += 1 (same UPDATE as stack write — no extra round-trip)
-```
-
-Both `steps_in_window` and `window_started_at` live on `PGC_WorkflowRun` (see schema
-additions below). All reads and writes happen in the same DB transaction as the stack
-update — no extra round-trip.
-
-**Action:** Kill immediately. Set `PGC_WorkflowRun.status = 'failed'`. Post to Slack:
-
-```
-Workflow {{workflow_name}} was stopped — possible infinite loop detected.
-{{steps_in_window}} steps executed in {{elapsed}}s with no human interaction.
-Last step: {{last_step_description}}
-[Show workflow definition]  [Delete this workflow]  [Dismiss]
-```
-
-**Thresholds:** `max_steps_per_window` and `window_seconds` are stored per workflow in
-`PGC_Workflow` — allowing stricter limits on LLM-generated workflows and looser limits
-on trusted system workflows. System-wide defaults (`max_steps_per_window: 20`,
-`window_seconds: 10`) are stored in `PGC_SystemContext` under key `guardrail_defaults`
-and applied when a workflow row has NULL for these columns.
-
-#### Guard 2 — Execution accumulator (runtime, pauses run)
-
-Monitors total Lambda execution time across all steps of a run.
-Designed to handle legitimately long workflows — pauses rather than kills.
-
-**Trigger:** `PGC_WorkflowRun.total_execution_ms` exceeds `PGC_Workflow.max_execution_ms`.
-
-**How the check runs:**
-Every step writes a `PGC_WorkflowRunStep` row with `duration_ms`.
-The Step Processor adds that value to `PGC_WorkflowRun.total_execution_ms` in the
-same UPDATE as the stack write — no extra DB round-trip. The check runs after that
-UPDATE, before enqueuing the next step message:
-
-```
-total_execution_ms += duration_ms   ← same UPDATE as stack write
-step_count += 1                     ← same UPDATE
-if max_execution_ms IS NOT NULL AND total_execution_ms >= max_execution_ms:
-    → PAUSE: set status = 'awaiting_human_gate', push human_gate frame, post Slack alert
-```
-
-**Action:** Suspend at next step boundary. Set status to `awaiting_human_gate`. Post to Slack:
-
-```
-Workflow {{workflow_name}} has been running for {{elapsed_minutes}} minutes.
-Steps completed: {{step_count}} | Estimated cost: ~${{estimated_cost}}
-
-Still going?
-[Continue for another {{extension_minutes}} min]  [Stop now]  [Disable timer for this run]
-```
-
-User options:
-- **Continue** → extends `max_execution_ms` by a configurable increment, resumes
-- **Stop now** → sets status to `cancelled`, posts confirmation
-- **Disable timer** → sets `max_execution_ms = NULL` for this run, resumes without limit
-
-**Thresholds:** `max_execution_ms` is stored per workflow in `PGC_Workflow`.
-System-wide default (`max_execution_ms: 300000` — 5 minutes) and
-`extension_minutes: 5` are stored in `PGC_SystemContext` under key `guardrail_defaults`.
-Cost estimate uses the usage data already returned by the Perplexity Agent API response.
-
-#### Guard 3 — Cycle detector (static, rejects workflow at store time)
-
-Validates the step graph for structural cycles before a workflow is stored in `PGC_Workflow`.
-Runs once at creation — zero runtime cost.
-
-**How it works:** Traverse all `on_success`, `on_failure`, `on_select` routing values.
-Build a directed graph of step → step edges. Run DFS cycle detection.
-If a cycle is found, reject the `INSERT` into `PGC_Workflow` with a descriptive error.
-
-**Note on intentional backward references:** The `create_domain` workflow uses
-`on_success: "step:3"` on step 3c as a deliberate loop for the add-table flow.
-The cycle detector must distinguish between intentional loops that pass through
-a `human_gate` (safe — Guard 1 resets on every gate completion) and tight
-computational loops with no gate. The rule: a backward reference is acceptable
-if the path from the target step back to the backward reference contains at least
-one `human_gate` step.
-
-**Limitation:** Cannot catch dynamic routing loops (where routing depends on runtime
-`local_state` values). Those are caught by Guard 1 at runtime.
-
-**Action:** Reject workflow storage. Log the cycle path. Increment `PGC_Prompt.error_log`
-for the prompt that generated this workflow — feeds prompt improvement loop.
-
-#### `/shutdown` — Emergency stop (user-initiated, immediate)
-
-Allows the user to immediately cancel all active workflows or a specific run.
-Use case: user fears a misworded command is causing harm and wants to stop everything.
-
-**Slack commands:**
-```
-/shutdown                 — cancel ALL active workflow runs for this instance
-/shutdown <runId>         — cancel a specific run by PGC_WorkflowRun.id
-```
-
-**Flow:**
-1. Slack → SlackbotFunction → synchronous response (no SQS hop — must be immediate)
-2. SlackbotFunction calls `ProcFunction POST /proc/shutdown` directly via HTTP
-3. ProcFunction sets `PGC_WorkflowRun.status = 'cancelled'` for matching runs
-4. ProcFunction enqueues `{ type: 'WORKFLOW_STEP', action: 'cancel', workflowRunId }`
-   to SQS WorkflowQueue for each cancelled run
-5. Step Processor discards any in-flight message for cancelled runs on next execution
-6. SlackbotFunction posts immediate confirmation to Slack
-
-**Step Processor cancellation check:**
-Before executing any step, the Step Processor reads `PGC_WorkflowRun.status`.
-If `cancelled` → discard SQS message (return success to avoid retry), do not execute.
-This check already exists for idempotency — cancellation reuses the same path.
-
-#### Schema fields added for guardrails
-
-**`PGC_WorkflowRun` — new columns (safety state, updated in same transaction as stack write):**
-
-| Column | Type | Notes |
-|---|---|---|
-| `total_execution_ms` | integer | Running sum of all step `duration_ms` values. Used by Guard 2 |
-| `step_count` | integer | Total steps executed this run — incremented on every step |
-| `steps_in_window` | integer | Steps since last `human_gate` step — reset when a gate completes. Used by Guard 1 |
-| `window_started_at` | timestamptz | When the current velocity window started — reset with `steps_in_window`. Used by Guard 1 |
-
-**`PGC_Workflow` — new columns (per-workflow thresholds, NULL = use system defaults from PGC_SystemContext):**
-
-| Column | Type | Notes |
-|---|---|---|
-| `max_execution_ms` | integer | Guard 2 ceiling. NULL = use system default (300000) |
-| `max_steps_per_window` | integer | Guard 1 threshold. NULL = use system default (20) |
-| `window_seconds` | integer | Guard 1 window duration. NULL = use system default (10) |
-
-**`PGC_SystemContext` — seed row for guardrail defaults:**
-
-| key | section | content |
-|---|---|---|
-| `guardrail_defaults` | `rules` | `{ "max_steps_per_window": 20, "window_seconds": 10, "max_execution_ms": 300000, "extension_minutes": 5 }` |
-
-#### PGC_WorkflowStats — SQL view for LLM prompt injection
-
-This view is **not used by the guards**. Guards 1 and 2 operate on per-run columns in
-`PGC_WorkflowRun` updated in-transaction with the stack write. No view query is needed
-on the hot execution path.
-
-`PGC_WorkflowStats` is queried **only by PROC when building prompts** for workflow
-evaluation or improvement — it gives the LLM cross-run context (how often does this
-workflow fail?) without storing redundant counters on the definition table.
-
-```sql
-CREATE OR REPLACE VIEW "PGC_WorkflowStats" AS
-SELECT
-  workflow_id,
-  COUNT(*)                                             AS run_count,
-  COUNT(*) FILTER (WHERE status = 'failed')            AS failure_count,
-  COUNT(*) FILTER (WHERE status = 'completed')         AS success_count,
-  COUNT(*) FILTER (WHERE status = 'cancelled')         AS cancelled_count,
-  ROUND(
-    COUNT(*) FILTER (WHERE status = 'failed')::numeric
-    / NULLIF(COUNT(*), 0) * 100, 1
-  )                                                    AS failure_rate_pct,
-  MAX(created_at)                                      AS last_run_at,
-  (ARRAY_AGG(status ORDER BY created_at DESC))[1]      AS last_status,
-  AVG(total_execution_ms)
-    FILTER (WHERE status = 'completed')                AS avg_execution_ms
-FROM "PGC_WorkflowRun"
-GROUP BY workflow_id;
-```
-
-Registered in `PGC_TableMap.views` on the `PGC_WorkflowRun` row — consistent with the
-existing `views` jsonb pattern. Not a physical table. No bootstrap DDL required beyond
-the `CREATE VIEW` statement in `init-brain.mjs`.
-
----
-
-### 6.11 Right-Brain Output Validation — Repeat-Until-Correct Loop
-
-Every `llm_call` and `js_transform` step produces output that must be validated before
-being passed to the next step. Without validation, structurally invalid output propagates
-silently into DDL, SQS payloads, or workflow state — causing failures downstream with no
-recoverable context. This section defines the validation and correction loop that runs
-after every LLM output is received, before any downstream action executes.
+Model selection is per-prompt row in `PGC_Prompt.model`.
 
 #### Design principles
 
-- Validation is always **in-process** — no extra Lambda invocation, no external call
-- Maximum **2 LLM attempts** per step execution — never an unbounded loop
-- All failures are written to `PGC_Prompt.error_log` — structured, queryable, permanent
-- The correction prompt injects the **exact Ajv or runtime error** from attempt 1 — not a vague retry
-- SQS retries are **not** the correction mechanism — they are for transient infrastructure failures only
-
-#### JSON Schema validation — Ajv
-
-Used for all `llm_call` steps that return structured JSON (e.g. `create_domain`, `design_table`).
-
-The validator is **Ajv** (Another JSON Validator) — the Node.js standard for JSON Schema validation,
-equivalent to XSD for XML. The schema lives in `PGC_Prompt.output_schema` and is fetched alongside
-the prompt. No hardcoded rules — the schema is the contract, and it evolves with the prompt.
-
-**Validation loop:**
-
-```
-attempt 1
-  LLM call → parse JSON → Ajv.validate(output_schema, scaffold)
-  if valid   → pass scaffold to next step
-  if invalid → log errors to PGC_Prompt.error_log
-             → inject Ajv error array into correction prompt
-             → attempt 2: LLM call with error context
-
-attempt 2
-  LLM call → parse JSON → Ajv.validate(output_schema, scaffold)
-  if valid   → pass scaffold to next step
-  if invalid → write full error record to PGC_Prompt.error_log
-             → set WorkflowRun status = 'failed'
-             → post error_recovery human_gate to Slack
-             → halt — do not proceed to DDL or next step
-```
-
-**Correction prompt injection (attempt 2):**
-
-```
-Your previous response had these validation errors:
-{{ajv_errors_as_json}}
-
-Return the corrected JSON only. Do not change any fields that were not flagged.
-```
-
-**Error log entry shape** (written on any validation failure):
-
-```json
-{
-  "at": "ISO timestamp",
-  "error_type": "json_schema_validation",
-  "error_message": "Ajv error summary",
-  "ajv_errors": [ ...full Ajv error array... ],
-  "llm_raw_output": "raw text before parse",
-  "recovery_action": "injected_errors_retry | halt"
-}
-```
-
-#### In-situ JS validation — `js_transform` steps
-
-Used for `js_transform` steps where the LLM generates executable JavaScript.
-There is no JSON Schema equivalent for arbitrary JS — two complementary gates are used instead.
-
-**Scope constraint — synchronous transforms only:**
-`js_transform` is restricted to pure synchronous data transformation — reshaping state,
-extracting fields, merging objects, computing derived values. No async operations,
-no I/O, no external API calls. The AST gate (Gate 1) enforces this by rejecting any
-function containing `async`, `await`, `fetch`, `require`, or `import`.
-
-External data enrichment from third-party APIs (e.g. Finnhub stock prices) is handled
-by the `capability_call` step type — see Section 15 for the API Registry design.
-This separation is intentional: arbitrary fetch in LLM-generated code is an
-exfiltration vector that the capability registry eliminates by design.
-
-**Why vm.runInNewContext timeout is sufficient for sync-only:**
-Node.js `vm.runInNewContext({ timeout: N })` reliably kills synchronous infinite loops
-because Node.js is single-threaded — the event loop cannot yield to the timed-out
-context. This timeout does NOT apply to async operations, which is precisely why
-async code is prohibited in js_transform and enforced at the AST gate before execution.
-
-**Gate 1 — Static AST parse (acorn)**
-
-Parse the generated JS using `acorn` before executing it. Reject if:
-- Syntactically invalid
-- Contains async/await keywords
-- Contains fetch, require, or import expressions
-- Contains network or file system identifiers
-
-**Gate 2 — In-situ sandbox execution**
-
-Run the generated function against a known test input using `vm.runInNewContext()` with a
-hard timeout. Compare the output shape against `PGC_StepType.output_schema` for the
-step type. If the function throws, times out, or returns the wrong shape — apply the
-correction loop.
-
-```js
-import vm from 'node:vm';
-
-const sandbox = { input: testInput };
-const result  = vm.runInNewContext(generatedCode, sandbox, { timeout: 500 });
-// validate result shape against PGC_StepType.output_schema
-```
-
-**Correction loop for JS (same 2-attempt ceiling):**
-
-```
-attempt 1
-  AST parse → sandbox execute → validate output shape
-  if valid   → pass to execution
-  if invalid → log error (parse error / runtime error / shape mismatch)
-             → inject error + stack trace into correction prompt
-             → attempt 2
-
-attempt 2
-  AST parse → sandbox execute → validate output shape
-  if valid   → pass to execution
-  if invalid → write to PGC_Prompt.error_log → halt → error_recovery gate
-```
-
-#### Semantic validation rules — create_domain scaffold
-
-Ajv validates JSON Schema shape (required fields, types, formats). It cannot validate
-cross-field semantic contracts — rules that require reasoning across multiple fields
-in the scaffold. These are enforced as a post-Ajv validation pass inside
-`POST /proc/review-output` before any `createTable` call fires.
-
-**Rule 1 — Every table must have the `set_updated_at()` trigger**
-
-Every PGD table scaffold must include a trigger entry with
-`"function": "set_updated_at()"` and `"timing": "BEFORE UPDATE"`.
-
-**Rule 2 — upsert_key columns must have a matching UNIQUE constraint**
-
-If the LLM populates `upsert_key` in `PGC_EntitySchema` with a column name, the same
-column must appear in a `UNIQUE` constraint in the corresponding table's `constraints[]`.
-
-**Rule 3 — Foreign key parent tables must exist in the same scaffold**
-
-If a table references another table via a foreign key, the referenced table must either
-exist in the current scaffold or already be registered in `PGC_Schema`. Cross-domain
-foreign keys are not permitted — all tables in a domain are created together.
-
-These rules apply equally to tables returned by the `design_table` prompt in the
-add-table branch. The `review-output.mjs` semantic pass runs after every `llm_call`
-step that produces table definitions, regardless of which prompt generated them.
-
-**Enforcement model:**
-
-These three rules fire as a named validation pass after Ajv, before any SERV call.
-Failures use the same 2-attempt correction loop — errors are injected into the
-correction prompt and logged to `PGC_Prompt.error_log` with
-`"error_type": "semantic_validation"`.
-
-#### Where this runs
-
-Validation runs inside the Step Processor (`POST /proc/run-workflow`) immediately after
-receiving LLM output, before writing to `local_state` or advancing the stack.
-It is not a separate Lambda or endpoint — it is a synchronous in-process call
-within the step execution loop.
-
-#### Relationship to right-brain architecture
-
-This section is the first concrete implementation of the right-brain feedback loop.
-`PGC_Prompt.error_log` accumulates structured evidence of where each prompt fails.
-A future `POST /proc/improve-prompt` endpoint reads this log and generates an improved
-prompt version — the self-evolution loop.
-
+- Coded logic always runs first — cheap, fast, zero LLM cost
+- LLM invoked only when coded logic cannot classify
+- Every classified intent resolves to a `PGC_Workflow` row or a known entry point
+- The preprocessor has no `PGC_WorkflowRun` row of its own — it is a routing
+  function, not a workflow. It never touches the execution stack.
 
 ---
 
-### 6.12 UI Dialog Contract — WORKFLOW_GATE Message
+### 6.4 Step Orchestrator — WorkflowRun and the execution loop
 
-#### Purpose
+When the Intent Preprocessor (or a direct command handler) decides a workflow
+should run, it creates a `PGC_WorkflowRun` row and enqueues a `WORKFLOW_STEP
+execute_top` SQS message. From that point, `run-workflow.mjs` takes over.
 
-When the Step Processor hits a `human_gate` step it must communicate to the
-Experience tier what the user needs to see and respond to. This communication
-must be UI-agnostic — the PROC layer has no knowledge of Slack Block Kit,
-Teams Adaptive Cards, or any other UI framework. The Experience tier
-translates the contract into whatever format its medium requires.
+#### PGC_WorkflowRun — the process control block
 
-This section defines that contract: the `WORKFLOW_GATE` SQS message shape,
-the `dialog` field type system, and the enforcement model.
+Every workflow execution has exactly one `PGC_WorkflowRun` row. This row is the
+complete runtime state of the execution — nothing is held in Lambda memory between
+SQS invocations.
 
-#### Design decisions — final
+```
+PGC_WorkflowRun
+  id            integer        — run identifier surfaced to the user for /shutdown
+  workflow_id   integer        — FK to PGC_Workflow (which program to run)
+  workflow_name text           — denormalised name for fast loading
+  status        text           — running | awaiting_human_gate | completed | failed | cancelled
+  stack         jsonb          — execution stack (see 6.6)
+  state         jsonb          — { local_state: { ... } } — the data bag (see 6.7)
+  input         jsonb          — original input passed to the run (available as input.* in local_state)
+  callback      jsonb          — { provider, channel, threadId } — where to send results
+  error         jsonb          — structured error if failed; also used for stuck-step detection
+  step_count    integer        — total steps executed — velocity guard uses this
+  completed_at  timestamptz
+```
 
-**UI-neutral field types grounded in standard component vocabulary.**
-Field type names are taken from Material UI (React) and Angular Material —
-the two dominant component libraries — so that any frontend developer
-immediately understands the rendering intent without reading documentation.
+#### The execution loop
 
-**Plain text only in workflow definitions.**
-`message_template` and option `label` fields in `PGC_Workflow.steps` contain
-plain text only — no Slack `mrkdwn`, no emoji, no markdown. The Experience
-tier adds all formatting, emoji, and markup appropriate to its medium.
+The Step Processor is a simple loop driven by SQS messages. Each message is one
+iteration:
 
-**`style` hints are retained in the contract.**
-`style: "primary" | "danger" | "default"` appears on buttons and per-row
-actions. It is a semantic hint about visual weight and intent, not a Slack
-colour instruction. Renderers are free to ignore it.
+```
+SQS delivers WORKFLOW_STEP execute_top
+  │
+  ▼
+Load PGC_WorkflowRun by workflowRunId
+  Check status — if cancelled: discard (shutdown contract)
+  │
+  ▼
+Inspect top of stack
+  workflow frame  → execute current_step of the workflow
+  iterator frame  → execute current item, advance index
+  (human_gate frame never reaches execute_top — it is suspended)
+  │
+  ▼
+Load PGC_Workflow.steps
+Find step where step.step === frame.current_step
+  │
+  ▼
+Check PGC_WorkflowRunStep for (run_id, frame_id, step_key)
+  Found → idempotency hit (SQS redelivery)
+         → increment stuck_count in run.error
+         → if stuck_count >= 3: fail run, notify user (Guard 1)
+         → else: re-enqueue execute_top, return
+  Not found → proceed
+  │
+  ▼
+Execute step (see 6.5 — step types)
+  │
+  ├── on error: write PGC_WorkflowRunStep (failed), mark run failed,
+  │             enqueue WORKFLOW_ERROR to callback, rethrow
+  │
+  └── on success: write PGC_WorkflowRunStep (completed)
+                  clear run.error.stuck_step if present
+                  store result at local_state[step.output_key]
+                  persist stack + state to PGC_WorkflowRun
+                  │
+                  ├── result.nextAction = 'suspend' (human_gate)
+                  │     push human_gate frame
+                  │     set status = awaiting_human_gate
+                  │     enqueue WORKFLOW_GATE to callback
+                  │     STOP — next SQS message comes from user interaction
+                  │
+                  ├── result.nextAction = 'iterator'
+                  │     push iterator frame
+                  │     enqueue execute_top
+                  │
+                  ├── result.nextAction = 'end'
+                  │     set status = completed
+                  │     STOP
+                  │
+                  └── result.nextAction = 'next' | 'step:N'
+                        resolve next step key
+                        update frame.current_step
+                        enqueue execute_top
+```
 
-**`secondaryAction` is a single action per list item.**
-One optional action per row. If multiple per-row actions are ever needed,
-the renderer wraps them; the contract field becomes an array at that point
-(Phase 3 decision).
+One SQS message per step. One step per Lambda invocation. The stack is the only
+shared state between invocations — always persisted to `PGC_WorkflowRun` before
+the Lambda returns.
 
-**`confirm` is a plain string.**
-A confirmation prompt before a destructive action. The renderer decides how
-to present it.
+---
 
-**`step` keys in `PGC_Workflow.steps` are strings throughout.**
-All step keys are strings: `"1"`, `"2"`, `"3"`, `"3a"`, `"3b"`, `"3c"`.
-Stored as-is in the jsonb array; the Step Processor indexes by string key.
+### 6.5 Step types — the instruction set
 
-#### WORKFLOW_GATE SQS message
+Every step in a workflow is one instruction from this set. The Step Processor has
+one handler per type. No workflow-specific code lives in the Step Processor.
 
-Enqueued by the Step Processor to `SYSSQSSlackResults` when a `human_gate`
-step is reached. Consumed by `SlackCallbackListenerFunction` (`callback.mjs`).
+#### Step definition schema
+
+Every step follows this shape:
+
+```json
+{
+  "step":             "1",
+  "type":             "<step_type>",
+  "description":      "Human-readable description for workflow authors and right-brain",
+  "input":            {},
+  "output_key":       "key_in_local_state",
+  "on_success":       "next | end | step:3a",
+  "on_failure":       "human_feedback | cancel"
+}
+```
+
+**Step keys are always strings.** `"1"`, `"3"`, `"3a"`, `"3b"`, `"3d"` are all
+valid step keys. `on_success: "step:3a"` is a forward or backward jump. The Step
+Processor resolves step keys by string equality — `parseInt` is never used.
+
+#### Step type reference
+
+```
+╔══════════════╦══════════════════════════════════════════════════════╦══════════════════╗
+║ Type         ║ What it does                                         ║ Status           ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ llm_call     ║ Load prompt from PGC_Prompt, call LLM, run           ║ ✅ Implemented   ║
+║              ║ review-output validation (2-attempt correction loop) ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ js_transform ║ Run a named built-in transform on local_state data.  ║ ✅ Implemented   ║
+║              ║ Only built-in: columnSummary. Generic AST sandbox    ║ (columnSummary   ║
+║              ║ deferred to Phase 3.                                 ║ only)            ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
+║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
+║              ║ review_object. (select_one, select_many Phase 3)     ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_schema  ║ Create a PGD table via SERV createTable              ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_insert  ║ INSERT one row into a PGD table via SERV             ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_query   ║ SELECT rows from a PGD table via SERV                ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_update  ║ UPDATE rows in a PGD table via SERV                  ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ notify       ║ Resolve message_template from local_state, enqueue   ║ ✅ Implemented   ║
+║              ║ WORKFLOW_NOTIFY to callback                          ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ iterator     ║ Loop over an array in local_state, execute item_step ║ ✅ Implemented   ║
+║              ║ for each item sequentially                           ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ end          ║ Mark run completed, stop                             ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ sub_workflow ║ Push child workflow frame, inherit local_state        ║ ⬜ Phase 3       ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ condition    ║ Evaluate expression, branch on if_true / if_false    ║ ⬜ Phase 3       ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Phase 3       ║
+╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
+```
+
+#### Step-specific schema fields by type
+
+**`llm_call`**
+```json
+{
+  "step": "1", "type": "llm_call",
+  "input": {
+    "prompt":    "create_domain",
+    "userInput": "{{input.userInput}}"
+  },
+  "output_key": "proposed_scaffold",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+`input.prompt` is the `intent_category` key into `PGC_Prompt`. All other `input`
+fields are available to the prompt template via `{{variable}}` substitution.
+Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
+
+**`js_transform`**
+```json
+{
+  "step": "2", "type": "js_transform",
+  "transform_type": "columnSummary",
+  "input_key":  "proposed_scaffold.tables",
+  "output_key": "proposed_scaffold.tables",
+  "on_success": "next"
+}
+```
+`transform_type` is required — there is no fallback. Unknown types throw.
+`columnSummary` enriches each table object with a `columnSummary` string
+listing the first four non-system column names — used as secondary text in
+`edit_list` gates.
+
+**`human_gate`**
+```json
+{
+  "step": "3", "type": "human_gate",
+  "gate_type":        "edit_list",
+  "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
+  "context_key":      "proposed_scaffold.tables",
+  "item_primary_key": "tableName",
+  "item_secondary_key": "columnSummary",
+  "options": [
+    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
+    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
+    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+  ],
+  "on_success": "next",
+  "on_failure": "cancel"
+}
+```
+`context_key` is a dot-path into `local_state` — the data bound to the dialog.
+`options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
+jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
+
+**`iterator`**
+```json
+{
+  "step": "5", "type": "iterator",
+  "items_key":   "proposed_scaffold.tables",
+  "item_step":   { "type": "serv_schema", "input": { "table": "{{item}}" } },
+  "output_key":  "created_tables",
+  "on_complete": "next"
+}
+```
+`items_key` is a dot-path to an array in `local_state`. `item_step` is executed
+once per item — the current item is available as `{{item}}` and `{{item.field}}`
+inside `item_step.input`. Results are collected into an array at `output_key`.
+
+**`serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
+```json
+{
+  "step": "1", "type": "serv_query",
+  "input": {
+    "tableName": "PGD_Recipes",
+    "filters":   [{ "column": "id", "op": "eq", "value": "{{input.id}}" }]
+  },
+  "output_key": "results",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+
+**`notify`**
+```json
+{
+  "step": "11", "type": "notify",
+  "message_template": "Domain {{proposed_scaffold.domain}} created. Try: {{generated.domainHelp.commands.0.syntax}}",
+  "notify_type": "WORKFLOW_NOTIFY",
+  "on_success": "next"
+}
+```
+
+**`end`**
+```json
+{ "step": "12", "type": "end" }
+```
+
+---
+
+### 6.6 Execution Stack — program counter and call stack
+
+`PGC_WorkflowRun.stack` is a JSON array of frames. The Step Processor always
+operates on the **top frame** (last element). This is a standard call stack —
+pushing a frame suspends the current context; popping a frame resumes it.
+
+#### Frame schema
+
+```json
+{
+  "frame_id":      "uuid",
+  "type":          "workflow | iterator | human_gate",
+  "status":        "running | awaiting | completed | failed",
+  "workflow_name": "create_domain",
+  "current_step":  "3d",
+  "local_state":   { "proposed_scaffold": { ... }, "new_table": { ... } },
+  "on_complete":   "end",
+  "pushed_at":     "2026-03-25T10:08:38Z",
+
+  "item_step":     { ... },
+  "items_key":     "proposed_scaffold.tables",
+  "items":         [ ... ],
+  "current_index": 2,
+  "results":       [ ... ],
+  "parent_step":   "5",
+
+  "gate_type":     "review_object",
+  "step_ref":      { ... },
+  "step_number":   "3d"
+}
+```
+
+`current_step` is the string step key of the **next step to execute** — the
+program counter. After every step completes, the Step Processor advances
+`current_step` before persisting the frame and enqueuing the next SQS message.
+
+#### Stack operations
+
+| Operation | Triggered by | Effect |
+|---|---|---|
+| PUSH workflow frame | Start of run (root frame) or `sub_workflow` step | New frame on top; parent frame paused at its current_step |
+| PUSH iterator frame | `iterator` step result | New iterator frame on top; workflow frame paused |
+| PUSH human_gate frame | `human_gate` step result | New gate frame on top; run status → awaiting_human_gate |
+| POP frame | Frame completes (iterator exhausted, gate resolved) | Top frame removed; parent frame resumes |
+| POP on cancel | User clicks Cancel at any gate | Stack cleared; run status → cancelled |
+
+#### Stack state examples
+
+**Initial state — single workflow frame, step 1:**
+```json
+stack: [
+  { "frame_id": "A", "type": "workflow", "current_step": "1", "local_state": {} }
+]
+```
+
+**After step 3 (human_gate) suspends — gate frame on top:**
+```json
+stack: [
+  { "frame_id": "A", "type": "workflow",    "current_step": "3",  "local_state": { "proposed_scaffold": {...} } },
+  { "frame_id": "B", "type": "human_gate",  "status": "awaiting", "gate_type": "edit_list", "step_number": "3" }
+]
+```
+The workflow frame is paused at step `"3"`. The gate frame is on top. No SQS
+messages are in flight. The Lambda is idle, costing nothing.
+
+**After user confirms — gate popped, workflow frame advanced to step 3d:**
+```json
+stack: [
+  { "frame_id": "A", "type": "workflow", "current_step": "3d", "local_state": { "proposed_scaffold": {...} } }
+]
+```
+
+**During step 5 iterator — iterator frame on top of workflow frame:**
+```json
+stack: [
+  { "frame_id": "A", "type": "workflow",  "current_step": "5",  "local_state": { ... } },
+  { "frame_id": "C", "type": "iterator",  "current_index": 1, "items": [...], "results": [...] }
+]
+```
+
+#### Sequential iterator rule
+
+**The iterator never enqueues all items simultaneously.** It executes one item,
+waits for it to complete, then executes the next. At all times there is at most
+one `execute_top` SQS message in flight per `workflowRunId`. This is enforced
+by stack discipline — the iterator frame stays on top until all items are done
+and the frame pops. No locking, no coordination.
+
+#### Idempotency
+
+Before executing any step, the Step Processor checks `PGC_WorkflowRunStep` for
+a row with `(run_id, frame_id, step_key)` where `step_key` is the string step
+key `"3a"`, `"3d"`, etc. If found, the step already ran (SQS at-least-once
+redelivery). The Step Processor increments `run.error.stuck_count` for this
+step. At count 3, it marks the run `failed` and posts a `WORKFLOW_ERROR` to
+Slack with the run ID and step name (Guard 1 — lightweight stuck-step detector).
+
+**Critical:** `step_key` is stored as `text` in `PGC_WorkflowRunStep`. Using the
+integer `step_number` column for idempotency would collapse `"3a"`, `"3b"`, `"3c"`,
+`"3d"` all to `3` via `parseInt`, creating false positive idempotency hits on
+branching workflows. The `step_key` text column was added by `migrate-step-key.mjs`.
+
+---
+
+### 6.7 `local_state` — the data bag
+
+`local_state` is a plain JSON object on each frame. It is the workflow's memory —
+the working set of data available to every step in the current frame. It is the
+equivalent of a function's local variables in a programming language.
+
+#### How data flows through local_state
+
+```
+Step 1 — llm_call
+  output_key: "proposed_scaffold"
+  LLM returns: { domain: "stock_portfolio", tables: [...] }
+  → local_state["proposed_scaffold"] = { domain: "stock_portfolio", tables: [...] }
+
+Step 2 — js_transform
+  input_key:  "proposed_scaffold.tables"   reads  local_state.proposed_scaffold.tables
+  output_key: "proposed_scaffold.tables"   writes local_state.proposed_scaffold.tables
+  → each table object now has a columnSummary field
+
+Step 3 — human_gate (edit_list)
+  context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
+  message_template: "Plan for {{proposed_scaffold.domain}}"
+                                           reads  local_state.proposed_scaffold.domain
+  User removes PGD_Transactions
+  → local_state.proposed_scaffold.tables now has 3 items instead of 4
+
+Step 3d — human_gate (review_object)
+  context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
+  → user sees all 3 tables with their column details before DDL
+
+Step 5 — iterator
+  items_key: "proposed_scaffold.tables"    reads  local_state.proposed_scaffold.tables
+  item_step: serv_schema input "{{item}}"  each item = one table object from the array
+  output_key: "created_tables"
+  → local_state["created_tables"] = [{ tableName: ..., status: 'created' }, ...]
+
+Step 6 — llm_call
+  input: { domain: "{{proposed_scaffold.domain}}", tables: "{{proposed_scaffold.tables}}" }
+  output_key: "generated"
+  → local_state["generated"] = { domainHelp: {...}, workflows: [...], intentMapRows: [...] }
+
+Step 7 — human_gate (review_object)
+  context_key: "generated.domainHelp"     binds  local_state.generated.domainHelp
+
+Step 8 — serv_insert
+  input.row: { domain: "{{generated.domainHelp.domain}}", ... }
+  → inserts PGC_DomainHelp row
+
+Step 9 — iterator (PGC_Workflow × 4)
+  items_key: "generated.workflows"         reads  local_state.generated.workflows
+
+Step 10 — iterator (PGC_IntentMap × 4)
+  items_key: "generated.intentMapRows"     reads  local_state.generated.intentMapRows
+
+Step 11 — notify
+  message_template: "Domain {{proposed_scaffold.domain}} created."
+                                           reads  local_state.proposed_scaffold.domain
+```
+
+#### Template syntax
+
+Templates appear in `message_template`, `input` values, and `context_key`. The
+template resolver (`template-resolver.mjs`) supports:
+
+```
+{{key}}              → local_state["key"]
+{{key.field}}        → local_state["key"]["field"]
+{{key.0.field}}      → local_state["key"][0]["field"]
+{{item}}             → current iterator item (inside item_step only)
+{{item.field}}       → field on current iterator item
+{{input.field}}      → run.input["field"] — original input to the workflow
+```
+
+Unresolved templates (key not found in local_state) resolve to the empty string
+`""` — they do not throw. This means a workflow author must ensure that every
+template reference has a corresponding `output_key` written by a prior step.
+
+#### local_state scope and persistence
+
+`local_state` is scoped to a frame. When an iterator frame is pushed, it inherits
+a copy of the parent frame's `local_state` at push time. When the iterator frame
+pops, its `output_key` result is written back to the parent frame's `local_state`.
+
+`local_state` is persisted to `PGC_WorkflowRun.state.local_state` after every
+step. Lambda is stateless — `local_state` is always reloaded from the DB on the
+next SQS invocation.
+
+#### The run.input object
+
+The workflow's original input (`run.input`) is always available as `{{input.*}}`
+in templates. For `create_domain`, `run.input = { userInput: "stock portfolio" }`.
+Step 1 reads `{{input.userInput}}` to pass the raw user description to the LLM.
+`run.input` is never modified by any step — it is read-only origin data.
+
+---
+
+### 6.8 Human-in-the-Loop — blocking I/O
+
+A `human_gate` step is the equivalent of blocking I/O in a program — the execution
+stack suspends entirely, Lambda exits, and no compute is consumed until the user
+responds. This is cost-free waiting.
+
+#### Suspension and resumption lifecycle
+
+```
+Step Processor executes human_gate step
+  │
+  ├── Pushes human_gate frame onto stack
+  ├── Sets PGC_WorkflowRun.status = 'awaiting_human_gate'
+  ├── Builds WORKFLOW_GATE dialog from gate_type + context_key data
+  ├── Enqueues WORKFLOW_GATE to SQS SlackResults
+  └── Lambda returns — stack suspended, no timeout, zero cost while waiting
+
+SlackResults → CallbackListener → Slack API → dialog rendered in thread
+
+User interacts with dialog
+  │
+Slack sends interaction payload to /interactive on SlackbotFunction
+  │
+SlackbotFunction enqueues:
+  { type: 'WORKFLOW_STEP', action: 'resume_gate',
+    workflowRunId: N, userResponse: 'confirm', responseData: {...} }
+  │
+Step Processor receives resume_gate
+  ├── Validates: top frame is human_gate, run status is awaiting_human_gate
+  ├── Applies mutation (remove_item, text_input value write, etc.)
+  ├── Pops gate frame
+  ├── Resolves on_select → next step key
+  ├── Advances parent frame.current_step
+  ├── Sets status = 'running'
+  └── Enqueues execute_top — execution resumes
+```
+
+#### Gate type catalogue
+
+| gate_type | User interaction | Data contract |
+|---|---|---|
+| `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
+| `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
+| `text_input` | Type free text, click Submit | Value written to `local_state[output_key]` on resolve |
+| `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs |
+| `select_one` | Pick one item from a list | Phase 3 |
+| `select_many` | Pick zero or more items | Phase 3 |
+
+#### Mutation during gate suspension
+
+`edit_list` gates support `remove_item` — the user can remove items from the
+list while the gate is still open. Each click sends `userResponse: 'remove_item'`
+with `responseData.tableName`. The Step Processor:
+1. Filters the item from `local_state[context_key]`
+2. Persists the updated `local_state`
+3. Re-renders the gate via `chat.update` (in-place edit of the Slack message)
+
+The stack remains suspended throughout. The gate stays open until the user clicks
+Confirm or Cancel.
+
+#### Routing from gates — on_select
+
+Each option in a `human_gate.options` array has an `on_select` that drives
+post-gate routing:
+
+```
+"on_select": "next"      → advance to sequentially next step in the workflow
+"on_select": "step:3d"   → jump to step "3d" (forward or backward)
+"on_select": "cancel"    → cancel the run, clear stack
+```
+
+`on_select` is resolved by the Step Processor in `resolveOnSelect()` after the
+gate frame is popped. The parent frame's `current_step` is set to the resolved
+step key before the next `execute_top` is enqueued.
+
+**Routing errors are fatal.** If `on_select` routes to a step that was already
+recorded in `PGC_WorkflowRunStep` for the same `frame_id`, the idempotency check
+fires on the next `execute_top`. Guard 1 detects this as a stuck step after 3
+consecutive hits and fails the run with a Slack notification.
+
+---
+
+### 6.9 Right-Brain Output Validation — correction loop
+
+Every `llm_call` step runs through a two-attempt validation loop before its output
+is accepted and stored in `local_state`. This is implemented in `review-output.mjs`
+and called directly (intra-proc import) from `step-executor.mjs`.
+
+#### Validation passes
+
+**Pass 1 — Ajv JSON Schema**
+The `output_schema` field on the `PGC_Prompt` row is an Ajv-compatible JSON Schema.
+The LLM output is validated against it. If it fails, the specific Ajv errors are
+collected and passed to the correction attempt.
+
+Every prompt must have an `output_schema`. A prompt without one skips Ajv
+validation entirely — this is a known gap in any prompt row that lacks the field.
+
+**Pass 2 — Semantic rules**
+Runs only if Ajv passed. Rules defined in `runSemanticRules()`:
+
+- Rule 1: Every table must have the `set_updated_at()` BEFORE UPDATE trigger
+- Rule 2: Every `upsert_key` column must have a matching UNIQUE constraint
+- Rule 3: Every FK parent table must exist in the same scaffold
+
+Semantic rules catch cross-reference errors that JSON Schema cannot express —
+e.g. a FK that points to a table not in the output, or a constraint on a column
+that doesn't exist. This is the right brain's first line of defence against
+structurally valid but semantically broken LLM output.
+
+#### Correction loop
+
+```
+Attempt 1:
+  Call LLM → parse JSON → run validation
+  Valid → store at output_key, continue
+  Invalid → collect errors, attempt 2
+
+Attempt 2 (callLlmWithCorrection):
+  Call LLM with original prompt + errors injected
+  Valid → store corrected output at output_key, continue
+  Invalid → log errors to PGC_Prompt.error_log
+             → step fails → run fails → WORKFLOW_ERROR to Slack
+```
+
+The correction is a second LLM call with the same prompt plus the specific
+validation errors. The LLM sees exactly what was wrong and why. This is not a
+retry — it is a targeted correction.
+
+---
+
+### 6.10 Workflow Safety — circuit breakers and Guard 1
+
+#### Guard 1 — stuck-step detector (implemented)
+
+A workflow routing error can cause the same step to be attempted repeatedly via
+idempotency re-enqueue. Guard 1 detects this and fails the run before SQS retries
+exhaust.
+
+The stuck state is tracked in `PGC_WorkflowRun.error` jsonb — no schema change:
+
+```json
+{ "stuck_step": "3a", "stuck_count": 2 }
+```
+
+On each idempotency hit for the same step, `stuck_count` increments. At count 3,
+the run is marked `failed` and `WORKFLOW_ERROR` is posted to Slack:
+
+```
+Workflow stuck at step "3a" — possible routing error in workflow definition. Run id: 18
+```
+
+The stuck state is cleared on any successful step execution — a single idempotency
+hit on a healthy workflow (legitimate SQS redelivery on a new step) resets the counter.
+
+#### Deferred safety mechanisms (Phase 3)
+
+| Guard | Purpose | Trigger |
+|---|---|---|
+| Velocity detector | Too many steps per time window | `steps_in_window` / `window_started_at` on run |
+| Execution accumulator | Total cost / duration limit | `PGC_SystemContext` thresholds |
+| Cycle detector | Circular workflow routing | Graph analysis at workflow registration time |
+| `/shutdown` | Emergency stop any run | Sets status = cancelled; execute_top checks before executing |
+
+#### Emergency shutdown
+
+`POST /proc/shutdown { workflowRunId }` sets `PGC_WorkflowRun.status = 'cancelled'`.
+Every `execute_top` invocation checks status before executing any step. If
+`cancelled`, the message is discarded. The shutdown contract is: no step will
+execute after `/shutdown` is called, even if SQS messages are already in flight.
+
+---
+
+### 6.11 UI Dialog Contract — WORKFLOW_GATE message
+
+The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
+translates it to Slack Block Kit. Adding a new UI is one new renderer in
+`callback.mjs` — the Step Processor and all workflows are unchanged.
+
+#### WORKFLOW_GATE message shape
 
 ```json
 {
   "type":          "WORKFLOW_GATE",
-  "workflowRunId": 42,
+  "workflowRunId": 23,
   "gate_type":     "edit_list",
   "dialog": {
-    "title": "Review domain plan",
-    "fields": [ ...fully resolved field objects... ]
+    "message":  "Here's my plan for domain stock_portfolio.",
+    "fields": [
+      { "type": "list",   "items": [{ "primary": "PGD_Portfolios", "secondary": "name, currency, created_at" }] },
+      { "type": "actions","items": [{ "label": "Looks good", "action": "confirm" }, ...] }
+    ]
   },
   "callback": { "provider": "slack", "channel": "C0AEJ87JSKF", "threadId": "..." },
-  "traceId": "uuid"
+  "message_ts": "1711358400.123"
 }
 ```
 
-The `dialog` is fully resolved before enqueuing — all `{{variable}}`
-substitutions applied, all `items_key` arrays expanded to concrete `items`
-arrays, all `item_action.condition` expressions evaluated per row.
-`callback.mjs` receives a ready-to-render structure with no unresolved paths.
+`message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
+to use `chat.update` (in-place edit) instead of posting a new message.
 
-#### Dialog field type system
-
-The `dialog.fields` array is an ordered list of field objects. Each has a
-`type` that maps directly to a standard UI component.
-
-**`typography`** — read-only display text. No user interaction.
-```json
-{ "type": "typography", "value": "Here's my plan for domain recipes." }
-```
-
-**`textbox`** — single-line free text input.
-```json
-{ "type": "textbox", "name": "table_description", "label": "Describe the new table", "placeholder": "e.g. stores daily stock prices", "required": true }
-```
-
-**`textarea`** — multi-line free text input.
-```json
-{ "type": "textarea", "name": "instructions", "label": "Cooking instructions", "required": false }
-```
-
-**`radio`** — mutually exclusive single selection from a fixed set.
-```json
-{
-  "type": "radio",
-  "name": "table_choice",
-  "label": "Select a table",
-  "options": [
-    { "value": "PGD_Recipes",     "label": "Recipes" },
-    { "value": "PGD_Ingredients", "label": "Ingredients" }
-  ]
-}
-```
-
-**`select`** — single selection from a drop-down list. Use when the option
-set is too long for radio buttons (more than ~5 items).
-```json
-{
-  "type": "select",
-  "name": "difficulty",
-  "label": "Difficulty",
-  "options": [
-    { "value": "easy",   "label": "Easy" },
-    { "value": "medium", "label": "Medium" },
-    { "value": "hard",   "label": "Hard" }
-  ]
-}
-```
-
-**`checkbox`** — multi-select from a fixed set. Zero or more values.
-```json
-{
-  "type": "checkbox",
-  "name": "selected_tables",
-  "label": "Select tables to include",
-  "options": [
-    { "value": "PGD_Recipes",     "label": "Recipes" },
-    { "value": "PGD_Ingredients", "label": "Ingredients" }
-  ]
-}
-```
-
-**`list`** — a vertical stack of items, each with a primary label, optional
-secondary text, and an optional single inline action button.
-`secondaryAction: null` means no action for this item — the renderer omits
-the button entirely.
+#### WORKFLOW_ERROR message shape
 
 ```json
 {
-  "type": "list",
-  "name": "tables",
-  "label": "Domain recipes — 3 tables selected",
-  "items": [
-    {
-      "id": "PGD_Recipes",
-      "primary": "PGD_Recipes",
-      "secondary": "name, description, prep_time_minutes",
-      "secondaryAction": null
-    },
-    {
-      "id": "PGD_RecipeIngredients",
-      "primary": "PGD_RecipeIngredients",
-      "secondary": "recipe_id, ingredient_id, quantity",
-      "secondaryAction": {
-        "action": "remove_item",
-        "label": "Remove",
-        "style": "danger",
-        "confirm": "Remove PGD_RecipeIngredients from this domain?"
-      }
-    }
-  ]
+  "type":          "WORKFLOW_ERROR",
+  "workflowRunId": 18,
+  "step":          "3a",
+  "message":       "Workflow stuck at step \"3a\" — possible routing error. Run id: 18",
+  "traceId":       "uuid"
 }
 ```
 
-**`actions`** — the form's submit/dismiss buttons. Always the last field in
-`dialog.fields`.
-```json
-{
-  "type": "actions",
-  "buttons": [
-    { "action": "confirm",   "label": "Looks good",  "style": "primary"  },
-    { "action": "add_table", "label": "Add a table", "style": "default"  },
-    { "action": "cancel",    "label": "Cancel",      "style": "default"  }
-  ]
-}
-```
-
-`action` is the value the Step Processor receives in `userResponse` when
-the user clicks this button. `label` is plain text — no emoji, no markup.
-
-#### Intent-based human_gate steps — FINAL
-
-`human_gate` step definitions express **intent**, not UI structure. The LLM
-designing a workflow declares what kind of interaction is needed and what data
-to bind — the Step Processor translates that intent into a concrete
-`WORKFLOW_GATE` dialog at runtime.
-
-**Three layers of translation:**
-
-```
-PGC_Workflow.steps  →  Step Processor  →  WORKFLOW_GATE  →  callback.mjs
-(intent)               (translation)      (concrete dialog)  (rendering)
-```
-
-#### Primitive gate_type catalogue
-
-Six primitive types cover all human interaction patterns:
-
-| gate_type | Interaction | Dialog produced by Step Processor |
-|---|---|---|
-| `confirm` | Read a proposal, accept or reject | `typography` + `actions` |
-| `select_one` | Pick exactly one item from a list | `typography` + `radio` or `select` + `actions` |
-| `select_many` | Pick zero or more items | `typography` + `checkbox` + `actions` |
-| `edit_list` | View a collection, optionally remove items, confirm, or branch | `typography` + `list` with per-row actions + `actions` |
-| `text_input` | Provide free text | `typography` + `textbox` + `actions` |
-| `review_object` | Review a structured summary, accept or reject | `typography` + structured summary + `actions` |
-
-#### Data preparation pattern — js_transform before human_gate
-
-`item_secondary_key` must be a real field on each item in the `context_key` array
-at the time the gate executes. The Step Processor does a plain field lookup — no derivation.
-Any `human_gate` that needs a derived display field must be preceded by a `js_transform`
-that produces it.
-
-#### Domain design constraint — primary table + child tables
-
-When the LLM designs a new domain via `create_domain`, it must produce exactly
-one primary (root) table with no foreign key references, and zero or more child
-tables that reference the primary table via FK. Cross-domain foreign keys are
-not permitted.
-
-This constraint applies equally to tables added via the add-table branch. The
-`design_table` prompt must produce a table that references the primary table via FK.
-The semantic validation Rule 3 enforces this — a new table with no FK to any existing
-scaffold table will fail validation.
-
-#### Enforcement model — schema sources
-
-All JSON Schema definitions used for LLM output validation are stored in
-`PGC_Prompt.output_schema` alongside the prompt that produced them.
-
-**Schema locations:**
-
-| Schema | Lives in | Used by |
-|---|---|---|
-| `create_domain_scaffold` | `PGC_Prompt.output_schema` (intent: `create_domain`) | `review-output.mjs` after Step 1 `llm_call` |
-| `design_table_scaffold` | `PGC_Prompt.output_schema` (intent: `design_table`) | `review-output.mjs` after Step 3b `llm_call` |
-| `workflow_steps` | `PGC_Prompt.output_schema` (intent: `create_workflow`) | `review-output.mjs` after `create_workflow` LLM call |
-| `merge_tables_scaffold` | `PGC_Prompt.output_schema` (intent: `merge_tables`) | `review-output.mjs` after merge LLM call |
+Posted to Slack when: Guard 1 fires, a step throws after exhausting retries, or
+an iterator item fails. Always includes `workflowRunId` so the user can reference
+it with `/shutdown` or for debugging.
 
 ---
 
-### 6.13 Session Architecture — Conversational Memory (Phase 3)
+### 6.12 create_domain Workflow — full annotated example
 
-#### Purpose
+`create_domain` is the primary demonstrator workflow. It uses every major Step
+Processor capability: `llm_call`, `js_transform`, multi-step `human_gate`
+sequences with branching, `iterator`, `serv_insert`, and `notify`.
+
+Reading this workflow against sections 6.5–6.8 is the intended way to understand
+how the Step Processor executes a real program.
+
+#### Data flow summary
+
+```
+run.input.userInput = "stock portfolios"
+
+Step 1  llm_call → proposed_scaffold = { domain, tables: [4 table objects with columns/FKs/constraints] }
+Step 2  js_transform → proposed_scaffold.tables[*].columnSummary added
+Step 3  human_gate edit_list → user reviews tables, may remove child tables or jump to add-table branch
+        ├── confirm   → step:3d
+        ├── add_table → step:3a (text_input)
+        └── cancel    → cancelled
+
+Step 3a human_gate text_input → new_table_description written to local_state
+Step 3b llm_call → new_table designed, stored at local_state["new_table"]
+Step 3c js_transform → merge new_table into proposed_scaffold.tables, loop back to step:3
+Step 3d human_gate review_object → user reviews all table column details before DDL
+        ├── confirm → next (step 4)
+        └── cancel  → cancelled
+
+Step 4  human_gate confirm → final DDL confirmation
+        ├── confirm → next (step 5)
+        └── cancel  → cancelled
+
+Step 5  iterator over proposed_scaffold.tables
+          item_step: serv_schema createTable(item)
+          → created_tables = [{ tableName, status: 'created' }, ...]
+
+Step 6  llm_call → generated = { domainHelp, workflows: [4 CRUD workflows], intentMapRows: [4 rows] }
+Step 7  human_gate review_object → user reviews domainHelp (aliases, description, commands)
+        ├── confirm → next (step 8)
+        └── cancel  → cancelled
+
+Step 8  serv_insert PGC_DomainHelp ← generated.domainHelp
+Step 9  iterator over generated.workflows
+          item_step: serv_insert PGC_Workflow(item)
+Step 10 iterator over generated.intentMapRows
+          item_step: serv_insert PGC_IntentMap(item)
+Step 11 notify → "Domain {{proposed_scaffold.domain}} created."
+Step 12 end
+```
+
+#### Why the add-table branch loops back
+
+Step 3c uses `on_success: "step:3"` — a backward jump. This is the first
+intentional backward reference in the system. After the new table is designed and
+merged into `proposed_scaffold.tables`, the workflow returns to step 3 so the user
+can review the updated list (now including their new table) and either confirm,
+add another, or cancel. The loop continues until the user confirms at step 3.
+
+The Step Processor handles this correctly because step keys are resolved by string
+equality. `"step:3"` resolves to step `"3"` — there is no confusion with `"3a"`,
+`"3b"`, `"3c"`, or `"3d"`. Each branching step has a distinct `frame_id` x
+`step_key` pair in `PGC_WorkflowRunStep`, so idempotency works correctly
+across loop iterations.
+
+#### Prompt dependencies
+
+| Step | Prompt `intent_category` | Output stored at |
+|---|---|---|
+| 1 | `create_domain` v3 | `proposed_scaffold` |
+| 3b | `design_table` v1 | `new_table` |
+| 6 | `generate_crud_workflows` v2 | `generated` |
+
+All three prompts have `output_schema` defined. The correction loop runs on all
+three if the LLM output is malformed.
+
+---
+
+### 6.13 create_workflow Workflow — Phase 2
+
+Stub definition in `PGC_Workflow`. Full 8-step implementation is Phase 2 item 4b.
+When complete, `/mind create a workflow that sends me a weekly portfolio summary`
+will generate a new `PGC_Workflow` row, register it in `PGC_IntentMap`, and make
+it immediately available via the Intent Preprocessor — without any code changes.
+
+---
+
+### 6.14 Session Architecture — Conversational Memory (Phase 3)
 
 The session layer gives the brain persistent memory across multiple `/mind`
-messages in the same Slack thread. Without it, each `/mind` call is cold —
-the Intent Preprocessor has no knowledge of what the user was just doing.
-With it, the brain can resolve ambiguous short-form inputs, pre-seed workflow
-state with entities the user was already working on, and accumulate a factual
-record of what happened in each thread — feeding the right-brain improvement loop.
+messages in the same Slack thread. Without it, each `/mind` call is cold — the
+Intent Preprocessor has no knowledge of what the user was just doing. With it,
+the brain can resolve ambiguous short-form inputs, pre-seed workflow state with
+entities the user was already working on, and accumulate a factual record of what
+happened in each thread — feeding the right-brain improvement loop.
 
 The session layer is Phase 3. The Intent Preprocessor works without it. When it
 lands, it does not change any workflow definitions or Step Processor contracts.
@@ -2485,85 +2027,35 @@ It is purely additive.
 
 #### Session identity — UI-agnostic by design
 
-A session is identified by a UUID (`session_id`) generated by `mind.mjs`, not
-by `thread_ts`. `thread_ts` is stored inside `PGC_Session.callback.threadId` —
-the same pattern as every other UI-specific routing field in the system. Adding
-Teams or any other UI later requires zero schema changes.
+A session is identified by a UUID (`session_id`) generated by `mind.mjs`, not by
+`thread_ts`. `thread_ts` is stored inside `PGC_Session.callback.threadId` — the
+same pattern as every other UI-specific routing field in the system.
 
 **Session lookup flow in `mind.mjs`:**
-
 ```
-thread_ts present in Slack event (reply in existing thread)?
+thread_ts present (reply in existing thread)
   → getRows PGC_Session where callback->>'threadId' = thread_ts
-      found   → retrieve session_id, include in CLASSIFY_INTENT SQS message
+      found     → retrieve session_id, include in CLASSIFY_INTENT message
       not found → generate UUID, PROC creates PGC_Session row on receipt
 
-thread_ts absent (fresh /mind, direct HTTP test call)
+thread_ts absent (fresh /mind or HTTP test)
   → session_id omitted → PROC treats as sessionless
 ```
 
-One `getRows` call to SERV — acceptable in the Experience tier within the Slack
-3-second ACK window.
-
 #### Session context injection into the Intent Preprocessor
 
-When `classify-intent.mjs` receives a `CLASSIFY_INTENT` message that includes a
-`session_id`, it performs one additional SERV read before running Tier 1c and Tier 2:
-
-```
-getRows PGC_SessionEntry
-  filter: session_id = <id>
-  orderBy: created_at DESC
-  limit: 20  (configurable via PGC_SystemContext key 'chat_defaults')
-```
-
-The retrieved rows are assembled into a plain-text context block from their
-`content` fields — most recent first. This block is used in two places:
+When `classify-intent.mjs` receives a `session_id`, it reads the last 20
+`PGC_SessionEntry` rows for that session (most recent first) and uses them in
+two ways:
 
 **Tier 1c domain fallback:** If Pass 1b finds no alias token in the input text,
 the preprocessor scans the session context for the most recently active domain.
-"Add carbonara" resolves to `recipes` because the session shows the user was
-just looking at recipes. Zero LLM cost.
+"Add carbonara" resolves to `recipes` because the session shows the user was just
+there. Zero LLM cost.
 
 **Tier 2 prompt injection:** The context block is prepended to the sonar
 classification prompt. "Make that a three-course meal plan" becomes classifiable
-as `meal_planner` because sonar sees the user has been working with recipes and
-just added one. The domain hint from Pass 1b is also injected if available — sonar
-only needs to classify the action, not re-identify the domain.
-
-#### `referenced_entities` — pre-seeding workflow state
-
-When Tier 2 classifies an intent in the context of a session, it returns an
-optional `referenced_entities` field alongside the classification result —
-e.g. `[{ entity: "Recipe", id: 42, name: "Carbonara" }]`. When the Step Processor
-enqueues `WORKFLOW_STEP execute_top`, it pre-seeds `local_state.context` with
-these entities. The workflow's first step has richer starting state without
-requiring the user to re-specify what they were working on. Workflows that do not
-use `local_state.context` are unaffected.
-
-#### Step Processor — automatic session entry writes
-
-The Step Processor writes `PGC_SessionEntry` rows automatically at two points.
-No workflow definition changes are required. No new step types are added.
-
-**At every `end` step (activity entry):**
-The `notify` step that precedes `end` resolves a `message_template` into a plain
-text string — the same string posted to the user in Slack. The Step Processor
-reuses this resolved text as the `content` of a `PGC_SessionEntry` with
-`entry_type: 'activity'`, `role: 'assistant'`, `workflow_run_id` populated. The
-session gets a human-readable record of what the workflow accomplished at zero
-extra LLM cost.
-
-**At every `confirm` gate resolution (activity entry):**
-When a `confirm` human gate resolves to `next`, the Step Processor writes an
-activity entry: `"User confirmed: [resolved gate message]"`. This gives
-subsequent LLM calls a factual record of what the user approved at each decision
-point in any prior workflow.
-
-**Conversational turns (`classify-intent.mjs`):**
-One `message` entry for the user's input, one for the classification result or
-workflow handoff summary. These are the conversational turns of the session —
-distinct from activity entries written by the Step Processor.
+as `meal_planner` because sonar sees the user has been working with recipes.
 
 #### Full example — recipes exploration → add → meal plan
 
@@ -2571,46 +2063,17 @@ distinct from activity entries written by the Step Processor.
 Turn 1  /mind show me my pasta recipes
   Pass 1b: alias 'pasta' → domain 'recipes'
   Pass 1c: verb 'show' → serv_query ad_hoc_step built
-  → WORKFLOW_NOTIFY (Phase 3 executes the query; returns Carbonara, Cacio e Pepe, Amatriciana)
-  SessionEntry message/user:      "show me my pasta recipes"
-  SessionEntry message/assistant: "Queried recipes — returned: Carbonara, Cacio e Pepe, Amatriciana"
 
-Turn 2  /mind add carbonara with ingredients [...]   (reply in same thread)
-  mind.mjs: finds session by thread_ts
-  Pass 1b: no alias token in "add carbonara with ingredients" → fallback to session context
-  Session context: most recent active domain = 'recipes' → domain resolved, zero LLM cost
+Turn 2  /mind add carbonara with ingredients [...]   (same thread)
+  Pass 1b: no alias token → fallback to session context → domain 'recipes'
   Pass 1c: verb 'add' → serv_insert ad_hoc_step built
-  SessionEntry message/user:      "add carbonara with ingredients [...]"
-  SessionEntry message/assistant: "Added recipe: Carbonara"
 
-Turn 3  /mind make that a three-course meal plan using those recipes   (reply)
-  mind.mjs: finds same session
-  Pass 1a: no pattern match. Pass 1b: no alias. Pass 1c: no verb.
-  Tier 2: sonar receives input + session context block (last 20 entries, plain text)
-  sonar classifies: workflow_name = 'meal_planner'
-                    referenced_entities = [{ entity:'Recipe', name:'Carbonara' }, ...]
-  → enqueue WORKFLOW_STEP execute_top, local_state.context pre-seeded with referenced_entities
-  meal_planner workflow runs with the recipes already in state — no re-specification needed
+Turn 3  /mind make that a three-course meal plan using those recipes
+  Pass 1a: no match. Pass 1b: no alias. No verb.
+  Tier 2: sonar receives input + session context
+  → workflow_name = 'meal_planner', referenced_entities = [Carbonara, ...]
+  → execute_top, local_state.context pre-seeded with referenced_entities
 ```
-
-#### Session and the right-brain improvement loop
-
-`PGC_SessionEntry` rows are structured evidence of where the brain succeeded and
-failed. A future `POST /proc/improve-prompt` reads session history alongside
-`PGC_Prompt.error_log` — looking for patterns such as: the user rephrased the
-same intent three times before Tier 2 classified it correctly, or the domain was
-resolved from session context 12 times this week rather than from explicit alias
-tokens (a signal the alias list needs updating). The session layer is not just
-memory for the user's benefit — it is training data for the brain's self-improvement.
-
-**Connection to intent tuning surface (Section 4.3.3):**
-When session evidence shows a domain is consistently resolved from context rather
-than from Tier 1b alias matching, that is the signal to add missing aliases to
-`PGC_DomainHelp`. The `/mind edit aliases for <domain>` management workflow
-(Phase 2 item 4c) surfaces this directly: the user can inspect and update aliases
-from within Slack without touching the database.
-
----
 
 ## 7. Tech Debt Register
 
