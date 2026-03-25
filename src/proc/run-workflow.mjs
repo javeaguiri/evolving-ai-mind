@@ -141,9 +141,43 @@ async function executeTop({ workflowRunId, traceId, source }) {
   // Idempotency check
   const alreadyRan = await checkIdempotency(run.id, frame.frame_id, frame.current_step);
   if (alreadyRan) {
-    console.info('run-workflow: idempotency hit — skipping', {
-      workflowRunId: run.id, step: frame.current_step, traceId,
+    // Lightweight Guard 1 — stuck-step detection.
+    // If the same step keeps hitting idempotency, the workflow routing is broken.
+    // Track consecutive hits in run.error.stuck_step / stuck_count (no schema change).
+    // After 3 hits on the same step, fail the run and notify the user.
+    const stuck      = run.error ?? {};
+    const sameStep   = stuck.stuck_step === frame.current_step;
+    const stuckCount = sameStep ? (stuck.stuck_count ?? 1) + 1 : 1;
+
+    if (stuckCount >= 3) {
+      const msg = `Workflow stuck at step "${frame.current_step}" — possible routing error in workflow definition. Run id: ${run.id}`;
+      console.error('run-workflow: stuck-step limit reached — failing run', {
+        workflowRunId: run.id, step: frame.current_step, stuckCount, traceId,
+      });
+      await updateRows('PGC_WorkflowRun',
+        [{ column: 'id', op: 'eq', value: run.id }],
+        { status: 'failed', error: { stuck_step: frame.current_step, stuck_count: stuckCount, message: msg } }
+      );
+      if (run.callback) {
+        await enqueueCallback(run.callback, {
+          type:          'WORKFLOW_ERROR',
+          workflowRunId: run.id,
+          step:          frame.current_step,
+          message:       msg,
+          traceId,
+        });
+      }
+      return { skipped: true, reason: 'stuck' };
+    }
+
+    // Not yet at limit — record the hit and re-enqueue
+    console.warn('run-workflow: idempotency hit — possible stuck step', {
+      workflowRunId: run.id, step: frame.current_step, stuckCount, traceId,
     });
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { error: { stuck_step: frame.current_step, stuck_count: stuckCount } }
+    );
     await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
     return { skipped: true };
   }
@@ -190,6 +224,14 @@ async function executeTop({ workflowRunId, traceId, source }) {
     result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 200) } : null,
     null, durationMs
   );
+
+  // Clear any stuck-step state now that a step executed successfully
+  if (run.error?.stuck_step) {
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { error: null }
+    );
+  }
 
   // Persist output_key → local_state
   if (step.output_key && result.outputValue !== null && result.outputValue !== undefined) {

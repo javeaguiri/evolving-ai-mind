@@ -43,7 +43,7 @@
           "confirm_template": "Remove {{item.tableName}} from this domain?"
         },
         "options": [
-          { "label": "Looks good",  "action": "confirm",   "on_select": "next"    },
+          { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
           { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
           { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
         ],
@@ -87,6 +87,20 @@
         "output_key": "proposed_scaffold.tables",
         "on_success": "step:3",
         "on_failure": "human_feedback"
+      },
+      {
+        "step": "3d",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User reviews the full column details of all tables before DDL is executed.",
+        "message_template": "Here are the full details for all tables in domain {{proposed_scaffold.domain}}. Review the columns before we create them.",
+        "context_key": "proposed_scaffold.tables",
+        "options": [
+          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
       },
       {
         "step": "4",
