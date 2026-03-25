@@ -345,15 +345,47 @@ export function buildDialog(step, localState) {
       break;
 
     case 'review_object': {
-      // Resolve the context object and render as { key, value } pairs.
-      // Skips system keys (id, created_at, updated_at) and null values.
-      const SYSTEM_KEYS = new Set(['id', 'created_at', 'updated_at']);
-      const obj = step.context_key
+      // Resolve the context and render as { key, value } pairs.
+      // Handles two shapes:
+      //   Flat object  — e.g. domainHelp: { domain, aliases, description, commands }
+      //                  Each property becomes one key/value pair.
+      //   Array of objects — e.g. tables: [{ tableName, columns, ... }]
+      //                  Each element becomes one pair: tableName → column name list.
+      //                  Uses step.item_primary_key (default: first string property)
+      //                  and step.item_secondary_key (default: 'columns') to resolve
+      //                  the label and value for each array element.
+      const SYSTEM_KEYS = new Set(['id', 'created_at', 'updated_at',
+        'columnSummary', 'domain', 'target', 'foreignKeys', 'constraints', 'triggers']);
+      const ctx = step.context_key
         ? resolvePath(localState, step.context_key) ?? {}
         : {};
-      const items = Object.entries(obj)
-        .filter(([k, v]) => !SYSTEM_KEYS.has(k) && v !== null && v !== undefined)
-        .map(([k, v]) => ({ key: k, value: v }));
+
+      let items;
+      if (Array.isArray(ctx)) {
+        // Array of objects — render each as primaryKey → column name list
+        const primaryKey   = step.item_primary_key   ?? 'tableName';
+        const secondaryKey = step.item_secondary_key ?? 'columns';
+        items = ctx.map(item => {
+          const label = item[primaryKey] ?? String(item);
+          const raw   = item[secondaryKey];
+          let value;
+          if (Array.isArray(raw)) {
+            // columns array — extract .name from each column, skip system cols
+            value = raw
+              .map(c => (typeof c === 'object' ? c.name : String(c)))
+              .filter(n => !SYSTEM_KEYS.has(n));
+          } else {
+            value = raw ?? '';
+          }
+          return { key: label, value };
+        });
+      } else {
+        // Flat object — each non-system property is one pair
+        items = Object.entries(ctx)
+          .filter(([k, v]) => !SYSTEM_KEYS.has(k) && v !== null && v !== undefined)
+          .map(([k, v]) => ({ key: k, value: v }));
+      }
+
       if (items.length > 0) {
         fields.push({ type: 'review_object', items });
       }

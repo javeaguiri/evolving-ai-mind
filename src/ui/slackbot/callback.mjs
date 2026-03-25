@@ -418,11 +418,29 @@ function dialogToBlocks(dialog, workflowRunId) {
         break;
 
       case 'review_object': {
-        // Render the context object as formatted key-value pairs.
-        // Expects field.items to be an array of { key, value } pairs built by
-        // the Step Processor from the context_key object in local_state.
+        // Render the context as formatted key-value pairs.
+        // item.value may be a scalar, an array of strings (column names),
+        // or an array of objects (commands). Render each appropriately.
         const reviewLines = (field.items ?? [])
-          .map(item => `*${item.key}:* ${Array.isArray(item.value) ? item.value.join(', ') : item.value}`)
+          .map(item => {
+            let valueText;
+            if (Array.isArray(item.value)) {
+              if (item.value.length === 0) {
+                valueText = '(none)';
+              } else if (typeof item.value[0] === 'object') {
+                // Array of objects (e.g. commands) — render as sub-list
+                valueText = '\n' + item.value
+                  .map(v => `    • ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                  .join('\n');
+              } else {
+                // Array of strings (e.g. column names, aliases) — comma list
+                valueText = item.value.join(', ');
+              }
+            } else {
+              valueText = String(item.value ?? '');
+            }
+            return `*${item.key}:* ${valueText}`;
+          })
           .join('\n');
         if (reviewLines) {
           blocks.push({
