@@ -3,7 +3,12 @@
     "name": "create_domain",
     "domain": null,
     "description": "Designs and creates a new user domain. LLM proposes a schema. User reviews, optionally adds tables, and confirms. DDL is executed, CRUD workflows are generated, and the domain is registered and immediately usable from /mind.",
-    "intent_keywords": ["create domain", "new domain", "build domain", "add domain"],
+    "intent_keywords": [
+      "create domain",
+      "new domain",
+      "build domain",
+      "add domain"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
     "version": 3,
@@ -12,7 +17,10 @@
         "step": "1",
         "type": "llm_call",
         "description": "LLM designs full domain schema. Must produce one primary table (no FK references) and zero or more child tables referencing it.",
-        "input": { "prompt": "create_domain", "user_input": "{{input.userInput}}" },
+        "input": {
+          "prompt": "create_domain",
+          "user_input": "{{input.userInput}}"
+        },
         "output_key": "proposed_scaffold",
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -43,9 +51,21 @@
           "confirm_template": "Remove {{item.tableName}} from this domain?"
         },
         "options": [
-          { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
-          { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
-          { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "step:3d"
+          },
+          {
+            "label": "Add a table",
+            "action": "add_table",
+            "on_select": "step:3a"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -57,8 +77,16 @@
         "description": "User describes the table they want to add.",
         "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "output_key": "new_table_description",
         "on_success": "next",
@@ -96,8 +124,16 @@
         "message_template": "Here are the full details for all tables in domain {{proposed_scaffold.domain}}. Review the columns before we create them.",
         "context_key": "proposed_scaffold.tables",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -109,8 +145,16 @@
         "description": "Final confirmation before DDL execution.",
         "message_template": "Ready to create domain {{proposed_scaffold.domain}} with {{proposed_scaffold.tables.length}} tables. This will create the physical database tables.",
         "options": [
-          { "label": "Create it", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Create it",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -137,8 +181,7 @@
         "input": {
           "prompt": "generate_crud_workflows",
           "domain": "{{proposed_scaffold.domain}}",
-          "tables": "{{proposed_scaffold.tables}}",
-          "domain_help": "{{proposed_scaffold.domainHelp}}"
+          "tables": "{{proposed_scaffold.tables}}"
         },
         "output_key": "generated",
         "on_success": "next",
@@ -152,8 +195,16 @@
         "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Confirm to proceed.",
         "context_key": "generated.domainHelp",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel",     "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "output_key": "confirmed_domain_help",
         "on_success": "next",
@@ -163,7 +214,10 @@
         "step": "8",
         "type": "serv_insert",
         "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
-        "input": { "tableName": "PGC_DomainHelp", "row": "{{confirmed_domain_help}}" },
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "row": "{{confirmed_domain_help}}"
+        },
         "on_success": "next",
         "on_failure": "human_feedback"
       },
@@ -174,7 +228,10 @@
         "items_key": "generated.workflows",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "PGC_Workflow", "row": "{{item}}" },
+          "input": {
+            "tableName": "PGC_Workflow",
+            "row": "{{item}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -189,7 +246,10 @@
         "items_key": "generated.intentMapRows",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "PGC_IntentMap", "row": "{{item}}" },
+          "input": {
+            "tableName": "PGC_IntentMap",
+            "row": "{{item}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -214,7 +274,12 @@
     "name": "help",
     "domain": null,
     "description": "Presents a welcome gate to the user and posts a summary of available commands after confirmation.",
-    "intent_keywords": ["help", "what can you do", "commands", "show help"],
+    "intent_keywords": [
+      "help",
+      "what can you do",
+      "commands",
+      "show help"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 1,
@@ -226,8 +291,16 @@
         "description": "Ask user if they want to see available commands.",
         "message_template": "👋 Welcome to evolving-mind!\n\nI can help you build and manage data domains using natural language. Want to see what I can do?",
         "options": [
-          { "label": "Yes, show me", "action": "confirm", "on_select": "next"   },
-          { "label": "Not now",      "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Yes, show me",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Not now",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -249,7 +322,12 @@
     "name": "create_workflow",
     "domain": null,
     "description": "Stub — designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition to be implemented in Phase 3.",
-    "intent_keywords": ["create workflow", "new workflow", "build workflow", "add workflow"],
+    "intent_keywords": [
+      "create workflow",
+      "new workflow",
+      "build workflow",
+      "add workflow"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 1,
