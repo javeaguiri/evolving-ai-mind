@@ -1048,8 +1048,7 @@ programmer's intent.
 | 6.4.1 | Step types — the instruction set |
 | 6.4.2 | Execution Stack — the program counter and call stack |
 | 6.4.3 | `local_state` — the data bag / memory |
-| 6.4.4 | Human-in-the-Loop — blocking I/O |
-| 6.4.4.1 | UI Dialog Contract — WORKFLOW_GATE and WORKFLOW_ERROR message shapes |
+| 6.4.4 | Human-in-the-Loop — blocking I/O || 6.4.4 | UI Dialog Contract — WORKFLOW_GATE and WORKFLOW_ERROR message shapes |
 | 6.4.5 | `human_gate` step schema reference |
 | 6.4.6 | Parallel execution hooks — deferred, Phase 3 |
 | 6.5 | Right-Brain Output Validation — correction loop |
@@ -1117,7 +1116,7 @@ The callback abstraction handles two distinct message types flowing back to the 
   structured dialog payload and enqueues it via the same callback path. `callback.mjs`
   translates the UI-agnostic `WORKFLOW_GATE` message into Slack Block Kit blocks and
   posts the interactive message to the thread. The user's interaction with that message
-  is what resumes the suspended stack. See Section 6.4.4 and 6.4.4.1 for the full gate lifecycle and message contract.
+  is what resumes the suspended stack. See Section 6.4.4 for the full gate lifecycle and message contract.
 
 ---
 
@@ -1768,7 +1767,7 @@ Step Processor receives resume_gate
 | `select_one` | Pick one item from a list | Phase 3 |
 | `select_many` | Pick zero or more items | Phase 3 |
 
-#### 6.4.4.1 UI Dialog Contract — WORKFLOW_GATE message
+#### UI Dialog Contract — WORKFLOW_GATE message
 
 The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
 translates it to Slack Block Kit. Adding a new UI is one new renderer in
@@ -2060,7 +2059,7 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 Processor capability: `llm_call`, `js_transform`, multi-step `human_gate`
 sequences with branching, `iterator`, `serv_insert`, and `notify`.
 
-Reading this workflow against sections 6.4.1–6.4.4.1 is the intended way to understand
+Reading this workflow against sections 6.4.1–6.4.4 is the intended way to understand
 how the Step Processor executes a real program.
 
 #### Data flow summary
