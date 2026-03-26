@@ -1048,9 +1048,8 @@ programmer's intent.
 | 6.4.1 | Step types — the instruction set |
 | 6.4.2 | Execution Stack — the program counter and call stack |
 | 6.4.3 | `local_state` — the data bag / memory |
-| 6.4.4 | Human-in-the-Loop — blocking I/O || 6.4.4 | UI Dialog Contract — WORKFLOW_GATE and WORKFLOW_ERROR message shapes |
-| 6.4.5 | `human_gate` step schema reference |
-| 6.4.6 | Parallel execution hooks — deferred, Phase 3 |
+| 6.4.4 | Human-in-the-Loop — blocking I/O |
+| 6.4.5 | Parallel execution hooks — deferred, Phase 3 |
 | 6.5 | Right-Brain Output Validation — correction loop |
 | 6.6 | Workflow Safety — circuit breakers and emergency shutdown |
 | 6.7 | create_domain Workflow — full annotated example |
@@ -1919,7 +1918,7 @@ consecutive hits and fails the run with a Slack notification.
 
 ---
 
-### 6.4.6 Parallel execution hooks — deferred, Phase 3
+### 6.4.5 Parallel execution hooks — deferred, Phase 3
 
 The frame schema includes hooks for future parallel execution. These fields are
 defined in the frame structure now so the schema is stable when fan-out/fan-in
