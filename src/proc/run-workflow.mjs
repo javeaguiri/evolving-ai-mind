@@ -110,6 +110,14 @@ async function executeTop({ workflowRunId, traceId, source }) {
     return { skipped: true, reason: 'cancelled' };
   }
 
+  // Guard against SQS retries re-executing a run already marked failed.
+  // Iterator item errors mark the run failed then rethrow — SQS retries the message
+  // 3× before DLQ. Without this check, each retry attempts the same failed item again.
+  if (run.status === 'failed') {
+    console.info('run-workflow: run already failed — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'failed' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {
