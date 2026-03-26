@@ -320,6 +320,10 @@ export function buildCreateTableSQL(template) {
       case 'unique':
         return `  CONSTRAINT ${con.name} UNIQUE (${con.columns.join(', ')})`;
       case 'check':
+        if (!con.expression) {
+          console.warn(`init-brain: skipping CHECK constraint "${con.name}" on ${table_name} — expression is missing (LLM produced columns array instead)`);
+          return null;
+        }
         return `  CONSTRAINT ${con.name} CHECK (${con.expression})`;
       default:
         console.warn(`init-brain: unknown constraint type "${con.type}" on ${table_name}`);

@@ -32,11 +32,10 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     temperature:  0.2,
   };
 
-  // Enforce structured JSON output at the model level when schema is available.
-  // Eliminates markdown-fence wrapping — the defensive strip below remains as a safety net.
-  if (outputSchema) {
-    body.response_format = { type: 'json_schema', json_schema: outputSchema };
-  }
+  // Note: response_format json_schema is not supported by the Perplexity Agent API (/v1/agent).
+  // Structural validation is handled by the Ajv correction loop in review-output.mjs.
+  // The prompt instructs the model to return JSON only; the markdown-fence strip below
+  // handles any residual wrapping defensively.
 
   const response = await fetch(process.env.LLM_AGENT_URL, {
     method:  'POST',
