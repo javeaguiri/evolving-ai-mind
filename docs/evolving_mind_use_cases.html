@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>evolving-mind-ai — Use Case Explorer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #f8f7f4;
+  --bg2: #ffffff;
+  --text: #1a1a18;
+  --text2: #5a5a56;
+  --text3: #9a9a94;
+  --border: rgba(0,0,0,0.10);
+  --border2: rgba(0,0,0,0.18);
+  --font: system-ui, -apple-system, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1a;
+    --bg2: #252523;
+    --text: #e8e6de;
+    --text2: #9c9a92;
+    --text3: #6b6965;
+    --border: rgba(255,255,255,0.09);
+    --border2: rgba(255,255,255,0.18);
+  }
+}
+
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header {
+  background: var(--text); color: var(--bg);
+  padding: 24px 32px; display: flex; align-items: flex-end;
+  justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.header h1 { font-size: 18px; font-weight: 500; }
+.header p { font-size: 13px; opacity: 0.5; margin-top: 3px; }
+.header-stats { display: flex; gap: 24px; }
+.stat-num { font-size: 22px; font-weight: 500; }
+.stat-label { font-size: 11px; opacity: 0.45; }
+
+.controls {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 32px; background: var(--bg2);
+  border-bottom: 0.5px solid var(--border2); flex-wrap: wrap;
+}
+.search-wrap {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0; flex-shrink: 0; min-width: 200px;
+}
+.search-wrap input {
+  border: none; background: transparent; font-family: var(--font);
+  font-size: 14px; color: var(--text); outline: none; width: 180px;
+}
+.search-wrap input::placeholder { color: var(--text3); }
+.divider { width: 0.5px; height: 20px; background: var(--border2); margin: 0 16px; flex-shrink: 0; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0; }
+.ftag {
+  font-size: 12px; padding: 3px 10px; border-radius: 6px;
+  border: 0.5px solid var(--border2); background: transparent;
+  color: var(--text2); cursor: pointer; font-family: var(--font);
+  transition: all .12s;
+}
+.ftag:hover { background: var(--bg); }
+.ftag.active { background: var(--text); color: var(--bg); border-color: transparent; }
+
+.main { padding: 24px 32px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.leg { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.leg-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+.discipline { margin-bottom: 28px; }
+.disc-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px; padding-bottom: 8px;
+  border-bottom: 0.5px solid var(--border2);
+}
+.disc-name { font-size: 15px; font-weight: 500; }
+.disc-badge { font-size: 11px; padding: 2px 8px; border-radius: 5px; }
+.disc-count { font-size: 12px; color: var(--text3); margin-left: auto; }
+
+.cases { display: flex; flex-direction: column; gap: 6px; }
+.card {
+  background: var(--bg2); border: 0.5px solid var(--border);
+  border-radius: 10px; overflow: hidden; transition: border-color .12s;
+}
+.card:hover { border-color: var(--border2); }
+.card-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; cursor: pointer; user-select: none;
+}
+.case-id { font-size: 11px; font-weight: 500; color: var(--text3); min-width: 20px; }
+.case-title { font-size: 13px; font-weight: 500; flex: 1; }
+.pills { display: flex; gap: 5px; }
+.pill { font-size: 11px; padding: 2px 7px; border-radius: 4px; }
+.p-llm { background: #fef3c7; color: #92400e; }
+.p-api { background: #dbeafe; color: #1e40af; }
+.p-crud { background: #d1fae5; color: #065f46; }
+.p-wf { background: #f1f0ec; color: #4b5563; }
+@media (prefers-color-scheme: dark) {
+  .p-llm { background: #451a0333; color: #fbbf24; }
+  .p-api { background: #1e3a5f33; color: #60a5fa; }
+  .p-crud { background: #06402033; color: #34d399; }
+  .p-wf { background: #33332e; color: #9ca3af; }
+}
+.chev { font-size: 9px; color: var(--text3); transition: transform .18s; display: inline-block; }
+.chev.open { transform: rotate(90deg); }
+.card-body { display: none; padding: 0 14px 12px; }
+.card-body.open { display: block; }
+.wf-label { font-size: 10px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+.wf-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-bottom: 8px; }
+.wf-step { font-size: 11px; padding: 2px 7px; background: var(--bg); border-radius: 4px; color: var(--text2); }
+.wf-arr { font-size: 10px; color: var(--text3); }
+.case-note { font-size: 12px; color: var(--text2); line-height: 1.6; padding-top: 6px; border-top: 0.5px solid var(--border); }
+.no-results { text-align: center; padding: 48px 0; color: var(--text3); font-size: 14px; }
+
+@media (max-width: 600px) {
+  .header, .controls, .main { padding-left: 16px; padding-right: 16px; }
+  .pills { display: none; }
+  .header-stats { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>evolving-mind-ai &mdash; use case explorer</h1>
+    <p>Workflow patterns across disciplines &middot; Phase 2 reference</p>
+  </div>
+  <div class="header-stats">
+    <div class="stat"><div class="stat-num">10</div><div class="stat-label">disciplines</div></div>
+    <div class="stat"><div class="stat-num">60</div><div class="stat-label">use cases</div></div>
+  </div>
+</div>
+
+<div class="controls">
+  <div class="search-wrap">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.2"/><path d="M9.5 9.5L12 12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    <input type="text" id="search" placeholder="Search use cases..." oninput="render()">
+  </div>
+  <div class="divider"></div>
+  <div class="filter-bar" id="filters"></div>
+</div>
+
+<div class="main">
+  <div class="legend">
+    <div class="leg"><div class="leg-dot" style="background:#fbbf24"></div><span>LLM call</span></div>
+    <div class="leg"><div class="leg-dot" style="background:#60a5fa"></div><span>External API</span></div>
+    <div class="leg"><div class="leg-dot" style="background:#34d399"></div><span>CRUD only</span></div>
+    <div class="leg"><div class="leg-dot" style="background:#9ca3af"></div><span>Multi-step</span></div>
+  </div>
+  <div id="content"></div>
+</div>
+
+<script>
+var DISCIPLINES = [
+  { id:"household", name:"General household", tag:"Personal", color:"#639922", cases:[
+    { id:"A", title:"Plan meals for the week", types:["llm","wf"],
+      steps:["Query pantry + budget","LLM proposes 7 meals","Human gate review","Confirm plan","Write to meal_plan domain"],
+      note:"LLM gets pantry contents and budget ceiling as context. User reviews and swaps meals via edit_list gate." },
+    { id:"B", title:"Add groceries from a receipt", types:["llm","api"],
+      steps:["OCR receipt image (API)","LLM maps items to pantry schema","Human gate confirm","Iterator: serv_insert each item"],
+      note:"Capability call to OCR API, then LLM normalises product names to canonical pantry item names." },
+    { id:"C", title:"Subtract used ingredients after cooking", types:["crud"],
+      steps:["User names recipe","serv_query recipe ingredient list","Human gate confirm quantities","Iterator: serv_update pantry levels"],
+      note:"Pure CRUD. No LLM needed -- ingredient quantities are already in the recipes domain." },
+    { id:"D", title:"Generate shopping list", types:["llm","wf"],
+      steps:["Query pantry levels + meal plan","Query purchase frequency","LLM ranks by need","Human gate edit list","Export and notify"],
+      note:"LLM weighs current stock, planned meals, and reorder frequency. User edits before finalising." },
+    { id:"E", title:"Budget forecast for the month", types:["llm","crud"],
+      steps:["serv_query expenses last 90 days","LLM identifies spending patterns","serv_query upcoming bills","LLM generates forecast","notify result"],
+      note:"Uses both historical actuals and fixed recurring costs. LLM produces a plain-language summary with category breakdown." },
+    { id:"F", title:"Find recipes for what's in the pantry", types:["llm"],
+      steps:["serv_query pantry non-zero stock","LLM generates 3 to 5 recipe suggestions","Human gate select one","Store to meal plan"],
+      note:"Zero external API calls. LLM receives ingredient list and produces structured recipe output validated by output_schema." },
+    { id:"G", title:"Notify before pantry items expire", types:["wf","crud"],
+      steps:["Scheduled trigger","serv_query items expiring in 7 days","Rank by urgency","notify Slack list"],
+      note:"Fully automated -- no LLM call or human gate. Requires scheduled trigger capability (Phase 3)." }
+  ]},
+  { id:"investor", name:"Stock investor", tag:"Finance", color:"#BA7517", cases:[
+    { id:"A", title:"Compare sector gains vs S&P 500", types:["wf","crud"],
+      steps:["serv_query holdings by sector","serv_query S&P portfolio same sectors","js_transform compute delta","notify ranked comparison"],
+      note:"S&P 500 is just another portfolio in the domain. All arithmetic done in js_transform -- no LLM needed." },
+    { id:"B", title:"News and trends for most active stocks", types:["llm","api"],
+      steps:["serv_query top-5 movers last 7 days","Capability call: news API per ticker","LLM synthesises themes","notify digest"],
+      note:"LLM gets raw news headlines and produces a concise per-stock narrative. Input tokens are bounded by ticker count." },
+    { id:"C", title:"Rebalancing recommendation", types:["llm","wf"],
+      steps:["serv_query current allocation %","LLM compares to target allocation","LLM flags drift over threshold","Human gate review","serv_insert rebalance_action rows"],
+      note:"LLM does the reasoning; no trade execution. Produces a list of suggested moves for the user to act on externally." },
+    { id:"D", title:"Tax-loss harvesting candidates", types:["llm","crud"],
+      steps:["serv_query unrealised losses","serv_query wash-sale rules","LLM identifies eligible pairs","Human gate confirm","notify report"],
+      note:"Requires a wash-sale rules table seeded at domain creation. LLM applies rules to actual holdings data." },
+    { id:"E", title:"Earnings calendar alert", types:["api","crud"],
+      steps:["Scheduled trigger","Capability call: earnings calendar API","serv_query held tickers","Filter intersection","notify Slack"],
+      note:"No LLM. Pure data join between external calendar and local holdings." },
+    { id:"F", title:"Dividend income forecast", types:["crud","wf"],
+      steps:["serv_query holdings with dividend_yield","js_transform compute annual income","serv_query historical payout dates","notify projected schedule"],
+      note:"All arithmetic in js_transform. Dividend yield kept current via a periodic price-history update workflow." }
+  ]},
+  { id:"medical", name:"Medical researcher", tag:"Research", color:"#534AB7", cases:[
+    { id:"A", title:"Compare biomarker levels across test subjects", types:["wf","crud"],
+      steps:["serv_query lab_results by biomarker and cohort","js_transform compute mean and SD per group","Capability call: stats API","notify table and chart"],
+      note:"serv_query returns structured rows; stats API does significance testing the js_transform cannot." },
+    { id:"B", title:"Toxicity rate lookup via proprietary API", types:["api","wf"],
+      steps:["serv_query compound exposure data","Capability call: toxicity API per compound","LLM interprets rate vs literature threshold","Human gate confirm findings","serv_insert result_summary"],
+      note:"LLM contextualises the API response against known literature thresholds stored in a reference domain." },
+    { id:"C", title:"Adverse event signal detection", types:["llm","wf"],
+      steps:["serv_query adverse_event_log","LLM clusters events by symptom pattern","LLM flags clusters above incidence threshold","Human gate review","serv_insert signal_report"],
+      note:"LLM does unsupervised pattern recognition across free-text adverse event descriptions." },
+    { id:"D", title:"Cross-trial cohort matching", types:["llm","crud"],
+      steps:["serv_query subject_demographics across trials","LLM identifies comparable subgroups","Human gate confirm matching criteria","serv_insert matched_cohort"],
+      note:"LLM interprets inclusion/exclusion criteria defined in the domain and applies them to structured subject data." },
+    { id:"E", title:"Lab result anomaly flagging", types:["wf","crud"],
+      steps:["Scheduled trigger","serv_query new results since last run","js_transform flag values outside reference range","notify researcher with ranked anomaly list"],
+      note:"No LLM. Reference ranges stored in a reference_ranges domain. Pure comparison in js_transform." },
+    { id:"F", title:"Protocol deviation audit", types:["llm","wf"],
+      steps:["serv_query procedure_log","serv_query approved_protocol","LLM compares actual vs protocol","Human gate review","serv_insert deviation_report"],
+      note:"LLM gets the protocol as context and the procedure log as data. Produces a structured deviation list with severity flags." }
+  ]},
+  { id:"trainer", name:"Personal trainer / athlete", tag:"Fitness", color:"#0F6E56", cases:[
+    { id:"A", title:"Weekly training plan generation", types:["llm","wf"],
+      steps:["serv_query recent workouts and recovery metrics","serv_query athlete goals","LLM generates 7-day plan","Human gate edit","serv_insert training_plan"],
+      note:"LLM gets load history and target event to periodise the plan. Human gate lets athlete swap sessions." },
+    { id:"B", title:"Track progressive overload", types:["crud"],
+      steps:["serv_query exercise history by movement","js_transform compute weekly volume trend","notify progress chart"],
+      note:"Pure CRUD and arithmetic. Flags if volume dropped more than 10% week-over-week as a potential deload signal." },
+    { id:"C", title:"Nutrition targets from body composition", types:["llm","crud"],
+      steps:["serv_query body_comp latest measurement","serv_query activity_level this week","LLM calculates macro targets","Human gate confirm","serv_insert nutrition_plan"],
+      note:"LLM computes TDEE and macro split. Output schema enforces numeric fields -- carbs, protein, fat in grams." },
+    { id:"D", title:"Injury risk flag before heavy session", types:["llm","wf"],
+      steps:["serv_query HRV and sleep and soreness log","serv_query upcoming session RPE target","LLM assesses readiness","notify recommendation"],
+      note:"LLM synthesises subjective and objective recovery data and recommends proceed, modify, or rest." },
+    { id:"E", title:"Competition prep timeline", types:["llm","wf"],
+      steps:["Query competition date and current metrics","LLM builds phase-by-phase prep plan","Human gate review milestones","Iterator: serv_insert phase rows","notify schedule"],
+      note:"LLM structures a periodisation model across phases (base, build, peak, taper). Each phase stored as a separate row." },
+    { id:"F", title:"Post-workout supplement timing log", types:["crud"],
+      steps:["User logs workout end time","serv_query supplement_protocol","js_transform compute optimal window","notify reminders"],
+      note:"No LLM. Pure time arithmetic against the supplement protocol rules stored in the domain." }
+  ]},
+  { id:"writer", name:"Author / content creator", tag:"Creative", color:"#993556", cases:[
+    { id:"A", title:"Chapter outline from notes", types:["llm","wf"],
+      steps:["serv_query story_notes by theme tag","LLM proposes chapter structure","Human gate review and reorder","serv_insert outline"],
+      note:"LLM receives tagged notes as context. edit_list gate lets author reorder and remove chapters before committing." },
+    { id:"B", title:"Character consistency check", types:["llm","crud"],
+      steps:["serv_query character_profiles","serv_query manuscript_passages by character","LLM flags inconsistencies","notify report"],
+      note:"LLM cross-references dialogue and action against established character traits. Useful mid-draft." },
+    { id:"C", title:"Research bibliography organiser", types:["llm","crud"],
+      steps:["User pastes raw citations","LLM normalises to standard format","serv_insert bibliography entries","serv_query by topic tag"],
+      note:"LLM maps messy citation text to a structured schema. Output schema enforces author, year, title, source fields." },
+    { id:"D", title:"Pacing analysis across chapters", types:["llm","wf"],
+      steps:["serv_query chapters with word_count and scene_type","LLM analyses tension and pacing curve","notify annotated chapter map"],
+      note:"LLM receives chapter metadata (not the full text) and identifies structural pacing issues." },
+    { id:"E", title:"Social content calendar from draft", types:["llm","wf"],
+      steps:["serv_query manuscript key themes","LLM generates 30-day post ideas","Human gate edit list","Iterator: serv_insert content_calendar rows"],
+      note:"LLM produces platform-tagged post ideas. User removes or edits before saving." },
+    { id:"F", title:"Word count and deadline tracker", types:["crud"],
+      steps:["serv_query daily_word_log","js_transform compute daily target vs actual","notify progress vs deadline"],
+      note:"No LLM. Pure arithmetic. Useful as a daily recurring workflow that posts an update each morning." }
+  ]},
+  { id:"musician", name:"Musician / producer", tag:"Music", color:"#185FA5", cases:[
+    { id:"A", title:"Setlist builder for a gig", types:["llm","wf"],
+      steps:["serv_query song catalogue and energy ratings","LLM builds setlist arc","Human gate reorder","serv_insert setlist"],
+      note:"LLM understands setlist dramaturgy -- energy arc, key transitions, BPM flow -- given song metadata." },
+    { id:"B", title:"Sample clearance tracking", types:["crud","wf"],
+      steps:["serv_query tracks with sample_status pending","Capability call: rights API lookup","serv_update sample_status","notify unresolved list"],
+      note:"Capability call to a music rights database. No LLM needed unless interpreting ambiguous license terms." },
+    { id:"C", title:"Release schedule coordination", types:["llm","wf"],
+      steps:["serv_query releases in pipeline","serv_query marketing_calendar","LLM spots conflicts and gaps","Human gate confirm schedule","Iterator: serv_insert release_plan rows"],
+      note:"LLM reasons across two calendars to find optimal windows." },
+    { id:"D", title:"Royalty income reconciliation", types:["api","crud"],
+      steps:["Capability call: distributor API","serv_query expected royalties","js_transform compute variance","notify discrepancy report"],
+      note:"Flags under-payments against expected rates. No LLM -- pure numeric comparison." },
+    { id:"E", title:"Lyrics and theme consistency check", types:["llm","wf"],
+      steps:["serv_query album tracks and lyric_notes","LLM identifies thematic threads","LLM flags tonal inconsistencies","Human gate review","serv_insert album_notes"],
+      note:"LLM receives lyric summaries (not full lyrics) and evaluates cohesion across the album." },
+    { id:"F", title:"Practice session logging and trend", types:["crud"],
+      steps:["User logs session: instrument, duration, focus_area","serv_insert practice_log","serv_query last 30 days","js_transform compute focus distribution","notify weekly summary"],
+      note:"No LLM. Surfaces whether practice time is proportional to weak areas flagged by the user." }
+  ]},
+  { id:"realestate", name:"Real estate agent", tag:"Property", color:"#3B6D11", cases:[
+    { id:"A", title:"Comparable market analysis (CMA)", types:["llm","api","wf"],
+      steps:["serv_query subject property","Capability call: MLS API comps","LLM analyses price per sqft trends","Human gate review","notify CMA report"],
+      note:"LLM contextualises the raw comp data with narrative -- pricing rationale, days-on-market, neighbourhood trend." },
+    { id:"B", title:"Client matching to new listings", types:["llm","wf"],
+      steps:["Trigger: new listing added","serv_query client_preferences","LLM scores listing fit per client","notify top-match clients"],
+      note:"LLM reads unstructured preference notes alongside structured criteria. Scored output allows ranking without a fixed formula." },
+    { id:"C", title:"Open house follow-up campaign", types:["llm","wf"],
+      steps:["serv_query attendees with interest_level","LLM segments by intent","Iterator: LLM drafts follow-up per segment","Human gate review batch","Iterator: notify each contact"],
+      note:"Two LLM steps: one to classify, one to draft. Human gate sits between them so the agent reviews the full batch." },
+    { id:"D", title:"Listing description from property notes", types:["llm","crud"],
+      steps:["serv_query property_features","LLM generates MLS listing copy","Human gate edit","serv_update listing description"],
+      note:"Output schema enforces word count limits per field." },
+    { id:"E", title:"Commission and pipeline forecasting", types:["crud","wf"],
+      steps:["serv_query deals by stage","js_transform apply close probability per stage","js_transform compute expected GCI","notify 90-day forecast"],
+      note:"No LLM. Standard weighted pipeline calculation. Close probabilities stored as domain config, editable by the agent." },
+    { id:"F", title:"Document checklist tracker", types:["crud"],
+      steps:["serv_query deal_checklist template","serv_query submitted documents per deal","js_transform compute completion %","notify outstanding items per deal"],
+      note:"No LLM. The checklist template is a domain table. Status updates as documents are uploaded." }
+  ]},
+  { id:"programmer", name:"Software developer", tag:"Tech", color:"#3C3489", cases:[
+    { id:"A", title:"Sprint retrospective summary", types:["llm","wf"],
+      steps:["serv_query completed and incomplete tickets","serv_query blocker_log","LLM synthesises themes","Human gate review","serv_insert retro_summary"],
+      note:"LLM reads structured ticket data (title, points, status) and produces a plain-language summary." },
+    { id:"B", title:"Dependency vulnerability triage", types:["api","wf"],
+      steps:["serv_query package manifest","Capability call: CVE database API per package","LLM prioritises by severity and exposure","Human gate review","notify triage report"],
+      note:"LLM reasons about which vulnerabilities are actually reachable given the project's architecture notes in the domain." },
+    { id:"C", title:"Meeting notes to action items", types:["llm","crud"],
+      steps:["User pastes meeting transcript","LLM extracts structured action items","Human gate confirm and assign","Iterator: serv_insert task per assignee"],
+      note:"Output schema enforces: owner, due_date, description, priority. LLM does the extraction; human gate corrects attributions." },
+    { id:"D", title:"On-call incident post-mortem", types:["llm","wf"],
+      steps:["serv_query incident timeline log","serv_query runbook for affected service","LLM drafts post-mortem","Human gate edit","serv_insert post_mortem"],
+      note:"LLM receives the structured timeline and runbook as context. Output schema enforces five-whys RCA format." },
+    { id:"E", title:"Tech debt prioritisation", types:["llm","wf"],
+      steps:["serv_query tech_debt_log","serv_query deployment_frequency and incident_rate","LLM scores debt items by risk","Human gate rank and remove","serv_update priority field"],
+      note:"LLM contextualises debt items against operational data to rank by actual blast radius, not just age." },
+    { id:"F", title:"Code review checklist enforcement", types:["crud","wf"],
+      steps:["PR event trigger (capability call)","serv_query checklist_template by project","Capability call: diff summary API","js_transform flag missing items","notify reviewer"],
+      note:"No LLM interpretation needed -- checklist items are boolean checks against the diff metadata." }
+  ]},
+  { id:"chef", name:"Chef / food business", tag:"Food", color:"#993C1D", cases:[
+    { id:"A", title:"Menu engineering by margin", types:["crud","wf"],
+      steps:["serv_query menu_items with cost and sales_volume","js_transform compute contribution margin","LLM classifies items (star/plow/dog/puzzle)","Human gate review","serv_update item category"],
+      note:"Classic BCG-style menu engineering. LLM applies the classification logic given the computed margins." },
+    { id:"B", title:"Prep list from tonight's reservations", types:["wf","crud"],
+      steps:["serv_query reservations for service","serv_query expected covers per course","serv_query recipe yields","js_transform compute batch quantities","notify prep list"],
+      note:"No LLM. Pure yield scaling arithmetic. Requires recipe domain with yield_per_portion values seeded." },
+    { id:"C", title:"Allergen cross-reference check", types:["crud"],
+      steps:["serv_query menu_items with ingredient list","serv_query allergen_matrix","js_transform flag dishes containing each allergen","notify allergen summary per dish"],
+      note:"No LLM. Boolean matrix lookup. Critical for compliance -- deterministic logic preferred over LLM interpretation." },
+    { id:"D", title:"Supplier price variance alert", types:["api","wf"],
+      steps:["Scheduled trigger","Capability call: supplier API","serv_query last_purchase_price per ingredient","js_transform compute % variance","notify items above threshold"],
+      note:"Flags ingredients where today's supplier price deviates more than 5% from last purchase." },
+    { id:"E", title:"Seasonal menu brainstorm", types:["llm","wf"],
+      steps:["serv_query in-season ingredients (month filter)","serv_query signature techniques and flavour profiles","LLM generates 5 dish concepts","Human gate select and notes","serv_insert concept_dishes"],
+      note:"LLM gets seasonal produce list and the kitchen's established flavour DNA to propose contextually appropriate dishes." },
+    { id:"F", title:"Staff scheduling from covers forecast", types:["llm","wf"],
+      steps:["serv_query reservation_forecast next 7 days","serv_query staff availability","LLM builds schedule minimising overtime","Human gate edit","Iterator: serv_insert shift per staff member"],
+      note:"LLM reasons across covers targets, labour law constraints, and stated availability." }
+  ]},
+  { id:"ngo", name:"Non-profit / NGO coordinator", tag:"Social impact", color:"#3B3489", cases:[
+    { id:"A", title:"Grant application matching", types:["llm","wf"],
+      steps:["serv_query active_programmes with outcomes data","Capability call: grant database API","LLM scores fit per grant","Human gate review shortlist","serv_insert grant_application rows"],
+      note:"LLM reads programme descriptions and grant criteria and produces a scored fit justification per opportunity." },
+    { id:"B", title:"Volunteer shift scheduling", types:["crud","wf"],
+      steps:["serv_query open_shifts","serv_query volunteer availability and skills","LLM matches volunteers to shifts","Human gate confirm","Iterator: notify each volunteer"],
+      note:"LLM handles skills-to-requirement matching. Iterator step sends personalised confirmation to each matched volunteer." },
+    { id:"C", title:"Donor segmentation for campaigns", types:["llm","wf"],
+      steps:["serv_query donor_history last 2 years","LLM segments by giving pattern","Human gate review segments","Iterator: LLM drafts message per segment","notify batch"],
+      note:"Two LLM calls: one for segmentation reasoning, one for message drafting. Costs are bounded by segment count." },
+    { id:"D", title:"Programme impact report", types:["llm","wf"],
+      steps:["serv_query programme_outcomes metrics","serv_query beneficiary_survey responses","LLM synthesises narrative impact report","Human gate edit","serv_insert report"],
+      note:"LLM gets quantitative metrics and qualitative survey data and produces a structured report." },
+    { id:"E", title:"Event logistics checklist", types:["crud"],
+      steps:["serv_query event_template checklist","serv_query venue and catering confirmations","js_transform flag unconfirmed items","notify outstanding actions"],
+      note:"No LLM. Template-driven checklist. The checklist template is a domain table seeded at event creation." },
+    { id:"F", title:"Budget variance tracking", types:["crud"],
+      steps:["serv_query actual_spend by budget_line","serv_query approved_budget","js_transform compute variance %","notify lines above 10% variance"],
+      note:"No LLM. Standard budget vs actuals. Useful as a weekly recurring workflow notifying the finance lead." }
+  ]}
+];
+
+var TYPE_PILL  = { llm:"p-llm", api:"p-api", crud:"p-crud", wf:"p-wf" };
+var TYPE_LABEL = { llm:"LLM", api:"API", crud:"CRUD", wf:"workflow" };
+
+var activeTags = new Set();
+var openCards  = new Set();
+
+function toggleTag(t) {
+  if (activeTags.has(t)) { activeTags.delete(t); } else { activeTags.add(t); }
+  render();
+}
+
+function toggleCard(id) {
+  if (openCards.has(id)) { openCards.delete(id); } else { openCards.add(id); }
+  render();
+}
+
+function buildSteps(steps) {
+  var parts = [];
+  for (var i = 0; i < steps.length; i++) {
+    parts.push('<span class="wf-step">' + steps[i] + '</span>');
+    if (i < steps.length - 1) { parts.push('<span class="wf-arr">&#8594;</span>'); }
+  }
+  return parts.join('');
+}
+
+function buildPills(types) {
+  return types.map(function(t) {
+    return '<span class="pill ' + TYPE_PILL[t] + '">' + TYPE_LABEL[t] + '</span>';
+  }).join('');
+}
+
+function render() {
+  var q = document.getElementById('search').value.toLowerCase();
+  var allTags = [];
+  DISCIPLINES.forEach(function(d) { if (allTags.indexOf(d.tag) === -1) { allTags.push(d.tag); } });
+
+  var filterHtml = '<button class="ftag' + (activeTags.size === 0 ? ' active' : '') + '" onclick="activeTags.clear();render()">All</button>';
+  allTags.forEach(function(t) {
+    var active = activeTags.has(t) ? ' active' : '';
+    filterHtml += '<button class="ftag' + active + '" onclick="toggleTag(\'' + t + '\')">' + t + '</button>';
+  });
+  document.getElementById('filters').innerHTML = filterHtml;
+
+  var html = '';
+  var any = false;
+
+  DISCIPLINES.forEach(function(d) {
+    if (activeTags.size > 0 && !activeTags.has(d.tag)) { return; }
+
+    var filtered = d.cases.filter(function(c) {
+      if (!q) { return true; }
+      if (c.title.toLowerCase().indexOf(q) !== -1) { return true; }
+      if (c.note.toLowerCase().indexOf(q) !== -1) { return true; }
+      for (var i = 0; i < c.steps.length; i++) {
+        if (c.steps[i].toLowerCase().indexOf(q) !== -1) { return true; }
+      }
+      return false;
+    });
+
+    if (!filtered.length) { return; }
+    any = true;
+
+    html += '<div class="discipline">';
+    html += '<div class="disc-head">';
+    html += '<span class="disc-name">' + d.name + '</span>';
+    html += '<span class="disc-badge" style="background:' + d.color + '22;color:' + d.color + '">' + d.tag + '</span>';
+    html += '<span class="disc-count">' + filtered.length + ' case' + (filtered.length !== 1 ? 's' : '') + '</span>';
+    html += '</div><div class="cases">';
+
+    filtered.forEach(function(c) {
+      var cid  = d.id + '-' + c.id;
+      var open = openCards.has(cid);
+      html += '<div class="card">';
+      html += '<div class="card-head" onclick="toggleCard(\'' + cid + '\')">';
+      html += '<span class="case-id">' + c.id + '</span>';
+      html += '<span class="case-title">' + c.title + '</span>';
+      html += '<div class="pills">' + buildPills(c.types) + '</div>';
+      html += '<span class="chev' + (open ? ' open' : '') + '">&#9654;</span>';
+      html += '</div>';
+      html += '<div class="card-body' + (open ? ' open' : '') + '">';
+      html += '<div class="wf-label">Workflow</div>';
+      html += '<div class="wf-steps">' + buildSteps(c.steps) + '</div>';
+      html += '<div class="case-note">' + c.note + '</div>';
+      html += '</div></div>';
+    });
+
+    html += '</div></div>';
+  });
+
+  document.getElementById('content').innerHTML = any ? html : '<div class="no-results">No matching use cases.</div>';
+}
+
+render();
+</script>
+</body>
+</html>
