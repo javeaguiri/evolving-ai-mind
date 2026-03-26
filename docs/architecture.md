@@ -1757,7 +1757,7 @@ Step Processor receives resume_gate
   └── Enqueues execute_top — execution resumes
 ```
 
-#### Gate type catalogue
+#### Human Gate-type catalogue
 
 | gate_type | User interaction | Data contract |
 |---|---|---|
@@ -1768,13 +1768,86 @@ Step Processor receives resume_gate
 | `select_one` | Pick one item from a list | Phase 3 |
 | `select_many` | Pick zero or more items | Phase 3 |
 
+#### Human gate-step schema reference
+
+Full field reference for a `human_gate` step definition. This is the authoritative
+schema for workflow authors and the right-brain when generating or validating
+workflow definitions containing gate steps.
+
+```json
+{
+  "step":             "3",
+  "type":             "human_gate",
+  "gate_type":        "confirm | edit_list | text_input | review_object | select_one | select_many",
+  "description":      "Human-readable — for workflow authors and right-brain only",
+
+  "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
+
+  "context_key":      "dot.path.into.local_state",
+  "item_primary_key": "field name — used as row label in edit_list",
+  "item_secondary_key": "field name — used as secondary text in edit_list",
+
+  "item_action": {
+    "condition":        "item.foreignKeys && item.foreignKeys.length > 0",
+    "action":           "remove_item",
+    "action_data_key":  "tableName",
+    "confirm_template": "Remove {{item.tableName}} from this domain?"
+  },
+
+  "options": [
+    { "label": "Looks good", "action": "confirm",   "on_select": "next"    },
+    { "label": "Add a table","action": "add_table", "on_select": "step:3a" },
+    { "label": "Cancel",     "action": "cancel",    "on_select": "cancel"  }
+  ],
+
+  "output_key": "key_written_to_local_state_on_resolve",
+
+  "on_success": "next",
+  "on_failure": "cancel"
+}
+```
+
+**Field notes**
+
+**`gate_type`** — determines how `callback.mjs` renders the dialog and what
+`resume_gate` expects in `responseData`. See the gate type catalogue in 6.4.4.
+
+**`message_template`** — resolved via `template-resolver.mjs` at suspension time,
+not at step definition time. Template variables are read from `local_state` at the
+moment the gate suspends.
+
+**`context_key`** — dot-path into `local_state`. For `edit_list`, must resolve to
+an array. For `review_object`, resolves to an object or array — arrays are rendered
+as a table-name / column-list display. Optional for `confirm`.
+
+**`item_action`** — `edit_list` only. Defines a per-row action button. `condition`
+is evaluated against each item — items where the condition is falsy do not get the
+button. Only `remove_item` is currently implemented; others are Phase 3.
+
+**`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
+routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
+cancels the run. Must include at least one option with `action: "cancel"`.
+
+**`output_key`** — `text_input` only. The typed value is written to
+`local_state[output_key]` when the gate resolves. Not used by other gate types.
+
+**`on_timeout` / `timeout_seconds`** — reserved fields, not yet implemented.
+When implemented, a gate that receives no user response within `timeout_seconds`
+will resolve via `on_timeout` routing (e.g. `"cancel"` or a specific step key).
+Until then, gates wait indefinitely — cost-free while suspended.
+
+**`on_success` / `on_failure`** — gate-level fallbacks. `on_success` is the
+default routing when no `on_select` override applies. `on_failure` handles
+gate execution errors (e.g. dialog build failure), not user cancellation.
+User cancellation is always routed via the option with `action: "cancel"`.
+
+---
+
 #### UI Dialog Contract — WORKFLOW_GATE message
 
 The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
 translates it to Slack Block Kit. Adding a new UI is one new renderer in
 `callback.mjs` — the Step Processor and all workflows are unchanged.
-
-#### WORKFLOW_GATE message shape
 
 ```json
 {
@@ -1843,81 +1916,6 @@ step key before the next `execute_top` is enqueued.
 recorded in `PGC_WorkflowRunStep` for the same `frame_id`, the idempotency check
 fires on the next `execute_top`. Guard 1 detects this as a stuck step after 3
 consecutive hits and fails the run with a Slack notification.
-
----
-
-### 6.4.5 `human_gate` step schema reference
-
-Full field reference for a `human_gate` step definition. This is the authoritative
-schema for workflow authors and the right-brain when generating or validating
-workflow definitions containing gate steps.
-
-```json
-{
-  "step":             "3",
-  "type":             "human_gate",
-  "gate_type":        "confirm | edit_list | text_input | review_object | select_one | select_many",
-  "description":      "Human-readable — for workflow authors and right-brain only",
-
-  "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
-
-  "context_key":      "dot.path.into.local_state",
-  "item_primary_key": "field name — used as row label in edit_list",
-  "item_secondary_key": "field name — used as secondary text in edit_list",
-
-  "item_action": {
-    "condition":        "item.foreignKeys && item.foreignKeys.length > 0",
-    "action":           "remove_item",
-    "action_data_key":  "tableName",
-    "confirm_template": "Remove {{item.tableName}} from this domain?"
-  },
-
-  "options": [
-    { "label": "Looks good", "action": "confirm",   "on_select": "next"    },
-    { "label": "Add a table","action": "add_table", "on_select": "step:3a" },
-    { "label": "Cancel",     "action": "cancel",    "on_select": "cancel"  }
-  ],
-
-  "output_key": "key_written_to_local_state_on_resolve",
-
-  "on_success": "next",
-  "on_failure": "cancel"
-}
-```
-
-#### Field notes
-
-**`gate_type`** — determines how `callback.mjs` renders the dialog and what
-`resume_gate` expects in `responseData`. See the gate type catalogue in 6.4.4.
-
-**`message_template`** — resolved via `template-resolver.mjs` at suspension time,
-not at step definition time. Template variables are read from `local_state` at the
-moment the gate suspends.
-
-**`context_key`** — dot-path into `local_state`. For `edit_list`, must resolve to
-an array. For `review_object`, resolves to an object or array — arrays are rendered
-as a table-name / column-list display. Optional for `confirm`.
-
-**`item_action`** — `edit_list` only. Defines a per-row action button. `condition`
-is evaluated against each item — items where the condition is falsy do not get the
-button. Only `remove_item` is currently implemented; others are Phase 3.
-
-**`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
-routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
-cancels the run. Must include at least one option with `action: "cancel"`.
-
-**`output_key`** — `text_input` only. The typed value is written to
-`local_state[output_key]` when the gate resolves. Not used by other gate types.
-
-**`on_timeout` / `timeout_seconds`** — reserved fields, not yet implemented.
-When implemented, a gate that receives no user response within `timeout_seconds`
-will resolve via `on_timeout` routing (e.g. `"cancel"` or a specific step key).
-Until then, gates wait indefinitely — cost-free while suspended.
-
-**`on_success` / `on_failure`** — gate-level fallbacks. `on_success` is the
-default routing when no `on_select` override applies. `on_failure` handles
-gate execution errors (e.g. dialog build failure), not user cancellation.
-User cancellation is always routed via the option with `action: "cancel"`.
 
 ---
 
