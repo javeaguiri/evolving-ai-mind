@@ -1420,7 +1420,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 
 #### Step-specific schema fields by type
 
-**`llm_call`**
+##### **`llm_call`**
 ```json
 {
   "step": "1", "type": "llm_call",
@@ -1437,7 +1437,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 fields are available to the prompt template via `{{variable}}` substitution.
 Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
 
-**`js_transform`**
+##### `js_transform`
 ```json
 {
   "step": "2", "type": "js_transform",
@@ -1452,7 +1452,7 @@ Output is the parsed JSON object from the LLM, stored at `output_key` in `local_
 listing the first four non-system column names — used as secondary text in
 `edit_list` gates.
 
-**`human_gate`**
+##### `human_gate`
 ```json
 {
   "step": "3", "type": "human_gate",
@@ -1470,12 +1470,12 @@ listing the first four non-system column names — used as secondary text in
   "on_failure": "cancel"
 }
 ```
-### Context key 
+###### Context key 
 `context_key` is a dot-path into `local_state` — the data bound to the dialog.
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
-### Template syntax
+###### Template syntax
 
 Templates appear in `message_template`, `input` values, and `context_key`. The
 template resolver (`template-resolver.mjs`) supports:
@@ -1493,7 +1493,7 @@ Unresolved templates (key not found in local_state) resolve to the empty string
 `""` — they do not throw. This means a workflow author must ensure that every
 template reference has a corresponding `output_key` written by a prior step.
 
-**`iterator`**
+##### `iterator`
 ```json
 {
   "step": "5", "type": "iterator",
@@ -1507,7 +1507,7 @@ template reference has a corresponding `output_key` written by a prior step.
 once per item — the current item is available as `{{item}}` and `{{item.field}}`
 inside `item_step.input`. Results are collected into an array at `output_key`.
 
-**`serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
+##### `serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
 ```json
 {
   "step": "1", "type": "serv_query",
@@ -1521,7 +1521,7 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
 }
 ```
 
-**`notify`**
+##### `notify`
 ```json
 {
   "step": "11", "type": "notify",
@@ -1531,7 +1531,7 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
 }
 ```
 
-**`end`**
+##### `end`
 ```json
 { "step": "12", "type": "end" }
 ```
