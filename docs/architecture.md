@@ -1050,6 +1050,8 @@ programmer's intent.
 | 6.4.3 | `local_state` — the data bag / memory |
 | 6.4.4 | Human-in-the-Loop — blocking I/O |
 | 6.4.4.1 | UI Dialog Contract — WORKFLOW_GATE and WORKFLOW_ERROR message shapes |
+| 6.4.5 | `human_gate` step schema reference |
+| 6.4.6 | Parallel execution hooks — deferred, Phase 3 |
 | 6.5 | Right-Brain Output Validation — correction loop |
 | 6.6 | Workflow Safety — circuit breakers and emergency shutdown |
 | 6.7 | create_domain Workflow — full annotated example |
@@ -1115,7 +1117,7 @@ The callback abstraction handles two distinct message types flowing back to the 
   structured dialog payload and enqueues it via the same callback path. `callback.mjs`
   translates the UI-agnostic `WORKFLOW_GATE` message into Slack Block Kit blocks and
   posts the interactive message to the thread. The user's interaction with that message
-  is what resumes the suspended stack. See Section 6.4.4 for the full gate lifecycle and message contract.
+  is what resumes the suspended stack. See Section 6.4.4 and 6.4.4.1 for the full gate lifecycle and message contract.
 
 ---
 
@@ -1766,13 +1768,13 @@ Step Processor receives resume_gate
 | `select_one` | Pick one item from a list | Phase 3 |
 | `select_many` | Pick zero or more items | Phase 3 |
 
-#### UI Dialog Contract — WORKFLOW_GATE message
+#### 6.4.4.1 UI Dialog Contract — WORKFLOW_GATE message
 
 The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
 translates it to Slack Block Kit. Adding a new UI is one new renderer in
 `callback.mjs` — the Step Processor and all workflows are unchanged.
 
-##### WORKFLOW_GATE message shape
+#### WORKFLOW_GATE message shape
 
 ```json
 {
@@ -1794,7 +1796,7 @@ translates it to Slack Block Kit. Adding a new UI is one new renderer in
 `message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
 to use `chat.update` (in-place edit) instead of posting a new message.
 
-##### WORKFLOW_ERROR message shape
+#### WORKFLOW_ERROR message shape
 
 ```json
 {
@@ -1841,6 +1843,123 @@ step key before the next `execute_top` is enqueued.
 recorded in `PGC_WorkflowRunStep` for the same `frame_id`, the idempotency check
 fires on the next `execute_top`. Guard 1 detects this as a stuck step after 3
 consecutive hits and fails the run with a Slack notification.
+
+---
+
+### 6.4.5 `human_gate` step schema reference
+
+Full field reference for a `human_gate` step definition. This is the authoritative
+schema for workflow authors and the right-brain when generating or validating
+workflow definitions containing gate steps.
+
+```json
+{
+  "step":             "3",
+  "type":             "human_gate",
+  "gate_type":        "confirm | edit_list | text_input | review_object | select_one | select_many",
+  "description":      "Human-readable — for workflow authors and right-brain only",
+
+  "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
+
+  "context_key":      "dot.path.into.local_state",
+  "item_primary_key": "field name — used as row label in edit_list",
+  "item_secondary_key": "field name — used as secondary text in edit_list",
+
+  "item_action": {
+    "condition":        "item.foreignKeys && item.foreignKeys.length > 0",
+    "action":           "remove_item",
+    "action_data_key":  "tableName",
+    "confirm_template": "Remove {{item.tableName}} from this domain?"
+  },
+
+  "options": [
+    { "label": "Looks good", "action": "confirm",   "on_select": "next"    },
+    { "label": "Add a table","action": "add_table", "on_select": "step:3a" },
+    { "label": "Cancel",     "action": "cancel",    "on_select": "cancel"  }
+  ],
+
+  "output_key": "key_written_to_local_state_on_resolve",
+
+  "on_success": "next",
+  "on_failure": "cancel"
+}
+```
+
+#### Field notes
+
+**`gate_type`** — determines how `callback.mjs` renders the dialog and what
+`resume_gate` expects in `responseData`. See the gate type catalogue in 6.4.4.
+
+**`message_template`** — resolved via `template-resolver.mjs` at suspension time,
+not at step definition time. Template variables are read from `local_state` at the
+moment the gate suspends.
+
+**`context_key`** — dot-path into `local_state`. For `edit_list`, must resolve to
+an array. For `review_object`, resolves to an object or array — arrays are rendered
+as a table-name / column-list display. Optional for `confirm`.
+
+**`item_action`** — `edit_list` only. Defines a per-row action button. `condition`
+is evaluated against each item — items where the condition is falsy do not get the
+button. Only `remove_item` is currently implemented; others are Phase 3.
+
+**`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
+routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
+cancels the run. Must include at least one option with `action: "cancel"`.
+
+**`output_key`** — `text_input` only. The typed value is written to
+`local_state[output_key]` when the gate resolves. Not used by other gate types.
+
+**`on_timeout` / `timeout_seconds`** — reserved fields, not yet implemented.
+When implemented, a gate that receives no user response within `timeout_seconds`
+will resolve via `on_timeout` routing (e.g. `"cancel"` or a specific step key).
+Until then, gates wait indefinitely — cost-free while suspended.
+
+**`on_success` / `on_failure`** — gate-level fallbacks. `on_success` is the
+default routing when no `on_select` override applies. `on_failure` handles
+gate execution errors (e.g. dialog build failure), not user cancellation.
+User cancellation is always routed via the option with `action: "cancel"`.
+
+---
+
+### 6.4.6 Parallel execution hooks — deferred, Phase 3
+
+The frame schema includes hooks for future parallel execution. These fields are
+defined in the frame structure now so the schema is stable when fan-out/fan-in
+is implemented. They are never populated in sequential mode.
+
+```json
+{
+  "frame_id":        "uuid",
+  "type":            "workflow | iterator | human_gate",
+  "status":          "running | awaiting | completed | failed",
+
+  "parallel_group":  null,
+  "fan_out_keys":    null,
+  "fan_in_barrier":  null
+}
+```
+
+**`parallel_group`** — UUID shared by all frames executing in the same fan-out
+group. Null in sequential mode. When set, the Step Processor knows these frames
+are siblings and coordinates their completion via `fan_in_barrier`.
+
+**`fan_out_keys`** — array of item keys this frame is responsible for processing.
+In sequential mode the iterator frame processes all items itself. In parallel mode,
+the iterator spawns one frame per item (or per batch), each carrying its subset in
+`fan_out_keys`.
+
+**`fan_in_barrier`** — the frame_id of the parent iterator frame waiting for all
+fan-out siblings to complete before popping and continuing. When the last sibling
+completes, it pops the barrier frame and re-enqueues `execute_top` on the parent.
+
+**Why defined now:** The `PGC_WorkflowRunLock` table (Section 4.3.2) is already
+reserved for the optimistic locking required by parallel execution. Defining the
+frame hooks alongside it ensures the execution model is internally consistent before
+Phase 3 lands. Sequential mode never reads these fields — they are null-safe.
+
+**Phase 3 prerequisite:** Parallel execution requires the cycle detector (Guard 3)
+to be implemented first. A fan-out that triggers another fan-out would create
+unbounded concurrency without cycle detection at workflow registration time.
 
 ---
 
@@ -1932,8 +2051,6 @@ hit on a healthy workflow (legitimate SQS redelivery on a new step) resets the c
 Every `execute_top` invocation checks status before executing any step. If
 `cancelled`, the message is discarded. The shutdown contract is: no step will
 execute after `/shutdown` is called, even if SQS messages are already in flight.
-
----
 
 ---
 
