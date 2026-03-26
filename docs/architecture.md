@@ -1470,9 +1470,28 @@ listing the first four non-system column names — used as secondary text in
   "on_failure": "cancel"
 }
 ```
+### Context key 
 `context_key` is a dot-path into `local_state` — the data bound to the dialog.
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
+
+### Template syntax
+
+Templates appear in `message_template`, `input` values, and `context_key`. The
+template resolver (`template-resolver.mjs`) supports:
+
+```
+{{key}}              → local_state["key"]
+{{key.field}}        → local_state["key"]["field"]
+{{key.0.field}}      → local_state["key"][0]["field"]
+{{item}}             → current iterator item (inside item_step only)
+{{item.field}}       → field on current iterator item
+{{input.field}}      → run.input["field"] — original input to the workflow
+```
+
+Unresolved templates (key not found in local_state) resolve to the empty string
+`""` — they do not throw. This means a workflow author must ensure that every
+template reference has a corresponding `output_key` written by a prior step.
 
 **`iterator`**
 ```json
@@ -1681,24 +1700,6 @@ Step 11 — notify
   message_template: "Domain {{proposed_scaffold.domain}} created."
                                            reads  local_state.proposed_scaffold.domain
 ```
-
-#### Template syntax
-
-Templates appear in `message_template`, `input` values, and `context_key`. The
-template resolver (`template-resolver.mjs`) supports:
-
-```
-{{key}}              → local_state["key"]
-{{key.field}}        → local_state["key"]["field"]
-{{key.0.field}}      → local_state["key"][0]["field"]
-{{item}}             → current iterator item (inside item_step only)
-{{item.field}}       → field on current iterator item
-{{input.field}}      → run.input["field"] — original input to the workflow
-```
-
-Unresolved templates (key not found in local_state) resolve to the empty string
-`""` — they do not throw. This means a workflow author must ensure that every
-template reference has a corresponding `output_key` written by a prior step.
 
 #### local_state scope and persistence
 
