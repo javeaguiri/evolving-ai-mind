@@ -75,7 +75,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "User describes the table they want to add.",
-        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
+        "message_template": "Describe the table you want to add \u2014 what it stores and how it relates to the other tables.",
         "options": [
           {
             "label": "Submit",
@@ -206,7 +206,6 @@
             "on_select": "cancel"
           }
         ],
-        "output_key": "confirmed_domain_help",
         "on_success": "next",
         "on_failure": "cancel"
       },
@@ -216,7 +215,7 @@
         "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
         "input": {
           "tableName": "PGC_DomainHelp",
-          "row": "{{confirmed_domain_help}}"
+          "row": "{{generated.domainHelp}}"
         },
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -289,7 +288,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Ask user if they want to see available commands.",
-        "message_template": "👋 Welcome to evolving-mind!\n\nI can help you build and manage data domains using natural language. Want to see what I can do?",
+        "message_template": "\ud83d\udc4b Welcome to evolving-mind!\n\nI can help you build and manage data domains using natural language. Want to see what I can do?",
         "options": [
           {
             "label": "Yes, show me",
@@ -309,7 +308,7 @@
         "step": "2",
         "type": "notify",
         "description": "Post available commands to the user.",
-        "message_template": "✅ Here's what evolving-mind can do:\n\n• `/create-domain <description>` — design and build a new data domain\n• `/help` — show this message\n\nMore commands coming as the brain evolves 🧠",
+        "message_template": "\u2705 Here's what evolving-mind can do:\n\n\u2022 `/create-domain <description>` \u2014 design and build a new data domain\n\u2022 `/help` \u2014 show this message\n\nMore commands coming as the brain evolves \ud83e\udde0",
         "on_success": "end"
       },
       {
@@ -321,7 +320,7 @@
   {
     "name": "create_workflow",
     "domain": null,
-    "description": "Stub — designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition to be implemented in Phase 3.",
+    "description": "Stub \u2014 designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition to be implemented in Phase 3.",
     "intent_keywords": [
       "create workflow",
       "new workflow",
