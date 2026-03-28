@@ -481,11 +481,15 @@ async function seedPGCPrompt(client) {
   const rows = Array.isArray(seedPrompt) ? seedPrompt : [seedPrompt];
   for (const row of rows) {
     // Use WHERE NOT EXISTS to deduplicate on (intent_category, version)
-    // PGC_Prompt has no unique constraint on this pair yet — added in R14
+    // PGC_Prompt has no unique constraint on this pair yet — added in R14.
+    // output_schema and input_variables are written on first insert only —
+    // DO NOTHING on conflict preserves any right-brain improvements already
+    // applied to existing rows on the live database.
     await client.query(
       `INSERT INTO "PGC_Prompt"
-         (intent_category, prompt_text, model, version, was_successful)
-       SELECT $1, $2, $3, $4, $5
+         (intent_category, prompt_text, model, version, was_successful,
+          output_schema, input_variables)
+       SELECT $1, $2, $3, $4, $5, $6, $7
        WHERE NOT EXISTS (
          SELECT 1 FROM "PGC_Prompt"
          WHERE intent_category = $1 AND version = $4
@@ -496,6 +500,8 @@ async function seedPGCPrompt(client) {
         row.model ?? null,
         row.version ?? 1,
         row.was_successful ?? null,
+        row.output_schema    ? JSON.stringify(row.output_schema)    : null,
+        row.input_variables  ? JSON.stringify(row.input_variables)  : null,
       ]
     );
   }

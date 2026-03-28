@@ -320,16 +320,190 @@
   {
     "name": "create_workflow",
     "domain": null,
-    "description": "Stub \u2014 designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Full step definition to be implemented in Phase 3.",
+    "description": "Designs and stores a new reusable workflow in PGC_Workflow from a natural language description. Classifies intent, generates steps, simulates, and registers the workflow so it is immediately available to the Intent Preprocessor.",
     "intent_keywords": [
       "create workflow",
       "new workflow",
       "build workflow",
-      "add workflow"
+      "add workflow",
+      "make a workflow",
+      "define a workflow"
     ],
     "state_strategy": "sequential_with_confirmation",
-    "model_used": null,
-    "version": 1,
-    "steps": []
+    "model_used": "anthropic/claude-sonnet-4-5",
+    "version": 2,
+    "steps": [
+      {
+        "step": "1",
+        "type": "llm_call",
+        "description": "Classify the workflow intent \u2014 extract domain, operation_type, target_tables, and a one-sentence description.",
+        "input": {
+          "prompt": "classify_workflow_intent",
+          "userIntent": "{{input.userIntent}}",
+          "domain": "{{input.domain}}"
+        },
+        "output_key": "workflow_intent",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "2",
+        "type": "llm_call",
+        "description": "Generate the workflow step array. Injects live PGC_StepType contracts and the create_domain worked example from PGC_SystemContext at prompt build time.",
+        "input": {
+          "prompt": "generate_workflow_steps",
+          "workflow_intent": "{{workflow_intent}}",
+          "domain_schema": "{{input.domain_schema}}"
+        },
+        "output_key": "draft_workflow",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "3",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User reviews the proposed step array before simulation. Can request changes (routes back to step 2) or cancel.",
+        "message_template": "Review the proposed steps for {{draft_workflow.name}}. Approve to simulate, or request changes to regenerate.",
+        "context_key": "draft_workflow.steps",
+        "options": [
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Request changes",
+            "action": "request_changes",
+            "on_select": "step:2"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "4",
+        "type": "simulate",
+        "description": "Level 1 static analysis only \u2014 no mocks needed. Validates routing values, dead targets, missing templates, and gate structure.",
+        "input": {
+          "steps_key": "draft_workflow.steps"
+        },
+        "output_key": "static_analysis_result",
+        "on_success": "next",
+        "on_failure": "step:3"
+      },
+      {
+        "step": "5",
+        "type": "llm_call",
+        "description": "Generate representative mock outputs for each step that produces data. Used as simulation inputs in Level 2 path execution.",
+        "input": {
+          "prompt": "generate_workflow_mocks",
+          "steps": "{{draft_workflow.steps}}"
+        },
+        "output_key": "mock_outputs",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "6",
+        "type": "llm_call",
+        "description": "Generate named simulation paths \u2014 happy path, cancel paths per gate, failure paths per llm_call and serv_* step.",
+        "input": {
+          "prompt": "generate_workflow_paths",
+          "steps": "{{draft_workflow.steps}}",
+          "mock_outputs": "{{mock_outputs}}"
+        },
+        "output_key": "simulation_paths",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "7",
+        "type": "simulate",
+        "description": "Level 2 + Level 3 \u2014 full path execution using mock outputs and decision scripts. Validates data flow, template resolution, and terminal states.",
+        "input": {
+          "steps_key": "draft_workflow.steps",
+          "mock_outputs_key": "mock_outputs",
+          "paths_key": "simulation_paths"
+        },
+        "output_key": "simulation_result",
+        "on_success": "next",
+        "on_failure": "step:3"
+      },
+      {
+        "step": "8",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Show simulation results and ask user to confirm registration.",
+        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
+        "options": [
+          {
+            "label": "Register",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "9",
+        "type": "serv_insert",
+        "description": "Write the new workflow to PGC_Workflow.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "row": {
+            "name": "{{draft_workflow.name}}",
+            "domain": "{{workflow_intent.domain}}",
+            "description": "{{draft_workflow.description}}",
+            "intent_keywords": "{{draft_workflow.intent_keywords}}",
+            "steps": "{{draft_workflow.steps}}",
+            "state_strategy": "sequential_with_confirmation",
+            "version": 1
+          }
+        },
+        "output_key": "registered_workflow",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "10",
+        "type": "serv_insert",
+        "description": "Write the PGC_IntentMap row so the new workflow is immediately matchable by the Intent Preprocessor Pass 1a regex.",
+        "input": {
+          "tableName": "PGC_IntentMap",
+          "row": {
+            "pattern": "{{draft_workflow.name}}",
+            "intent_category": "{{draft_workflow.name}}",
+            "workflow_id": "{{registered_workflow.id}}",
+            "action_type": "workflow"
+          }
+        },
+        "output_key": "registered_intent_row",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "11",
+        "type": "notify",
+        "description": "Confirm the workflow is registered and ready.",
+        "message_template": "Workflow {{draft_workflow.name}} is registered and ready.\n\nTry: /mind {{draft_workflow.description}}",
+        "on_success": "end"
+      },
+      {
+        "step": "12",
+        "type": "end"
+      }
+    ]
   }
 ]

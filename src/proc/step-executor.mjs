@@ -23,6 +23,7 @@
 //   serv_query   — calls SERV getRows, writes rows array to output_key
 //   serv_update  — calls SERV updateRows, generic filter + updates shape
 //   serv_delete  — calls SERV deleteRows, generic filter shape
+//   simulate     — static analysis + optional path simulation of a step array
 //   notify       — enqueues result message to SlackResults
 //   end          — signals workflow complete
 //
@@ -69,6 +70,7 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_query':   return executeServQuery({ step, localState, traceId });
     case 'serv_update':  return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
+    case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
@@ -589,6 +591,568 @@ async function executeServDelete({ step, localState, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
+// simulate — dry-run a workflow step array (Section 6.4.6)
+// ---------------------------------------------------------------------------
+//
+// Three validation levels run in strict order — later levels only run if
+// earlier levels pass.
+//
+//   Level 1 — Static analysis (no mocks needed)
+//     Seven structural checks on the step array itself.
+//     Returns immediately on failure — no path execution occurs.
+//
+//   Level 2 — Path execution (uses mock_outputs + simulation_paths)
+//     Walks each named path, injecting mocks instead of calling real services.
+//     Tracks local_state transitions. Fails if a template variable is
+//     unresolvable or if the actual terminal != expected_terminal.
+//
+//   Level 3 — Skip-path analysis (advisory only)
+//     For every step with on_failure: "human_feedback", simulates what happens
+//     if the user chooses Skip at the recovery gate. Flags downstream steps
+//     that read output_key values that would be null if the step was skipped.
+//     Non-fatal — included in result but does not flip passed to false.
+//
+// simulation_mode flag: run.state.simulation_mode is set true before path
+// execution begins and cleared after. All step handlers already check this
+// flag (returning mock output instead of calling real services). The simulate
+// handler itself reads mock outputs from local_state — it does not call SERV
+// or LLM. Simulation is entirely in-process.
+
+// Known valid routing token pattern — "next", "end", "cancel",
+// "human_feedback", or "step:<key>" where <key> is a non-empty string.
+const ROUTING_TOKEN_RE = /^(next|end|cancel|human_feedback|step:.+)$/;
+
+async function executeSimulate({ step, localState, run, traceId }) {
+  // ── Resolve inputs from local_state ─────────────────────────────────────
+  const stepsKey       = step.input?.steps_key;
+  const mockOutputsKey = step.input?.mock_outputs_key;   // optional
+  const pathsKey       = step.input?.paths_key;          // optional
+
+  if (!stepsKey) {
+    throw new Error('simulate step missing input.steps_key');
+  }
+
+  const steps         = resolvePath(localState, stepsKey);
+  const mockOutputs   = mockOutputsKey ? resolvePath(localState, mockOutputsKey) : null;
+  const simPaths      = pathsKey       ? resolvePath(localState, pathsKey)       : null;
+
+  if (!Array.isArray(steps) || steps.length === 0) {
+    throw new Error(`simulate: steps_key "${stepsKey}" did not resolve to a non-empty array`);
+  }
+
+  console.info('step-executor: simulate — starting', {
+    stepCount: steps.length,
+    hasMocks:  !!mockOutputs,
+    pathCount: Array.isArray(simPaths) ? simPaths.length : 0,
+    traceId,
+  });
+
+  // ── Level 1 — Static analysis ────────────────────────────────────────────
+  const staticIssues = runLevel1StaticAnalysis(steps);
+
+  if (staticIssues.length > 0) {
+    const result = {
+      passed:         false,
+      paths_run:      0,
+      paths_passed:   0,
+      paths_failed:   0,
+      static_analysis: { passed: false, issues: staticIssues },
+      path_results:    [],
+      skip_path_warnings: [],
+    };
+    console.info('step-executor: simulate — Level 1 failed', {
+      issueCount: staticIssues.length, traceId,
+    });
+    return {
+      outputValue: result,
+      nextAction:  resolveNextAction(step.on_failure ?? 'next', null),
+    };
+  }
+
+  // Level 1 passed — if no mocks/paths, return Level 1 pass result now.
+  if (!mockOutputs || !Array.isArray(simPaths) || simPaths.length === 0) {
+    const result = {
+      passed:         true,
+      paths_run:      0,
+      paths_passed:   0,
+      paths_failed:   0,
+      static_analysis: { passed: true, issues: [] },
+      path_results:    [],
+      skip_path_warnings: [],
+    };
+    console.info('step-executor: simulate — Level 1 only (no paths provided)', { traceId });
+    return {
+      outputValue: result,
+      nextAction:  resolveNextAction(step.on_success, null),
+    };
+  }
+
+  // ── Level 2 — Path execution ─────────────────────────────────────────────
+  const pathResults = [];
+  const runInput    = run?.input ?? {};
+
+  for (const path of simPaths) {
+    const pathResult = executeSimPath(steps, path, mockOutputs, runInput);
+    pathResults.push(pathResult);
+  }
+
+  const pathsPassed = pathResults.filter(r => r.passed).length;
+  const pathsFailed = pathResults.filter(r => !r.passed).length;
+  const level2Passed = pathsFailed === 0;
+
+  // ── Level 3 — Skip-path analysis (advisory) ──────────────────────────────
+  const skipPathWarnings = level2Passed
+    ? runLevel3SkipPathAnalysis(steps, mockOutputs, runInput)
+    : [];
+
+  const result = {
+    passed:         level2Passed,
+    paths_run:      pathResults.length,
+    paths_passed:   pathsPassed,
+    paths_failed:   pathsFailed,
+    static_analysis: { passed: true, issues: [] },
+    path_results:    pathResults,
+    skip_path_warnings: skipPathWarnings,
+  };
+
+  console.info('step-executor: simulate — complete', {
+    passed: result.passed, pathsRun: result.paths_run,
+    pathsPassed, pathsFailed, warnings: skipPathWarnings.length, traceId,
+  });
+
+  return {
+    outputValue: result,
+    nextAction:  level2Passed
+      ? resolveNextAction(step.on_success, null)
+      : resolveNextAction(step.on_failure ?? 'next', null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Level 1 — Static analysis
+// ---------------------------------------------------------------------------
+
+function runLevel1StaticAnalysis(steps) {
+  const issues = [];
+
+  // Build a set of all step keys for dead-target checking
+  const stepKeys = new Set(steps.map(s => String(s.step)));
+
+  // Build the set of output_key values written by each step at each point
+  // in the canonical (top-to-bottom) execution order. This is a conservative
+  // approximation — it does not model branching. It catches the common case
+  // where a template references a key that is never written by any prior step.
+  const outputKeysSoFar = new Set(['input']); // run.input is always available
+
+  for (const s of steps) {
+    const stepKey = String(s.step);
+
+    // Check every routing value on this step
+    const routingValues = [];
+    if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
+    if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
+    if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
+    for (const opt of s.options ?? []) {
+      if (opt.on_select) routingValues.push({ field: `options[${opt.action}].on_select`, value: opt.on_select });
+    }
+
+    for (const { field, value } of routingValues) {
+      if (!ROUTING_TOKEN_RE.test(String(value))) {
+        issues.push({
+          check:         'unknown_routing_value',
+          step:          stepKey,
+          failure_class: 'unknown_routing_value',
+          detail:        `Step "${stepKey}" field "${field}" has unknown routing value "${value}". Valid values: next, end, cancel, human_feedback, step:<key>`,
+        });
+      }
+      // Check dead step:N targets
+      if (String(value).startsWith('step:')) {
+        const target = String(value).slice(5);
+        if (!stepKeys.has(target)) {
+          issues.push({
+            check:         'dead_routing_target',
+            step:          stepKey,
+            failure_class: 'dead_routing_target',
+            detail:        `Step "${stepKey}" field "${field}" routes to "step:${target}" but no step with key "${target}" exists`,
+          });
+        }
+      }
+    }
+
+    // Check items_key for iterator steps
+    if (s.type === 'iterator') {
+      const baseKey = (s.items_key ?? '').split('.')[0];
+      if (baseKey && !outputKeysSoFar.has(baseKey)) {
+        issues.push({
+          check:         'iterator_source_not_array',
+          step:          stepKey,
+          failure_class: 'iterator_source_not_array',
+          detail:        `Iterator step "${stepKey}" items_key "${s.items_key}" — base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
+        });
+      }
+    }
+
+    // Check gate has at least one cancel option
+    if (s.type === 'human_gate') {
+      const hasCancel = (s.options ?? []).some(o => o.action === 'cancel');
+      if (!hasCancel) {
+        issues.push({
+          check:         'missing_cancel_option',
+          step:          stepKey,
+          failure_class: 'missing_cancel_option',
+          detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
+        });
+      }
+
+      // review_object and confirm gates must not have output_key
+      if ((s.gate_type === 'review_object' || s.gate_type === 'confirm') && s.output_key) {
+        issues.push({
+          check:         'gate_output_key_invalid',
+          step:          stepKey,
+          failure_class: 'gate_output_key_invalid',
+          detail:        `Gate type "${s.gate_type}" on step "${stepKey}" has output_key but this gate type does not write to local_state. Only text_input gates write output_key.`,
+        });
+      }
+    }
+
+    // Check template variables in message_template and input values
+    const templatesToCheck = [];
+    if (s.message_template) templatesToCheck.push(s.message_template);
+    if (s.context_key)      templatesToCheck.push(`{{${s.context_key}}}`);
+    if (typeof s.input === 'object' && s.input !== null) {
+      Object.values(s.input).forEach(v => {
+        if (typeof v === 'string') templatesToCheck.push(v);
+      });
+    }
+    if (s.input_key) templatesToCheck.push(`{{${s.input_key}}}`);
+    if (s.items_key) templatesToCheck.push(`{{${s.items_key}}}`);
+
+    for (const template of templatesToCheck) {
+      const refs = extractTemplateRefs(template);
+      for (const ref of refs) {
+        const baseKey = ref.split('.')[0];
+        if (baseKey !== 'item' && baseKey !== 'input' && !outputKeysSoFar.has(baseKey)) {
+          issues.push({
+            check:         'unresolved_template_variable',
+            step:          stepKey,
+            failure_class: 'unresolved_template_variable',
+            detail:        `Step "${stepKey}" references "{{${ref}}}" but base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
+            suggestion:    findClosestKey([...outputKeysSoFar], baseKey),
+          });
+        }
+      }
+    }
+
+    // Register this step's output_key for downstream steps
+    if (s.output_key) {
+      const baseOut = s.output_key.split('.')[0];
+      outputKeysSoFar.add(baseOut);
+    }
+  }
+
+  return issues;
+}
+
+// ---------------------------------------------------------------------------
+// Level 2 — Path execution
+// ---------------------------------------------------------------------------
+
+function executeSimPath(steps, path, mockOutputs, runInput) {
+  const localState     = { input: runInput };
+  const transitions    = [];
+  let stepVisits       = {};  // step_key → visit count, for loop detection
+  let decisionIndex    = 0;
+
+  // Build a map from step key to step definition for fast lookup
+  const stepMap = Object.fromEntries(steps.map(s => [String(s.step), s]));
+
+  // Start at the first step
+  let currentKey = String(steps[0].step);
+  let stepsExecuted = 0;
+  const MAX_STEPS = steps.length * 10; // safety valve against infinite loops
+
+  while (stepsExecuted < MAX_STEPS) {
+    stepsExecuted++;
+
+    if (currentKey === 'end' || currentKey === 'cancel' || currentKey === 'human_feedback') {
+      break;
+    }
+
+    const currentStep = stepMap[currentKey];
+    if (!currentStep) {
+      return {
+        path_name:           path.path_name,
+        passed:              false,
+        steps_executed:      stepsExecuted,
+        terminal:            currentKey,
+        expected_terminal:   path.expected_terminal,
+        failure_step:        currentKey,
+        failure_reason:      `Routing reached step key "${currentKey}" which does not exist in the step array`,
+        local_state_transitions: transitions,
+      };
+    }
+
+    stepVisits[currentKey] = (stepVisits[currentKey] ?? 0) + 1;
+
+    const keysBefore = Object.keys(localState);
+    let nextKey;
+    let transition = {
+      step:                    currentKey,
+      type:                    currentStep.type,
+      keys_before:             [...keysBefore],
+      keys_added:              [],
+      template_vars_resolved:  {},
+      template_vars_missing:   [],
+      status:                  'ok',
+    };
+
+    // Find the matching decision entry for this step (if any)
+    const decision = (path.decisions ?? []).find(d => String(d.step) === currentKey);
+
+    if (currentStep.type === 'end') {
+      transitions.push({ ...transition });
+      currentKey = 'end';
+      break;
+    }
+
+    if (currentStep.type === 'human_gate') {
+      if (!decision || decision.outcome !== 'gate') {
+        // No decision for this gate — path is underspecified
+        transition.status = 'failed';
+        transitions.push(transition);
+        return {
+          path_name:           path.path_name,
+          passed:              false,
+          steps_executed:      stepsExecuted,
+          terminal:            currentKey,
+          expected_terminal:   path.expected_terminal,
+          failure_step:        currentKey,
+          failure_reason:      `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" — add { step: "${currentKey}", outcome: "gate", user_response: "...", on_select: "..." }`,
+          local_state_transitions: transitions,
+        };
+      }
+
+      // For text_input gates, write the value to local_state
+      if (currentStep.gate_type === 'text_input' && decision.output_key) {
+        localState[decision.output_key] = decision.value ?? '';
+        transition.keys_added.push(decision.output_key);
+      }
+
+      // Resolve next step from on_select
+      const onSelect = decision.on_select;
+      nextKey = resolveSimNextKey(steps, currentKey, onSelect);
+      if (onSelect === 'cancel')           currentKey = 'cancel';
+      else if (onSelect === 'end')         currentKey = 'end';
+      else                                 currentKey = nextKey;
+
+      transitions.push(transition);
+      continue;
+    }
+
+    if (currentStep.type === 'notify') {
+      // notify is a side-effect — advance to next, no output_key
+      nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_success ?? 'next');
+      transitions.push(transition);
+      currentKey = nextKey;
+      continue;
+    }
+
+    if (currentStep.type === 'iterator') {
+      // Treat iterator as a single step — output_key is written with an empty array
+      // (mocks for iterator items are not required; the data-flow check is approximate)
+      if (currentStep.output_key) {
+        const baseOut = currentStep.output_key.split('.')[0];
+        localState[baseOut] = [];
+        transition.keys_added.push(baseOut);
+      }
+      nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_complete ?? 'next');
+      transitions.push(transition);
+      currentKey = nextKey;
+      continue;
+    }
+
+    // For steps with a decision entry that signals failure
+    if (decision?.outcome === 'failure') {
+      const onFailure = currentStep.on_failure ?? 'next';
+      nextKey = resolveSimNextKey(steps, currentKey, onFailure);
+      if (onFailure === 'human_feedback') currentKey = 'human_feedback';
+      else if (onFailure === 'cancel')    currentKey = 'cancel';
+      else if (onFailure === 'end')       currentKey = 'end';
+      else                                currentKey = nextKey;
+      transition.status = 'failed';
+      transitions.push(transition);
+      continue;
+    }
+
+    // Steps that produce output — inject mock output
+    const mockKey = String(currentKey);
+    const mockOutput = mockOutputs?.[mockKey] ?? null;
+
+    // Validate that required template vars in this step's input resolve
+    const templatesToCheck = [];
+    if (typeof currentStep.input === 'object' && currentStep.input !== null) {
+      Object.values(currentStep.input).forEach(v => {
+        if (typeof v === 'string') templatesToCheck.push(v);
+      });
+    }
+
+    for (const tmpl of templatesToCheck) {
+      const refs = extractTemplateRefs(tmpl);
+      for (const ref of refs) {
+        const baseKey = ref.split('.')[0];
+        if (baseKey !== 'item' && baseKey !== 'input' && !(baseKey in localState)) {
+          transition.template_vars_missing.push(ref);
+        } else if (baseKey in localState || baseKey === 'input') {
+          transition.template_vars_resolved[ref] = String(localState[baseKey] ?? '').slice(0, 100);
+        }
+      }
+    }
+
+    if (transition.template_vars_missing.length > 0) {
+      transition.status = 'failed';
+      transitions.push(transition);
+      return {
+        path_name:           path.path_name,
+        passed:              false,
+        steps_executed:      stepsExecuted,
+        terminal:            currentKey,
+        expected_terminal:   path.expected_terminal,
+        failure_step:        currentKey,
+        failure_reason:      `Template variable(s) missing at step "${currentKey}": ${transition.template_vars_missing.join(', ')}. Available keys: ${Object.keys(localState).join(', ')}`,
+        local_state_transitions: transitions,
+      };
+    }
+
+    // Write mock output to local_state
+    if (currentStep.output_key && mockOutput !== null) {
+      const baseOut = currentStep.output_key.split('.')[0];
+      if (!localState[baseOut]) {
+        localState[baseOut] = mockOutput;
+        transition.keys_added.push(baseOut);
+      }
+    }
+
+    nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_success ?? 'next');
+    transitions.push(transition);
+    currentKey = nextKey;
+  }
+
+  // Determine actual terminal
+  let terminal;
+  if (currentKey === 'end' || stepMap[currentKey]?.type === 'end') terminal = 'end';
+  else if (currentKey === 'cancel') terminal = 'cancelled';
+  else if (currentKey === 'human_feedback') terminal = 'human_feedback';
+  else terminal = currentKey;
+
+  const passed = terminal === path.expected_terminal;
+
+  return {
+    path_name:               path.path_name,
+    passed,
+    steps_executed:          stepsExecuted,
+    terminal,
+    expected_terminal:       path.expected_terminal,
+    failure_step:            passed ? undefined : currentKey,
+    failure_reason:          passed ? undefined : `Path ended at "${terminal}" but expected "${path.expected_terminal}"`,
+    local_state_transitions: transitions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Level 3 — Skip-path analysis (advisory)
+// ---------------------------------------------------------------------------
+
+function runLevel3SkipPathAnalysis(steps, mockOutputs, runInput) {
+  const warnings = [];
+  const stepMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
+
+  for (const s of steps) {
+    if (s.on_failure !== 'human_feedback') continue;
+
+    // Simulate what happens if this step produces no output (user chose Skip)
+    // then check if any downstream step reads its output_key
+    if (!s.output_key) continue;
+
+    const skippedKey = s.output_key.split('.')[0];
+
+    for (const downstream of steps) {
+      if (String(downstream.step) <= String(s.step)) continue; // only forward references
+
+      const templatesToCheck = [];
+      if (typeof downstream.input === 'object' && downstream.input !== null) {
+        Object.values(downstream.input).forEach(v => {
+          if (typeof v === 'string') templatesToCheck.push(v);
+        });
+      }
+      if (downstream.items_key) templatesToCheck.push(`{{${downstream.items_key}}}`);
+      if (downstream.context_key) templatesToCheck.push(`{{${downstream.context_key}}}`);
+
+      for (const tmpl of templatesToCheck) {
+        const refs = extractTemplateRefs(tmpl);
+        if (refs.some(r => r.split('.')[0] === skippedKey)) {
+          warnings.push({
+            step:            String(s.step),
+            downstream_step: String(downstream.step),
+            missing_key:     s.output_key,
+            detail:          `Step "${downstream.step}" reads "{{${s.output_key}}}" but step "${s.step}" is skippable via human_feedback. If step "${s.step}" is skipped, "${skippedKey}" will be null.`,
+          });
+          break; // one warning per downstream step is enough
+        }
+      }
+    }
+  }
+
+  return warnings;
+}
+
+// ---------------------------------------------------------------------------
+// Simulate helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract all {{ref}} template variable names from a string.
+ * Returns base paths only — "proposed_scaffold.domain" for "{{proposed_scaffold.domain}}".
+ */
+function extractTemplateRefs(template) {
+  if (typeof template !== 'string') return [];
+  const refs = [];
+  const re   = /\{\{([^}]+)\}\}/g;
+  let match;
+  while ((match = re.exec(template)) !== null) {
+    refs.push(match[1].trim());
+  }
+  return refs;
+}
+
+/**
+ * Resolve the next step key for simulation (mirrors resolveNextStep in run-workflow.mjs
+ * but operates purely on the steps array without DB access).
+ */
+function resolveSimNextKey(steps, currentKey, nextAction) {
+  if (!nextAction || nextAction === 'next') {
+    const idx = steps.findIndex(s => String(s.step) === String(currentKey));
+    if (idx === -1 || idx === steps.length - 1) return 'end';
+    return String(steps[idx + 1].step);
+  }
+  if (nextAction === 'end')                  return 'end';
+  if (nextAction === 'cancel')               return 'cancel';
+  if (nextAction === 'human_feedback')       return 'human_feedback';
+  if (nextAction.startsWith('step:'))        return nextAction.slice(5);
+  return 'end';
+}
+
+/**
+ * Find the closest key to the search term by simple prefix/substring match.
+ * Used to provide helpful suggestions in Level 1 errors.
+ */
+function findClosestKey(keys, search) {
+  const exact = keys.find(k => k === search);
+  if (exact) return exact;
+  const prefix = keys.find(k => k.startsWith(search) || search.startsWith(k));
+  if (prefix) return `Did you mean "{{${prefix}}}"?`;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 
 async function executeNotify({ step, localState, traceId }) {
