@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — create_workflow full implementation (Phase 2 item 4b) next  
-Last updated: 2026-03-26 (session 10)
+Status: Active development — create_workflow complete (Phase 2 item 4b); Phase 2 item 4c (`/mind edit aliases`) and Phase 3 features next  
+Last updated: 2026-03-28 (session 11)
 
 ---
 
@@ -1416,10 +1416,10 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Phase 3       ║
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
-║ simulate       ║ Dry-run a workflow step array against named         ║ ⬜ Phase 2       ║
-║               ║ execution paths using injected mock outputs.         ║ (prerequisite    ║
-║               ║ Three validation levels: static analysis, path        ║ for              ║
-║               ║ execution, skip-path analysis. See Section 6.4.6.   ║ create_workflow) ║
+║ simulate       ║ Dry-run a workflow step array against named         ║ ✅ live          ║
+║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
+║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
+║               ║ execution, skip-path analysis. See Section 6.4.6.   ║ complete        ║
 ╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
 ```
 
@@ -2213,6 +2213,9 @@ and called directly (intra-proc import) from `step-executor.mjs`.
 
 #### Validation passes
 
+Three passes run in strict order. Later passes only execute if all earlier passes
+have returned zero errors.
+
 **Pass 1 — Ajv JSON Schema**
 The `output_schema` field on the `PGC_Prompt` row is an Ajv-compatible JSON Schema.
 The LLM output is validated against it. If it fails, the specific Ajv errors are
@@ -2221,36 +2224,62 @@ collected and passed to the correction attempt.
 Every prompt must have an `output_schema`. A prompt without one skips Ajv
 validation entirely — this is a known gap in any prompt row that lacks the field.
 
-**Pass 2 — Semantic rules**
-Runs only if Ajv passed. Rules defined in `runSemanticRules()`:
+**Pass 2a — Schema semantic rules** (`runSemanticRules()`)
+Runs only if Pass 1 passed, and only when the output contains a `tables` array
+(i.e. `create_domain` and `design_table` prompts). Rules:
 
 - Rule 1: Every table must have the `set_updated_at()` BEFORE UPDATE trigger
 - Rule 2: Every `upsert_key` column must have a matching UNIQUE constraint
 - Rule 3: Every FK parent table must exist in the same scaffold
 
-Semantic rules catch cross-reference errors that JSON Schema cannot express —
-e.g. a FK that points to a table not in the output, or a constraint on a column
-that doesn't exist. This is the right brain's first line of defence against
-structurally valid but semantically broken LLM output.
+These rules catch cross-reference errors that JSON Schema cannot express —
+a FK pointing to a table not in the output, or a constraint on a nonexistent column.
+
+**Pass 2b — Routing value rules** (`runRoutingValueRules()`)
+Runs only if Pass 1 passed, and only when the output contains a `steps` array
+(i.e. workflow generation prompts: `generate_workflow_steps` and any prompt whose
+output shape includes a steps array). Does not run on `create_domain` output.
+
+Rules enforced on every step in the array:
+
+- Every `on_success`, `on_failure`, and `on_complete` value must be a known routing
+  token: `next`, `end`, `cancel`, `human_feedback`, or `step:<key>`
+- Every `step:N` target must exist as a step key in the same array — dead targets
+  are caught here before the workflow is ever registered or simulated
+- Every `human_gate` must have at least one option with `action: "cancel"`
+
+Pass 2a and Pass 2b are mutually exclusive by output shape — an output with `tables`
+never has `steps`, and vice versa. Both use the same error format
+`{ type: "semantic", rule, message, step? }` so the correction loop handles them
+identically.
 
 #### Correction loop
 
 ```
 Attempt 1:
-  Call LLM → parse JSON → run validation
+  Call LLM → parse JSON → run validation (Pass 1 + Pass 2a or 2b)
   Valid → store at output_key, continue
   Invalid → collect errors, attempt 2
 
 Attempt 2 (callLlmWithCorrection):
-  Call LLM with original prompt + errors injected
+  Call LLM with original prompt + all collected errors injected
   Valid → store corrected output at output_key, continue
-  Invalid → log errors to PGC_Prompt.error_log
-             → step fails → run fails → WORKFLOW_ERROR to Slack
+  Invalid → log errors to PGC_Prompt.error_log → step throws
+
+Step throws → run-workflow.mjs catch block:
+  on_failure === "human_feedback" → push recovery gate (Retry / Skip / Cancel)
+  on_failure !== "human_feedback" → mark run failed → WORKFLOW_ERROR to Slack
 ```
 
 The correction is a second LLM call with the same prompt plus the specific
 validation errors. The LLM sees exactly what was wrong and why. This is not a
 retry — it is a targeted correction.
+
+When both attempts fail, the step throws. Whether the run is marked failed or
+a recovery gate is shown to the user depends entirely on the step's `on_failure`
+field — not on anything inside `review-output.mjs`. The validation module is
+responsible only for determining validity and collecting errors; routing on
+failure is the Step Processor's responsibility.
 
 ---
 
@@ -2591,14 +2620,14 @@ deployed. The correction loop in `review-output.mjs` runs on all four independen
 
 #### Prerequisites before implementation
 
-The following must exist before `create_workflow` can be built:
+All prerequisites are now complete as of `v3.2-create-workflow-complete`:
 
-1. `simulate` step type implemented in `step-executor.mjs` (Section 6.4.6)
-2. `on_failure: "human_feedback"` implemented in `run-workflow.mjs` (tech debt register)
-3. `PGC_StepType` rows seeded with live step types and routing value contracts (tech debt register)
-4. Semantic validation rule in `review-output.mjs`: unknown routing values fail with a specific error (tech debt register)
-5. `PGC_SystemContext` rows seeded with `inject_for: ["create_workflow"]` context
-6. Four new prompts created in `seed_PGC_Prompt.json` (see prompt dependencies above)
+1. ✅ `simulate` step type implemented in `step-executor.mjs` (Section 6.4.6)
+2. ✅ `on_failure: "human_feedback"` implemented in `run-workflow.mjs`
+3. ✅ `PGC_StepType` rows seeded with live step types and routing value contracts
+4. ✅ Routing value semantic validation rule in `review-output.mjs` (Pass 2b)
+5. ✅ `PGC_SystemContext` rows seeded with `inject_for: ["create_workflow"]` context
+6. ✅ Four new prompts in `seed_PGC_Prompt.json` and live in DB
 
 ---
 
@@ -2705,6 +2734,8 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `PGC_WorkflowRun.session_id` FK column | Medium | Phase 3 — add `session_id integer FK → PGC_Session.id nullable` to `PGC_WorkflowRun`. Required by session layer. Migration script needed — column did not exist at bootstrap |
 | Alias management workflow `/mind edit aliases for <domain>` | Low | Phase 3. Allows users to view and update `PGC_DomainHelp.aliases` from Slack without touching the DB. Until this exists, aliases can be corrected directly via SERV table endpoint. Rule-based singular/plural derivation in Phase 2 item 4a covers the common case |
 | Session context window size configurable | Low | `chat_defaults` key in `PGC_SystemContext` should define `session_context_limit` (default 20). Currently hardcoded in classify-intent.mjs spec — externalise when session layer is built |
+| Live prompt export back to seed files | Medium | When the right-brain improves a prompt (via `PGC_Prompt.error_log` or manual correction), the improved version lives only in the DB. A fresh brain instance bootstrapped from `seed_PGC_Prompt.json` would revert to the original seed. Fix: `dev_scripts/export-prompts.mjs` reads live `PGC_Prompt` rows and overwrites `seed_PGC_Prompt.json`. Run before creating a new brain instance. Required before the right-brain improvement loop (Phase 3 item 8) is useful at scale |
+| `PGC_SystemContext.step_type_contracts` can become stale | Low | The `step_type_contracts` content in `PGC_SystemContext` is derived from `PGC_StepType` rows at the time `seed_PGC_SystemContext.mjs` runs. When a new step type goes live, re-run `seed_PGC_StepType.mjs` then `seed_PGC_SystemContext.mjs` to update the injected context. This is intentional — the script is the locus of control, not the prompt text |
 | Concurrent bootstrap race — `tuple concurrently updated` | ~~High~~ | ✅ Resolved — `seedPGCSchema` changed from `ON CONFLICT DO UPDATE` to `ON CONFLICT DO NOTHING`. All seed functions now use `DO NOTHING` or `WHERE NOT EXISTS`. Concurrent cold-start bootstraps are fully idempotent |
 | `/mind` ACK non-descriptive | ~~Low~~ | ✅ Resolved — ACK now echoes user input truncated to 100 chars. Slack angle-bracket tokens stripped |
 | `matchDomainAlias` did not match domain name itself | ~~Medium~~ | ✅ Resolved — domain name checked as implicit alias before scanning aliases array |
@@ -2715,9 +2746,9 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `generate_crud_workflows` v2 `input_variables` stale | Low | Seed row still lists `domain_help` as a required input variable, and prompt text has a `{{domain_help}}` reference in the rules section. `create_domain` step 6 no longer passes `domain_help`. Unresolved template renders as empty string — not breaking but should be cleaned up |
 | `output_key` on `review_object` gate should warn if set | Low | See `output_key on non-text_input gates` item above. The specific case in `create_domain` v4 has been fixed (step 7 `output_key` removed, step 8 reads `generated.domainHelp` directly), but the executor itself has no guard |
 | CHECK constraint `output_schema` validation | Low | `create_domain` `output_schema` does not require `expression` on check constraints and does not reject `columns` arrays on them. LLM produced `columns: ["quantity"]` instead of `expression: "quantity > 0"` — passed Ajv but failed DDL. Tighten schema to require `expression` and disallow `columns` on check type |
-| `on_failure: "human_feedback"` not implemented | High | `human_feedback` appears on every `on_failure` in every workflow definition (14 times in `create_domain`) but silently falls through to `"next"` in `resolveNextAction()` — the run fails and posts `WORKFLOW_ERROR` before routing logic is consulted. Correct fix: in the failure catch block of `executeTop` and `executeIteratorItem`, when `on_failure === "human_feedback"`, push a recovery `human_gate` with three options (Retry, Skip, Cancel) instead of marking the run `failed`. Must be implemented before `create_workflow` is deployed — user-generated workflows depend on recoverable step failures |
-| `PGC_StepType` rows not seeded with routing value contracts | High | `PGC_StepType.on_success_options` and `on_failure_options` jsonb columns exist in the schema but are not seeded. Without seed data the columns are null for all step types, making the routing value contract invisible to the `create_workflow` prompt and to static analysis. Fix: seed one row per live step type with its valid `on_success_options` and `on_failure_options` arrays before `create_workflow` is implemented. The `generate_workflow_steps` prompt injects these from `PGC_StepType` rows — unseeded rows mean the LLM receives no routing constraints and produces unvalidatable routing values |
-| Unknown routing values silently become `"next"` | Medium | `resolveNextAction()` in `step-executor.mjs` has a final `return "next"` fallback that swallows any unrecognised `on_success` or `on_failure` value without error. An `on_failure: "retry"` or a typo like `on_success: "nextt"` silently advances to the next step. Correct fix: add a semantic validation rule to `runSemanticRules()` in `review-output.mjs` that checks every `on_success`, `on_failure`, and `on_select` value in the step array against the known routing token set (`"next"`, `"end"`, `"cancel"`, `"human_feedback"`, `"step:N"`) and fails validation with a specific error naming the step and the unknown value. Pairs with seeding `PGC_StepType.on_success_options` / `on_failure_options` — both items together close the routing contract gap |
+| ~~`on_failure: "human_feedback"` not implemented~~ | ~~High~~ | ✅ Resolved — `executeTop` and `executeIteratorItem` catch blocks in `run-workflow.mjs` now check `step.on_failure === "human_feedback"` before marking the run failed. When matched, `pushRecoveryGate()` pushes a `human_gate` frame with Retry / Skip / Cancel options using the existing gate machinery — no new step type, no schema change. `v3.2-create-workflow-complete` |
+| ~~`PGC_StepType` rows not seeded with routing value contracts~~ | ~~High~~ | ✅ Resolved — `dev_scripts/seed_PGC_StepType.mjs` seeds one row per live step type (12 total) with `on_success_options`, `on_failure_options`, `input_contract`, `output_contract`, `description`, and `status`. `ON CONFLICT (step_type) DO UPDATE` — safe to re-run when new step types go live. `dev_scripts/seed_PGC_SystemContext.mjs` reads live rows and writes `step_type_contracts` to `PGC_SystemContext` for prompt injection. `v3.2-create-workflow-complete` |
+| ~~Unknown routing values silently become `"next"`~~ | ~~Medium~~ | ✅ Resolved — `runRoutingValueRules()` added to `review-output.mjs` as Pass 2b. Runs when LLM output contains a `steps` array (workflow generation prompts only — does not run on `create_domain` output). Validates every `on_success`, `on_failure`, `on_complete`, and `on_select` value against the known routing token set (`next`, `end`, `cancel`, `human_feedback`, `step:<key>`). Also validates that every `step:N` target exists as a step key in the array, and that every `human_gate` has a cancel option. Returns errors in the same shape as `runSemanticRules()` — the correction loop handles them identically. `v3.2-create-workflow-complete` |
 
 ---
 
@@ -2797,6 +2828,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational end-to-end. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs. Three-tier pipeline verified: Pass 1a (exact), Pass 1b+1c (alias+CRUD with PGC_Schema fallback), Tier 2 (sonar via LLM_CHAT_URL, prompt from PGC_Prompt). Tier 3 routes to CREATE_DOMAIN / CREATE_WORKFLOW / WORKFLOW_NOTIFY. /mind and /m verified in Slack. openapi.yaml v3.3.5. seed_PGC_Prompt.json: classify_intent_tier2 row added. callback.mjs: runId suppressed when absent. Architecture session 7: WorkflowQueue two-category framing, PGC_Session + PGC_SessionEntry design, intent tuning surface, session architecture Section 6.13 |
 | `v3.2-crud-adhoc-complete` | Ad_hoc CRUD execution from /mind fully operational. serv_query/update/delete step types live in step-executor.mjs. deleteRows wrapper in serv-client.mjs. executeCrudStep() in classify-intent.mjs executes ad_hoc steps directly for all four verbs. Structured input enforcement: id=N for delete/update, field=value for insert/update. Ambiguity errors with table field listing. Domain name as implicit alias in matchDomainAlias. matchCrudVerb returns ambiguous with reason for insert/update/delete. /mind ACK echoes truncated user input. init-brain concurrent cold-start race fixed (DO NOTHING). Code review fixes: cancelled status check, dynamic imports eliminated, callLlm user-turn resolved generically. Architecture session 9 |
 | `v3.2-create-domain-with-crud` | First complete `create_domain` end-to-end: LLM schema design, 5 human gates, 4 PGD tables created, CRUD workflows + IntentMap registered, domain immediately usable from /mind. Guard 1 stuck-step detection proven. CHECK constraint expression guard in `buildCreateTableSQL`. `status=failed` check in `executeTop` stops SQS retry storm. `response_format` removed from Perplexity Agent API calls. Architecture sessions 9–10 |
+| `v3.2-create-workflow-complete` | `create_workflow` workflow fully implemented. `on_failure: "human_feedback"` live in `run-workflow.mjs` (`pushRecoveryGate()` in both catch blocks). `simulate` step type live in `step-executor.mjs` (Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis). Pass 2b routing value rules in `review-output.mjs`. `seed_PGC_StepType.mjs` + `seed_PGC_SystemContext.mjs` new dev scripts. Four new prompts in `seed_PGC_Prompt.json`. `create_workflow` v2 (12 steps) in `seed_PGC_Workflow.json`. `seedPGCPrompt` extended to write `output_schema` + `input_variables`. Architecture session 11 |
 
 ---
 
@@ -2851,10 +2883,15 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — init-brain.mjs: CHECK constraint expression guard, FK column undefined guard | ✅ |
 | | — llm-client.mjs: response_format removed (Perplexity Agent API does not support json_schema) | ✅ |
 | | — First complete create_domain end-to-end: 4 PGD tables + 4 CRUD workflows + 4 IntentMap rows | ✅ |
-| 4b | create_workflow workflow full implementation | ⬜ |
-| | — seed_PGC_Prompt.json: add create_workflow prompt | ⬜ |
-| | — seed_PGC_Workflow.json: update create_workflow from stub to 8-step definition (Section 6.9) | ⬜ |
-| | — run upsert-workflow.mjs create_workflow after deploy | ⬜ |
+| 4b | create_workflow workflow full implementation | ✅ complete — v3.2-create-workflow-complete |
+| | — `run-workflow.mjs`: `on_failure: "human_feedback"` — `pushRecoveryGate()` in both catch blocks | ✅ |
+| | — `step-executor.mjs`: `simulate` step type — Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis | ✅ |
+| | — `review-output.mjs`: Pass 2b `runRoutingValueRules()` — routing token validation on steps arrays | ✅ |
+| | — `dev_scripts/seed_PGC_StepType.mjs`: 12 live step types seeded with routing value contracts | ✅ |
+| | — `dev_scripts/seed_PGC_SystemContext.mjs`: `step_type_contracts`, `routing_value_rules`, `create_domain_example` rows seeded | ✅ |
+| | — `seed_PGC_Prompt.json`: `classify_workflow_intent` v1, `generate_workflow_steps` v1, `generate_workflow_mocks` v1, `generate_workflow_paths` v1 | ✅ |
+| | — `seed_PGC_Workflow.json`: `create_workflow` v2 — full 12-step definition replacing stub | ✅ |
+| | — `init-brain.mjs`: `seedPGCPrompt` extended to write `output_schema` and `input_variables` columns | ✅ |
 | 4c | `/mind edit aliases for <domain>` — alias management workflow | ⬜ |
 | | — Allows users to view and update PGC_DomainHelp.aliases from Slack | ⬜ |
 | | — Until live: aliases updated directly via SERV table endpoint | ⬜ |
@@ -2878,6 +2915,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `serv_query` | ✅ live | Resolves template vars in filters/orderBy/limit, writes rows array to output_key |
 | `serv_update` | ✅ live | Generic filter + updates shape, full template resolution, enforces non-empty filters |
 | `serv_delete` | ✅ live | Generic filter shape, full template resolution, enforces non-empty filters |
+| `simulate` | ✅ live | Level 1 static analysis + Level 2 path execution + Level 3 skip-path analysis (advisory). Used by `create_workflow` steps 4 and 7 |
 | `sub_workflow` | ⬜ Phase 3 | |
 | `condition` | ⬜ Phase 3 | |
 | `capability_call` | ⬜ Phase 3 | Not yet defined — see Section 15.1 |
