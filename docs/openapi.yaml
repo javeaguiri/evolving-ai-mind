@@ -370,6 +370,290 @@ components:
           type: string
           format: uuid
 
+    SimulationDecision:
+      type: object
+      description: >
+        A single decision at a branch point in a simulation path.
+        One entry per gate step, failure point, or iterator outcome.
+      required: [step, outcome]
+      properties:
+        step:
+          type: string
+          description: Step key this decision applies to (e.g. "3", "3d")
+          example: "3"
+        outcome:
+          type: string
+          enum: [success, failure, gate]
+          description: >
+            success — step completes normally, mock_output injected into local_state.
+            failure — step throws, on_failure routing is taken.
+            gate    — human_gate step, user_response and on_select are injected.
+        user_response:
+          type: string
+          description: Required when outcome is gate. Matches one of the gate option actions.
+          example: confirm
+        on_select:
+          type: string
+          description: >
+            Required when outcome is gate. The on_select value from the chosen option.
+            Must be a valid routing token (next, cancel, end, step:N).
+          example: "step:3d"
+        output_key:
+          type: string
+          description: >
+            For text_input gates only. The output_key the gate writes to.
+          example: new_table_description
+        value:
+          description: >
+            For text_input gates only. The value written to local_state[output_key].
+          example: "A nutritional info table linking to PGD_Recipes"
+        error:
+          type: string
+          description: For outcome=failure only. The simulated error message.
+          example: "LLM returned invalid JSON"
+
+    SimulationPath:
+      type: object
+      description: >
+        A named execution path through a workflow. Describes every decision made
+        at branch points so the simulator can advance local_state deterministically.
+      required: [path_name, decisions, expected_terminal]
+      properties:
+        path_name:
+          type: string
+          description: Short identifier used in failure reports.
+          example: happy_path
+        decisions:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/SimulationDecision'
+          description: >
+            Ordered list of decisions. One entry per branch point encountered on
+            this path (gates, failures, iterator outcomes). Steps with no branching
+            (serv_insert, notify, end) do not require a decision entry.
+        expected_terminal:
+          type: string
+          description: >
+            The step key or terminal state the path should reach.
+            Use "end" for normal completion, "cancelled" for cancel paths,
+            "human_feedback" for failure paths where on_failure routes to recovery.
+          example: end
+
+    SimulationStepTransition:
+      type: object
+      description: local_state snapshot before and after a single simulated step
+      properties:
+        step:
+          type: string
+          example: "6"
+        type:
+          type: string
+          example: llm_call
+        keys_before:
+          type: array
+          items:
+            type: string
+          description: Top-level keys present in local_state before this step
+          example: ["input", "proposed_scaffold", "created_tables"]
+        keys_added:
+          type: array
+          items:
+            type: string
+          description: Top-level keys written to local_state by this step
+          example: ["generated"]
+        template_vars_resolved:
+          type: object
+          description: Template variable name → resolved value (truncated to 100 chars)
+          additionalProperties:
+            type: string
+        template_vars_missing:
+          type: array
+          items:
+            type: string
+          description: Template variables that could not be resolved at this step
+          example: ["confirmed_domain_help"]
+        closest_match:
+          type: string
+          description: >
+            When template_vars_missing is non-empty, the nearest key in local_state
+            by edit distance. Advisory — shown to user in the review gate.
+          example: "generated.domainHelp"
+        status:
+          type: string
+          enum: [ok, failed, skipped]
+
+    SimulationPathResult:
+      type: object
+      properties:
+        path_name:
+          type: string
+          example: happy_path
+        passed:
+          type: boolean
+        steps_executed:
+          type: integer
+          example: 11
+        terminal:
+          type: string
+          description: The step key or terminal state the path actually reached
+          example: end
+        expected_terminal:
+          type: string
+          example: end
+        failure_step:
+          type: string
+          description: Step key where the path failed. Present only when passed=false.
+          example: "8"
+        failure_reason:
+          type: string
+          description: Human-readable failure description. Present only when passed=false.
+          example: "Template variable 'confirmed_domain_help' not found in local_state"
+        local_state_transitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimulationStepTransition'
+
+    StaticAnalysisIssue:
+      type: object
+      description: A single Level 1 static analysis failure
+      required: [check, step, failure_class, detail]
+      properties:
+        check:
+          type: string
+          description: Which static analysis rule fired
+          example: unresolved_template_variable
+        step:
+          type: string
+          description: Step key where the issue was detected
+          example: "8"
+        failure_class:
+          type: string
+          enum:
+            - unknown_routing_value
+            - dead_routing_target
+            - unresolved_template_variable
+            - iterator_source_not_array
+            - unknown_prompt_reference
+            - gate_output_key_invalid
+            - missing_cancel_option
+        detail:
+          type: string
+          description: Specific description of the issue including key names involved
+          example: "Template variable 'confirmed_domain_help' not found in local_state at step 8. Available keys: input, proposed_scaffold, generated"
+        suggestion:
+          type: string
+          description: >
+            Advisory correction hint. For unresolved_template_variable, the nearest
+            key in local_state by edit distance at the point of failure.
+          example: "Did you mean '{{generated.domainHelp}}'?"
+
+    SkipPathWarning:
+      type: object
+      description: >
+        Advisory warning from Level 3 skip-path analysis.
+        Identifies data flow risks if a user chooses Skip at a human_feedback recovery gate.
+        Does not fail the simulation — shown to user in the review gate.
+      properties:
+        step:
+          type: string
+          description: The step with on_failure=human_feedback whose skip path has a risk
+          example: "6"
+        downstream_step:
+          type: string
+          description: The step that reads the null output_key if step is skipped
+          example: "8"
+        missing_key:
+          type: string
+          description: The output_key that would be null if step is skipped
+          example: "generated"
+        detail:
+          type: string
+          example: "Step 8 reads {{generated.domainHelp}} but step 6 is skippable. If step 6 is skipped, 'generated' will be null."
+
+    SimulateWorkflowRequest:
+      type: object
+      description: >
+        Request body for POST /api/v1/proc/simulate-workflow.
+        Accepts the workflow step array, mock outputs, and simulation paths directly
+        without requiring a WorkflowRun. Used for developer testing and by the
+        simulate step type during create_workflow execution.
+      required: [steps, simulationPaths]
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          description: The workflow step array to simulate
+          items:
+            type: object
+        mockOutputs:
+          type: object
+          description: >
+            Mock outputs keyed by step number (string). Required for any path that
+            reaches an llm_call or serv_query step with outcome=success.
+            Steps that are pure side-effects (serv_insert, notify, end) do not need mocks.
+          additionalProperties: true
+          example:
+            "1": { domain: "recipes", tables: [] }
+            "6": { domainHelp: { domain: "recipes", aliases: ["recipe"] }, workflows: [] }
+        simulationPaths:
+          type: array
+          minItems: 1
+          description: >
+            Named execution paths to simulate. Must include at minimum:
+            one happy path, one cancel path per gate step, and one failure path
+            per llm_call or serv_* step. The output_schema for generate_workflow_paths
+            enforces this minimum coverage.
+          items:
+            $ref: '#/components/schemas/SimulationPath'
+        runInput:
+          type: object
+          description: >
+            Simulated run.input — the original user input available as {{input.*}}
+            in templates during simulation. Defaults to {} if omitted.
+          example:
+            userInput: "weekly portfolio summary"
+        traceId:
+          type: string
+          format: uuid
+
+    SimulateWorkflowResponse:
+      type: object
+      properties:
+        passed:
+          type: boolean
+          description: True only if all paths passed all three validation levels
+        pathsRun:
+          type: integer
+          example: 3
+        pathsPassed:
+          type: integer
+          example: 3
+        pathsFailed:
+          type: integer
+          example: 0
+        staticAnalysis:
+          type: object
+          properties:
+            passed:
+              type: boolean
+            issues:
+              type: array
+              items:
+                $ref: '#/components/schemas/StaticAnalysisIssue'
+        pathResults:
+          type: array
+          items:
+            $ref: '#/components/schemas/SimulationPathResult'
+        skipPathWarnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/SkipPathWarning'
+          description: Advisory warnings from Level 3 skip-path analysis. Non-empty does not fail the simulation.
+        traceId:
+          type: string
+          format: uuid
+
     ReviewOutputResponse:
       type: object
       properties:
@@ -2423,6 +2707,192 @@ paths:
                     cancelled: []
         '500':
           description: SERV getRows, updateRows, or SQS enqueue failed
+
+  /api/v1/proc/simulate-workflow:
+    post:
+      summary: Workflow simulation — static analysis and path execution validation
+      description: >
+        Validates a workflow step array before it is registered in PGC_Workflow.
+        Runs three validation levels in order, stopping early if a prior level fails.
+
+        **Level 1 — Static analysis (no mocks required)**
+
+        Structural checks on the step array itself:
+          - All on_success, on_failure, on_select values are valid routing tokens
+          - All step:N routing targets exist in the step array
+          - All {{template}} references resolve to an output_key written by a prior step
+            on that execution path
+          - All items_key values in iterator steps resolve to arrays written prior
+          - All input.prompt values in llm_call steps name a known intent_category
+          - No output_key on review_object or confirm gate types (those do not write output)
+          - Every human_gate has at least one option with action=cancel
+
+        Level 1 failures are returned immediately — no path execution occurs.
+
+        **Level 2 — Path execution (requires mockOutputs and simulationPaths)**
+
+        Executes each named path in simulationPaths independently. At each step,
+        injects the mock output or gate decision instead of calling the real service.
+        Records the local_state transition log. Fails the path if any template
+        variable is unresolvable or if the actual terminal step does not match
+        expected_terminal.
+
+        **Level 3 — Skip-path analysis (advisory, runs after Level 2 passes)**
+
+        For every step with on_failure=human_feedback, runs a micro-path where
+        the user chooses Skip at the recovery gate. Flags any downstream step that
+        reads the null output_key as a latent data flow risk. Advisory only —
+        does not fail the simulation. Results appear in skipPathWarnings.
+
+        This endpoint is called:
+          - Directly by developers testing a workflow definition before registration
+          - By the simulate step type in step-executor.mjs during create_workflow execution
+            (in that context, the request body is assembled from local_state keys)
+
+        The endpoint does not create or modify any PGC_WorkflowRun row. It is
+        stateless — no side effects on success or failure.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateWorkflowRequest'
+            examples:
+              static_analysis_only:
+                summary: Level 1 only — validate step array structure without mocks
+                value:
+                  steps:
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
+                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "human_feedback" }
+                  simulationPaths:
+                    - path_name: happy_path
+                      decisions:
+                        - { step: "1", outcome: success }
+                      expected_terminal: end
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+              full_simulation:
+                summary: Full simulation — all three levels
+                value:
+                  steps:
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
+                    - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_failure: "cancel" }
+                    - { step: "3", type: "end" }
+                  mockOutputs:
+                    "1": { domain: "recipes", tables: [] }
+                  simulationPaths:
+                    - path_name: happy_path
+                      decisions:
+                        - { step: "1", outcome: success }
+                        - { step: "2", outcome: gate, user_response: confirm, on_select: "next" }
+                      expected_terminal: end
+                    - path_name: user_cancels
+                      decisions:
+                        - { step: "1", outcome: success }
+                        - { step: "2", outcome: gate, user_response: cancel, on_select: cancel }
+                      expected_terminal: cancelled
+                  runInput:
+                    userInput: "recipe collection with ingredients"
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+      responses:
+        '200':
+          description: >
+            Simulation complete. Check passed field — false means one or more
+            validation levels failed. A 200 response does not mean the workflow is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulateWorkflowResponse'
+              examples:
+                all_passed:
+                  summary: All paths passed all validation levels
+                  value:
+                    passed: true
+                    pathsRun: 3
+                    pathsPassed: 3
+                    pathsFailed: 0
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                static_analysis_failed:
+                  summary: Level 1 failed — unresolved template variable detected
+                  value:
+                    passed: false
+                    pathsRun: 0
+                    pathsPassed: 0
+                    pathsFailed: 0
+                    staticAnalysis:
+                      passed: false
+                      issues:
+                        - check: unresolved_template_variable
+                          step: "8"
+                          failure_class: unresolved_template_variable
+                          detail: "Template variable 'confirmed_domain_help' not found in local_state at step 8. Available keys: input, proposed_scaffold, generated"
+                          suggestion: "Did you mean '{{generated.domainHelp}}'?"
+                    pathResults: []
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                path_execution_failed:
+                  summary: Level 2 failed — path reached unexpected terminal
+                  value:
+                    passed: false
+                    pathsRun: 2
+                    pathsPassed: 1
+                    pathsFailed: 1
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                      - path_name: llm_step_fails
+                        passed: false
+                        steps_executed: 1
+                        terminal: failed
+                        expected_terminal: human_feedback
+                        failure_step: "1"
+                        failure_reason: "on_failure routing value 'human_feedback' is not implemented. Run terminated with status=failed."
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                skip_path_warnings:
+                  summary: All paths passed but skip-path warnings present
+                  value:
+                    passed: true
+                    pathsRun: 3
+                    pathsPassed: 3
+                    pathsFailed: 0
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                    skipPathWarnings:
+                      - step: "6"
+                        downstream_step: "8"
+                        missing_key: generated
+                        detail: "Step 8 reads {{generated.domainHelp}} but step 6 has on_failure=human_feedback. If step 6 is skipped, 'generated' will be null at step 8."
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+        '400':
+          description: >
+            Missing required fields, empty steps array, or empty simulationPaths.
+            Also returned when Level 2 or 3 is requested but mockOutputs is absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Simulation infrastructure error — step executor threw unexpectedly
 
   /api/v1/proc/review-output:
     post:

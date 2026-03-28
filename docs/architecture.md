@@ -1050,6 +1050,7 @@ programmer's intent.
 | 6.4.3 | `local_state` — the data bag / memory |
 | 6.4.4 | Human-in-the-Loop — blocking I/O |
 | 6.4.5 | Parallel execution hooks — deferred, Phase 3 |
+| 6.4.6 | `simulate` step type — workflow path simulation and validation |
 | 6.5 | Right-Brain Output Validation — correction loop |
 | 6.6 | Workflow Safety — circuit breakers and emergency shutdown |
 | 6.7 | create_domain Workflow — full annotated example |
@@ -1414,6 +1415,11 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ condition    ║ Evaluate expression, branch on if_true / if_false    ║ ⬜ Phase 3       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Phase 3       ║
+╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
+║ simulate       ║ Dry-run a workflow step array against named         ║ ⬜ Phase 2       ║
+║               ║ execution paths using injected mock outputs.         ║ (prerequisite    ║
+║               ║ Three validation levels: static analysis, path        ║ for              ║
+║               ║ execution, skip-path analysis. See Section 6.4.6.   ║ create_workflow) ║
 ╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
 ```
 
@@ -1534,6 +1540,27 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
 ```json
 { "step": "12", "type": "end" }
 ```
+
+##### `simulate`
+```json
+{
+  "step":        "4",
+  "type":        "simulate",
+  "input": {
+    "steps_key":        "draft_workflow.steps",
+    "mock_outputs_key": "mock_outputs",
+    "paths_key":        "simulation_paths"
+  },
+  "output_key":  "simulation_result",
+  "on_success":  "next",
+  "on_failure":  "step:3"
+}
+```
+All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
+and `paths_key` are optional — if absent, the `simulate` step runs Level 1
+static analysis only. `on_failure` routes back to the step where the user can
+review and correct the workflow definition before re-simulating.
+Full schema, validation levels, and result structure: see **Section 6.4.6**.
 
 ---
 
@@ -1960,6 +1987,224 @@ unbounded concurrency without cycle detection at workflow registration time.
 
 ---
 
+### 6.4.6 `simulate` step type — workflow path simulation and validation
+
+The `simulate` step type is the right-brain’s earliest operational capability.
+It dry-runs a generated workflow definition through the Step Processor’s own
+execution logic using injected mock outputs and decision scripts, validates every
+`local_state` transition, and surfaces structured failure reports before the
+workflow is registered in `PGC_Workflow`. It is a prerequisite for `create_workflow`
+being trustworthy and is classified as Phase 2 work, not Phase 3.
+
+#### Why simulation is not optional for `create_workflow`
+
+Without simulation, the only way to discover a broken workflow is to deploy it
+and run it. Given that `create_workflow` produces workflows that will themselves
+execute against real data, an undetected broken step is a production incident.
+The `confirmed_domain_help` class of bug — a template reference to a key that
+was never written to `local_state` — is invisible to Ajv validation and only
+manifests at execution time. Simulation catches it before registration.
+
+#### Step definition schema
+
+```json
+{
+  "step":        "4",
+  "type":        "simulate",
+  "description": "Dry-run the generated workflow definition against all declared paths",
+  "input": {
+    "steps_key":       "generated_workflow.steps",
+    "mock_outputs_key":"generated_workflow.mock_outputs",
+    "paths_key":       "generated_workflow.simulation_paths"
+  },
+  "output_key":  "simulation_result",
+  "on_success":  "next",
+  "on_failure":  "step:3"
+}
+```
+
+`steps_key`, `mock_outputs_key`, and `paths_key` are dot-paths into `local_state`.
+They reference keys written by the LLM generation steps that precede the simulate
+step. `on_failure: "step:3"` routes back to the human gate where the user reviewed
+the step array, with simulation failures injected into the gate context.
+`mock_outputs_key` and `paths_key` are optional — when absent the simulate step
+runs Level 1 static analysis only.
+
+#### Inputs the LLM must generate
+
+The LLM calls that precede simulate produce three structures, each in a separate
+`llm_call` step. See Section 6.8 for why these are produced across multiple LLM
+calls rather than one.
+
+**`steps`** — the workflow step array. Step keys, types, routing values, templates.
+
+**`mock_outputs`** — a plain object keyed by step number. Only steps that produce
+output need mocks (`llm_call`, `serv_query`). Steps that are pure side-effects
+(`serv_insert`, `notify`, `end`) do not.
+
+```json
+{
+  "mock_outputs": {
+    "1": { "domain": "recipes", "tables": [{ "tableName": "PGD_Recipes", "columns": [] }] },
+    "6": { "domainHelp": { "domain": "recipes", "aliases": ["recipe", "recipes"] }, "workflows": [] }
+  }
+}
+```
+
+**`simulation_paths`** — an array of named execution paths. Each path is an ordered
+list of decisions — one entry per branch point (gate step, failure point, iterator
+outcome). Human gates are simulated by injecting `user_response` and `on_select`
+as if the user clicked that option. LLM steps, SERV steps, and `js_transform` steps
+are simulated using their mock output. The path terminates when it reaches `end`,
+`cancel`, or `human_feedback`.
+
+```json
+{
+  "simulation_paths": [
+    {
+      "path_name": "happy_path",
+      "decisions": [
+        { "step": "1",  "outcome": "success" },
+        { "step": "3",  "outcome": "gate", "user_response": "confirm", "on_select": "step:3d" },
+        { "step": "3d", "outcome": "gate", "user_response": "confirm", "on_select": "next" },
+        { "step": "4",  "outcome": "gate", "user_response": "confirm", "on_select": "next" },
+        { "step": "5",  "outcome": "success" }
+      ],
+      "expected_terminal": "end"
+    },
+    {
+      "path_name": "user_cancels_at_review",
+      "decisions": [
+        { "step": "1",  "outcome": "success" },
+        { "step": "3",  "outcome": "gate", "user_response": "cancel", "on_select": "cancel" }
+      ],
+      "expected_terminal": "cancelled"
+    },
+    {
+      "path_name": "llm_step_fails",
+      "decisions": [
+        { "step": "1", "outcome": "failure", "error": "LLM returned invalid JSON" }
+      ],
+      "expected_terminal": "human_feedback"
+    }
+  ]
+}
+```
+
+The LLM is expected to enumerate at minimum: the happy path, one cancel path per
+gate step, and one failure path per `llm_call` or `serv_*` step. The `output_schema`
+for the `generate_workflow_paths` prompt enforces this minimum coverage.
+
+#### What the simulator validates
+
+The simulator runs each path independently. For each path it:
+
+1. Resets `local_state` to `{ input: run.input }` — a clean slate per path
+2. Walks steps in execution order driven by the decision script
+3. At each step, records the `local_state` transition: keys present before, keys
+   added or mutated after, template variables resolved and to what values
+4. Flags any step where a template variable could not be resolved (`{{key}}` not
+   in `local_state` at that point)
+5. Verifies the path’s terminal step matches `expected_terminal`
+6. Detects backward-reference loops: a step key reached more times than there are
+   gate decisions for it in the script is flagged as a potential infinite loop
+   (safe if a `human_gate` step exists on the path from target back to source —
+   the same rule as Guard 3)
+
+**Three validation levels run in order. Later levels only run if earlier levels pass.**
+
+**Level 1 — Static analysis (no execution, no mocks needed)**
+
+Runs before any path simulation. Catches structural errors in the step array itself:
+
+| Check | Failure class |
+|---|---|
+| Every `on_success`, `on_failure`, `on_select` value is a known routing token | Unknown routing value |
+| Every `step:N` routing target exists in the step array | Dead routing target |
+| Every `{{template}}` reference resolves to an `output_key` written by a prior step on that path | Unresolved template variable |
+| Every `items_key` in an `iterator` resolves to an array written by a prior step | Iterator source not an array |
+| Every `input.prompt` in an `llm_call` names an `intent_category` in `PGC_Prompt` | Unknown prompt reference |
+| No `output_key` is set on a `review_object` or `confirm` gate | Gate type does not write output |
+| Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
+
+Level 1 failures are returned immediately — no path execution occurs.
+
+**Level 2 — Path execution (uses mocks and decision scripts)**
+
+Executes each path in `simulation_paths`. For each step, injects the mock output
+or decision instead of calling the real service or LLM. Records the `local_state`
+transition log. Fails the path if any template variable is unresolvable or if the
+terminal step does not match `expected_terminal`.
+
+**Level 3 — Skip-path analysis (failure recovery, advisory)**
+
+For every step with `on_failure: "human_feedback"`, the simulator runs an additional
+micro-path: what happens if the user chooses Skip at the recovery gate? If skipping
+the step leaves a `null` at an `output_key` that a downstream step reads, the
+simulator flags this as a latent data flow risk. This is advisory — it does not
+fail the simulation — but it is included in the failure report and shown to the
+user in the review gate.
+
+#### Simulation result structure
+
+Written to `local_state[output_key]` on completion:
+
+```json
+{
+  "passed": true,
+  "paths_run": 3,
+  "paths_passed": 3,
+  "paths_failed": 0,
+  "static_analysis": { "passed": true, "issues": [] },
+  "path_results": [
+    {
+      "path_name": "happy_path",
+      "passed": true,
+      "steps_executed": 11,
+      "terminal": "end",
+      "expected_terminal": "end",
+      "local_state_transitions": [
+        {
+          "step": "1",
+          "keys_before": ["input"],
+          "keys_added": ["proposed_scaffold"],
+          "template_vars_resolved": {},
+          "template_vars_missing": []
+        }
+      ]
+    }
+  ],
+  "skip_path_warnings": []
+}
+```
+
+On failure, `passed: false` and `paths_failed > 0`. The first failed path’s
+transition log is included in full, showing exactly which step failed and what
+`local_state` contained at that point. This is presented to the user in the
+`review_object` gate when `on_failure: "step:3"` routes back for correction.
+
+#### Simulation mode flag on WorkflowRun
+
+When `run-workflow.mjs` executes a `simulate` step, it sets
+`PGC_WorkflowRun.state.simulation_mode = true` before the simulation begins and
+clears it after. This flag is checked by every step handler in `step-executor.mjs`
+— when true, the handler returns the mock output from the decision script instead
+of calling the real service. No new Lambda, no new SQS queue — the same Step
+Processor executes both live runs and simulations. The only difference is the
+execution context.
+
+#### HTTP endpoint
+
+`POST /api/v1/proc/simulate-workflow` accepts the step array, mock outputs, and
+simulation paths directly, without a `WorkflowRun`. This is the developer-facing
+test surface for validating workflow definitions during development, before they
+are registered in `PGC_Workflow`. See openapi.yaml for the full request/response
+contract.
+
+---
+
+---
+
 ### 6.5 Right-Brain Output Validation — correction loop
 
 Every `llm_call` step runs through a two-attempt validation loop before its output
@@ -2130,10 +2375,230 @@ three if the LLM output is malformed.
 
 ### 6.8 create_workflow Workflow — Phase 2
 
-Stub definition in `PGC_Workflow`. Full 8-step implementation is Phase 2 item 4b.
-When complete, `/mind create a workflow that sends me a weekly portfolio summary`
-will generate a new `PGC_Workflow` row, register it in `PGC_IntentMap`, and make
-it immediately available via the Intent Preprocessor — without any code changes.
+`create_workflow` is the workflow that makes the brain self-extending. When a user
+says `/mind create a workflow that sends me a weekly portfolio summary`, the brain
+designs the step array, validates it, simulates it, and registers it — without
+any code changes. Every new workflow becomes immediately available to the Intent
+Preprocessor.
+
+---
+
+#### Why `create_workflow` is harder than `create_domain`
+
+`create_domain` asks an LLM to produce a PostgreSQL schema. The schema is
+self-contained — every field in the output is a leaf value or a well-bounded
+sub-object. The Ajv `output_schema` can enforce structural correctness fully.
+
+`create_workflow` asks an LLM to produce a step array where every field
+cross-references other fields — step keys, template variable names, routing
+targets, prompt `intent_category` values, and `output_key` names must all be
+internally consistent. A step array can pass Ajv validation and still be broken
+because `output_key: "foo"` on step 3 is referenced as `{{bar}}` on step 6.
+This is a referential integrity problem, not a structural one. Ajv cannot catch it.
+
+Two mechanisms close this gap: **semantic validation rules** (static analysis on
+the step array — see Section 6.4.6 Level 1) and **simulation** (execution-time
+data flow validation — see Section 6.4.6 Levels 2 and 3). Both run before the
+workflow is registered.
+
+---
+
+#### Decision: decomposed LLM generation
+
+A single LLM call producing steps + mock_outputs + output_schema + simulation_paths
+simultaneously is unreliable. The four structures are interdependent — mock shapes
+must match `output_key` fields, simulation paths must reference step keys, the
+output_schema must describe mock shapes — and LLMs are increasingly unreliable at
+global referential integrity as the number of cross-references grows. The failure
+mode is not an obviously wrong answer but a subtly inconsistent one that passes
+Ajv and only breaks at simulation time.
+
+The solution is **dependency-ordered generation**: each structure is produced in
+a separate `llm_call` step, using the confirmed output of the prior step as input.
+Each call is narrow, well-scoped, and independently correctable by the 2-attempt
+correction loop.
+
+| Step | LLM call | Input | Output |
+|---|---|---|---|
+| 2 | `generate_workflow_steps` v1 | User intent + domain schema + `PGC_StepType` contracts (live only) + `create_domain` as worked example | `draft_workflow` — name, description, steps array only |
+| 5 | `generate_workflow_mocks` v1 | Confirmed `draft_workflow.steps` | `mock_outputs` keyed by step number |
+| 6 | `generate_workflow_paths` v1 | Confirmed `draft_workflow.steps` + `mock_outputs` | `simulation_paths` decision scripts |
+
+This means three LLM calls instead of one. The cost is justified: each call is
+cheaper individually (narrower context), independently correctable (the correction
+loop targets only the failing call), and the simulation that follows is the primary
+quality gate.
+
+**`output_schema` is not generated by the LLM.** `llm_call` steps in generated
+workflows reference existing prompts in `PGC_Prompt` — those prompts already have
+`output_schema` defined. If a workflow requires a new prompt, that is a separate
+`create_prompt` workflow (Phase 3), not part of `create_workflow`.
+
+---
+
+#### Decision: PGC_SystemContext injection, not inline rules
+
+The `generate_workflow_steps` prompt is deliberately short. It does not embed step
+type contracts as inline text. Instead it injects at runtime:
+
+- `PGC_StepType` rows where `status = 'live'` — input/output contracts per type, valid routing values
+- `PGC_SystemContext` rows where `inject_for` includes `create_workflow` — naming
+  conventions, routing value enumeration, template syntax rules
+- `create_domain` annotated example from Section 6.7 — the worked example that
+  makes the instruction set concrete
+
+When a new step type goes live, `PGC_StepType` is updated. The prompt does not
+change. This is the correct locus of control for evolving the instruction set.
+
+---
+
+#### Decision: routing values formally enumerated in PGC_StepType
+
+`on_success`, `on_failure`, and `on_select` currently accept any string, with
+unknown values silently falling through to `"next"` in `resolveNextAction()`.
+This is a known gap (see tech debt register). For `create_workflow` to produce
+correct routing values, the valid set must be formally enumerated.
+
+`PGC_StepType.on_success_options` and `on_failure_options` jsonb columns are
+seeded with the valid values per step type before `create_workflow` is implemented.
+The `generate_workflow_steps` prompt receives these from the injected `PGC_StepType`
+context. Level 1 static analysis in the `simulate` step validates every routing
+value against the seeded enum before simulation begins.
+
+---
+
+#### Decision: `human_feedback` implemented before `create_workflow` ships
+
+`human_feedback` appears on every `on_failure` in every workflow definition but is
+currently unimplemented — it silently falls through to `"next"`, and the run is
+marked `failed` by the catch block before routing logic is ever consulted. This is
+acceptable in `create_domain` where a step failure is a terminal event. It is not
+acceptable in user-generated workflows where the user expects recovery options.
+
+`human_feedback` must be implemented in `run-workflow.mjs` before `create_workflow`
+is deployed. The behaviour: when a step throws and `on_failure === "human_feedback"`,
+the Step Processor pushes a recovery `human_gate` with three options (Retry, Skip,
+Cancel) instead of immediately marking the run failed. The existing `human_gate`
+machinery handles the gate — no new step type, no schema change, no new SQS queue.
+The only new code is in the failure catch blocks of `executeTop` and
+`executeIteratorItem`.
+
+---
+
+#### Step definition
+
+```
+Step 1   llm_call (classify_workflow_intent v1)
+           input:  { userIntent: "{{input.userIntent}}", domain: "{{input.domain}}" }
+           output: workflow_intent = { domain, operation_type, target_tables, description }
+
+Step 2   llm_call (generate_workflow_steps v1)
+           input:  { workflow_intent: "{{workflow_intent}}",
+                     domain_schema: "{{domain_schema}}",
+                     steptypes: injected from PGC_StepType (live rows),
+                     example: injected from PGC_SystemContext }
+           output: draft_workflow = { name, description, intent_keywords, steps }
+
+Step 3   human_gate (review_object)
+           context_key:      "draft_workflow.steps"
+           message_template: "Review the proposed steps for {{draft_workflow.name}}."
+           options:
+             Looks good      → next
+             Request changes → step:2
+             Cancel          → cancel
+
+Step 4   simulate (Level 1 — static analysis only)
+           input:  { steps_key: "draft_workflow.steps" }
+           output: static_analysis_result
+           on_success: next
+           on_failure: step:3   (routes back with Level 1 failures shown in gate context)
+
+Step 5   llm_call (generate_workflow_mocks v1)
+           input:  { steps: "{{draft_workflow.steps}}" }
+           output: mock_outputs = { "<step_key>": <representative output object> }
+
+Step 6   llm_call (generate_workflow_paths v1)
+           input:  { steps: "{{draft_workflow.steps}}", mock_outputs: "{{mock_outputs}}" }
+           output: simulation_paths = [ { path_name, decisions, expected_terminal }, ... ]
+
+Step 7   simulate (Level 2 + 3 — full path simulation)
+           input:  { steps_key:        "draft_workflow.steps",
+                     mock_outputs_key: "mock_outputs",
+                     paths_key:        "simulation_paths" }
+           output: simulation_result
+           on_success: next
+           on_failure: step:3   (routes back with path failure details in gate context)
+
+Step 8   human_gate (confirm)
+           message_template: "Simulation passed {{simulation_result.paths_passed}} of
+                              {{simulation_result.paths_run}} paths. Ready to register
+                              {{draft_workflow.name}}?"
+           options:
+             Register → next
+             Cancel   → cancel
+
+Step 9   serv_insert PGC_Workflow
+           input:  { tableName: "PGC_Workflow",
+                     row: { name:             "{{draft_workflow.name}}",
+                            domain:           "{{workflow_intent.domain}}",
+                            description:      "{{draft_workflow.description}}",
+                            intent_keywords:  "{{draft_workflow.intent_keywords}}",
+                            steps:            "{{draft_workflow.steps}}",
+                            version:          1 } }
+           output: registered_workflow
+
+Step 10  iterator over generated_intent_map_rows
+           item_step: serv_insert PGC_IntentMap
+           output: registered_intent_rows
+
+Step 11  notify
+           message_template: "Workflow {{draft_workflow.name}} is registered and ready.
+                              Try: /mind {{draft_workflow.description}}"
+           on_success: end
+
+Step 12  end
+```
+
+---
+
+#### Gate-bounded correction loops
+
+Steps 3–4 and steps 3–7 form gate-bounded correction loops. The backward jump
+from step 4 (or step 7) to step 3 is safe because every path from step 3 back to
+step 4 or step 7 passes through the step 3 `human_gate`. This satisfies Guard 3’s
+cycle-safety rule: a backward reference is safe if there is at least one
+`human_gate` on the path from the target step back to the source step.
+
+The user is the circuit breaker for these loops. If simulation repeatedly fails
+and the user cannot resolve the issues, they cancel at step 3. There is no
+automated retry limit on human-gate-bounded loops.
+
+---
+
+#### Prompt dependencies
+
+| Step | Prompt `intent_category` | Output stored at |
+|---|---|---|
+| 1 | `classify_workflow_intent` v1 | `workflow_intent` |
+| 2 | `generate_workflow_steps` v1 | `draft_workflow` |
+| 5 | `generate_workflow_mocks` v1 | `mock_outputs` |
+| 6 | `generate_workflow_paths` v1 | `simulation_paths` |
+
+All four prompts must have `output_schema` defined before `create_workflow` is
+deployed. The correction loop in `review-output.mjs` runs on all four independently.
+
+---
+
+#### Prerequisites before implementation
+
+The following must exist before `create_workflow` can be built:
+
+1. `simulate` step type implemented in `step-executor.mjs` (Section 6.4.6)
+2. `on_failure: "human_feedback"` implemented in `run-workflow.mjs` (tech debt register)
+3. `PGC_StepType` rows seeded with live step types and routing value contracts (tech debt register)
+4. Semantic validation rule in `review-output.mjs`: unknown routing values fail with a specific error (tech debt register)
+5. `PGC_SystemContext` rows seeded with `inject_for: ["create_workflow"]` context
+6. Four new prompts created in `seed_PGC_Prompt.json` (see prompt dependencies above)
 
 ---
 
@@ -2250,6 +2715,9 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `generate_crud_workflows` v2 `input_variables` stale | Low | Seed row still lists `domain_help` as a required input variable, and prompt text has a `{{domain_help}}` reference in the rules section. `create_domain` step 6 no longer passes `domain_help`. Unresolved template renders as empty string — not breaking but should be cleaned up |
 | `output_key` on `review_object` gate should warn if set | Low | See `output_key on non-text_input gates` item above. The specific case in `create_domain` v4 has been fixed (step 7 `output_key` removed, step 8 reads `generated.domainHelp` directly), but the executor itself has no guard |
 | CHECK constraint `output_schema` validation | Low | `create_domain` `output_schema` does not require `expression` on check constraints and does not reject `columns` arrays on them. LLM produced `columns: ["quantity"]` instead of `expression: "quantity > 0"` — passed Ajv but failed DDL. Tighten schema to require `expression` and disallow `columns` on check type |
+| `on_failure: "human_feedback"` not implemented | High | `human_feedback` appears on every `on_failure` in every workflow definition (14 times in `create_domain` alone) but silently falls through to `"next"` in `resolveNextAction()` — the run is marked `failed` by the catch block before routing logic is consulted. Correct fix: in the failure catch blocks of `executeTop` and `executeIteratorItem` in `run-workflow.mjs`, when `step.on_failure === "human_feedback"`, push a recovery `human_gate` with three options (Retry, Skip, Cancel) instead of marking the run `failed`. Must be implemented before `create_workflow` is deployed — user-generated workflows depend on recoverable step failures |
+| `PGC_StepType` rows not seeded with routing value contracts | High | `PGC_StepType.on_success_options` and `on_failure_options` jsonb columns exist in the schema but are not seeded. Without seed data the columns are null for all step types, making the routing value contract invisible to the `create_workflow` prompt and to Level 1 static analysis in the `simulate` step. Fix: seed one row per live step type with its valid `on_success_options` and `on_failure_options` arrays before `create_workflow` is implemented. The `generate_workflow_steps` prompt injects these from `PGC_StepType` — unseeded rows mean the LLM receives no routing constraints |
+| Unknown routing values silently become `"next"` | Medium | `resolveNextAction()` in `step-executor.mjs` has a final `return "next"` fallback that swallows any unrecognised `on_success` or `on_failure` value without error. An `on_failure: "retry"` or a typo like `on_success: "nextt"` silently advances to the next step. Correct fix: add a semantic validation rule to `runSemanticRules()` in `review-output.mjs` that validates every `on_success`, `on_failure`, and `on_select` value against the known routing token set (`"next"`, `"end"`, `"cancel"`, `"human_feedback"`, `"step:N"`) and fails validation with a specific error naming the step and the unknown value. Pairs with seeding `PGC_StepType.on_success_options` / `on_failure_options` — both items together close the routing contract gap |
 
 ---
 
