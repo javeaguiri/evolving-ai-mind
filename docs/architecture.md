@@ -1414,6 +1414,11 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ condition    ║ Evaluate expression, branch on if_true / if_false    ║ ⬜ Phase 3       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Phase 3       ║
+╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
+║ simulate       ║ Dry-run a workflow step array against named         ║ ⬜ Phase 2       ║
+║               ║ execution paths using injected mock outputs.         ║ (prerequisite    ║
+║               ║ Three validation levels: static analysis, path        ║ for              ║
+║               ║ execution, skip-path analysis. See Section 6.4.6.   ║ create_workflow) ║
 ╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
 ```
 
@@ -1534,6 +1539,27 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
 ```json
 { "step": "12", "type": "end" }
 ```
+
+##### `simulate`
+```json
+{
+  "step":        "4",
+  "type":        "simulate",
+  "input": {
+    "steps_key":        "draft_workflow.steps",
+    "mock_outputs_key": "mock_outputs",
+    "paths_key":        "simulation_paths"
+  },
+  "output_key":  "simulation_result",
+  "on_success":  "next",
+  "on_failure":  "step:3"
+}
+```
+All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
+and `paths_key` are optional — if absent, the `simulate` step runs Level 1
+static analysis only. `on_failure` routes back to the step where the user can
+review and correct the workflow definition before re-simulating.
+Full schema, validation levels, and result structure: see **Section 6.4.6**.
 
 ---
 
@@ -2250,6 +2276,9 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `generate_crud_workflows` v2 `input_variables` stale | Low | Seed row still lists `domain_help` as a required input variable, and prompt text has a `{{domain_help}}` reference in the rules section. `create_domain` step 6 no longer passes `domain_help`. Unresolved template renders as empty string — not breaking but should be cleaned up |
 | `output_key` on `review_object` gate should warn if set | Low | See `output_key on non-text_input gates` item above. The specific case in `create_domain` v4 has been fixed (step 7 `output_key` removed, step 8 reads `generated.domainHelp` directly), but the executor itself has no guard |
 | CHECK constraint `output_schema` validation | Low | `create_domain` `output_schema` does not require `expression` on check constraints and does not reject `columns` arrays on them. LLM produced `columns: ["quantity"]` instead of `expression: "quantity > 0"` — passed Ajv but failed DDL. Tighten schema to require `expression` and disallow `columns` on check type |
+| `on_failure: "human_feedback"` not implemented | High | `human_feedback` appears on every `on_failure` in every workflow definition (14 times in `create_domain`) but silently falls through to `"next"` in `resolveNextAction()` — the run fails and posts `WORKFLOW_ERROR` before routing logic is consulted. Correct fix: in the failure catch block of `executeTop` and `executeIteratorItem`, when `on_failure === "human_feedback"`, push a recovery `human_gate` with three options (Retry, Skip, Cancel) instead of marking the run `failed`. Must be implemented before `create_workflow` is deployed — user-generated workflows depend on recoverable step failures |
+| `PGC_StepType` rows not seeded with routing value contracts | High | `PGC_StepType.on_success_options` and `on_failure_options` jsonb columns exist in the schema but are not seeded. Without seed data the columns are null for all step types, making the routing value contract invisible to the `create_workflow` prompt and to static analysis. Fix: seed one row per live step type with its valid `on_success_options` and `on_failure_options` arrays before `create_workflow` is implemented. The `generate_workflow_steps` prompt injects these from `PGC_StepType` rows — unseeded rows mean the LLM receives no routing constraints and produces unvalidatable routing values |
+| Unknown routing values silently become `"next"` | Medium | `resolveNextAction()` in `step-executor.mjs` has a final `return "next"` fallback that swallows any unrecognised `on_success` or `on_failure` value without error. An `on_failure: "retry"` or a typo like `on_success: "nextt"` silently advances to the next step. Correct fix: add a semantic validation rule to `runSemanticRules()` in `review-output.mjs` that checks every `on_success`, `on_failure`, and `on_select` value in the step array against the known routing token set (`"next"`, `"end"`, `"cancel"`, `"human_feedback"`, `"step:N"`) and fails validation with a specific error naming the step and the unknown value. Pairs with seeding `PGC_StepType.on_success_options` / `on_failure_options` — both items together close the routing contract gap |
 
 ---
 
