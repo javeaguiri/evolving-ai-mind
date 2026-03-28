@@ -632,18 +632,49 @@ async function executeSimulate({ step, localState, run, traceId }) {
     throw new Error('simulate step missing input.steps_key');
   }
 
-  const steps         = resolvePath(localState, stepsKey);
-  const mockOutputs   = mockOutputsKey ? resolvePath(localState, mockOutputsKey) : null;
-  const simPaths      = pathsKey       ? resolvePath(localState, pathsKey)       : null;
+  const steps       = resolvePath(localState, stepsKey);
+  const mockOutputs = mockOutputsKey ? resolvePath(localState, mockOutputsKey) : null;
+  const simPaths    = pathsKey       ? resolvePath(localState, pathsKey)       : null;
 
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error(`simulate: steps_key "${stepsKey}" did not resolve to a non-empty array`);
   }
 
-  console.info('step-executor: simulate — starting', {
+  const result = runSimulation({
+    steps,
+    mockOutputs,
+    simulationPaths: simPaths,
+    runInput: run?.input ?? {},
+    traceId,
+  });
+
+  const passed = result.passed;
+  return {
+    outputValue: result,
+    nextAction:  passed
+      ? resolveNextAction(step.on_success, null)
+      : resolveNextAction(step.on_failure ?? 'next', null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runSimulation — exported for the HTTP simulate-workflow endpoint.
+// Called identically from executeSimulate (step type) and simulate-workflow.mjs
+// (standalone HTTP handler). No WorkflowRun required.
+//
+// @param {object[]} steps           — workflow step array to validate
+// @param {object|null} mockOutputs  — mock outputs keyed by step number string
+// @param {object[]|null} simulationPaths — named execution paths
+// @param {object} runInput          — simulated run.input (available as {{input.*}})
+// @param {string} [traceId]
+// @returns {SimulateWorkflowResponse}
+// ---------------------------------------------------------------------------
+
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, traceId }) {
+  console.info('step-executor: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
-    pathCount: Array.isArray(simPaths) ? simPaths.length : 0,
+    pathCount: Array.isArray(simulationPaths) ? simulationPaths.length : 0,
     traceId,
   });
 
@@ -651,53 +682,43 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const staticIssues = runLevel1StaticAnalysis(steps);
 
   if (staticIssues.length > 0) {
-    const result = {
-      passed:         false,
-      paths_run:      0,
-      paths_passed:   0,
-      paths_failed:   0,
+    console.info('step-executor: runSimulation — Level 1 failed', {
+      issueCount: staticIssues.length, traceId,
+    });
+    return {
+      passed:          false,
+      paths_run:       0,
+      paths_passed:    0,
+      paths_failed:    0,
       static_analysis: { passed: false, issues: staticIssues },
       path_results:    [],
       skip_path_warnings: [],
     };
-    console.info('step-executor: simulate — Level 1 failed', {
-      issueCount: staticIssues.length, traceId,
-    });
-    return {
-      outputValue: result,
-      nextAction:  resolveNextAction(step.on_failure ?? 'next', null),
-    };
   }
 
-  // Level 1 passed — if no mocks/paths, return Level 1 pass result now.
-  if (!mockOutputs || !Array.isArray(simPaths) || simPaths.length === 0) {
-    const result = {
-      passed:         true,
-      paths_run:      0,
-      paths_passed:   0,
-      paths_failed:   0,
+  // Level 1 passed — if no paths supplied, return Level 1 result only.
+  // mockOutputs is optional — Level 2 runs whenever simulationPaths is present,
+  // injecting null mock output for steps that have no entry in mockOutputs.
+  if (!Array.isArray(simulationPaths) || simulationPaths.length === 0) {
+    console.info('step-executor: runSimulation — Level 1 only (no paths provided)', { traceId });
+    return {
+      passed:          true,
+      paths_run:       0,
+      paths_passed:    0,
+      paths_failed:    0,
       static_analysis: { passed: true, issues: [] },
       path_results:    [],
       skip_path_warnings: [],
     };
-    console.info('step-executor: simulate — Level 1 only (no paths provided)', { traceId });
-    return {
-      outputValue: result,
-      nextAction:  resolveNextAction(step.on_success, null),
-    };
   }
 
   // ── Level 2 — Path execution ─────────────────────────────────────────────
-  const pathResults = [];
-  const runInput    = run?.input ?? {};
+  const pathResults = simulationPaths.map(
+    path => executeSimPath(steps, path, mockOutputs, runInput)
+  );
 
-  for (const path of simPaths) {
-    const pathResult = executeSimPath(steps, path, mockOutputs, runInput);
-    pathResults.push(pathResult);
-  }
-
-  const pathsPassed = pathResults.filter(r => r.passed).length;
-  const pathsFailed = pathResults.filter(r => !r.passed).length;
+  const pathsPassed  = pathResults.filter(r => r.passed).length;
+  const pathsFailed  = pathResults.filter(r => !r.passed).length;
   const level2Passed = pathsFailed === 0;
 
   // ── Level 3 — Skip-path analysis (advisory) ──────────────────────────────
@@ -706,26 +727,21 @@ async function executeSimulate({ step, localState, run, traceId }) {
     : [];
 
   const result = {
-    passed:         level2Passed,
-    paths_run:      pathResults.length,
-    paths_passed:   pathsPassed,
-    paths_failed:   pathsFailed,
+    passed:          level2Passed,
+    paths_run:       pathResults.length,
+    paths_passed:    pathsPassed,
+    paths_failed:    pathsFailed,
     static_analysis: { passed: true, issues: [] },
     path_results:    pathResults,
     skip_path_warnings: skipPathWarnings,
   };
 
-  console.info('step-executor: simulate — complete', {
+  console.info('step-executor: runSimulation — complete', {
     passed: result.passed, pathsRun: result.paths_run,
     pathsPassed, pathsFailed, warnings: skipPathWarnings.length, traceId,
   });
 
-  return {
-    outputValue: result,
-    nextAction:  level2Passed
-      ? resolveNextAction(step.on_success, null)
-      : resolveNextAction(step.on_failure ?? 'next', null),
-  };
+  return result;
 }
 
 // ---------------------------------------------------------------------------
