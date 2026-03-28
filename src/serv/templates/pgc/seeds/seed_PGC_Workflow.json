@@ -2,7 +2,7 @@
   {
     "name": "create_domain",
     "domain": null,
-    "description": "Designs and creates a new user domain. LLM proposes a schema. User reviews, optionally adds tables, and confirms. DDL is executed, CRUD workflows are generated, and the domain is registered and immediately usable from /mind.",
+    "description": "Designs and creates a new user domain. LLM proposes a schema. User reviews, optionally adds tables, and confirms. DDL is executed, CRUD workflows are generated, entity schemas are registered, and the domain is immediately usable from /mind.",
     "intent_keywords": [
       "create domain",
       "new domain",
@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 3,
+    "version": 4,
     "steps": [
       {
         "step": "1",
@@ -177,7 +177,7 @@
       {
         "step": "6",
         "type": "llm_call",
-        "description": "LLM generates domainHelp (aliases, commands) and 4 CRUD workflow definitions from the confirmed scaffold. Returns { domainHelp, workflows, intentMapRows }.",
+        "description": "LLM generates domainHelp (aliases, commands), 4 CRUD workflow definitions, and entity schema definitions from the confirmed scaffold. Returns { domainHelp, workflows, intentMapRows, entitySchemas }.",
         "input": {
           "prompt": "generate_crud_workflows",
           "domain": "{{proposed_scaffold.domain}}",
@@ -253,6 +253,24 @@
         },
         "execution_mode": "sequential",
         "output_key": "registered_intent_rows",
+        "on_complete": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "10b",
+        "type": "iterator",
+        "description": "Register each generated entity schema in PGC_EntitySchema so SERV-Entity can serve multi-table queries for this domain.",
+        "items_key": "generated.entitySchemas",
+        "item_step": {
+          "type": "serv_insert",
+          "input": {
+            "tableName": "PGC_EntitySchema",
+            "row": "{{item}}"
+          },
+          "on_failure": "human_feedback"
+        },
+        "execution_mode": "sequential",
+        "output_key": "registered_entities",
         "on_complete": "next",
         "on_failure": "human_feedback"
       },
