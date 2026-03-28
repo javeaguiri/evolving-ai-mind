@@ -28,6 +28,7 @@ import { handle as runWorkflow, dispatchSqs } from './run-workflow.mjs';
 import { handle as deleteDomain }       from './delete-domain.mjs';
 import { handle as help }               from './help.mjs';
 import { handle as classifyIntent }     from './classify-intent.mjs';
+import { handle as simulateWorkflow }   from './simulate-workflow.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -151,6 +152,9 @@ async function dispatch(req) {
 
     case 'classify-intent':
       return classifyIntent(req);
+
+    case 'simulate-workflow':
+      return simulateWorkflow(req);
 
     // Routes added here as refactor progresses:
 
