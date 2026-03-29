@@ -210,14 +210,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
   } catch (stepError) {
     await recordStepAudit(run.id, frame.frame_id, frame.current_step, step.type,
       'failed', null, null, stepError.message, Date.now() - stepStart);
-
-    // on_failure: "human_feedback" — push a recovery gate instead of failing the run.
-    // The user sees exactly what failed and chooses Retry, Skip, or Cancel.
-    // Existing human_gate machinery handles everything — no new step type or SQS queue.
-    if (step.on_failure === 'human_feedback') {
-      return pushRecoveryGate({ run, frame, step, stepError, traceId });
-    }
-
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
       { status: 'failed', error: { step: frame.current_step, message: stepError.message } }
@@ -438,6 +430,19 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
+  // For dynamic confirm gates (context_key present, no matched option in options array)
+  // the userResponse is a runtime value (e.g. a domain name) not known at workflow
+  // authoring time. Write it to output_key and route via on_success.
+  if (!matchedOption && gateType === 'confirm' && stepRef.context_key && stepRef.output_key) {
+    setPath(localState, stepRef.output_key, userResponse);
+    frame.local_state = localState;
+    console.info('run-workflow: dynamic confirm gate — selection written to local_state', {
+      output_key: stepRef.output_key,
+      selection:  userResponse,
+      traceId,
+    });
+  }
+
   // Pop gate frame
   run.stack.pop();
   const parentFrame = topFrame(run);
@@ -568,14 +573,6 @@ async function executeIteratorItem({ run, traceId }) {
       itemStep.type, 'failed', { tableName: item.tableName }, null,
       itemError.message, Date.now() - stepStart
     );
-
-    // on_failure: "human_feedback" on item_step — push recovery gate instead of failing.
-    if (itemStep.on_failure === 'human_feedback') {
-      // Surface as if the parent iterator step failed — step key is the parent_step.
-      const parentStepDef = { ...itemStep, step: frame.parent_step, on_failure: 'human_feedback' };
-      return pushRecoveryGate({ run, frame: topFrame(run), step: parentStepDef, stepError: itemError, traceId });
-    }
-
     // Mark the run failed and notify the user before rethrowing.
     // Without this, the error propagates to the SQS handler, retries 3×,
     // goes to DLQ, and the user receives no notification.
@@ -615,86 +612,6 @@ async function executeIteratorItem({ run, traceId }) {
   // Enqueue next item (or completion)
   await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
   return { action: 'iterator_item_done', index: frame.current_index - 1 };
-}
-
-// ---------------------------------------------------------------------------
-// pushRecoveryGate — human_feedback recovery
-// ---------------------------------------------------------------------------
-// Called from executeTop and executeIteratorItem catch blocks when a step
-// has on_failure: "human_feedback". Pushes a recovery human_gate so the user
-// can Retry, Skip, or Cancel rather than the run being immediately marked failed.
-// Uses the existing human_gate machinery — no new step type, no schema change.
-//
-// Recovery options and their semantics:
-//   Retry  → re-enqueues execute_top at the same step key (existing audit row
-//             means idempotency check fires, but Guard 1 only fails at 3 hits,
-//             so one retry is safe — the user sees the gate again if it fails again)
-//   Skip   → advances past the failing step (on_select: "next")
-//   Cancel → clears stack, marks run cancelled
-//
-// The gate frame carries a synthetic step_ref with gate_type "confirm" so
-// callback.mjs renders it as a plain message + three buttons — no context object.
-
-async function pushRecoveryGate({ run, frame, step, stepError, traceId }) {
-  const failedStepKey = String(step.step ?? frame.current_step);
-  const errorMessage  = stepError.message ?? String(stepError);
-
-  const recoveryStepRef = {
-    step:             `${failedStepKey}_recovery`,
-    type:             'human_gate',
-    gate_type:        'confirm',
-    message_template: `Step ${failedStepKey} failed:\n\n${errorMessage}\n\nHow would you like to proceed?`,
-    options: [
-      { label: 'Retry',  action: 'retry',  on_select: `step:${failedStepKey}` },
-      { label: 'Skip',   action: 'skip',   on_select: 'next'                  },
-      { label: 'Cancel', action: 'cancel', on_select: 'cancel'                },
-    ],
-    on_success: 'next',
-    on_failure: 'cancel',
-  };
-
-  const gateFrame = {
-    frame_id:      randomUUID(),
-    type:          'human_gate',
-    status:        'awaiting',
-    gate_type:     'confirm',
-    step_ref:      recoveryStepRef,
-    step_number:   failedStepKey,
-    workflow_name: run.workflow_name,
-    local_state:   frame.local_state,
-    pushed_at:     new Date().toISOString(),
-  };
-  run.stack.push(gateFrame);
-
-  await updateRows('PGC_WorkflowRun',
-    [{ column: 'id', op: 'eq', value: run.id }],
-    {
-      status:     'awaiting_human_gate',
-      stack:      run.stack,
-      state:      { local_state: frame.local_state },
-      step_count: (run.step_count ?? 0) + 1,
-    }
-  );
-
-  // buildDialog is already imported from step-executor.mjs at the top of this file.
-  const dialog = buildDialog(recoveryStepRef, frame.local_state);
-
-  if (run.callback) {
-    await enqueueCallback(run.callback, {
-      type:          'WORKFLOW_GATE',
-      workflowRunId: run.id,
-      gate_type:     'confirm',
-      dialog,
-      callback:      run.callback,
-      traceId,
-    });
-  }
-
-  console.info('run-workflow: human_feedback — recovery gate pushed', {
-    workflowRunId: run.id, failedStep: failedStepKey, traceId,
-  });
-
-  return { action: 'human_feedback_gate', failedStep: failedStepKey };
 }
 
 // ---------------------------------------------------------------------------

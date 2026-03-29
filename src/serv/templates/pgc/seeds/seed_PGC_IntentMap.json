@@ -18,9 +18,9 @@
     "action_type": "crud"
   },
   {
-    "pattern": "help",
+    "pattern": "^help$|show help|what can you do|commands",
     "intent_category": "help",
-    "workflow_name": null,
-    "action_type": "crud"
+    "workflow_name": "help",
+    "action_type": "workflow"
   }
 ]

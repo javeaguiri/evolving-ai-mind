@@ -205,6 +205,81 @@ async function executeJsTransform({ step, localState, traceId }) {
       return { outputValue: enriched, nextAction: resolveNextAction(step.on_success, null) };
     }
 
+    case 'buildHelpOptions': {
+      // Build the domain button list for the Level 2 help gate.
+      // input_key must resolve to the registered_domains array from PGC_DomainHelp.
+      // Produces: { domainButtons, domainMap }
+      //   domainButtons — array of { action, label } for the dynamic confirm gate
+      //   domainMap     — object keyed by domain name for fast lookup at Level 3
+      // System option and Cancel are prepended/appended by the workflow gate options array —
+      // this transform only produces the per-domain buttons and the lookup map.
+      const domains = resolvePath(localState, step.input_key) ?? [];
+      const domainButtons = domains.map(d => ({
+        action: d.domain,
+        label:  `${d.domain}${d.description ? ` — ${d.description}` : ''}`,
+      }));
+      const domainMap = Object.fromEntries(domains.map(d => [d.domain, d]));
+      console.info('step-executor: js_transform — buildHelpOptions', {
+        domainCount: domains.length, traceId,
+      });
+      return {
+        outputValue: { domainButtons, domainMap },
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+
+    case 'resolveHelpContent': {
+      // Resolve the selected help topic into a formatted string for notify.
+      // Reads help_selection (set by the dynamic confirm gate) and domainMap
+      // (set by buildHelpOptions) from local_state.
+      // Returns: { isSystem, content } where content is a mrkdwn string.
+      const selection  = resolvePath(localState, step.selection_key  ?? 'help_selection');
+      const domainMap  = resolvePath(localState, step.domain_map_key ?? 'help_options.domainMap') ?? {};
+      const systemKey  = step.system_key ?? 'system';
+
+      let content;
+      let isSystem = false;
+
+      if (!selection || selection === systemKey) {
+        isSystem = true;
+        content = [
+          '*System commands:*',
+          '• `/create-domain <description>` — design and build a new data domain',
+          '• `/mind create workflow <description>` — design and register a new workflow',
+          '• `/mind help` — show this help',
+          '• `/shutdown <runId>` — emergency stop a running workflow',
+        ].join('\n');
+      } else {
+        const domain = domainMap[selection];
+        if (!domain) {
+          content = `No help found for "${selection}".`;
+        } else {
+          const lines = [
+            `*${domain.domain}*`,
+            domain.description ? `_${domain.description}_` : '',
+            '',
+            domain.aliases?.length
+              ? `*Aliases:* ${domain.aliases.join(', ')}`
+              : '',
+            '',
+            '*Commands:*',
+            ...(domain.commands ?? []).map(
+              c => `• \`${c.syntax}\` — ${c.description}`
+            ),
+          ].filter(l => l !== undefined);
+          content = lines.join('\n');
+        }
+      }
+
+      console.info('step-executor: js_transform — resolveHelpContent', {
+        selection, isSystem, traceId,
+      });
+      return {
+        outputValue: { isSystem, selection, content },
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+
     default:
       throw new Error(`js_transform: unknown transform_type "${transformType}" — generic sandbox is Phase 3`);
   }
@@ -342,9 +417,37 @@ export function buildDialog(step, localState) {
       break;
     }
 
-    case 'confirm':
-      // typography already added — no additional data fields needed
+    case 'confirm': {
+      // When context_key is present, build one button per item in the array
+      // at that path — each item's `action` and `label` fields become buttons.
+      // This is the dynamic confirm gate pattern used by the help workflow's
+      // domain selection level: the domain list is not known at workflow authoring
+      // time, so buttons are built at runtime from local_state.
+      // When context_key is absent, confirm renders as typography-only (the
+      // message is the prompt and the options array provides the buttons below).
+      if (step.context_key) {
+        const items = resolvePath(localState, step.context_key) ?? [];
+        if (Array.isArray(items) && items.length > 0) {
+          fields.push({
+            type:    'actions',
+            buttons: items.map(item => ({
+              action: item.action,
+              label:  item.label,
+              style:  'default',
+            })),
+          });
+        } else {
+          // No items — show a placeholder so the gate is not blank
+          fields.push({
+            type: 'typography',
+            value: '_(No items available)_',
+          });
+        }
+      }
+      // typography for the message is always added first (above the switch)
+      // Static options buttons (Cancel etc.) are added after the switch — see below.
       break;
+    }
 
     case 'review_object': {
       // Resolve the context and render as { key, value } pairs.

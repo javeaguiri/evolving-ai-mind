@@ -466,11 +466,16 @@ async function seedPGCIntentMap(client) {
         workflowId = lookup.rows[0].id;
       }
     }
+    // WHERE NOT EXISTS on intent_category — PGC_IntentMap has no unique constraint
+    // on pattern or intent_category, so ON CONFLICT DO NOTHING is a no-op and
+    // every cold start inserts fresh duplicate rows. This guard prevents that.
     await client.query(
       `INSERT INTO "PGC_IntentMap"
          (pattern, intent_category, workflow_id, action_type)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT DO NOTHING`,
+       SELECT $1, $2, $3, $4
+       WHERE NOT EXISTS (
+         SELECT 1 FROM "PGC_IntentMap" WHERE intent_category = $2
+       )`,
       [row.pattern, row.intent_category, workflowId, row.action_type]
     );
   }
