@@ -85,23 +85,31 @@ export async function handle(req) {
   // Slack puts these in payload.state.values keyed by block_id → action_id → value.
   // We flatten all values and take the first non-empty one — text_input gates
   // have exactly one input element per dialog.
-  let inputValue = null;
+  let inputValue    = null;
+  let selectedValue = null;  // for radio_buttons / static_select elements
   const stateValues = payload.state?.values ?? {};
   for (const blockValues of Object.values(stateValues)) {
     for (const actionValue of Object.values(blockValues)) {
+      // plain_text_input
       const text = actionValue?.value?.trim();
-      if (text) {
+      if (text && !inputValue) {
         inputValue = text;
-        break;
+      }
+      // radio_buttons and static_select — selected option value
+      const sel = actionValue?.selected_option?.value;
+      if (sel && !selectedValue) {
+        selectedValue = sel;
       }
     }
-    if (inputValue) break;
   }
 
-  // Merge inputValue into responseData so run-workflow can write it to local_state
-  const mergedResponseData = inputValue
-    ? { ...(responseData ?? {}), inputValue }
-    : responseData;
+  // Merge inputValue and selectedValue into responseData so run-workflow
+  // can write them to local_state as needed.
+  const mergedResponseData = {
+    ...(responseData ?? {}),
+    ...(inputValue    ? { inputValue }    : {}),
+    ...(selectedValue ? { selectedValue } : {}),
+  };
 
   const slackUserId = payload.user?.id;
   const channel     = payload.channel?.id;
@@ -123,7 +131,9 @@ export async function handle(req) {
     ? '✅ Got it — processing your response...'
     : userResponse === 'remove_item'
     ? '🗑️ Removing — updating...'
-    : '❌ Cancelled.';
+    : userResponse === 'cancel'
+    ? '❌ Cancelled.'
+    : `✅ Selected: ${userResponse} — processing...`;
 
   // For remove_item we keep the gate open — don't replace the full message,
   // just acknowledge. The Step Processor will re-enqueue an updated WORKFLOW_GATE.

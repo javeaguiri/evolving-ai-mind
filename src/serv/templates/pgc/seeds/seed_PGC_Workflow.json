@@ -290,7 +290,7 @@
   {
     "name": "help",
     "domain": null,
-    "description": "Presents a welcome gate to the user and posts a summary of available commands after confirmation.",
+    "description": "Interactive help \u2014 shows system commands or live domain help. Queries PGC_DomainHelp at runtime so the list grows as domains are added.",
     "intent_keywords": [
       "help",
       "what can you do",
@@ -299,22 +299,49 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 1,
+    "version": 2,
     "steps": [
       {
         "step": "1",
+        "type": "serv_query",
+        "description": "Load all registered domain help entries so domain buttons are live data.",
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "orderBy": {
+            "column": "domain",
+            "direction": "asc"
+          }
+        },
+        "output_key": "registered_domains",
+        "on_success": "next",
+        "on_failure": "next"
+      },
+      {
+        "step": "2",
+        "type": "js_transform",
+        "transform_type": "buildHelpOptions",
+        "description": "Build per-domain button list and domain lookup map from query results.",
+        "input_key": "registered_domains",
+        "output_key": "help_options",
+        "on_success": "next",
+        "on_failure": "next"
+      },
+      {
+        "step": "3",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Ask user if they want to see available commands.",
-        "message_template": "\ud83d\udc4b Welcome to evolving-mind!\n\nI can help you build and manage data domains using natural language. Want to see what I can do?",
+        "description": "Level 1 \u2014 What would you like help with? System commands or a specific domain.",
+        "message_template": "\ud83e\udde0 *What would you like help with?*",
+        "context_key": "help_options.domainButtons",
+        "output_key": "help_selection",
         "options": [
           {
-            "label": "Yes, show me",
-            "action": "confirm",
+            "label": "System commands",
+            "action": "system",
             "on_select": "next"
           },
           {
-            "label": "Not now",
+            "label": "Cancel",
             "action": "cancel",
             "on_select": "cancel"
           }
@@ -323,14 +350,45 @@
         "on_failure": "cancel"
       },
       {
-        "step": "2",
-        "type": "notify",
-        "description": "Post available commands to the user.",
-        "message_template": "\u2705 Here's what evolving-mind can do:\n\n\u2022 `/create-domain <description>` \u2014 design and build a new data domain\n\u2022 `/help` \u2014 show this message\n\nMore commands coming as the brain evolves \ud83e\udde0",
-        "on_success": "end"
+        "step": "4",
+        "type": "js_transform",
+        "transform_type": "resolveHelpContent",
+        "description": "Resolve the selected topic (system or domain name) into formatted help text.",
+        "selection_key": "help_selection",
+        "domain_map_key": "help_options.domainMap",
+        "system_key": "system",
+        "output_key": "resolved_help",
+        "on_success": "next",
+        "on_failure": "next"
       },
       {
-        "step": "3",
+        "step": "5",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Level 2 \u2014 Display the resolved help content as the gate message. User can go back to the topic selector or dismiss.",
+        "message_template": "{{resolved_help.content}}",
+        "options": [
+          {
+            "label": "Done",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Go back",
+            "action": "back",
+            "on_select": "step:3"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "6",
         "type": "end"
       }
     ]
