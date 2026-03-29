@@ -453,30 +453,19 @@ async function seedPGCWorkflow(client) {
 async function seedPGCIntentMap(client) {
   const rows = Array.isArray(seedIntentMap) ? seedIntentMap : [seedIntentMap];
   for (const row of rows) {
-    // Resolve workflow_id by name if provided — nullable for ad-hoc intents
-    let workflowId = null;
-    if (row.workflow_name) {
-      const lookup = await client.query(
-        `SELECT id FROM "PGC_Workflow" WHERE name = $1`,
-        [row.workflow_name]
-      );
-      if (lookup.rows.length === 0) {
-        console.warn(`init-brain: seed_PGC_IntentMap — no PGC_Workflow row for "${row.workflow_name}", seeding with workflow_id = NULL`);
-      } else {
-        workflowId = lookup.rows[0].id;
-      }
-    }
     // WHERE NOT EXISTS on intent_category — PGC_IntentMap has no unique constraint
     // on pattern or intent_category, so ON CONFLICT DO NOTHING is a no-op and
     // every cold start inserts fresh duplicate rows. This guard prevents that.
+    // workflow_id column has been dropped — PGC_IntentMap and PGC_Workflow are
+    // structurally independent; routing uses action_type + intent_category only.
     await client.query(
       `INSERT INTO "PGC_IntentMap"
-         (pattern, intent_category, workflow_id, action_type)
-       SELECT $1, $2, $3, $4
+         (pattern, intent_category, action_type)
+       SELECT $1, $2, $3
        WHERE NOT EXISTS (
          SELECT 1 FROM "PGC_IntentMap" WHERE intent_category = $2
        )`,
-      [row.pattern, row.intent_category, workflowId, row.action_type]
+      [row.pattern, row.intent_category, row.action_type]
     );
   }
   console.info('init-brain: PGC_IntentMap seeded');

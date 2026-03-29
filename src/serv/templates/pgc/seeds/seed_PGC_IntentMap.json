@@ -2,25 +2,21 @@
   {
     "pattern": "create.domain|new.domain|build.domain",
     "intent_category": "create_domain",
-    "workflow_name": "create_domain",
     "action_type": "heavy_lift"
   },
   {
     "pattern": "create.workflow|new.workflow",
     "intent_category": "create_workflow",
-    "workflow_name": "create_workflow",
     "action_type": "heavy_lift"
   },
   {
     "pattern": "list.domains|show.domains",
     "intent_category": "list_domains",
-    "workflow_name": null,
     "action_type": "crud"
   },
   {
     "pattern": "^help$|show help|what can you do|commands",
     "intent_category": "help",
-    "workflow_name": "help",
     "action_type": "workflow"
   }
 ]
