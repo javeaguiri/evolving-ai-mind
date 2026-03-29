@@ -31,7 +31,24 @@
  */
 export function matchIntentMap(userInput, intentRows) {
   const input = userInput.toLowerCase();
-  for (const row of intentRows) {
+
+  // Sort defensively: prefer rows with action_type='workflow' and a non-null
+  // workflow_id over crud/heavy_lift rows with the same pattern. This prevents
+  // a duplicate or stale crud row from shadowing the correct workflow row when
+  // both match the same input. Within each priority tier, lower id wins
+  // (first-seeded row is canonical).
+  const sorted = [...intentRows].sort((a, b) => {
+    const aScore = (a.action_type === 'workflow' && a.workflow_id) ? 0
+                 : (a.action_type === 'heavy_lift')                ? 1
+                 : 2;  // crud or anything else
+    const bScore = (b.action_type === 'workflow' && b.workflow_id) ? 0
+                 : (b.action_type === 'heavy_lift')                ? 1
+                 : 2;
+    if (aScore !== bScore) return aScore - bScore;
+    return (a.id ?? 0) - (b.id ?? 0);
+  });
+
+  for (const row of sorted) {
     try {
       const regex = new RegExp(row.pattern, 'i');
       if (regex.test(input)) {
