@@ -604,12 +604,53 @@ async function executeIteratorItem({ run, traceId }) {
   frame.results.push(result.outputValue ?? { tableName: item.tableName, status: 'created' });
   frame.current_index++;
 
+  // Self-completing iterator: if this was the last item, execute the completion
+  // path inline rather than enqueuing another execute_top hop. This eliminates
+  // the SQS message loss window that causes runs to get permanently stuck after
+  // the last item — the iterator frame pop and parent advancement happen in the
+  // same Lambda invocation as the final item execution.
+  if (frame.current_index >= frame.items.length) {
+    const results = frame.results;
+    run.stack.pop();
+    const parentFrame = topFrame(run);
+
+    if (parentFrame && frame.output_key) {
+      setPath(parentFrame.local_state, frame.output_key, results);
+    }
+
+    if (parentFrame) {
+      const steps    = await loadSteps(run.workflow_name, traceId);
+      const nextStep = resolveNextStep(steps, frame.parent_step, frame.on_complete);
+      parentFrame.current_step = nextStep;
+    }
+
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      {
+        stack:      run.stack,
+        state:      { local_state: parentFrame?.local_state ?? {} },
+        step_count: (run.step_count ?? 0) + 1,
+      }
+    );
+
+    console.info('run-workflow: iterator complete (inline)', {
+      workflowRunId: run.id,
+      parentStep:    frame.parent_step,
+      nextStep:      parentFrame?.current_step,
+      total:         frame.items.length,
+      traceId,
+    });
+
+    await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
+    return { action: 'iterator_complete', results };
+  }
+
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
     { stack: run.stack, step_count: (run.step_count ?? 0) + 1 }
   );
 
-  // Enqueue next item (or completion)
+  // Enqueue next item
   await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
   return { action: 'iterator_item_done', index: frame.current_index - 1 };
 }

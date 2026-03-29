@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 4,
+    "version": 5,
     "steps": [
       {
         "step": "1",

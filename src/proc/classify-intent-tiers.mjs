@@ -26,23 +26,21 @@
  * Returns the first matching row, or null if nothing matched.
  *
  * @param {string}   userInput   Lowercased user input
- * @param {object[]} intentRows  PGC_IntentMap rows — each has { pattern, intent_category, action_type, workflow_id }
+ * @param {object[]} intentRows  PGC_IntentMap rows — each has { pattern, intent_category, action_type }
  * @returns {object|null}
  */
 export function matchIntentMap(userInput, intentRows) {
   const input = userInput.toLowerCase();
 
-  // Sort defensively: prefer rows with action_type='workflow' and a non-null
-  // workflow_id over crud/heavy_lift rows with the same pattern. This prevents
-  // a duplicate or stale crud row from shadowing the correct workflow row when
-  // both match the same input. Within each priority tier, lower id wins
-  // (first-seeded row is canonical).
+  // Sort defensively: prefer rows with action_type='workflow' over crud/heavy_lift
+  // rows with the same pattern. workflow_id is no longer a routing signal —
+  // action_type alone determines priority. Within each tier, lower id wins.
   const sorted = [...intentRows].sort((a, b) => {
-    const aScore = (a.action_type === 'workflow' && a.workflow_id) ? 0
-                 : (a.action_type === 'heavy_lift')                ? 1
+    const aScore = a.action_type === 'workflow'    ? 0
+                 : a.action_type === 'heavy_lift'  ? 1
                  : 2;  // crud or anything else
-    const bScore = (b.action_type === 'workflow' && b.workflow_id) ? 0
-                 : (b.action_type === 'heavy_lift')                ? 1
+    const bScore = b.action_type === 'workflow'    ? 0
+                 : b.action_type === 'heavy_lift'  ? 1
                  : 2;
     if (aScore !== bScore) return aScore - bScore;
     return (a.id ?? 0) - (b.id ?? 0);

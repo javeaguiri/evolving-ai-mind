@@ -113,8 +113,10 @@ async function classify(userInput, sessionId, traceId) {
       intent_category: intentMatch.intent_category,
       action_type:     intentMatch.action_type,
       confidence:      'exact',
-      workflow_name:   intentMatch.workflow_id ? intentMatch.intent_category : null,
-      workflow_id:     intentMatch.workflow_id ?? null,
+      // workflow_name is the intent_category when action_type is 'workflow' —
+      // handoff() looks up the workflow by name, not by workflow_id.
+      // workflow_id is no longer a routing gate — action_type alone determines routing.
+      workflow_name:   intentMatch.action_type === 'workflow' ? intentMatch.intent_category : null,
       domain:          null,
       ad_hoc_step:     null,
     };
@@ -411,11 +413,23 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 // ---------------------------------------------------------------------------
 
 async function handoff(result, callback, traceId, userInput) {
-  // Named workflow matched — create PGC_WorkflowRun row, then enqueue WORKFLOW_STEP execute_top.
-  // A WORKFLOW_STEP message must always carry a valid workflowRunId (architecture Section 3.2).
-  if (result.action_type === 'workflow' && result.workflow_id) {
+  // Named workflow matched — look up PGC_Workflow by name to get the id,
+  // then create PGC_WorkflowRun and enqueue WORKFLOW_STEP execute_top.
+  // workflow_id is no longer carried on PGC_IntentMap — we always resolve
+  // by name so the intent map and workflow table remain structurally independent.
+  if (result.action_type === 'workflow' && result.workflow_name) {
+    const wfResp = await getRows(
+      'PGC_Workflow',
+      [{ column: 'name', op: 'eq', value: result.workflow_name }],
+      null, 1
+    );
+    if (!wfResp.success || wfResp.count === 0) {
+      throw new Error(`handoff: workflow "${result.workflow_name}" not found in PGC_Workflow`);
+    }
+    const workflowId = wfResp.rows[0].id;
+
     const runResp = await insertRow('PGC_WorkflowRun', {
-      workflow_id:  result.workflow_id,
+      workflow_id:  workflowId,
       trace_id:     traceId,
       triggered_by: 'slack',
       status:       'pending',
