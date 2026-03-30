@@ -2,18 +2,19 @@
 // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
 // See LICENSE file in the project root for full license terms.
 // src/serv/init-brain.mjs
-// PostgreSQL client factory and PGC bootstrap.
+// PostgreSQL client factory and PGC bootstrap HTTP handler.
 //
 // Responsibilities:
 //   1. Provide getClient(url) — opens a pg.Client with standard SSL config.
-//   2. On cold start, bootstrap() ensures all PGC system tables exist.
-//      Reads src/serv/templates/pgc/*.json → buildCreateTableSQL() → CREATE TABLE IF NOT EXISTS.
-//      Safe to call on every Lambda invocation — IF NOT EXISTS makes it idempotent.
+//   2. bootstrap(req) — install-time HTTP handler for POST /api/v1/serv/bootstrap.
+//      Ensures all PGC system tables exist and seeds initial data.
+//      NOT called on cold start — avoids concurrent-update races when multiple
+//      Lambda containers initialise simultaneously.
 //
-// Called by: serv/handler.mjs (cold start), schema.mjs (getClient, buildCreateTableSQL)
-// Never throws — returns { ok, report, error } so callers decide how to handle failures.
+// Called by: serv/handler.mjs (bootstrap route), schema.mjs (getClient, buildCreateTableSQL)
 
-import pg           from 'pg';
+import pg              from 'pg';
+import { ok, err }     from '../shared/lambda-utils.mjs';
 
 // Fixed — bundled at build time by esbuild
 import PGC_Schema       from './templates/pgc/PGC_Schema.json'       with { type: 'json' };
@@ -96,14 +97,29 @@ export function getClient(connectionString) {
 }
 
 /**
- * Ensure all PGC system tables exist.
- * Safe to call on every Lambda invocation — skips on warm containers.
+ * Initialise all PGC system tables, views, and seed data.
+ * Install-time HTTP handler — POST /api/v1/serv/bootstrap.
+ * NOT called automatically on cold start (concurrent Lambda initialisations
+ * cause tuple concurrently updated races in PostgreSQL).
  *
- * @returns {Promise<{ ok: boolean, report?: BootstrapReport, error?: string, cached?: boolean }>}
+ * Safe to call multiple times — idempotent, skips existing tables.
+ * Returns cached result if called again within the same container lifetime.
+ *
+ * @param {ReturnType<import('../shared/lambda-utils.mjs').parseEvent>} req
  */
-export async function bootstrap() {
+export async function bootstrap(req) {
+  const correlationId = req?.correlationId;
+  console.info('serv: bootstrap requested', { correlationId });
+
   if (bootstrapComplete) {
-    return { ok: true, report: cachedReport, cached: true };
+    console.info('serv: bootstrap — returning cached result', { correlationId });
+    return ok({
+      success:          true,
+      cached:           true,
+      freshEnvironment: cachedReport?.freshEnvironment ?? false,
+      tables:           cachedReport?.tables ?? [],
+      bootstrappedAt:   cachedReport?.bootstrappedAt,
+    }, correlationId);
   }
 
   const client = getClient(process.env.PGC_DATABASE_URL);
@@ -160,11 +176,17 @@ export async function bootstrap() {
       console.info('init-brain: bootstrap complete — all tables already existed');
     }
 
-    return { ok: true, report };
+    return ok({
+      success:          true,
+      cached:           false,
+      freshEnvironment,
+      tables:           tableResults,
+      bootstrappedAt:   report.bootstrappedAt,
+    }, correlationId);
 
   } catch (error) {
     console.error('init-brain: bootstrap failed', error.message);
-    return { ok: false, error: error.message };
+    return err(500, `Bootstrap failed: ${error.message}`, correlationId);
   } finally {
     await client.end();
     await pgdClient.end();

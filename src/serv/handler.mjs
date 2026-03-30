@@ -5,9 +5,10 @@
 // Lambda entry point for the SERV (Service) layer.
 // Owns: /api/v1/serv/{proxy+}
 //
-// On every cold start, bootstrap() is called to ensure all PGC system
-// tables exist. The bootstrap report is attached to req so route handlers
-// and PROC can see whether a fresh environment was initialised.
+// Bootstrap is NOT called on cold start — it is an explicit install-time
+// operation invoked via POST /api/v1/serv/bootstrap (see README.md).
+// Running bootstrap on cold start caused concurrent-update races when
+// multiple Lambda containers initialised simultaneously.
 //
 // Sub-route switching lives here — NOT in template.yaml.
 
@@ -18,49 +19,24 @@ import { bootstrap }          from './init-brain.mjs';
 import { handle as table }   from './table.mjs';
 import { handle as entity } from './entity.mjs';
 
-// Bootstrap runs once per cold start — warm containers return cached result.
-let bootstrapResult = null;
-
-async function ensureBootstrap() {
-  if (bootstrapResult) return bootstrapResult;
-  bootstrapResult = await bootstrap();
-  return bootstrapResult;
-}
-
 /**
  * AWS Lambda handler — called by API Gateway for every
  * /api/v1/serv/* request.
  */
 export async function handler(event) {
-  // Run bootstrap on every cold start — idempotent, skipped on warm containers
-  const boot = await ensureBootstrap();
-
-  if (!boot.ok) {
-    console.error('serv: bootstrap failed, rejecting request', boot.error);
-    return err(503, `Service unavailable — PGC bootstrap failed: ${boot.error}`, 'boot-failure');
-  }
-
-  if (boot.report?.freshEnvironment) {
-    console.info('serv: fresh environment — PGC tables were just created', {
-      tables:         boot.report.tables,
-      bootstrappedAt: boot.report.bootstrappedAt,
-    });
-  }
-
   const req      = parseEvent(event);
   const segments = req.path.split('/').filter(Boolean);
   req.subRoute   = segments.pop();
   const parent   = segments.pop();
-  req.route      = parent === 'serv' ? req.subRoute : parent;  
-
-  // Attach bootstrap report so PROC can read it from invoke responses
-  req.bootstrapReport = boot.report;
+  req.route      = parent === 'serv' ? req.subRoute : parent;
 
   switch (req.route) {
     case 'ping-db': return pingDb(req);
     case 'schema':  return schema(req);
     case 'table':   return table(req);
     case 'entity':  return entity(req);
+    case 'bootstrap': return bootstrap(req);
+
     default:
       return err(404, `SERV route "${req.route}" not found`, req.correlationId);
   }
