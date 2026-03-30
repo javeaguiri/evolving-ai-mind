@@ -15,8 +15,8 @@
 //
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
-//   js_transform — columnSummary built-in only; transform_type required;
-//                  generic sandbox is Phase 3
+//   js_transform — built-ins: columnSummary, buildHelpOptions, resolveHelpContent,
+//                  buildEntitySchema; transform_type required; generic sandbox is Phase 3
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
@@ -276,6 +276,117 @@ async function executeJsTransform({ step, localState, traceId }) {
       });
       return {
         outputValue: { isSystem, selection, content },
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+
+    case 'buildEntitySchema': {
+      // Build a full entity schema object by combining PGC_EntitySchema (join topology)
+      // with PGC_Schema (live column definitions for root and all child tables).
+      //
+      // PGC_EntitySchema owns: root_table, joins (which child tables exist and how they
+      // relate), aggregations (output_key and alias per child). It does NOT own column
+      // lists — those are owned by PGC_Schema and are the single source of truth.
+      //
+      // This transform queries PGC_Schema for all tables in the entity (root + every
+      // join table) in a single 'in' call, then assembles:
+      //   {
+      //     entity_name, description,
+      //     root: { table, columns: [non-system, non-FK col names] },
+      //     children: [{ table, alias, fk_column, output_key, columns }]
+      //   }
+      //
+      // input_key must resolve to a PGC_EntitySchema row (not an array).
+      // System columns (id, created_at, updated_at) and FK columns are excluded
+      // from all column lists — the workflow injects FKs at insert time.
+      const entitySchema = resolvePath(localState, step.input_key);
+      if (!entitySchema || typeof entitySchema !== 'object') {
+        throw new Error(
+          `js_transform buildEntitySchema: input_key "${step.input_key}" did not resolve to an entity schema row`
+        );
+      }
+
+      const rootTable   = entitySchema.root_table;
+      const joins       = Array.isArray(entitySchema.joins)        ? entitySchema.joins        : [];
+      const aggregations = Array.isArray(entitySchema.aggregations) ? entitySchema.aggregations : [];
+
+      // Collect all table names — root first, then child tables from joins
+      const allTables = [rootTable, ...joins.map(j => j.table)].filter(Boolean);
+
+      // Single PGC_Schema query for all tables
+      const schemaResp = await getRows(
+        'PGC_Schema',
+        [{ column: 'table_name', op: 'in', value: allTables }],
+        undefined,
+        allTables.length + 1
+      );
+
+      if (!schemaResp.success) {
+        throw new Error(`js_transform buildEntitySchema: PGC_Schema query failed: ${schemaResp.error}`);
+      }
+
+      // Build lookup: tableName → column array
+      const schemaByTable = {};
+      for (const row of schemaResp.rows ?? []) {
+        schemaByTable[row.table_name] = row.columns ?? [];
+      }
+
+      // Helper: extract non-system, non-FK column names from a schema row's columns
+      const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
+      function userColumns(tableName, fkColumnsToExclude = []) {
+        const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
+        return (schemaByTable[tableName] ?? [])
+          .filter(c => !exclude.has(c.name))
+          .map(c => c.name);
+      }
+
+      // Root table — no FK columns to exclude (root has no FK to other domain tables)
+      const rootColumns = userColumns(rootTable);
+
+      // Child tables — exclude the FK column that references the root table's id.
+      // FK column is found by looking at the PGC_Schema foreign_keys for the child.
+      // Fallback: derive from join.on expression (e.g. "s.recipe_id = r.id" → "recipe_id")
+      const children = joins.map(join => {
+        const agg = aggregations.find(a => a.alias === join.alias) ?? {};
+
+        // Try to find FK column from PGC_Schema foreign_keys on the child table
+        const childSchemaRow = (schemaResp.rows ?? []).find(r => r.table_name === join.table);
+        const fkCols = (childSchemaRow?.foreign_keys ?? []).map(fk => fk.column);
+
+        // Fallback: parse FK column from join.on e.g. "s.recipe_id = r.id"
+        if (fkCols.length === 0 && join.on) {
+          const onMatch = join.on.match(/(w+).(w+)s*=s*r.id/);
+          if (onMatch) fkCols.push(onMatch[2]);
+        }
+
+        return {
+          table:      join.table,
+          alias:      join.alias,
+          fk_column:  fkCols[0] ?? null,
+          output_key: agg.outputKey ?? join.alias,
+          columns:    userColumns(join.table, fkCols),
+        };
+      });
+
+      const result = {
+        entity_name:  entitySchema.entity_name,
+        description:  entitySchema.description,
+        root: {
+          table:   rootTable,
+          columns: rootColumns,
+        },
+        children,
+      };
+
+      console.info('step-executor: js_transform — buildEntitySchema', {
+        entity:       result.entity_name,
+        rootTable,
+        childCount:   children.length,
+        traceId,
+      });
+
+      return {
+        outputValue: result,
         nextAction:  resolveNextAction(step.on_success, null),
       };
     }
