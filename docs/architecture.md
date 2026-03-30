@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — create_workflow complete (Phase 2 item 4b); Phase 2 item 4c (`/mind edit aliases`) and Phase 3 features next  
-Last updated: 2026-03-28 (session 11)
+Status: Active development — Gap 3 (rich multi-table ingestion) next  
+Last updated: 2026-03-30 (sessions 12–14)
 
 ---
 
@@ -480,18 +480,28 @@ This pattern means every PROC endpoint is:
 
 **Bootstrap — `init-brain.mjs`**
 
-On every Lambda cold start, `bootstrap()` runs and is idempotent:
-1. Install `set_updated_at()` trigger function on PGC
+`bootstrap()` is an **install-time HTTP handler**, not a cold-start routine.
+It is called once during installation via `POST /api/v1/serv/bootstrap` and is
+idempotent — safe to call again if needed. It is NOT called automatically on
+Lambda cold start. Running bootstrap on cold start caused PostgreSQL
+`tuple concurrently updated` errors when multiple Lambda containers initialised
+simultaneously and raced to seed the same rows.
+
+`serv/handler.mjs` routes `case 'bootstrap': return bootstrap(req)` — the
+same one-line delegation pattern as all other SERV routes. `bootstrap(req)`
+returns `ok()`/`err()` directly, following the established SERV handler pattern.
+
+Bootstrap steps:
+1. Install `set_updated_at()` trigger function on PGC and PGD
 2. `CREATE TABLE IF NOT EXISTS` for all PGC system tables (from imported JSON templates)
 3. Seed self-referential rows into `PGC_Schema` (`ON CONFLICT DO NOTHING`)
 4. Seed gatekeeper rows into `PGC_TableMap` (`ON CONFLICT DO NOTHING`)
-5. Seed `PGC_Prompt` rows for system workflows (`ON CONFLICT DO NOTHING` via `WHERE NOT EXISTS`)
-6. Seed `PGC_Workflow` rows for system workflows (`ON CONFLICT DO NOTHING`)
-7. Seed `PGC_IntentMap` rows (`ON CONFLICT DO NOTHING`)
-8. Set `bootstrapComplete = true` — skipped on warm containers
+5. Seed `PGC_Workflow` rows for system workflows (`WHERE NOT EXISTS`)
+6. Seed `PGC_IntentMap` rows (`WHERE NOT EXISTS ON intent_category`)
+7. Seed `PGC_Prompt` rows for system workflows (`WHERE NOT EXISTS ON intent_category + version`)
+8. Set `bootstrapComplete = true` — returns cached result on subsequent calls within same container
 
-All seed operations use `ON CONFLICT DO NOTHING` or `WHERE NOT EXISTS` — never `DO UPDATE`.
-This ensures concurrent cold-start bootstraps are fully idempotent and cannot race on the same rows.
+All seed operations use `WHERE NOT EXISTS` or `ON CONFLICT DO NOTHING` — never `DO UPDATE`.
 
 Bootstrap template files live in `src/serv/templates/pgc/` and are imported as ES module
 static imports — NOT read via `fs.readFile` at runtime.
@@ -684,7 +694,7 @@ Rows are seeded at bootstrap for system-level intents, and written at runtime by
 
 These two tables answer different questions and are consulted in a strict order by the Intent Preprocessor (see Section 6.4 Tier 1).
 
-`PGC_IntentMap` answers: "Is this a known system-level intent?" — create domain, create workflow, help, or any user-defined workflow. Its patterns are written by developers (bootstrap seed) or by the brain itself when a new workflow is stored. It has a direct FK to `PGC_Workflow` so a match immediately tells the preprocessor exactly which workflow to run. Pass 1a in Tier 1 — always runs first.
+`PGC_IntentMap` answers: "Is this a known system-level intent?" — create domain, create workflow, help, or any user-defined workflow. Its patterns are written by developers (bootstrap seed) or by the brain itself when a new domain is created. It has no FK to `PGC_Workflow` — routing uses `action_type` + `intent_category` name lookup in `handoff()`. Pass 1a in Tier 1 — always runs first.
 
 `PGC_DomainHelp` answers: "Does the user's input mention something in their personal data?" — stocks, recipes, meals, budget. It has no FK to `PGC_Workflow` and no awareness of workflows. It only knows that "stocks", "portfolio", and "holdings" all mean `stock_portfolio`. Pass 1b in Tier 1 — only consulted when no `PGC_IntentMap` pattern matched. Once a domain is resolved from `PGC_DomainHelp`, the preprocessor runs CRUD verb detection (Pass 1c) or passes the resolved domain as a hint to Tier 2.
 
@@ -1044,6 +1054,7 @@ programmer's intent.
 | 6.1 | Process Layer API — HTTP routes and SQS message types |
 | 6.2 | Process Layer config tables — PGC as the brain's system memory |
 | 6.3 | Intent Preprocessor — the kernel that routes input to programs |
+| 6.3a | Intent Preprocessor contracts — Pass/Tier I/O shapes, routing rules, invariants |
 | 6.4 | Step Orchestrator — WorkflowRun, execution loop, and all execution subsystems |
 | 6.4.1 | Step types — the instruction set |
 | 6.4.2 | Execution Stack — the program counter and call stack |
@@ -1135,7 +1146,7 @@ from PGC at runtime.
 | `PGC_WorkflowRun` | Process control block — stack, status, state, callback for each run | Step Processor | Step Processor |
 | `PGC_WorkflowRunStep` | Audit log — one row per step execution, used for idempotency | Step Processor | Step Processor |
 | `PGC_Prompt` | Prompt store — `prompt_text`, `output_schema`, `model`, `error_log` per intent | Step Processor (llm_call steps) | `upsert-prompt.mjs` / right-brain |
-| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `workflow_id` | Intent Preprocessor | `create_domain` workflow (step 10) |
+| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `action_type`. Structurally independent from `PGC_Workflow` — no `workflow_id` FK. Routing uses `action_type` + `intent_category` name lookup | Intent Preprocessor | `create_domain` workflow (step 10) |
 | `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 8) |
 | `PGC_Schema` | Schema registry — column definitions per PGD table | SERV (column validation) | `create_domain` workflow (DDL iterator) |
 | `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
@@ -1153,7 +1164,7 @@ When `create_domain` runs, the Step Processor:
 3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
 4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
 5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
-6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_Workflow` (4 CRUD workflows), and `PGC_IntentMap` (4 rows) — making the new domain available to the Intent Preprocessor
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_Workflow` (4 CRUD workflows), `PGC_IntentMap` (4 rows — pattern + intent_category + action_type, no workflow_id), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity
 
 The PGC tables are not just config — they are the evolving state of the brain.
 The Intent Preprocessor reads from PGC to route incoming intents. The Step
@@ -1182,10 +1193,20 @@ User input — arrives via /mind Slack command
 Tier 1 — Coded logic (zero LLM cost)
   │
   ├── Pass 1a: regex test against PGC_IntentMap.pattern rows
-  │     Load all rows. Test lowercased input against each pattern.
-  │     First match → intent_category + action_type + workflow_id.
-  │     SHORT-CIRCUIT — no further passes if matched.
-  │     e.g. "build me a new domain" → create.domain → heavy_lift
+  │     Load all rows. Sort: workflow rows before crud, lower id wins within tier.
+  │     Test lowercased input against each pattern.
+  │     First match → intent_category + action_type.
+  │     │
+  │     ├── action_type = 'workflow' or 'heavy_lift'
+  │     │     SHORT-CIRCUIT — return immediately, handoff() routes to Step Processor
+  │     │     e.g. "build me a new domain" → create.domain → heavy_lift
+  │     │
+  │     └── action_type = 'crud'
+  │           Extract domain from intent_category (strip verb prefix: add_recipes → recipes)
+  │           Resolve root table via PGC_EntitySchema, fallback to PGC_Schema
+  │           Build ad_hoc_step via matchCrudVerb() — same as Pass 1c
+  │           SHORT-CIRCUIT with domain + ad_hoc_step populated
+  │           e.g. "add my recipes name=Pasta" → insert on PGD_Recipes
   │
   ├── Pass 1b: tokenise input, scan PGC_DomainHelp.aliases arrays
   │     Load all domain rows. Check if any alias token appears in input.
@@ -1219,23 +1240,81 @@ Tier 3 — Heavy lift handoff (no additional LLM call)
                                             but have no workflow for it yet."
 ```
 
-#### Classification response shape
+#### Two coexisting CRUD paths — table-level vs domain-level
+
+A deliberate architectural boundary separates simple table operations from
+full domain operations. Both paths coexist and are distinguished by `action_type`
+in `PGC_IntentMap`:
+
+| `action_type` | Path | Scope | Cost |
+|---|---|---|---|
+| `crud` | Pass 1a → `executeCrudStep()` direct | Root table only — single-row INSERT / SELECT / UPDATE / DELETE | Zero LLM, zero WorkflowRun |
+| `workflow` | Pass 1a → `handoff()` → Step Processor | Full domain entity — root + child tables, validation gates, multi-step | WorkflowRun lifecycle |
+
+The `create_domain` workflow registers four CRUD intent rows per domain. Add,
+update, and delete default to `action_type: crud` (table-level, immediate).
+List defaults to `action_type: workflow` (Step Processor, formatted response).
+When a full domain-level workflow is built for a verb (e.g. `ingest_recipe` for
+structured multi-table add), the intent row is updated to `action_type: workflow`
+so the workflow takes over from the direct CRUD path.
+
+#### Classification result shape
 
 ```json
 {
-  "intent_category": "list_stock_portfolio",
+  "intent_category": "add_recipes",
+  "action_type":     "crud",
+  "confidence":      "exact",
+  "workflow_name":   null,
+  "domain":          "recipes",
+  "ad_hoc_step":     { "type": "serv_insert", "input": { "tableName": "PGD_Recipes", "row": { "name": "Pasta" } } }
+}
+```
+
+```json
+{
+  "intent_category": "list_recipes",
   "action_type":     "workflow",
-  "confidence":      "exact | alias | crud | llm_classified | heavy_lift",
-  "workflow_name":   "list_stock_portfolio",
-  "workflow_id":     12,
-  "domain":          "stock_portfolio",
-  "ad_hoc_step":     null,
-  "traceId":         "uuid"
+  "confidence":      "exact",
+  "workflow_name":   "list_recipes",
+  "domain":          null,
+  "ad_hoc_step":     null
 }
 ```
 
 `confidence` is the tier and pass that produced the result — useful for
 right-brain analysis of where classification is weak.
+
+#### handoff() routing contract
+
+`handoff()` in `classify-intent.mjs` routes the classification result downstream.
+The routing rules are final — do not add per-workflow special cases here:
+
+| `action_type` | `workflow_name` | Route |
+|---|---|---|
+| `workflow` | set | Look up `PGC_Workflow` by `workflow_name`, create `PGC_WorkflowRun`, enqueue `WORKFLOW_STEP execute_top` |
+| `heavy_lift` | — | `resolveTier3Route()` → enqueue `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `WORKFLOW_NOTIFY` |
+| `crud` | — | `executeCrudStep()` — executes `ad_hoc_step` directly, posts result as `WORKFLOW_NOTIFY` |
+| `crud_ambiguous` | — | Post instructive error to user (missing id, missing fields, unknown domain) |
+
+**`PGC_IntentMap` has no `workflow_id` column.** This was removed as a structural
+error — there is no genuine FK relationship between the intent map and workflow
+table. `handoff()` looks up the workflow by name at dispatch time. `action_type`
+alone is the routing signal.
+
+#### matchIntentMap sort order — FINAL
+
+`matchIntentMap()` in `classify-intent-tiers.mjs` sorts all `PGC_IntentMap` rows
+before iterating. Sort order:
+
+1. `action_type = 'workflow'` — score 0 (highest priority)
+2. `action_type = 'heavy_lift'` — score 1
+3. `action_type = 'crud'` and all others — score 2 (lowest priority)
+4. Within each tier: lower `id` wins (first-seeded row is canonical)
+
+This ensures that if a duplicate stale `crud` row somehow matches the same
+pattern as a `workflow` row, the workflow row always wins. This is the defensive
+guard against `PGC_IntentMap` data quality issues.
 
 #### LLM model selection
 
@@ -1253,6 +1332,105 @@ Model selection is per-prompt row in `PGC_Prompt.model`.
 - Every classified intent resolves to a `PGC_Workflow` row or a known entry point
 - The preprocessor has no `PGC_WorkflowRun` row of its own — it is a routing
   function, not a workflow. It never touches the execution stack.
+- `PGC_IntentMap` and `PGC_Workflow` are structurally independent — no FK between them
+
+---
+
+### 6.3a Intent Preprocessor — I/O contracts and invariants
+
+This section documents the input/output contracts between the Intent Preprocessor
+passes and tiers. Future work must preserve these contracts — they are the
+interfaces that allow passes to compose correctly and that `handoff()` relies on.
+
+#### Classification result object — canonical shape
+
+Every return path in `classify()` produces this shape:
+
+```js
+{
+  intent_category: string,      // e.g. "add_recipes", "create_domain", "unknown_domain_crud"
+  action_type:     string,      // 'workflow' | 'heavy_lift' | 'crud' | 'crud_ambiguous'
+  confidence:      string,      // 'exact' | 'crud' | 'llm_classified' | 'heavy_lift'
+  workflow_name:   string|null, // set when action_type === 'workflow', null otherwise
+  domain:          string|null, // set when domain was resolved (Pass 1a crud, 1b, 1c, Tier 2)
+  ad_hoc_step:     object|null, // set when action_type === 'crud' and verb resolved
+  // Optional — present on crud_ambiguous paths only:
+  known_domains:   string[],
+  table_columns:   string[],
+  root_table:      string,
+  ambiguous_reason: string,     // 'no_id' | 'no_fields'
+}
+```
+
+**Invariants:**
+- `workflow_name` is set if and only if `action_type === 'workflow'`
+- `ad_hoc_step` is set if and only if `action_type === 'crud'` AND the verb was unambiguous
+- `action_type === 'crud_ambiguous'` means the intent was identified but cannot execute — post instructive error
+- `domain` is always set when `action_type === 'crud'` or `'crud_ambiguous'`
+- `domain` is null when `action_type === 'workflow'` or `'heavy_lift'` — handoff does not need it
+
+#### Pass I/O boundaries
+
+| Pass | Input | Output contract |
+|---|---|---|
+| Pass 1a — workflow/heavy_lift | PGC_IntentMap row with `action_type !== 'crud'` | Short-circuits: returns result with `workflow_name` set, `domain: null`, `ad_hoc_step: null` |
+| Pass 1a — crud | PGC_IntentMap row with `action_type === 'crud'` | Resolves domain from `intent_category`, looks up root table, calls `matchCrudVerb()`. Returns full result including `ad_hoc_step` or `crud_ambiguous` |
+| Pass 1b | PGC_DomainHelp rows | Resolves `domain` string only — does not build `ad_hoc_step`. Falls through to Pass 1c |
+| Pass 1c | `domain` string + root table | Calls `matchCrudVerb()`, returns `ad_hoc_step` or `crud_ambiguous`. Falls through to Tier 2 only on no-verb match |
+| Tier 2 (sonar) | Raw user input + optional domain hint | Returns `{ intent_category, workflow_name, action_type }` — no `ad_hoc_step`, no `domain` resolution. `handoff()` looks up workflow by `workflow_name` |
+| Tier 3 | `intent_category` string | Routes to `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `WORKFLOW_NOTIFY` — no further classification |
+
+#### handoff() routing — FINAL, do not add per-workflow cases
+
+```
+action_type === 'workflow' AND workflow_name set
+  → getRows('PGC_Workflow', name = workflow_name)
+  → insertRow('PGC_WorkflowRun', ...)
+  → enqueueWorkflow(WORKFLOW_STEP execute_top)
+
+action_type === 'heavy_lift'
+  → resolveTier3Route(intent_category)
+  → enqueue CREATE_DOMAIN | CREATE_WORKFLOW | WORKFLOW_NOTIFY
+
+action_type === 'crud' AND ad_hoc_step set
+  → executeCrudStep() — runs step directly, posts WORKFLOW_NOTIFY
+
+action_type === 'crud_ambiguous'
+  → enqueueCallback(WORKFLOW_NOTIFY, instructive error message)
+
+action_type === 'crud' AND no ad_hoc_step (Tier 2 crud path — no root table resolved)
+  → enqueueCallback(WORKFLOW_NOTIFY, "could not determine which table to use")
+```
+
+#### PGC_IntentMap schema — FINAL
+
+```
+id              serial primary key
+pattern         text not null        — regex pattern, tested case-insensitive
+intent_category text not null        — e.g. "add_recipes", "help", "create_domain"
+action_type     text not null        — CHECK: 'crud' | 'workflow' | 'heavy_lift'
+created_at      timestamptz
+updated_at      timestamptz
+```
+
+**No `workflow_id` column.** Removed permanently — there is no structural
+relationship between `PGC_IntentMap` and `PGC_Workflow`. Do not add it back.
+
+#### create_domain intent row conventions
+
+The `generate_crud_workflows` prompt generates four intent rows per domain.
+Conventions that must be preserved when updating the prompt:
+
+| Verb | `action_type` | Rationale |
+|---|---|---|
+| `list_<domain>` | `workflow` | Routes to `list_<domain>` workflow — formatted response |
+| `add_<domain>` | `crud` | Table-level insert — Pass 1a resolves root table + field values |
+| `update_<domain>` | `crud` | Table-level update — requires `id=N field=value` |
+| `delete_<domain>` | `crud` | Table-level delete — requires `id=N` |
+
+When a full domain-level workflow exists for a verb (e.g. `ingest_recipe` for
+multi-table structured add), update the intent row to `action_type: workflow`
+so the Step Processor takes over.
 
 ---
 
@@ -1385,8 +1563,8 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║              ║ review-output validation (2-attempt correction loop) ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ js_transform ║ Run a named built-in transform on local_state data.  ║ ✅ Implemented   ║
-║              ║ Only built-in: columnSummary. Generic AST sandbox    ║ (columnSummary   ║
-║              ║ deferred to Phase 3.                                 ║ only)            ║
+║              ║ Built-ins: columnSummary, buildHelpOptions,          ║ (built-ins only) ║
+║              ║ resolveHelpContent. Generic AST sandbox Phase 3.     ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
 ║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
@@ -2706,7 +2884,7 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `WORKFLOW_GATE` → `callback.mjs` `chat.update` |
 | Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — now unblocked, fix in Phase 2 item 4a |
 | `create_domain` prompt produces varying schemas across runs | Medium | LLM variance at `temperature: 0.2`. Correct fix: right-brain prompt evolution via `PGC_WorkflowStats` + `PGC_Prompt.error_log`. Do not invest in defensive patching before the feedback loop exists |
-| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. New built-ins `buildDomainHelp` and `buildCrudWorkflows` added for Phase 2 item 4a. Generic sandbox deferred to Phase 3 |
+| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. New built-ins added: `buildHelpOptions`, `resolveHelpContent` (interactive help workflow), `resolveIntentMapWorkflowIds` (removed — wrong fix). Generic sandbox deferred to Phase 3 |
 | `PGC_WorkflowRunStep` idempotency uses `parseInt(stepNumber)` | ~~Medium~~ | ✅ Resolved — `step_key text` column added to `PGC_WorkflowRunStep`. `checkIdempotency` queries on `(run_id, frame_id, step_key)` string comparison. `parseInt` never used in idempotency paths. `migrate-step-key.mjs` backfilled existing rows |
 | `created_tables_summary` hardcoded in iterator | ~~Low~~ | ✅ Resolved — `notify` step message_template now uses `proposed_scaffold.domain` and explicit command examples instead of the hardcoded iterator summary |
 | `domain: null` on DDL-created tables | ~~Medium~~ | ✅ Resolved in Phase 2 item 4a — `js_transform` at step 2 enriches each table object with `domain: proposed_scaffold.domain` before the DDL iterator runs. `serv_schema createTable` writes domain to both `PGC_Schema` and `PGC_TableMap` |
@@ -2736,7 +2914,15 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | Session context window size configurable | Low | `chat_defaults` key in `PGC_SystemContext` should define `session_context_limit` (default 20). Currently hardcoded in classify-intent.mjs spec — externalise when session layer is built |
 | Live prompt export back to seed files | Medium | When the right-brain improves a prompt (via `PGC_Prompt.error_log` or manual correction), the improved version lives only in the DB. A fresh brain instance bootstrapped from `seed_PGC_Prompt.json` would revert to the original seed. Fix: `dev_scripts/export-prompts.mjs` reads live `PGC_Prompt` rows and overwrites `seed_PGC_Prompt.json`. Run before creating a new brain instance. Required before the right-brain improvement loop (Phase 3 item 8) is useful at scale |
 | `PGC_SystemContext.step_type_contracts` can become stale | Low | The `step_type_contracts` content in `PGC_SystemContext` is derived from `PGC_StepType` rows at the time `seed_PGC_SystemContext.mjs` runs. When a new step type goes live, re-run `seed_PGC_StepType.mjs` then `seed_PGC_SystemContext.mjs` to update the injected context. This is intentional — the script is the locus of control, not the prompt text |
-| Concurrent bootstrap race — `tuple concurrently updated` | ~~High~~ | ✅ Resolved — `seedPGCSchema` changed from `ON CONFLICT DO UPDATE` to `ON CONFLICT DO NOTHING`. All seed functions now use `DO NOTHING` or `WHERE NOT EXISTS`. Concurrent cold-start bootstraps are fully idempotent |
+| Concurrent bootstrap race — `tuple concurrently updated` | ~~High~~ | ✅ Resolved — `bootstrap()` removed from Lambda cold start entirely. Now an explicit install-time HTTP endpoint `POST /api/v1/serv/bootstrap`. `serv/handler.mjs` routes to `bootstrap(req)` in `init-brain.mjs` which returns `ok()`/`err()` directly. All seed functions use `WHERE NOT EXISTS` or `ON CONFLICT DO NOTHING` |
+| `PGC_IntentMap.workflow_id` false FK | ~~High~~ | ✅ Resolved — `workflow_id` column dropped from `PGC_IntentMap`. There is no structural relationship between the intent map and workflow table. Routing uses `action_type` + `intent_category` name lookup in `handoff()`. `matchIntentMap` sort uses `action_type` alone |
+| Pass 1a `crud` intents returning `domain: null` | ~~High~~ | ✅ Resolved — Pass 1a now resolves domain and builds `ad_hoc_step` for `crud` intent rows. Domain extracted from `intent_category` (strip verb prefix), root table resolved via `PGC_EntitySchema` then `PGC_Schema` fallback, CRUD verb parsed identically to Pass 1c |
+| Iterator single-item race condition | ~~High~~ | ✅ Resolved — `executeIteratorItem` completes inline after the last item instead of enqueuing a separate `execute_top` hop. Single-item iterators (step 10b — PGC_EntitySchema) were getting permanently stuck due to SQS concurrent delivery when `current_index` incremented and the completion check message arrived before the DB write was visible. `!item` fallback path retained for SQS redelivery safety |
+| `PGC_IntentMap` duplicate rows on cold start | ~~High~~ | ✅ Resolved — `seedPGCIntentMap` uses `WHERE NOT EXISTS ON intent_category`. `ON CONFLICT DO NOTHING` was a no-op (no unique constraint) causing 84+ duplicate rows per table across development sessions. 332 duplicates cleaned |
+| `create_domain` intent map rows missing `workflow_id` | ~~Medium~~ | ✅ Resolved — `workflow_id` column removed entirely. Intent rows inserted by `create_domain` step 10 need only `pattern`, `intent_category`, `action_type`. Routing works via `action_type` alone |
+| `PGC_WorkflowRun` stuck after single-item iterator | ~~High~~ | ✅ Resolved — inline iterator completion fix (see iterator race condition above). Runs 40 and 41 manually completed |
+| `executeTop` does not discard messages for `status: completed` | Medium | `executeTop` guards against `cancelled` and `failed` but not `completed`. A stale SQS message delivered after manual status patch will re-execute steps until idempotency guard catches it. Fix: add `status === 'completed'` check alongside `cancelled` at top of `executeTop` |
+| `list_recipes` notify shows "Found recipes record(s)" without count | Low | `{{results.length}}` not resolving — LLM generated the template without the token on one run. Right-brain fix — prompt variance. Do not patch the template resolver |
 | `/mind` ACK non-descriptive | ~~Low~~ | ✅ Resolved — ACK now echoes user input truncated to 100 chars. Slack angle-bracket tokens stripped |
 | `matchDomainAlias` did not match domain name itself | ~~Medium~~ | ✅ Resolved — domain name checked as implicit alias before scanning aliases array |
 | CRUD verb ambiguity not enforced uniformly | ~~Medium~~ | ✅ Resolved — insert requires `field=value` pairs, update requires `id=<number>` + `field=value`, delete requires `id=<number>`. Ambiguous requests return instructive errors listing available fields |
@@ -2829,6 +3015,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-crud-adhoc-complete` | Ad_hoc CRUD execution from /mind fully operational. serv_query/update/delete step types live in step-executor.mjs. deleteRows wrapper in serv-client.mjs. executeCrudStep() in classify-intent.mjs executes ad_hoc steps directly for all four verbs. Structured input enforcement: id=N for delete/update, field=value for insert/update. Ambiguity errors with table field listing. Domain name as implicit alias in matchDomainAlias. matchCrudVerb returns ambiguous with reason for insert/update/delete. /mind ACK echoes truncated user input. init-brain concurrent cold-start race fixed (DO NOTHING). Code review fixes: cancelled status check, dynamic imports eliminated, callLlm user-turn resolved generically. Architecture session 9 |
 | `v3.2-create-domain-with-crud` | First complete `create_domain` end-to-end: LLM schema design, 5 human gates, 4 PGD tables created, CRUD workflows + IntentMap registered, domain immediately usable from /mind. Guard 1 stuck-step detection proven. CHECK constraint expression guard in `buildCreateTableSQL`. `status=failed` check in `executeTop` stops SQS retry storm. `response_format` removed from Perplexity Agent API calls. Architecture sessions 9–10 |
 | `v3.2-create-workflow-complete` | `create_workflow` workflow fully implemented. `on_failure: "human_feedback"` live in `run-workflow.mjs` (`pushRecoveryGate()` in both catch blocks). `simulate` step type live in `step-executor.mjs` (Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis). Pass 2b routing value rules in `review-output.mjs`. `seed_PGC_StepType.mjs` + `seed_PGC_SystemContext.mjs` new dev scripts. Four new prompts in `seed_PGC_Prompt.json`. `create_workflow` v2 (12 steps) in `seed_PGC_Workflow.json`. `seedPGCPrompt` extended to write `output_schema` + `input_variables`. Architecture session 11 |
+| `v3.2-create-domain-complete-w-help` | Gap 4 (entity schema registration) + Gap 1 (interactive help) + structural refactoring. `create_domain` v5 (17 steps) — step 10b inserts `PGC_EntitySchema` rows via iterator. `generate_crud_workflows` v3 prompt produces `entitySchemas` array with joins + aggregations matching `buildSelectSQL()` in `entity.mjs`. `help` workflow v2 — 6-step interactive: `serv_query` PGC_DomainHelp → `buildHelpOptions` → dynamic `confirm` gate (one button per domain) → `resolveHelpContent` → `confirm` gate showing content. `delete-domain.mjs` cleans `PGC_Workflow` + `PGC_IntentMap` + `PGC_EntitySchema` + `PGC_DomainHelp`. `PGC_IntentMap.workflow_id` column dropped — no FK relationship exists between intent map and workflow table. `handoff()` looks up `PGC_Workflow` by `workflow_name` at dispatch time. `matchIntentMap` sort uses `action_type` alone (not `workflow_id`). `seedPGCIntentMap` uses `WHERE NOT EXISTS ON intent_category`. `executeIteratorItem` self-completes inline on last item — eliminates SQS message loss race on single-item iterators. `bootstrap()` moved from Lambda cold start to explicit `POST /api/v1/serv/bootstrap` HTTP endpoint — resolves concurrent-update race condition. Pass 1a now resolves domain + builds `ad_hoc_step` for `crud` intent rows — two coexisting CRUD paths: table-level (Pass 1a crud) and domain-level (workflow). Sessions 12–14 |
 
 ---
 
@@ -2895,6 +3082,17 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | 4c | `/mind edit aliases for <domain>` — alias management workflow | ⬜ |
 | | — Allows users to view and update PGC_DomainHelp.aliases from Slack | ⬜ |
 | | — Until live: aliases updated directly via SERV table endpoint | ⬜ |
+| Gap 1 | Interactive `/help` workflow | ✅ complete — v3.2-create-domain-complete-w-help |
+| | — `help` workflow v2: 6-step interactive — serv_query PGC_DomainHelp → buildHelpOptions → dynamic confirm gate → resolveHelpContent → confirm gate showing content | ✅ |
+| | — `js_transform` built-ins: `buildHelpOptions`, `resolveHelpContent` in `step-executor.mjs` | ✅ |
+| | — Dynamic `confirm` gate: when `context_key` present, buttons built from array at runtime | ✅ |
+| | — `interactive.mjs`: `selectedValue` extracted from radio/static_select state values | ✅ |
+| | — `run-workflow.mjs`: dynamic confirm gate writes `userResponse` to `local_state[output_key]` on no matched option | ✅ |
+| | — `/help` slash command wired in Slack app pointing to `/api/v1/ui/slack/help` | ✅ |
+| Gap 4 | PGC_EntitySchema population at domain creation | ✅ complete — v3.2-create-domain-complete-w-help |
+| | — `generate_crud_workflows` v3 produces `entitySchemas` array alongside domainHelp, workflows, intentMapRows | ✅ |
+| | — `create_domain` v5 step 10b: iterator over `generated.entitySchemas` → `serv_insert PGC_EntitySchema` | ✅ |
+| | — Entity schema shape matches `buildSelectSQL()` in `entity.mjs` exactly: joins[].{type,table,alias,on}, aggregations[].{alias,columns,outputKey} | ✅ |
 | 5 | PROC — Step Processor — SQS-driven stack execution, full PGC_WorkflowRun lifecycle | ✅ complete — v3.2-step-processor-complete |
 | | — `run-workflow.mjs`, `step-executor.mjs`, `template-resolver.mjs` | ✅ |
 | | — velocity detector, execution accumulator, cycle detector (Section 6.10) | ⬜ deferred — see tech debt register |
@@ -2924,7 +3122,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 
 | Gate type | Status |
 |---|---|
-| `confirm` | ✅ live |
+| `confirm` | ✅ live — static options array or dynamic buttons from `context_key` (runtime array) |
 | `edit_list` | ✅ live — per-row Remove button, in-place `chat.update` re-render, Add table branch (Phase 2 item 4a) |
 | `text_input` | ✅ live — add-table branch step 3a, value written to local_state[output_key] |
 | `review_object` | ✅ live — domain help confirmation step 7, column detail review step 3d |
