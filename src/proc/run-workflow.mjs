@@ -118,6 +118,14 @@ async function executeTop({ workflowRunId, traceId, source }) {
     return { skipped: true, reason: 'failed' };
   }
 
+  // Guard against stale SQS execute_top messages arriving after the run completed.
+  // Without this check, the completed run has an empty stack (cleared at completion),
+  // so executeTop would push a new root frame and re-execute the workflow from step 1.
+  if (run.status === 'completed') {
+    console.info('run-workflow: run already completed — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'completed' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {
