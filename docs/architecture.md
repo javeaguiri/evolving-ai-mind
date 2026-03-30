@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Gap 3 (rich multi-table ingestion) next  
-Last updated: 2026-03-30 (sessions 12–14)
+Status: Active development — Gap 2 (edit_workflow) next  
+Last updated: 2026-03-30 (session 15)
 
 ---
 
@@ -2921,8 +2921,11 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `PGC_IntentMap` duplicate rows on cold start | ~~High~~ | ✅ Resolved — `seedPGCIntentMap` uses `WHERE NOT EXISTS ON intent_category`. `ON CONFLICT DO NOTHING` was a no-op (no unique constraint) causing 84+ duplicate rows per table across development sessions. 332 duplicates cleaned |
 | `create_domain` intent map rows missing `workflow_id` | ~~Medium~~ | ✅ Resolved — `workflow_id` column removed entirely. Intent rows inserted by `create_domain` step 10 need only `pattern`, `intent_category`, `action_type`. Routing works via `action_type` alone |
 | `PGC_WorkflowRun` stuck after single-item iterator | ~~High~~ | ✅ Resolved — inline iterator completion fix (see iterator race condition above). Runs 40 and 41 manually completed |
-| `executeTop` does not discard messages for `status: completed` | Medium | `executeTop` guards against `cancelled` and `failed` but not `completed`. A stale SQS message delivered after manual status patch will re-execute steps until idempotency guard catches it. Fix: add `status === 'completed'` check alongside `cancelled` at top of `executeTop` |
+| ~~`executeTop` does not discard messages for `status: completed`~~ | ~~Medium~~ | ✅ Resolved — `executeTop` now checks `status === 'completed'` immediately after `cancelled` and `failed` guards. Stale SQS `execute_top` messages arriving after a completed run are discarded before the empty stack triggers a new root frame. `v3.2-gap3-add-workflow` |
 | `list_recipes` notify shows "Found recipes record(s)" without count | Low | `{{results.length}}` not resolving — LLM generated the template without the token on one run. Right-brain fix — prompt variance. Do not patch the template resolver |
+| `generate_crud_workflows` v2 `add_<domain>` thin stub still in PGC_Prompt | Info | v2 row intentionally retained as history. v4 wins at runtime via `ORDER BY version DESC LIMIT 1`. No action needed |
+| `add_<domain>` workflows already in DB from v2/v3 are thin stubs | Medium | Existing domains (e.g. recipes) have the old 2-step `add_recipes` workflow in `PGC_Workflow`. Delete and recreate the domain to get the v4 LLM-parse-first workflow. Or manually upsert the corrected step array via `upsert-workflow.mjs`. Required before testing Gap 3 on an existing domain |
+| `parse_entity_input` generic prompt — domain-specific refinement | Low | Generic prompt with entity schema injection works for well-named columns. For domains where column semantics are non-obvious, parse quality may degrade. Right-brain fix — `PGC_Prompt.error_log` records parse failures; right brain generates domain-specific refinement from evidence. Deferred to Phase 3 item 8 |
 | `/mind` ACK non-descriptive | ~~Low~~ | ✅ Resolved — ACK now echoes user input truncated to 100 chars. Slack angle-bracket tokens stripped |
 | `matchDomainAlias` did not match domain name itself | ~~Medium~~ | ✅ Resolved — domain name checked as implicit alias before scanning aliases array |
 | CRUD verb ambiguity not enforced uniformly | ~~Medium~~ | ✅ Resolved — insert requires `field=value` pairs, update requires `id=<number>` + `field=value`, delete requires `id=<number>`. Ambiguous requests return instructive errors listing available fields |
@@ -3016,6 +3019,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-create-domain-with-crud` | First complete `create_domain` end-to-end: LLM schema design, 5 human gates, 4 PGD tables created, CRUD workflows + IntentMap registered, domain immediately usable from /mind. Guard 1 stuck-step detection proven. CHECK constraint expression guard in `buildCreateTableSQL`. `status=failed` check in `executeTop` stops SQS retry storm. `response_format` removed from Perplexity Agent API calls. Architecture sessions 9–10 |
 | `v3.2-create-workflow-complete` | `create_workflow` workflow fully implemented. `on_failure: "human_feedback"` live in `run-workflow.mjs` (`pushRecoveryGate()` in both catch blocks). `simulate` step type live in `step-executor.mjs` (Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis). Pass 2b routing value rules in `review-output.mjs`. `seed_PGC_StepType.mjs` + `seed_PGC_SystemContext.mjs` new dev scripts. Four new prompts in `seed_PGC_Prompt.json`. `create_workflow` v2 (12 steps) in `seed_PGC_Workflow.json`. `seedPGCPrompt` extended to write `output_schema` + `input_variables`. Architecture session 11 |
 | `v3.2-create-domain-complete-w-help` | Gap 4 (entity schema registration) + Gap 1 (interactive help) + structural refactoring. `create_domain` v5 (17 steps) — step 10b inserts `PGC_EntitySchema` rows via iterator. `generate_crud_workflows` v3 prompt produces `entitySchemas` array with joins + aggregations matching `buildSelectSQL()` in `entity.mjs`. `help` workflow v2 — 6-step interactive: `serv_query` PGC_DomainHelp → `buildHelpOptions` → dynamic `confirm` gate (one button per domain) → `resolveHelpContent` → `confirm` gate showing content. `delete-domain.mjs` cleans `PGC_Workflow` + `PGC_IntentMap` + `PGC_EntitySchema` + `PGC_DomainHelp`. `PGC_IntentMap.workflow_id` column dropped — no FK relationship exists between intent map and workflow table. `handoff()` looks up `PGC_Workflow` by `workflow_name` at dispatch time. `matchIntentMap` sort uses `action_type` alone (not `workflow_id`). `seedPGCIntentMap` uses `WHERE NOT EXISTS ON intent_category`. `executeIteratorItem` self-completes inline on last item — eliminates SQS message loss race on single-item iterators. `bootstrap()` moved from Lambda cold start to explicit `POST /api/v1/serv/bootstrap` HTTP endpoint — resolves concurrent-update race condition. Pass 1a now resolves domain + builds `ad_hoc_step` for `crud` intent rows — two coexisting CRUD paths: table-level (Pass 1a crud) and domain-level (workflow). Sessions 12–14 |
+| `v3.2-gap3-add-workflow` | Gap 3 (rich multi-table ingestion) + Priority 2 (executeTop completed guard). `parse_entity_input` v1 — generic entity parser prompt: receives `{ userInput, entity_schema }` from `PGC_EntitySchema`, returns `{ root, children }`. `generate_crud_workflows` v4 — `add_<domain>` workflow is now 7-step LLM-parse-first: serv_query entity schema → llm_call parse_entity_input → review_object gate → serv_insert root row → iterator per child table → notify → end. All four IntentMap rows stay `action_type: workflow` — Tier 2 sonar routes free-text add intent without user keyword obligation. `run-workflow.mjs`: `executeTop` discards stale SQS messages when `run.status === 'completed'`. Session 15 |
 
 ---
 
@@ -3089,6 +3093,12 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — `interactive.mjs`: `selectedValue` extracted from radio/static_select state values | ✅ |
 | | — `run-workflow.mjs`: dynamic confirm gate writes `userResponse` to `local_state[output_key]` on no matched option | ✅ |
 | | — `/help` slash command wired in Slack app pointing to `/api/v1/ui/slack/help` | ✅ |
+| Gap 3 | Rich multi-table ingestion via LLM-parse-first `add_<domain>` workflow | ✅ complete — v3.2-gap3-add-workflow |
+| | — `parse_entity_input` v1 prompt: generic entity parser receives `{ userInput, entity_schema }` (from `PGC_EntitySchema`), returns `{ root, children }` — root fields for the root table, children keyed by aggregation `outputKey` for child tables | ✅ |
+| | — `generate_crud_workflows` bumped to v4: `add_<domain>` is now a 7-step LLM-parse-first workflow — serv_query PGC_EntitySchema → llm_call parse_entity_input → review_object gate → serv_insert root row → iterator per child table → notify → end | ✅ |
+| | — All four `PGC_IntentMap` rows stay `action_type: workflow` — Tier 2 sonar routes free-text add intent to `add_<domain>` workflow; no user keyword required | ✅ |
+| | — `run-workflow.mjs`: `executeTop` discards stale SQS messages when `run.status === 'completed'` | ✅ |
+| | — Domain-specific parse prompt refinement deferred to Phase 3 right-brain loop | ⬜ Phase 3 |
 | Gap 4 | PGC_EntitySchema population at domain creation | ✅ complete — v3.2-create-domain-complete-w-help |
 | | — `generate_crud_workflows` v3 produces `entitySchemas` array alongside domainHelp, workflows, intentMapRows | ✅ |
 | | — `create_domain` v5 step 10b: iterator over `generated.entitySchemas` → `serv_insert PGC_EntitySchema` | ✅ |
