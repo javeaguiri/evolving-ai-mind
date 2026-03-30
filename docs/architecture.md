@@ -1680,7 +1680,8 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ js_transform ║ Run a named built-in transform on local_state data.  ║ ✅ Implemented   ║
 ║              ║ Built-ins: columnSummary, buildHelpOptions,          ║ (built-ins only) ║
-║              ║ resolveHelpContent. Generic AST sandbox Phase 3.     ║                  ║
+║              ║ resolveHelpContent, buildEntitySchema.               ║                  ║
+║              ║ Generic AST sandbox Phase 3.                         ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
 ║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
@@ -2655,18 +2656,20 @@ Step 5  iterator over proposed_scaffold.tables
           item_step: serv_schema createTable(item)
           → created_tables = [{ tableName, status: 'created' }, ...]
 
-Step 6  llm_call → generated = { domainHelp, workflows: [4 CRUD workflows], intentMapRows: [4 rows] }
+Step 6  llm_call → generated = { domainHelp, workflows: [4 CRUD workflows], intentMapRows: [4 rows], entitySchemas: [1+ entity definitions] }
 Step 7  human_gate review_object → user reviews domainHelp (aliases, description, commands)
         ├── confirm → next (step 8)
         └── cancel  → cancelled
 
-Step 8  serv_insert PGC_DomainHelp ← generated.domainHelp
-Step 9  iterator over generated.workflows
-          item_step: serv_insert PGC_Workflow(item)
-Step 10 iterator over generated.intentMapRows
-          item_step: serv_insert PGC_IntentMap(item)
-Step 11 notify → "Domain {{proposed_scaffold.domain}} created."
-Step 12 end
+Step 8   serv_insert PGC_DomainHelp ← generated.domainHelp
+Step 9   iterator over generated.workflows
+           item_step: serv_insert PGC_Workflow(item)
+Step 10  iterator over generated.intentMapRows
+           item_step: serv_insert PGC_IntentMap(item)
+Step 10b iterator over generated.entitySchemas
+           item_step: serv_insert PGC_EntitySchema(item)
+Step 11  notify → "Domain {{proposed_scaffold.domain}} created."
+Step 12  end
 ```
 
 #### Why the add-table branch loops back
@@ -2689,10 +2692,129 @@ across loop iterations.
 |---|---|---|
 | 1 | `create_domain` v3 | `proposed_scaffold` |
 | 3b | `design_table` v1 | `new_table` |
-| 6 | `generate_crud_workflows` v2 | `generated` |
+| 6 | `generate_crud_workflows` v5 | `generated` |
 
 All three prompts have `output_schema` defined. The correction loop runs on all
 three if the LLM output is malformed.
+
+---
+
+#### Generated CRUD workflows — one subsection per verb
+
+The `generate_crud_workflows` v5 prompt produces four workflow definitions written
+to `PGC_Workflow` at step 9. All four have `action_type: workflow` in
+`PGC_IntentMap`. Below is the canonical step structure for each.
+
+##### list_\<domain\>
+
+Zero-LLM formatted list. Runs `serv_query` on the root table and posts a count
+and preview to Slack.
+
+```
+Step 1  serv_query PGD_<root_table>  (no filters — all rows)
+          output_key: results
+Step 2  notify → "Found {{results.length}} <domain> record(s)."
+Step 3  end
+```
+
+##### add_\<domain\>
+
+LLM-parse-first multi-table insert. Accepts natural language input of any length.
+Uses `buildEntitySchema` to load live column definitions from `PGC_Schema` for
+root and all child tables — single source of truth, immune to schema drift.
+
+```
+Step 1  serv_query PGC_EntitySchema  (filter: entity_name = <PascalCase>)
+          output_key: entity_schema_rows
+
+Step 2  js_transform buildEntitySchema
+          input_key:  entity_schema_rows.0
+          output_key: full_entity_schema
+          Queries PGC_Schema for all tables in the entity (single IN call).
+          Returns: {
+            entity_name, description,
+            root:     { table, columns: [non-system, non-FK col names] },
+            children: [{ table, alias, fk_column, output_key, columns }]
+          }
+
+Step 3  llm_call parse_entity_input  v2
+          input: { userInput: "{{input.userInput}}",
+                   full_entity_schema: "{{full_entity_schema}}" }
+          output_key: parsed_entity
+          Returns: { root: { <field>: <value> },
+                     children: { <output_key>: [rows] } }
+
+Step 4  human_gate review_object
+          context_key: parsed_entity
+          "Here's what I parsed — does this look right?"
+          ├── Looks good → next
+          └── Cancel     → cancelled
+
+Step 5  serv_insert <root_table>
+          row: "{{parsed_entity.root}}"
+          output_key: new_record
+
+Step 6  iterator over parsed_entity.<child_output_key>   (one per child table)
+          item_step: serv_insert <child_table>
+            row: { <fk_column>: "{{new_record.id}}", <col>: "{{item.<col>}}" }
+          (step numbers increment sequentially per additional child table)
+
+Step N    notify → "Added <domain> record (id: {{new_record.id}})."
+Step N+1  end
+```
+
+**Key design decisions:**
+- `buildEntitySchema` (step 2) fetches live column definitions from `PGC_Schema` at
+  every run — not from `PGC_EntitySchema.aggregations.columns`, which is set at domain
+  creation time and can drift. New columns added to any table are immediately visible
+  to the LLM without recreating the domain.
+- `parse_entity_input` v2 receives `full_entity_schema` — it uses
+  `full_entity_schema.root.columns` as the authoritative field list for the root row
+  and `full_entity_schema.children[].columns` for each child. Column name hallucination
+  is eliminated because the LLM never guesses column names.
+- Child iterators inject `new_record.id` as the FK column at insert time.
+  FK columns are never included in `parsed_entity.children` output.
+
+##### update_\<domain\>
+
+Confirmation-gate update on the root table by id. Requires `id=N` and at least
+one `field=value` pair (enforced by Pass 1c or Tier 2 classification before the
+workflow is invoked). Only updates the root table — child row updates require a
+dedicated workflow.
+
+```
+Step 1  human_gate confirm
+          "Update <domain> id={{input.id}} with provided changes?"
+          ├── Confirm → next
+          └── Cancel  → cancelled
+
+Step 2  serv_update <root_table>
+          filters: [{ column: id, op: eq, value: "{{input.id}}" }]
+          updates: "{{input.updates}}"
+          output_key: updated_record
+
+Step 3  notify → "Updated <domain> record (id: {{input.id}})."
+Step 4  end
+```
+
+##### delete_\<domain\>
+
+Confirmation-gate delete on the root table by id. Requires `id=N` (enforced by
+Pass 1c or Tier 2). Child rows are cleaned up by the database `ON DELETE CASCADE`
+constraint on the FK — no application-level child deletion needed.
+
+```
+Step 1  human_gate confirm
+          "Delete <domain> id={{input.id}}? This cannot be undone."
+          ├── Confirm delete → next
+          └── Cancel         → cancelled
+
+Step 2  serv_delete <root_table>
+          filters: [{ column: id, op: eq, value: "{{input.id}}" }]
+
+Step 3  notify → "Deleted <domain> record (id: {{input.id}})."
+Step 4  end
+```
 
 ---
 
