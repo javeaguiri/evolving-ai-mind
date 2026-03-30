@@ -159,8 +159,11 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
 
         // Insert requires at least one field=value pair.
         // Accepted format: field=value  field="multi word value"
-        // If none found, return ambiguous so the caller can list the table's
-        // columns and show the correct syntax.
+        // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
+        // Without them, return ambiguous: true — classify-intent.mjs yields to Tier 2
+        // so it can route to a registered add_<domain> workflow if one exists.
+        // Do NOT return a crud_ambiguous error here — Tier 2 decides whether this is
+        // a workflow invocation or a genuine syntax error.
         if (pattern.action === 'insert') {
           const row = parseFieldValues(userInput);
           if (Object.keys(row).length === 0) {

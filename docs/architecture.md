@@ -1305,14 +1305,16 @@ Tier 1 — Coded logic (zero LLM cost)
   │     │
   │     ├── action_type = 'workflow' or 'heavy_lift'
   │     │     SHORT-CIRCUIT — return immediately, handoff() routes to Step Processor
+  │     │     e.g. "add my recipes ..." → add_recipes workflow → Step Processor
   │     │     e.g. "build me a new domain" → create.domain → heavy_lift
   │     │
   │     └── action_type = 'crud'
   │           Extract domain from intent_category (strip verb prefix: add_recipes → recipes)
   │           Resolve root table via PGC_EntitySchema, fallback to PGC_Schema
   │           Build ad_hoc_step via matchCrudVerb() — same as Pass 1c
-  │           SHORT-CIRCUIT with domain + ad_hoc_step populated
-  │           e.g. "add my recipes name=Pasta" → insert on PGD_Recipes
+  │           Insert without field=value pairs → yield to Tier 2 (not crud_ambiguous)
+  │           SHORT-CIRCUIT with domain + ad_hoc_step populated (field=value present)
+  │           e.g. "add my recipes name=Pasta" → direct serv_insert, zero LLM
   │
   ├── Pass 1b: tokenise input, scan PGC_DomainHelp.aliases arrays
   │     Load all domain rows. Check if any alias token appears in input.
@@ -1321,9 +1323,12 @@ Tier 1 — Coded logic (zero LLM cost)
   │
   ├── Pass 1c: CRUD verb detection against resolved domain
   │     Patterns: list, add, update, delete, show
-  │     Verb matched → build ad_hoc_step, return confidence: crud
+  │     Insert verb + field=value pairs → build ad_hoc_step, return confidence: crud
+  │     Insert verb + no field=value pairs → yield to Tier 2 (domain hint passed)
+  │     Other verbs matched → build ad_hoc_step, return confidence: crud
   │     No verb → pass domain as hint to Tier 2 (warm — domain already known)
   │     e.g. "list my stock_portfolio" → serv_query ad_hoc_step built
+  │     e.g. "add my recipes Pasta Carbonara..." → yield to Tier 2 → add_recipes workflow
   │
   └── Phase 3 — Pass 1b domain fallback from session context
         If no alias token in input, check recent PGC_SessionEntry for active domain.
@@ -1357,12 +1362,16 @@ in `PGC_IntentMap`:
 | `crud` | Pass 1a → `executeCrudStep()` direct | Root table only — single-row INSERT / SELECT / UPDATE / DELETE | Zero LLM, zero WorkflowRun |
 | `workflow` | Pass 1a → `handoff()` → Step Processor | Full domain entity — root + child tables, validation gates, multi-step | WorkflowRun lifecycle |
 
-The `create_domain` workflow registers four CRUD intent rows per domain. Add,
-update, and delete default to `action_type: crud` (table-level, immediate).
-List defaults to `action_type: workflow` (Step Processor, formatted response).
-When a full domain-level workflow is built for a verb (e.g. `ingest_recipe` for
-structured multi-table add), the intent row is updated to `action_type: workflow`
-so the workflow takes over from the direct CRUD path.
+The `create_domain` workflow registers four CRUD intent rows per domain.
+All four default to `action_type: workflow` — routed to the Step Processor.
+This allows add to invoke the LLM-parse-first `add_<domain>` workflow for
+natural-language input, while update and delete use their confirmation-gate workflows.
+
+**Pass 1c insert rule:** Pass 1c claims insert intent only when `field=value` pairs
+are present in the input. Without them, it yields to Tier 2. Tier 2 routes to
+`add_<domain>` workflow if registered, or returns `crud_ambiguous` with an
+instructive error if no workflow covers the intent. This prevents Pass 1c from
+intercepting natural-language add requests meant for the Step Processor.
 
 #### Classification result shape
 
@@ -1482,7 +1491,7 @@ Every return path in `classify()` produces this shape:
 | Pass 1a — workflow/heavy_lift | PGC_IntentMap row with `action_type !== 'crud'` | Short-circuits: returns result with `workflow_name` set, `domain: null`, `ad_hoc_step: null` |
 | Pass 1a — crud | PGC_IntentMap row with `action_type === 'crud'` | Resolves domain from `intent_category`, looks up root table, calls `matchCrudVerb()`. Returns full result including `ad_hoc_step` or `crud_ambiguous` |
 | Pass 1b | PGC_DomainHelp rows | Resolves `domain` string only — does not build `ad_hoc_step`. Falls through to Pass 1c |
-| Pass 1c | `domain` string + root table | Calls `matchCrudVerb()`, returns `ad_hoc_step` or `crud_ambiguous`. Falls through to Tier 2 only on no-verb match |
+| Pass 1c | `domain` string + root table | Calls `matchCrudVerb()`, returns `ad_hoc_step` when `field=value` pairs present. Insert with no `field=value` pairs yields to Tier 2 (not `crud_ambiguous`). Falls through to Tier 2 on no-verb match or ambiguous insert |
 | Tier 2 (sonar) | Raw user input + optional domain hint | Returns `{ intent_category, workflow_name, action_type }` — no `ad_hoc_step`, no `domain` resolution. `handoff()` looks up workflow by `workflow_name` |
 | Tier 3 | `intent_category` string | Routes to `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `WORKFLOW_NOTIFY` — no further classification |
 
@@ -1530,13 +1539,14 @@ Conventions that must be preserved when updating the prompt:
 | Verb | `action_type` | Rationale |
 |---|---|---|
 | `list_<domain>` | `workflow` | Routes to `list_<domain>` workflow — formatted response |
-| `add_<domain>` | `crud` | Table-level insert — Pass 1a resolves root table + field values |
-| `update_<domain>` | `crud` | Table-level update — requires `id=N field=value` |
-| `delete_<domain>` | `crud` | Table-level delete — requires `id=N` |
+| `add_<domain>` | `workflow` | Routes to LLM-parse-first `add_<domain>` workflow — natural-language input, multi-table insert |
+| `update_<domain>` | `workflow` | Routes to `update_<domain>` workflow — confirmation gate + serv_update |
+| `delete_<domain>` | `workflow` | Routes to `delete_<domain>` workflow — confirmation gate + serv_delete |
 
-When a full domain-level workflow exists for a verb (e.g. `ingest_recipe` for
-multi-table structured add), update the intent row to `action_type: workflow`
-so the Step Processor takes over.
+All four verbs are `action_type: workflow` as of `generate_crud_workflows` v4.
+Pass 1c handles structured `field=value` insert input as a zero-cost ad_hoc CRUD
+step when the user explicitly provides field values. Without them, Pass 1c yields
+to Tier 2 — the workflow path is the default for natural-language add requests.
 
 ---
 

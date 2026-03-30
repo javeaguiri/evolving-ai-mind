@@ -164,22 +164,14 @@ async function classify(userInput, sessionId, traceId) {
         action: crudMatch.action, domain, rootTable, traceId,
       });
 
+      // Insert verb found but no field=value pairs.
+      // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
+      // Without them, yield to Tier 2 with the resolved domain hint.
       if (crudMatch.ambiguous && crudMatch.action === 'insert') {
-        const schemaRow = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: rootTable }]);
-        const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
-        const columns = (schemaRow.rows?.[0]?.columns ?? [])
-          .filter(c => !SYSTEM_COLS.has(c.name)).map(c => c.name);
-        return {
-          intent_category: `insert_${domain}`,
-          action_type:     'crud_ambiguous',
-          confidence:      'exact',
-          workflow_name:   null,
-          domain,
-          ad_hoc_step:     null,
-          known_domains:   domainRows.map(r => r.domain),
-          table_columns:   columns,
-          root_table:      rootTable,
-        };
+        console.info('classify-intent: Pass 1a crud insert ambiguous — yielding to Tier 2', {
+          domain, traceId,
+        });
+        return await tier2(userInput, domain, intentRows, traceId);
       }
 
       if (crudMatch.ambiguous && crudMatch.action === 'update') {
@@ -268,28 +260,18 @@ async function classify(userInput, sessionId, traceId) {
           action: crudMatch.action, domain: domainMatch.domain, traceId,
         });
 
-        // Insert verb found but no field=value pairs — fetch column names from
-        // PGC_Schema and return ambiguous so handoff() can show the correct syntax.
+        // Insert verb found but no field=value pairs.
+        // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
+        // Without them, yield to Tier 2 — it can route to a registered add_<domain>
+        // workflow (LLM-parse-first) if one exists, or return crud_ambiguous with an
+        // instructive error if no workflow covers this intent.
+        // This prevents Pass 1c from intercepting natural-language add requests that
+        // are meant for the Step Processor workflow path.
         if (crudMatch.ambiguous && crudMatch.action === 'insert') {
-          const schemaRow = await getRows('PGC_Schema', [
-            { column: 'table_name', op: 'eq', value: rootTable },
-          ]);
-          const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
-          const columns = (schemaRow.rows?.[0]?.columns ?? [])
-            .filter(c => !SYSTEM_COLS.has(c.name))
-            .map(c => c.name);
-          return {
-            intent_category: `insert_${domainMatch.domain}`,
-            action_type:     'crud_ambiguous',
-            confidence:      'crud',
-            workflow_name:   null,
-            workflow_id:     null,
-            domain:          domainMatch.domain,
-            ad_hoc_step:     null,
-            known_domains:   domainRows.map(r => r.domain),
-            table_columns:   columns,
-            root_table:      rootTable,
-          };
+          console.info('classify-intent: Pass 1c insert ambiguous — yielding to Tier 2', {
+            domain: domainMatch.domain, traceId,
+          });
+          return await tier2(userInput, domainMatch.domain, intentRows, traceId);
         }
 
         // Update verb found — missing ID or missing field=value pairs.
