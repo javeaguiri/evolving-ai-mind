@@ -935,7 +935,113 @@ GROUP BY workflow_id;
 
 ---
 
-## 5. Service Layer — SERV
+#### 4.3.7 Dev Scripts — PGC Data Management
+
+These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
+intelligence at runtime. They are not part of the Lambda deployment — they run locally
+against the live PGC database to push, update, or export seed data.
+
+All scripts are run with local environment variables to avoid CRLF issues on Windows:
+
+```cmd
+set PGC_DATABASE_URL=<url> && node dev_scripts/<script>.mjs
+```
+
+---
+
+##### `upsert-prompt.mjs`
+
+Pushes prompt definitions from `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json`
+into `PGC_Prompt`.
+
+**When to run:** After any change to `seed_PGC_Prompt.json` — new prompts, version
+bumps, output schema changes. Must be run before the new prompt version is active at
+runtime, since the Step Processor loads prompts from the DB at execution time
+(`ORDER BY version DESC LIMIT 1` per `intent_category`).
+
+**Idempotency:** Uses `WHERE NOT EXISTS ON (intent_category, version)` — safe to
+re-run. Existing rows at the same version are not overwritten. Bump the version number
+to deploy a changed prompt.
+
+**Key behaviour:**
+- Writes `prompt_text`, `output_schema`, `input_variables`, `model`, `version`
+- Old versions are retained as history — the highest version wins at runtime
+- `error_log` and `output_sample` are never written by this script — those are
+  populated by the right-brain improvement loop (Phase 3)
+
+---
+
+##### `upsert-workflow.mjs`
+
+Pushes workflow definitions from `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json`
+into `PGC_Workflow`.
+
+**When to run:** After any change to `seed_PGC_Workflow.json` — new workflows, step
+changes, version bumps. Required on every fresh brain instance after `bootstrap` since
+`init-brain` seeds the schema but not the workflow step arrays.
+
+**Idempotency:** Uses `WHERE NOT EXISTS ON name` — safe to re-run for new entries.
+To update an existing workflow's steps, bump its `version` in the JSON or use
+`ON CONFLICT (name) DO UPDATE` mode if the script supports it. Check script internals
+before re-running against a live system with active workflow runs.
+
+**Key behaviour:**
+- Writes `name`, `domain`, `description`, `intent_keywords`, `steps`, `state_strategy`,
+  `model_used`, `version`
+- Domain-generated workflows (`add_recipes`, `list_recipes`, etc.) are written at
+  runtime by `create_domain` — this script only manages system workflows
+  (`create_domain`, `help`, `create_workflow`)
+
+---
+
+##### `seed_PGC_StepType.mjs`
+
+Seeds one row per live step type into `PGC_StepType`.
+
+**When to run:** When a new step type goes live. Must be run before
+`seed_PGC_SystemContext.mjs` so the injected `step_type_contracts` context is current.
+
+**Idempotency:** `ON CONFLICT (step_type) DO UPDATE` — safe to re-run. Existing rows
+are updated in place.
+
+**What it seeds:** 12 live step types, each with `on_success_options`,
+`on_failure_options`, `input_contract`, `output_contract`, `description`, and `status`.
+These contracts are injected into the `generate_workflow_steps` prompt so the LLM
+knows exactly what each step type accepts and produces.
+
+_Further details to be added when the script is next modified._
+
+---
+
+##### `seed_PGC_SystemContext.mjs`
+
+Seeds key-value rows into `PGC_SystemContext` that are injected into heavy-lift LLM
+prompts at runtime.
+
+**When to run:** After `seed_PGC_StepType.mjs` (reads live `PGC_StepType` rows to
+build `step_type_contracts`). Also re-run when `routing_value_rules` or the
+`create_domain_example` worked example needs updating.
+
+**Idempotency:** `ON CONFLICT (key) DO UPDATE` — safe to re-run. All rows are
+overwritten with current values.
+
+**Rows it manages:**
+
+| Key | Purpose |
+|---|---|
+| `step_type_contracts` | Derived from live `PGC_StepType` rows — injected into `generate_workflow_steps` prompt so the LLM knows the instruction set |
+| `routing_value_rules` | Canonical routing token rules (`next`, `end`, `cancel`, `human_feedback`, `step:<key>`) — used by `review-output.mjs` Pass 2b validation |
+| `create_domain_example` | A worked example of a complete `create_domain` workflow — injected into `generate_workflow_steps` as a reference for correct step structure |
+
+**Important:** `PGC_SystemContext.step_type_contracts` is derived from `PGC_StepType`
+rows at script-run time. When a new step type goes live, re-run `seed_PGC_StepType.mjs`
+then `seed_PGC_SystemContext.mjs` in that order. The script is the locus of control —
+do not edit the prompt text to work around a stale contracts row.
+
+_Further details to be added when the script is next modified._
+
+---
+## 5. Service Layer â€” SERV
 
 ### 5.1 SERV-Schema (complete)
 DDL executor and PGC metadata registry.
