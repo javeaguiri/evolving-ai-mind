@@ -485,10 +485,16 @@ export function buildDialog(step, localState) {
           return { key: label, value };
         });
       } else {
-        // Flat object — each non-system property is one pair
+        // Flat object — each non-system property is one pair.
+        // Nested objects and arrays are JSON-stringified for display — prevents
+        // '[object Object]' when a review_object gate receives structured data
+        // (e.g. parsed_entity: { root: {...}, children: {...} }).
         items = Object.entries(ctx)
           .filter(([k, v]) => !SYSTEM_KEYS.has(k) && v !== null && v !== undefined)
-          .map(([k, v]) => ({ key: k, value: v }));
+          .map(([k, v]) => ({
+            key:   k,
+            value: (v !== null && typeof v === 'object') ? JSON.stringify(v, null, 2) : v,
+          }));
       }
 
       if (items.length > 0) {
