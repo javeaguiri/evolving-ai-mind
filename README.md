@@ -378,18 +378,24 @@ On first deploy SAM will prompt for stack parameters:
 
 ### Step 5 — Bootstrap the Brain
 
-After first deploy, trigger the PGC bootstrap by calling ping-db:
-
-```bash
-curl https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/ping-db
-```
-
-Then seed the workflows:
+After first deploy, initialise all 13 PGC system tables by calling the bootstrap endpoint:
 
 ```cmd
+curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/bootstrap
+```
+
+You should see `"success": true` with all 13 tables listed as `"already_existed"` (or `"created"` on a fresh DB). This is idempotent — safe to call again if anything goes wrong.
+
+Then seed the system workflows and prompts:
+
+```cmd
+set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-prompt.mjs
 set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-workflow.mjs create_domain
 set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-workflow.mjs help
+set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/upsert-workflow.mjs create_workflow
 ```
+
+> **Why not on cold start?** Running bootstrap automatically on Lambda cold start causes PostgreSQL `tuple concurrently updated` errors when multiple Lambda containers spin up simultaneously and race to seed the same rows. Bootstrap is install-time logic, not request infrastructure.
 
 ---
 
@@ -420,17 +426,19 @@ aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --re
 
 In the [Slack API dashboard](https://api.slack.com/apps):
 
-1. **Slash Commands** → each pointing to `https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/command`
+1. **Slash Commands** — each pointing to `https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/<command>`
 
-   | Command | Purpose |
-   |---|---|
-   | `/ping-api` | Slackbot health check |
-   | `/ping-sqs` | SQS round-trip check |
-   | `/ping-llm` | LLM connectivity check |
-   | `/ping-e2e` | Full end-to-end check |
-   | `/create-domain` | Design and create a new data domain |
-   | `/help` | Show available commands |
-   | `/shutdown` | Emergency stop — cancel all active workflow runs |
+   | Command | URL suffix | Purpose |
+   |---|---|---|
+   | `/ping-api` | `ping-api` | Slackbot health check |
+   | `/ping-sqs` | `ping-sqs` | SQS round-trip check |
+   | `/ping-llm` | `ping-llm` | LLM connectivity check |
+   | `/ping-e2e` | `ping-e2e` | Full end-to-end check |
+   | `/create-domain` | `create-domain` | Design and create a new data domain |
+   | `/help` | `help` | Interactive help — shows system commands and registered domains |
+   | `/mind` | `mind` | Natural language intent — primary command |
+   | `/m` | `mind` | Alias for `/mind` (same URL) |
+   | `/shutdown` | `shutdown` | Emergency stop — cancel all active workflow runs |
 
 2. **Interactivity** → Request URL:
    ```
@@ -458,7 +466,11 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 | Step Processor — design-domain gate | `v3.2-design-domain-gate-complete` | ✅ Done |
 | Step Processor — core engine | `v3.2-step-processor-complete` | ✅ Done |
 | `/create-domain` through Step Processor | `v3.2-tangential-features` | ✅ Done |
-| `/help` through Step Processor | (this session) | ✅ Done |
+| Intent Preprocessor fully operational | `v3.2-intent-preprocessor-complete` | ✅ Done |
+| Ad_hoc CRUD from `/mind` | `v3.2-crud-adhoc-complete` | ✅ Done |
+| `/create-domain` end-to-end with CRUD | `v3.2-create-domain-with-crud` | ✅ Done |
+| `create_workflow` workflow | `v3.2-create-workflow-complete` | ✅ Done |
+| Gap 1 (interactive `/help`) + Gap 4 (entity schema) + structural refactoring | `v3.2-create-domain-complete-w-help` | ✅ Done |
 
 ---
 
