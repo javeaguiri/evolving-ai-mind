@@ -421,31 +421,42 @@ function dialogToBlocks(dialog, workflowRunId) {
         // Render the context as formatted key-value pairs.
         // item.value may be a scalar, an array of strings (column names),
         // or an array of objects (commands). Render each appropriately.
-        const reviewLines = (field.items ?? [])
-          .map(item => {
-            let valueText;
-            if (Array.isArray(item.value)) {
-              if (item.value.length === 0) {
-                valueText = '(none)';
-              } else if (typeof item.value[0] === 'object') {
-                // Array of objects (e.g. commands) — render as sub-list
-                valueText = '\n' + item.value
-                  .map(v => `    • ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
-                  .join('\n');
-              } else {
-                // Array of strings (e.g. column names, aliases) — comma list
-                valueText = item.value.join(', ');
-              }
+        //
+        // Slack section blocks have a 3000-character limit on text.text.
+        // We emit one section block per field line, and truncate any single
+        // value that exceeds BLOCK_CHAR_LIMIT to prevent invalid_blocks errors.
+        // Long recipes, notes, or instruction arrays would otherwise overflow
+        // a single block.
+        const BLOCK_CHAR_LIMIT = 2800; // safe margin below Slack's 3000 hard limit
+
+        for (const item of (field.items ?? [])) {
+          let valueText;
+          if (Array.isArray(item.value)) {
+            if (item.value.length === 0) {
+              valueText = '(none)';
+            } else if (typeof item.value[0] === 'object') {
+              // Array of objects (e.g. commands, ingredients, steps) — sub-list
+              valueText = '\n' + item.value
+                .map(v => `    • ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                .join('\n');
             } else {
-              valueText = String(item.value ?? '');
+              // Array of strings (e.g. column names, aliases) — comma list
+              valueText = item.value.join(', ');
             }
-            return `*${item.key}:* ${valueText}`;
-          })
-          .join('\n');
-        if (reviewLines) {
+          } else {
+            valueText = String(item.value ?? '');
+          }
+
+          let line = `*${item.key}:* ${valueText}`;
+
+          // Truncate if a single field still exceeds the block limit
+          if (line.length > BLOCK_CHAR_LIMIT) {
+            line = line.slice(0, BLOCK_CHAR_LIMIT - 3) + '...';
+          }
+
           blocks.push({
             type: 'section',
-            text: { type: 'mrkdwn', text: reviewLines },
+            text: { type: 'mrkdwn', text: line },
           });
         }
         break;
