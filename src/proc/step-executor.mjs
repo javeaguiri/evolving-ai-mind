@@ -21,7 +21,9 @@
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
-//   serv_query   — calls SERV getRows, writes rows array to output_key
+//   serv_query        — calls SERV getRows, writes rows array to output_key
+//   serv_entity_query — calls SERV listEntities, writes entities array to output_key
+//   serv_entity_get   — calls SERV getEntity by id, writes entity object to output_key
 //   serv_update  — calls SERV updateRows, generic filter + updates shape
 //   serv_delete  — calls SERV deleteRows, generic filter shape
 //   simulate     — static analysis + optional path simulation of a step array
@@ -36,7 +38,7 @@
 
 import { callLlm }          from '../shared/llm-client.mjs';
 import { validate }         from './review-output.mjs';
-import { servPost, getRows, insertRow, updateRows, deleteRows } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
 import {
   resolvePath,
   resolveTemplate,
@@ -68,8 +70,10 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'human_gate':   return executeHumanGate({ step, localState, run, traceId });
     case 'serv_schema':  return executeServSchema({ step, localState, traceId });
     case 'serv_insert':  return executeServInsert({ step, localState, traceId });
-    case 'serv_query':   return executeServQuery({ step, localState, traceId });
-    case 'serv_update':  return executeServUpdate({ step, localState, traceId });
+    case 'serv_query':        return executeServQuery({ step, localState, traceId });
+    case 'serv_entity_query': return executeServEntityQuery({ step, localState, traceId });
+    case 'serv_entity_get':   return executeServEntityGet({ step, localState, traceId });
+    case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
@@ -393,22 +397,20 @@ async function executeJsTransform({ step, localState, traceId }) {
     }
 
     case 'formatRecordList': {
-      // Format an array of DB rows into a human-readable Slack mrkdwn string.
-      // Used by list_<domain> workflows to display query results.
+      // Format an array of DB rows or assembled entities into a Slack mrkdwn string.
+      // Handles both flat rows (serv_query) and entity results (serv_entity_query)
+      // which may contain child arrays (ingredients, steps, tags, etc.).
       //
       // Step definition fields:
-      //   input_key      — dot-path to the rows array in local_state (required)
-      //   output_key     — where to write the formatted string (required)
-      //   columns        — optional array of column names to show. If absent,
-      //                    auto-derived from first row keys, system cols excluded.
-      //   max_rows       — optional integer cap on rows shown. Default: 20.
+      //   input_key   — dot-path to the rows/entities array in local_state (required)
+      //   columns     — optional array of root column names to show. Auto-derived
+      //                 from first row keys if absent, system cols excluded.
+      //                 Child array keys are always appended as sub-lists.
+      //   max_rows    — optional integer cap on rows shown. Default: 20.
       //
       // Output: a mrkdwn string ready for a notify message_template.
-      //   e.g. "Found 2 record(s).\n• id=1 | name=Pasta Carbonara | ..."
       //
-      // Phase 3 replacement: generic js_transform sandbox will allow the LLM
-      // to produce arbitrary formatting JS. This built-in exists because the
-      // sandbox is not yet available — every list_<domain> workflow needs it.
+      // Phase 3 replacement: generic js_transform sandbox.
       const rows = resolvePath(localState, step.input_key);
       if (!Array.isArray(rows)) {
         throw new Error(
@@ -420,26 +422,44 @@ async function executeJsTransform({ step, localState, traceId }) {
       const maxRows = step.max_rows ?? 20;
       const capped  = rows.slice(0, maxRows);
 
-      // Determine columns to show
-      let cols = step.columns;
-      if (!cols || cols.length === 0) {
-        // Auto-derive from first row, excluding system columns
-        const firstRow = capped[0] ?? {};
-        cols = Object.keys(firstRow).filter(k => !SYSTEM_COLS.has(k));
-      }
+      // Separate scalar columns from child array keys on the first row
+      const firstRow     = capped[0] ?? {};
+      const allKeys      = Object.keys(firstRow);
+      const childKeys    = allKeys.filter(k => Array.isArray(firstRow[k]));
+      const scalarKeys   = allKeys.filter(k => !Array.isArray(firstRow[k]) && !SYSTEM_COLS.has(k));
 
-      // Format each row as "• col1=val1 | col2=val2 | ..."
+      // Columns to show for the root row — use step.columns if provided,
+      // otherwise auto-derive scalar (non-child, non-system) keys.
+      let cols = (step.columns && step.columns.length > 0)
+        ? step.columns.filter(k => !childKeys.includes(k))  // exclude child keys if accidentally included
+        : scalarKeys;
+
       const lines = capped.map(row => {
-        const parts = cols.map(col => {
+        // Root scalar fields — "col=val | col=val"
+        const rootParts = cols.map(col => {
           const val = row[col];
-          const display = val === null || val === undefined
-            ? '—'
-            : typeof val === 'object'
-              ? JSON.stringify(val)
-              : String(val);
+          const display = val === null || val === undefined ? '—' : String(val);
           return `${col}=${display}`;
         });
-        return `• ${parts.join(' | ')}`;
+        const rootLine = `• ${rootParts.join(' | ')}`;
+
+        // Child arrays — render each as an indented sub-list
+        const childLines = childKeys.flatMap(key => {
+          const children = row[key];
+          if (!Array.isArray(children) || children.length === 0) return [];
+          const header = `  _${key}:_`;
+          const items  = children.map(child => {
+            if (typeof child !== 'object' || child === null) return `    ◦ ${child}`;
+            // Show all non-system, non-id scalar fields of the child
+            const childParts = Object.entries(child)
+              .filter(([k]) => !SYSTEM_COLS.has(k) && !Array.isArray(child[k]))
+              .map(([k, v]) => `${k}=${v ?? '—'}`);
+            return `    ◦ ${childParts.join(' | ')}`;
+          });
+          return [header, ...items];
+        });
+
+        return [rootLine, ...childLines].join('\n');
       });
 
       const truncated = rows.length > maxRows
@@ -453,6 +473,7 @@ async function executeJsTransform({ step, localState, traceId }) {
       console.info('step-executor: js_transform — formatRecordList', {
         rowCount:    rows.length,
         colCount:    cols.length,
+        childKeys:   childKeys.length > 0 ? childKeys : undefined,
         capped:      capped.length,
         traceId,
       });
@@ -795,6 +816,80 @@ async function executeServQuery({ step, localState, traceId }) {
 
   return {
     outputValue: resp.rows ?? [],
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_entity_query — listEntities via SERV-Entity
+// ---------------------------------------------------------------------------
+
+// Step input shape:
+//   {
+//     "entityName": "Recipe",
+//     "filters":    [ { "column": "name", "op": "like", "value": "{{input.search}}" } ],
+//     "orderBy":    { "column": "name", "direction": "asc" },
+//     "limit":      20
+//   }
+//
+// entityName is required. filters, orderBy, limit are optional.
+// Returns assembled entities — root columns + jsonb_agg child arrays.
+// entities array is written to local_state[output_key].
+
+async function executeServEntityQuery({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { entityName, filters, orderBy, limit } = resolvedInput;
+
+  if (!entityName) throw new Error('serv_entity_query step missing input.entityName');
+
+  console.info('step-executor: serv_entity_query', {
+    entityName,
+    filterCount: filters?.length ?? 0,
+    traceId,
+  });
+
+  const resp = await listEntities(entityName, filters ?? [], orderBy, limit);
+
+  if (!resp.success) {
+    throw new Error(`serv_entity_query failed for "${entityName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: resp.entities ?? [],
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_entity_get — getEntity by id via SERV-Entity
+// ---------------------------------------------------------------------------
+
+// Step input shape:
+//   {
+//     "entityName": "Recipe",
+//     "id":         "{{input.id}}"
+//   }
+//
+// entityName and id are required.
+// Returns the single assembled entity object (root + children) at output_key.
+
+async function executeServEntityGet({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { entityName, id } = resolvedInput;
+
+  if (!entityName) throw new Error('serv_entity_get step missing input.entityName');
+  if (id === undefined || id === null) throw new Error('serv_entity_get step missing input.id');
+
+  console.info('step-executor: serv_entity_get', { entityName, id, traceId });
+
+  const resp = await getEntityById(entityName, id);
+
+  if (!resp.success) {
+    throw new Error(`serv_entity_get failed for "${entityName}" id=${id}: ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: resp.entity ?? null,
     nextAction:  resolveNextAction(step.on_success, null),
   };
 }

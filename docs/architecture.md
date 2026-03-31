@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Gap 2 (edit_workflow) next  
-Last updated: 2026-03-31 (session 16)
+Last updated: 2026-03-31 (session 16 — continued)
 
 ---
 
@@ -1694,6 +1694,13 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_query   ║ SELECT rows from a PGD table via SERV                ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ LIST assembled entities via SERV-Entity listEntities ║ ✅ Implemented   ║
+║ query        ║ — root columns + jsonb_agg child arrays. Use instead ║                  ║
+║              ║ of serv_query for domains with child tables.         ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ FETCH one assembled entity by id via SERV-Entity     ║ ✅ Implemented   ║
+║ get          ║ getEntity. Returns root columns + child arrays.      ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_update  ║ UPDATE rows in a PGD table via SERV                  ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
@@ -1836,6 +1843,36 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
     "filters":   [{ "column": "id", "op": "eq", "value": "{{input.id}}" }]
   },
   "output_key": "results",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+
+##### `serv_entity_query` / `serv_entity_get`
+```json
+{
+  "step": "1", "type": "serv_entity_query",
+  "input": {
+    "entityName": "Recipe",
+    "filters":    [{ "column": "name", "op": "like", "value": "{{input.search}}" }],
+    "orderBy":    { "column": "name", "direction": "asc" },
+    "limit":      20
+  },
+  "output_key": "results",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+`entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`, not `Recipes`.
+Returns assembled entities with root columns plus child arrays (`ingredients`, `steps`, etc.).
+Use instead of `serv_query` for domains with child tables or when full entity display is needed.
+
+`serv_entity_get` fetches a single entity by id:
+```json
+{
+  "step": "1", "type": "serv_entity_get",
+  "input": { "entityName": "Recipe", "id": "{{input.id}}" },
+  "output_key": "result",
   "on_success": "next",
   "on_failure": "human_feedback"
 }
@@ -3379,6 +3416,8 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `end` | ✅ live | Marks run completed |
 | `iterator` | ✅ live | Sequential only — one SQS hop per item |
 | `serv_query` | ✅ live | Resolves template vars in filters/orderBy/limit, writes rows array to output_key |
+| `serv_entity_query` | ✅ live | Calls SERV-Entity listEntities — assembled entity array with child arrays at output_key |
+| `serv_entity_get` | ✅ live | Calls SERV-Entity getEntity by id — single assembled entity at output_key |
 | `serv_update` | ✅ live | Generic filter + updates shape, full template resolution, enforces non-empty filters |
 | `serv_delete` | ✅ live | Generic filter shape, full template resolution, enforces non-empty filters |
 | `simulate` | ✅ live | Level 1 static analysis + Level 2 path execution + Level 3 skip-path analysis (advisory). Used by `create_workflow` steps 4 and 7 |

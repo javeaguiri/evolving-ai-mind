@@ -82,3 +82,38 @@ export async function updateRows(tableName, filters, updates) {
 export async function deleteRows(tableName, filters) {
   return servPost('/api/v1/serv/table/deleteRows', { tableName, filters });
 }
+
+// ---------------------------------------------------------------------------
+// SERV-Entity convenience wrappers
+// ---------------------------------------------------------------------------
+
+/**
+ * List entities via SERV-Entity listEntities.
+ * Returns assembled entities — root columns + jsonb_agg child arrays.
+ * Response shape: { success, entityName, count, entities: [...] }
+ *
+ * @param {string}   entityName   PascalCase entity name e.g. 'Recipe'
+ * @param {Array}    filters      Optional filter array — same shape as getRows filters
+ * @param {object}   orderBy      Optional { column, direction }
+ * @param {number}   limit        Optional row cap (default 100, max 1000)
+ */
+export async function listEntities(entityName, filters = [], orderBy, limit) {
+  return servPost('/api/v1/serv/entity/listEntities', {
+    entityName,
+    ...(filters.length && { filters }),
+    ...(orderBy        && { orderBy }),
+    ...(limit          && { limit }),
+  });
+}
+
+/**
+ * Fetch a single entity by id via SERV-Entity getEntity.
+ * Returns the assembled entity with all configured joins and aggregations.
+ * Response shape: { success, entityName, entity: {...} }
+ *
+ * @param {string}   entityName   PascalCase entity name e.g. 'Recipe'
+ * @param {number}   id           Root table primary key
+ */
+export async function getEntityById(entityName, id) {
+  return servPost('/api/v1/serv/entity/getEntity', { entityName, id });
+}
