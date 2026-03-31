@@ -10,6 +10,11 @@
 // Currently targets Perplexity Agent API.
 // Model is passed per-call from PGC_Prompt.model — not hardcoded here.
 
+// Hard abort ceiling — must be safely below ProcFunction Lambda timeout (60s).
+// Gives a clean descriptive error instead of a silent Lambda kill on large outputs
+// like generate_crud_workflows which can take ~28s.
+const LLM_TIMEOUT_MS = 55_000;
+
 /**
  * Call Perplexity Agent API and return parsed JSON.
  * Strips markdown fences defensively before JSON.parse.
@@ -37,14 +42,28 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
   // The prompt instructs the model to return JSON only; the markdown-fence strip below
   // handles any residual wrapping defensively.
 
-  const response = await fetch(process.env.LLM_AGENT_URL, {
-    method:  'POST',
-    headers: {
-      'Authorization': `Bearer ${llmKey}`,
-      'Content-Type':  'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(process.env.LLM_AGENT_URL, {
+      method:  'POST',
+      headers: {
+        'Authorization': `Bearer ${llmKey}`,
+        'Content-Type':  'application/json',
+      },
+      body:   JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (fetchErr) {
+    if (fetchErr.name === 'AbortError') {
+      throw new Error(`LLM call timed out after ${LLM_TIMEOUT_MS / 1000}s`);
+    }
+    throw fetchErr;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const text = await response.text();

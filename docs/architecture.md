@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Gap 2 (edit_workflow) next  
-Last updated: 2026-03-30 (session 15)
+Last updated: 2026-03-31 (session 16)
 
 ---
 
@@ -1680,7 +1680,8 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ js_transform ║ Run a named built-in transform on local_state data.  ║ ✅ Implemented   ║
 ║              ║ Built-ins: columnSummary, buildHelpOptions,          ║ (built-ins only) ║
-║              ║ resolveHelpContent, buildEntitySchema.               ║                  ║
+║              ║ resolveHelpContent, buildEntitySchema,               ║                  ║
+║              ║ formatRecordList.                                    ║                  ║
 ║              ║ Generic AST sandbox Phase 3.                         ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
@@ -1751,6 +1752,25 @@ Output is the parsed JSON object from the LLM, stored at `output_key` in `local_
 `columnSummary` enriches each table object with a `columnSummary` string
 listing the first four non-system column names — used as secondary text in
 `edit_list` gates.
+
+**`formatRecordList`** — formats a `serv_query` rows array into a Slack `mrkdwn`
+string for display. Used by `list_<domain>` workflows.
+```json
+{
+  "step": "2", "type": "js_transform",
+  "transform_type": "formatRecordList",
+  "input_key":  "results",
+  "columns":    ["name", "description", "created_at"],
+  "max_rows":   20,
+  "output_key": "results_display",
+  "on_success": "next"
+}
+```
+`columns` — optional array of column names to show. If absent, auto-derived from
+first row keys, system cols (`id`, `created_at`, `updated_at`) excluded.
+`max_rows` — optional row cap, default 20. Appends a truncation note if exceeded.
+Output is a `mrkdwn` string: count header + one `• col=val | col=val` line per row.
+Phase 3 replacement: generic `js_transform` sandbox.
 
 ##### `human_gate`
 ```json
@@ -3351,7 +3371,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | Type | Status | Notes |
 |---|---|---|
 | `llm_call` | ✅ live | Loads prompt from `PGC_Prompt`, calls LLM, runs `review-output` validation |
-| `js_transform` | ✅ live (built-in only) | Built-in `columnSummary` enrichment only — generic AST sandbox Phase 3 |
+| `js_transform` | ✅ live (built-in only) | Built-ins: `columnSummary`, `buildHelpOptions`, `resolveHelpContent`, `buildEntitySchema`, `formatRecordList`. Generic AST sandbox Phase 3 |
 | `human_gate` | ✅ live | `confirm` + `edit_list` proven end-to-end |
 | `serv_schema` | ✅ live | `createTable` via SERV |
 | `serv_insert` | ✅ live | `insertRow` via SERV |
@@ -3382,7 +3402,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | # | Task |
 |---|---|
 | 1 | SERV-Query — cross-entity parameterised SELECT with pagination |
-| 2 | Generic `js_transform` sandbox — acorn AST gate + `vm.runInNewContext` |
+| 2 | Generic `js_transform` sandbox — acorn AST gate + `vm.runInNewContext`. Replaces built-ins `formatRecordList`, `buildEntitySchema`, `columnSummary`, `buildHelpOptions`, `resolveHelpContent` |
 | ~~3~~ | ~~`serv_query`, `serv_update`, `serv_delete` step types~~ ✅ live — v3.2-crud-adhoc-complete |
 | 4 | `sub_workflow` and `condition` step types |
 | 5 | `capability_call` step type + External API Registry (Section 15.1) |
