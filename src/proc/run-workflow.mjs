@@ -126,6 +126,17 @@ async function executeTop({ workflowRunId, traceId, source }) {
     return { skipped: true, reason: 'completed' };
   }
 
+  // Guard against SQS redelivery executing a step while the run is suspended at a
+  // human_gate. Without this check, a redelivered execute_top re-executes the gate
+  // step and posts a second WORKFLOW_GATE message to Slack. The user sees two
+  // identical gate messages — clicking the second one leaves the first with
+  // buttons permanently visible since chat.update targets the clicked message's ts,
+  // not the orphaned earlier one.
+  if (run.status === 'awaiting_human_gate') {
+    console.info('run-workflow: run awaiting human gate — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'awaiting_human_gate' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {

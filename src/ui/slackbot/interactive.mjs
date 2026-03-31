@@ -113,7 +113,11 @@ export async function handle(req) {
 
   const slackUserId = payload.user?.id;
   const channel     = payload.channel?.id;
-  const threadId    = payload.message?.ts;
+  // container.message_ts is always the ts of the message containing the clicked button.
+  // payload.message?.ts can resolve to the parent thread ts in threaded message contexts.
+  const threadId    = payload.container?.message_ts ?? payload.message?.ts;
+  // Original gate message text — included in the ack so the user sees which step was confirmed.
+  const gateText    = payload.message?.text ?? '';
   const traceId     = req.correlationId || randomUUID();
 
   console.info('interactive: resume_gate enqueuing', {
@@ -127,13 +131,17 @@ export async function handle(req) {
   // Replace buttons with a static confirmation — prevents duplicate clicks.
   // chat.update replaces the original message in-place. If this fails we still
   // enqueue the resume_gate — a cosmetic failure should not block the workflow.
+  //
+  // Include the gate's own message text in the ack so the user can see which
+  // step was just completed — without it all acks look identical in the thread.
+  const gateContext    = gateText ? `\n> _${gateText}_` : '';
   const confirmationText = userResponse === 'confirm'
-    ? '✅ Got it — processing your response...'
+    ? `✅ Confirmed.${gateContext}`
     : userResponse === 'remove_item'
     ? '🗑️ Removing — updating...'
     : userResponse === 'cancel'
-    ? '❌ Cancelled.'
-    : `✅ Selected: ${userResponse} — processing...`;
+    ? `❌ Cancelled.${gateContext}`
+    : `✅ ${userResponse}.${gateContext}`;
 
   // For remove_item we keep the gate open — don't replace the full message,
   // just acknowledge. The Step Processor will re-enqueue an updated WORKFLOW_GATE.
@@ -153,7 +161,10 @@ export async function handle(req) {
       });
     } catch (error) {
       console.warn('interactive: chat.update failed (non-fatal)', {
-        error: error.message,
+        error:     error.message,
+        errorCode: error.data?.error,   // Slack error code e.g. 'cant_update_message'
+        channel,
+        ts:        threadId,
         traceId,
       });
     }
