@@ -16,7 +16,8 @@
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
 //   js_transform — built-ins: columnSummary, buildHelpOptions, resolveHelpContent,
-//                  buildEntitySchema; transform_type required; generic sandbox is Phase 3
+//                  buildEntitySchema, formatRecordList; transform_type required;
+//                  generic sandbox is Phase 3
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
@@ -387,6 +388,77 @@ async function executeJsTransform({ step, localState, traceId }) {
 
       return {
         outputValue: result,
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+
+    case 'formatRecordList': {
+      // Format an array of DB rows into a human-readable Slack mrkdwn string.
+      // Used by list_<domain> workflows to display query results.
+      //
+      // Step definition fields:
+      //   input_key      — dot-path to the rows array in local_state (required)
+      //   output_key     — where to write the formatted string (required)
+      //   columns        — optional array of column names to show. If absent,
+      //                    auto-derived from first row keys, system cols excluded.
+      //   max_rows       — optional integer cap on rows shown. Default: 20.
+      //
+      // Output: a mrkdwn string ready for a notify message_template.
+      //   e.g. "Found 2 record(s).\n• id=1 | name=Pasta Carbonara | ..."
+      //
+      // Phase 3 replacement: generic js_transform sandbox will allow the LLM
+      // to produce arbitrary formatting JS. This built-in exists because the
+      // sandbox is not yet available — every list_<domain> workflow needs it.
+      const rows = resolvePath(localState, step.input_key);
+      if (!Array.isArray(rows)) {
+        throw new Error(
+          `js_transform formatRecordList: input_key "${step.input_key}" did not resolve to an array — ` +
+          `got ${JSON.stringify(rows)}`
+        );
+      }
+
+      const maxRows = step.max_rows ?? 20;
+      const capped  = rows.slice(0, maxRows);
+
+      // Determine columns to show
+      let cols = step.columns;
+      if (!cols || cols.length === 0) {
+        // Auto-derive from first row, excluding system columns
+        const firstRow = capped[0] ?? {};
+        cols = Object.keys(firstRow).filter(k => !SYSTEM_COLS.has(k));
+      }
+
+      // Format each row as "• col1=val1 | col2=val2 | ..."
+      const lines = capped.map(row => {
+        const parts = cols.map(col => {
+          const val = row[col];
+          const display = val === null || val === undefined
+            ? '—'
+            : typeof val === 'object'
+              ? JSON.stringify(val)
+              : String(val);
+          return `${col}=${display}`;
+        });
+        return `• ${parts.join(' | ')}`;
+      });
+
+      const truncated = rows.length > maxRows
+        ? `\n_... and ${rows.length - maxRows} more record(s) not shown._`
+        : '';
+
+      const formatted = rows.length === 0
+        ? 'No records found.'
+        : `Found ${rows.length} record(s).\n${lines.join('\n')}${truncated}`;
+
+      console.info('step-executor: js_transform — formatRecordList', {
+        rowCount:    rows.length,
+        colCount:    cols.length,
+        capped:      capped.length,
+        traceId,
+      });
+
+      return {
+        outputValue: formatted,
         nextAction:  resolveNextAction(step.on_success, null),
       };
     }
