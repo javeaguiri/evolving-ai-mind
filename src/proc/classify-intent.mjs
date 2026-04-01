@@ -517,12 +517,31 @@ async function handoff(result, callback, traceId, userInput) {
     }
     const workflowId = wfResp.rows[0].id;
 
+    // For get_<domain> workflows, extract the search term from the user input.
+    // Everything after the verb + optional 'my' + domain name becomes input.search.
+    // e.g. 'get my recipes sweet potato chili' → search: 'sweet potato chili'
+    // e.g. 'show recipes pasta'                → search: 'pasta'
+    // The get_<domain> workflow step uses {{input.search}} as the LIKE filter value.
+    let workflowInput = { userInput };
+    if (result.workflow_name?.startsWith('get_')) {
+      const domain = result.workflow_name.slice(4); // strip 'get_'
+      // Strip leading verb (get|show|find|display|look up), optional 'my', domain name
+      const searchMatch = userInput.match(
+        new RegExp(`(?:get|show|find|display|look\\s+up)\\s+(?:my\\s+)?(?:${domain}|${domain.replace(/_/g, '\\s+')})[s]?\\s*(.*)`, 'i')
+      );
+      const search = searchMatch?.[1]?.trim() ?? userInput;
+      workflowInput = { userInput, search };
+      console.info('classify-intent: handoff — get workflow search extracted', {
+        domain, search, traceId,
+      });
+    }
+
     const runResp = await insertRow('PGC_WorkflowRun', {
       workflow_id:  workflowId,
       trace_id:     traceId,
       triggered_by: 'slack',
       status:       'pending',
-      input:        { userInput },
+      input:        workflowInput,
       stack:        [],
       state:        {},
       callback,

@@ -297,8 +297,8 @@ async function executeJsTransform({ step, localState, traceId }) {
       // join table) in a single 'in' call, then assembles:
       //   {
       //     entity_name, description,
-      //     root: { table, columns: [non-system, non-FK col names] },
-      //     children: [{ table, alias, fk_column, output_key, columns }]
+      //     root: { table, columns: [{ name, type }] },   ← includes type for jsonb handling
+      //     children: [{ table, alias, fk_column, output_key, columns: [{ name, type }] }]
       //   }
       //
       // input_key must resolve to a PGC_EntitySchema row (not an array).
@@ -336,13 +336,15 @@ async function executeJsTransform({ step, localState, traceId }) {
         schemaByTable[row.table_name] = row.columns ?? [];
       }
 
-      // Helper: extract non-system, non-FK column names from a schema row's columns
+      // Helper: extract non-system, non-FK columns from a schema row's columns.
+      // Returns { name, type } objects so the LLM knows which columns are jsonb
+      // and can produce valid JSON values instead of bare strings.
       const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
       function userColumns(tableName, fkColumnsToExclude = []) {
         const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
         return (schemaByTable[tableName] ?? [])
           .filter(c => !exclude.has(c.name))
-          .map(c => c.name);
+          .map(c => ({ name: c.name, type: c.type }));
       }
 
       // Root table — no FK columns to exclude (root has no FK to other domain tables)
