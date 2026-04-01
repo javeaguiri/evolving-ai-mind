@@ -232,7 +232,7 @@ async function listEntities(req) {
         case 'gte':      conditions.push(`${col} >= $${idx++}`);     values.push(f.value);  break;
         case 'lt':       conditions.push(`${col} < $${idx++}`);      values.push(f.value);  break;
         case 'lte':      conditions.push(`${col} <= $${idx++}`);     values.push(f.value);  break;
-        case 'like':     conditions.push(`${col} LIKE $${idx++}`);   values.push(f.value);  break;
+        case 'like':     conditions.push(`${col} ILIKE $${idx++}`);  values.push(`%${f.value}%`);  break;
         case 'in':       conditions.push(`${col} = ANY($${idx++})`); values.push(f.value);  break;
         case 'is_null':  conditions.push(`${col} IS NULL`);                                  break;
         case 'not_null': conditions.push(`${col} IS NOT NULL`);                              break;
