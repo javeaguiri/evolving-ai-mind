@@ -6,10 +6,12 @@
 // Pure classification functions — no I/O, no imports, directly unit-testable.
 // Called by classify-intent.mjs which owns all DB reads and SQS writes.
 //
-// Tier 1 — coded logic (zero LLM cost):
-//   Pass 1a: regex test against PGC_IntentMap rows
-//   Pass 1b: alias token scan against PGC_DomainHelp rows
-//   Pass 1c: CRUD verb detection against resolved domain
+// Pass 1 — PGC_IntentMap regex match (zero LLM)
+//
+// Pass 2 — Domain-Workflow Lookup (zero LLM):
+//   Step 1: alias token scan against PGC_DomainHelp rows
+//   Step 2: workflow keyword scan against PGC_Workflow.intent_keywords
+//   Step 3: CRUD verb fallback for field=value structured input
 //
 // Tier 2 — cheap LLM classification (perplexity/sonar via LLM_CHAT_URL)
 //   Called by classify-intent.mjs — this module builds the prompt only.
@@ -18,7 +20,7 @@
 //   Routes to create_domain or create_workflow entry points.
 
 // ---------------------------------------------------------------------------
-// Tier 1a — PGC_IntentMap regex match
+// Pass 1 — PGC_IntentMap regex match
 // ---------------------------------------------------------------------------
 
 /**
@@ -64,7 +66,7 @@ export function matchIntentMap(userInput, intentRows) {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 1b — PGC_DomainHelp alias match
+// Pass 2 — step 1: PGC_DomainHelp alias match
 // ---------------------------------------------------------------------------
 
 /**
@@ -98,7 +100,105 @@ export function matchDomainAlias(userInput, domainRows) {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 1c — CRUD verb detection
+// Pass 2 — step 2: workflow keyword scan
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan PGC_Workflow rows for a domain and test each workflow's intent_keywords
+ * array for token presence in userInput. Returns the best-matching workflow
+ * name and an optional search_term for retrieval workflows.
+ *
+ * Disambiguation rule: when multiple workflows match (e.g. both list_<domain>
+ * and get_<domain> share a keyword like "show"), get_<domain> wins when the
+ * input contains tokens beyond the verb and domain name — those extra tokens
+ * indicate a search term rather than a broad list request.
+ *
+ * @param {string}   userInput       Raw user input (lowercased internally)
+ * @param {string}   domain          Resolved domain name, e.g. "recipes"
+ * @param {object[]} workflowRows    All PGC_Workflow rows — filtered by domain internally
+ * @returns {{ workflow_name: string, search_term: string|null } | null}
+ */
+export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
+  const input = userInput.toLowerCase();
+  const domainWorkflows = workflowRows.filter(r => r.domain === domain);
+
+  if (domainWorkflows.length === 0) return null;
+
+  const matches = [];
+  for (const wf of domainWorkflows) {
+    const keywords = Array.isArray(wf.intent_keywords) ? wf.intent_keywords : [];
+    for (const keyword of keywords) {
+      // Token presence — keyword must appear as a word boundary match to avoid
+      // "add" matching inside "addition" or "address"
+      const pattern = new RegExp(`\\b${keyword.toLowerCase()}\\b`);
+      if (pattern.test(input)) {
+        matches.push(wf);
+        break; // one keyword is enough to count this workflow as a candidate
+      }
+    }
+  }
+
+  if (matches.length === 0) return null;
+
+  // Disambiguation: if get_<domain> is among the candidates AND the input has
+  // tokens beyond the verb+domain pair, prefer get_<domain> — those extra
+  // tokens are a search term, not a list intent.
+  const getWorkflow = matches.find(wf => wf.name === `get_${domain}`);
+  const searchTerm  = extractSearchTerm(userInput, domain);
+
+  if (getWorkflow && searchTerm) {
+    return { workflow_name: getWorkflow.name, search_term: searchTerm };
+  }
+
+  // Prefer the first match in registration order (lower id = earlier seeded)
+  const best = matches.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))[0];
+
+  // Populate search_term for any retrieval workflow that matched
+  const isRetrieval = best.name.startsWith('get_') || best.name.startsWith('search_');
+  return {
+    workflow_name: best.name,
+    search_term:   isRetrieval && searchTerm ? searchTerm : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2 — step 2 helper: search term extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the search term from a retrieval-intent user input by stripping
+ * the leading verb tokens and the domain name.
+ *
+ * e.g. "get my recipes sweet potato chili"  → "sweet potato chili"
+ *      "show recipes pasta carbonara"        → "pasta carbonara"
+ *      "find my stock_portfolio AAPL"        → "AAPL"
+ *      "show all my recipes"                 → null  (no extra tokens)
+ *
+ * Returns null when no meaningful search term remains after stripping.
+ *
+ * @param {string} userInput   Raw user input
+ * @param {string} domain      Resolved domain name, e.g. "recipes"
+ * @returns {string|null}
+ */
+export function extractSearchTerm(userInput, domain) {
+  // Strip leading retrieval verb, optional quantifier, optional "my", then domain
+  const domainPattern = domain.replace(/_/g, '[_\\s]+');
+  const stripped = userInput
+    .replace(
+      new RegExp(
+        `^\\s*(?:get|show|find|fetch|display|look\\s+up|search(?:\\s+for)?)\\s+` +
+        `(?:all\\s+)?(?:my\\s+)?(?:${domainPattern})[s]?\\s*`,
+        'i'
+      ),
+      ''
+    )
+    .trim();
+
+  return stripped.length > 0 ? stripped : null;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2 — step 3: CRUD verb detection (fallback for field=value input)
 // ---------------------------------------------------------------------------
 
 // Ordered by specificity — longer phrases before single words to avoid
@@ -113,8 +213,9 @@ const CRUD_PATTERNS = [
 
 /**
  * Returns true if userInput contains any CRUD verb from CRUD_PATTERNS.
- * Used by classify-intent.mjs to detect CRUD intent before falling to Tier 2
- * when Pass 1b found no domain match.
+ * Used by classify-intent.mjs to detect CRUD intent when Pass 2 finds no
+ * domain match, so we can short-circuit with an instructive error rather
+ * than burning a Tier 2 LLM call.
  *
  * @param {string} userInput
  * @returns {boolean}
@@ -159,11 +260,10 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
 
         // Insert requires at least one field=value pair.
         // Accepted format: field=value  field="multi word value"
-        // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
-        // Without them, return ambiguous: true — classify-intent.mjs yields to Tier 2
-        // so it can route to a registered add_<domain> workflow if one exists.
-        // Do NOT return a crud_ambiguous error here — Tier 2 decides whether this is
-        // a workflow invocation or a genuine syntax error.
+        // Rule: Pass 2 CRUD fallback claims insert intent ONLY when field=value
+        // pairs are present. Without them, return ambiguous: true so
+        // classify-intent.mjs yields to Tier 2 — which can route to a registered
+        // add_<domain> workflow. Do NOT return crud_ambiguous here.
         if (pattern.action === 'insert') {
           const row = parseFieldValues(userInput);
           if (Object.keys(row).length === 0) {
@@ -233,8 +333,7 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
           };
         }
 
-        // All other verbs — return step without filters (list/show queries
-        // return all rows; insert/update are handled by Tier 2 or full workflow)
+        // All other verbs (list/show) — return step without filters
         return {
           action:   pattern.action,
           stepType: pattern.stepType,
@@ -262,7 +361,7 @@ export function matchCrudVerb(userInput, domainRow, rootTable) {
  * Returns the messages array for the chat completions API.
  *
  * @param {string}      userInput       Raw user input
- * @param {string|null} domainHint      Resolved domain name from Pass 1b, or null
+ * @param {string|null} domainHint      Resolved domain name from Pass 2, or null
  * @param {string[]}    workflowNames   All workflow names from PGC_Workflow — sonar picks from this list
  * @param {string}      promptText      System prompt text from PGC_Prompt.prompt_text
  * @returns {object[]}  messages array for chat completions body

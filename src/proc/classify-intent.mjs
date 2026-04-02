@@ -5,13 +5,15 @@
 // Handles POST /api/v1/proc/classify-intent
 //         SQS  CLASSIFY_INTENT
 //
-// Intent Preprocessor — three-tier classification pipeline.
-// See architecture Section 6.4 for full design.
+// Intent Preprocessor — two-pass, domain-workflow-aware classification pipeline.
+// See architecture Section 6.3 for full design.
 //
-// Tier 1 — coded logic (zero LLM cost):
-//   Pass 1a: regex match against PGC_IntentMap rows
-//   Pass 1b: alias token match against PGC_DomainHelp rows
-//   Pass 1c: CRUD verb detection against resolved domain
+// Pass 1 — PGC_IntentMap regex match (zero LLM)
+//
+// Pass 2 — Domain-Workflow Lookup (zero LLM):
+//   Step 1: alias token scan against PGC_DomainHelp rows
+//   Step 2: workflow keyword scan against PGC_Workflow.intent_keywords
+//   Step 3: CRUD verb fallback for explicit field=value structured input
 //
 // Tier 2 — cheap LLM classification (perplexity/sonar via LLM_CHAT_URL)
 //
@@ -21,12 +23,13 @@
 // Transport-agnostic — req.source ('http' | 'sqs') determines response path only.
 // All business logic is identical for both transports.
 
-import { ok, err }             from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, updateRows } from '../shared/serv-client.mjs';
+import { ok, err }                         from '../shared/lambda-utils.mjs';
+import { getRows, insertRow, updateRows }  from '../shared/serv-client.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import {
   matchIntentMap,
   matchDomainAlias,
+  matchWorkflowByKeywords,
   matchCrudVerb,
   hasCrudVerb,
   buildTier2Prompt,
@@ -73,6 +76,7 @@ export async function handle(req) {
     action_type:   result.action_type,
     workflow_name: result.workflow_name ?? null,
     domain:        result.domain ?? null,
+    search_term:   result.search_term ?? null,
   });
 
   // HTTP path — return result directly for curl testing
@@ -89,10 +93,14 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 async function classify(userInput, sessionId, traceId) {
-  // Load PGC_IntentMap and PGC_DomainHelp in parallel — both needed for Tier 1
-  const [intentMapResp, domainHelpResp] = await Promise.all([
+  // Pre-load all three tables in parallel — PGC_Workflow is now included so
+  // Pass 2 keyword scan and handoff() both use the same rows without a second
+  // DB round-trip. Net savings: removes the getRows('PGC_Workflow') that
+  // previously lived inside tier2() and handoff() separately.
+  const [intentMapResp, domainHelpResp, workflowResp] = await Promise.all([
     getRows('PGC_IntentMap'),
     getRows('PGC_DomainHelp'),
+    getRows('PGC_Workflow'),
   ]);
 
   if (intentMapResp.statusCode !== 200) {
@@ -101,14 +109,18 @@ async function classify(userInput, sessionId, traceId) {
   if (domainHelpResp.statusCode !== 200) {
     throw new Error(`PGC_DomainHelp read failed: ${domainHelpResp.error || domainHelpResp.statusCode}`);
   }
+  if (workflowResp.statusCode !== 200) {
+    throw new Error(`PGC_Workflow read failed: ${workflowResp.error || workflowResp.statusCode}`);
+  }
 
-  const intentRows = intentMapResp.rows ?? [];
-  const domainRows = domainHelpResp.rows ?? [];
+  const intentRows  = intentMapResp.rows  ?? [];
+  const domainRows  = domainHelpResp.rows ?? [];
+  const workflowRows = workflowResp.rows  ?? [];
 
-  // ── Pass 1a — PGC_IntentMap regex ────────────────────────────────────────
+  // ── Pass 1 — PGC_IntentMap regex ─────────────────────────────────────────
   const intentMatch = matchIntentMap(userInput, intentRows);
   if (intentMatch) {
-    console.info('classify-intent: Pass 1a match', { pattern: intentMatch.pattern, traceId });
+    console.info('classify-intent: Pass 1 match', { pattern: intentMatch.pattern, traceId });
 
     // workflow and heavy_lift: return immediately — domain resolution not needed.
     // workflow_name is the intent_category; handoff() looks up the workflow by name.
@@ -120,11 +132,12 @@ async function classify(userInput, sessionId, traceId) {
         workflow_name:   intentMatch.action_type === 'workflow' ? intentMatch.intent_category : null,
         domain:          null,
         ad_hoc_step:     null,
+        search_term:     null,
       };
     }
 
     // crud: extract domain from intent_category (e.g. "add_recipes" → "recipes"),
-    // resolve the root table, and build the ad_hoc_step exactly as Pass 1c does.
+    // resolve the root table, and build the ad_hoc_step.
     // This is the table-level CRUD path — operates on the root table only.
     // Domain-level operations (multi-table, child rows) are handled by workflows.
     const domain = intentMatch.intent_category.replace(/^(list|add|insert|update|edit|delete|remove)_/, '');
@@ -154,24 +167,24 @@ async function classify(userInput, sessionId, traceId) {
         workflow_name:   null,
         domain,
         ad_hoc_step:     null,
+        search_term:     null,
         known_domains:   domainRows.map(r => r.domain),
       };
     }
 
     const crudMatch = matchCrudVerb(userInput, domainRow, rootTable);
     if (crudMatch) {
-      console.info('classify-intent: Pass 1a crud resolved', {
+      console.info('classify-intent: Pass 1 crud resolved', {
         action: crudMatch.action, domain, rootTable, traceId,
       });
 
-      // Insert verb found but no field=value pairs.
-      // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
-      // Without them, yield to Tier 2 with the resolved domain hint.
+      // Insert verb found but no field=value pairs — yield to Tier 2 with domain hint.
+      // Tier 2 routes to add_<domain> workflow if registered.
       if (crudMatch.ambiguous && crudMatch.action === 'insert') {
-        console.info('classify-intent: Pass 1a crud insert ambiguous — yielding to Tier 2', {
+        console.info('classify-intent: Pass 1 crud insert ambiguous — yielding to Tier 2', {
           domain, traceId,
         });
-        return await tier2(userInput, domain, intentRows, traceId);
+        return await tier2(userInput, domain, workflowRows, intentRows, traceId);
       }
 
       if (crudMatch.ambiguous && crudMatch.action === 'update') {
@@ -180,15 +193,16 @@ async function classify(userInput, sessionId, traceId) {
         const columns = (schemaRow.rows?.[0]?.columns ?? [])
           .filter(c => !SYSTEM_COLS.has(c.name)).map(c => c.name);
         return {
-          intent_category: `update_${domain}`,
-          action_type:     'crud_ambiguous',
-          confidence:      'exact',
-          workflow_name:   null,
+          intent_category:  `update_${domain}`,
+          action_type:      'crud_ambiguous',
+          confidence:       'exact',
+          workflow_name:    null,
           domain,
-          ad_hoc_step:     null,
-          known_domains:   domainRows.map(r => r.domain),
-          table_columns:   columns,
-          root_table:      rootTable,
+          ad_hoc_step:      null,
+          search_term:      null,
+          known_domains:    domainRows.map(r => r.domain),
+          table_columns:    columns,
+          root_table:       rootTable,
           ambiguous_reason: crudMatch.reason,
         };
       }
@@ -201,6 +215,7 @@ async function classify(userInput, sessionId, traceId) {
           workflow_name:   null,
           domain,
           ad_hoc_step:     null,
+          search_term:     null,
           known_domains:   domainRows.map(r => r.domain),
           table_columns:   [],
           root_table:      rootTable,
@@ -214,40 +229,58 @@ async function classify(userInput, sessionId, traceId) {
         workflow_name:   null,
         domain,
         ad_hoc_step:     crudMatch.adHocStep,
+        search_term:     null,
       };
     }
 
-    // Pattern matched but no CRUD verb detected — fall through to Pass 1b
-    // so the domain alias match can handle it (e.g. "my recipes" with no verb)
+    // Pattern matched but no CRUD verb detected — fall through to Pass 2
   }
 
-  // ── Pass 1b — PGC_DomainHelp alias ───────────────────────────────────────
+  // ── Pass 2 — Domain-Workflow Lookup ───────────────────────────────────────
   const domainMatch = matchDomainAlias(userInput, domainRows);
   if (domainMatch) {
-    console.info('classify-intent: Pass 1b match', { domain: domainMatch.domain, traceId });
+    console.info('classify-intent: Pass 2 domain resolved', { domain: domainMatch.domain, traceId });
 
-    // ── Pass 1c — CRUD verb detection ──────────────────────────────────────
-    // Fetch the root table for this domain — try PGC_EntitySchema first,
-    // fall back to PGC_Schema (domain tables registered but entity not yet defined).
+    // Step 2: workflow keyword scan — data-driven verb vocabulary from PGC_Workflow.intent_keywords.
+    // Checks all workflows for this domain before falling back to CRUD verb detection.
+    // This is the key fix: Pass 2 is workflow-aware before it is CRUD-aware.
+    const kwMatch = matchWorkflowByKeywords(userInput, domainMatch.domain, workflowRows);
+    if (kwMatch) {
+      console.info('classify-intent: Pass 2 keyword match', {
+        workflow_name: kwMatch.workflow_name,
+        search_term:   kwMatch.search_term ?? null,
+        traceId,
+      });
+      return {
+        intent_category: kwMatch.workflow_name,
+        action_type:     'workflow',
+        confidence:      'keyword_match',
+        workflow_name:   kwMatch.workflow_name,
+        domain:          null,
+        ad_hoc_step:     null,
+        search_term:     kwMatch.search_term ?? null,
+      };
+    }
+
+    // Step 3: CRUD verb fallback — only reached when no keyword matched.
+    // Only proceeds to build ad_hoc_step when explicit field=value pairs are present
+    // (insert) or id+fields are present (update/delete). Natural-language input
+    // without structure falls through to Tier 2.
     const entityResp = await getRows('PGC_EntitySchema', [
       { column: 'entity_name', op: 'like', value: `%${titleCase(domainMatch.domain)}%` },
     ]);
-
     let rootTable = entityResp.rows?.[0]?.root_table ?? null;
 
-    // Fallback — entity not registered yet, derive root table from PGC_Schema.
-    // Root table = the one with no foreign keys (no FK references to other tables).
     if (!rootTable) {
       const schemaResp = await getRows('PGC_Schema', [
         { column: 'domain', op: 'eq', value: domainMatch.domain },
         { column: 'target', op: 'eq', value: 'pgd' },
       ]);
       const tables = schemaResp.rows ?? [];
-      // Primary table has empty or null foreign_keys array
       const primary = tables.find(t => !t.foreign_keys || t.foreign_keys.length === 0);
       rootTable = primary?.table_name ?? (tables[0]?.table_name ?? null);
       if (rootTable) {
-        console.info('classify-intent: Pass 1c entity fallback via PGC_Schema', {
+        console.info('classify-intent: Pass 2 entity fallback via PGC_Schema', {
           domain: domainMatch.domain, rootTable, traceId,
         });
       }
@@ -256,26 +289,18 @@ async function classify(userInput, sessionId, traceId) {
     if (rootTable) {
       const crudMatch = matchCrudVerb(userInput, domainMatch, rootTable);
       if (crudMatch) {
-        console.info('classify-intent: Pass 1c match', {
+        console.info('classify-intent: Pass 2 CRUD fallback', {
           action: crudMatch.action, domain: domainMatch.domain, traceId,
         });
 
-        // Insert verb found but no field=value pairs.
-        // Rule: Pass 1c claims insert intent ONLY when field=value pairs are present.
-        // Without them, yield to Tier 2 — it can route to a registered add_<domain>
-        // workflow (LLM-parse-first) if one exists, or return crud_ambiguous with an
-        // instructive error if no workflow covers this intent.
-        // This prevents Pass 1c from intercepting natural-language add requests that
-        // are meant for the Step Processor workflow path.
+        // Insert with no field=value pairs — yield to Tier 2 with domain hint
         if (crudMatch.ambiguous && crudMatch.action === 'insert') {
-          console.info('classify-intent: Pass 1c insert ambiguous — yielding to Tier 2', {
+          console.info('classify-intent: Pass 2 insert ambiguous — yielding to Tier 2', {
             domain: domainMatch.domain, traceId,
           });
-          return await tier2(userInput, domainMatch.domain, intentRows, traceId);
+          return await tier2(userInput, domainMatch.domain, workflowRows, intentRows, traceId);
         }
 
-        // Update verb found — missing ID or missing field=value pairs.
-        // Fetch column names for the error message in both cases.
         if (crudMatch.ambiguous && crudMatch.action === 'update') {
           const schemaRow = await getRows('PGC_Schema', [
             { column: 'table_name', op: 'eq', value: rootTable },
@@ -285,32 +310,29 @@ async function classify(userInput, sessionId, traceId) {
             .filter(c => !SYSTEM_COLS.has(c.name))
             .map(c => c.name);
           return {
-            intent_category: `update_${domainMatch.domain}`,
-            action_type:     'crud_ambiguous',
-            confidence:      'crud',
-            workflow_name:   null,
-            workflow_id:     null,
-            domain:          domainMatch.domain,
-            ad_hoc_step:     null,
-            known_domains:   domainRows.map(r => r.domain),
-            table_columns:   columns,
-            root_table:      rootTable,
+            intent_category:  `update_${domainMatch.domain}`,
+            action_type:      'crud_ambiguous',
+            confidence:       'crud',
+            workflow_name:    null,
+            domain:           domainMatch.domain,
+            ad_hoc_step:      null,
+            search_term:      null,
+            known_domains:    domainRows.map(r => r.domain),
+            table_columns:    columns,
+            root_table:       rootTable,
             ambiguous_reason: crudMatch.reason,
           };
         }
 
-        // Delete verb found but no ID — return ambiguous so handoff() can
-        // send an instructive error. Do not fall to Tier 2 (it would
-        // misclassify "delete my recipes" as a heavy_lift or crud intent).
         if (crudMatch.ambiguous && crudMatch.action === 'delete') {
           return {
             intent_category: `delete_${domainMatch.domain}`,
             action_type:     'crud_ambiguous',
             confidence:      'crud',
             workflow_name:   null,
-            workflow_id:     null,
             domain:          domainMatch.domain,
             ad_hoc_step:     null,
+            search_term:     null,
             known_domains:   domainRows.map(r => r.domain),
             table_columns:   [],
             root_table:      rootTable,
@@ -322,23 +344,20 @@ async function classify(userInput, sessionId, traceId) {
           action_type:     'crud',
           confidence:      'crud',
           workflow_name:   null,
-          workflow_id:     null,
           domain:          domainMatch.domain,
           ad_hoc_step:     crudMatch.adHocStep,
+          search_term:     null,
         };
       }
     }
 
-    // Domain resolved but no CRUD verb — fall to Tier 2 with domain hint
-    return await tier2(userInput, domainMatch.domain, intentRows, traceId);
+    // Domain resolved but no keyword match and no CRUD verb — fall to Tier 2 with hint
+    return await tier2(userInput, domainMatch.domain, workflowRows, intentRows, traceId);
   }
 
-  // ── Pass 1b failed — no domain matched ───────────────────────────────────
-  // If the input contains a CRUD verb, the user is almost certainly trying to
-  // operate on a domain they own but phrased it in a way we don't recognise.
-  // Short-circuit here with an instructive error listing their registered
-  // domains — no value in sending this to Tier 2 (it would misclassify it
-  // or burn an LLM call to reach the same conclusion).
+  // ── Pass 2 failed — no domain matched ────────────────────────────────────
+  // CRUD verb present but no domain recognised — short-circuit with instructive
+  // error listing registered domains. No value in sending to Tier 2.
   if (hasCrudVerb(userInput)) {
     console.info('classify-intent: CRUD verb with no domain match — short-circuit', { traceId });
     return {
@@ -346,22 +365,22 @@ async function classify(userInput, sessionId, traceId) {
       action_type:     'crud_ambiguous',
       confidence:      'crud',
       workflow_name:   null,
-      workflow_id:     null,
       domain:          null,
       ad_hoc_step:     null,
+      search_term:     null,
       known_domains:   domainRows.map(r => r.domain),
     };
   }
 
-  // ── Tier 2 — no Tier 1 match ─────────────────────────────────────────────
-  return await tier2(userInput, null, intentRows, traceId);
+  // ── Tier 2 — no Pass 1 or Pass 2 match ───────────────────────────────────
+  return await tier2(userInput, null, workflowRows, intentRows, traceId);
 }
 
 // ---------------------------------------------------------------------------
 // Tier 2 — cheap sonar classification
 // ---------------------------------------------------------------------------
 
-async function tier2(userInput, domainHint, intentRows, traceId) {
+async function tier2(userInput, domainHint, workflowRows, intentRows, traceId) {
   // Load prompt from PGC_Prompt — consistent with all other LLM calls in the system.
   // Gives Tier 2 versioning, error_log, and the right-brain improvement loop.
   const promptResp = await getRows('PGC_Prompt', [
@@ -370,9 +389,7 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
   const promptRow = promptResp.rows?.[0];
   if (!promptRow) throw new Error('PGC_Prompt row missing for classify_intent_tier2 — run init-brain');
 
-  // Load all workflow names so sonar can match against them
-  const workflowResp  = await getRows('PGC_Workflow');
-  const workflowRows  = workflowResp.rows ?? [];
+  // workflowRows pre-loaded by classify() — no second DB fetch needed
   const workflowNames = workflowRows.map(r => r.name);
 
   const messages = buildTier2Prompt(userInput, domainHint, workflowNames, promptRow.prompt_text);
@@ -397,16 +414,14 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 
   if (!response.ok) {
     const text = await response.text();
-    // Log failure to PGC_Prompt.error_log — same pattern as review-output.mjs
     const errorEntry = {
-      at:             new Date().toISOString(),
-      error_type:     'llm_http_error',
-      error_message:  `Tier 2 LLM error ${response.status}: ${text}`,
-      llm_raw_output: text,
+      at:              new Date().toISOString(),
+      error_type:      'llm_http_error',
+      error_message:   `Tier 2 LLM error ${response.status}: ${text}`,
+      llm_raw_output:  text,
       recovery_action: 'halt',
     };
     console.error('classify-intent: Tier 2 LLM HTTP error', { traceId, status: response.status });
-    // Best-effort error log write — do not throw on log failure
     try {
       const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
       await updateRows('PGC_Prompt',
@@ -429,7 +444,6 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
     const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     parsed = JSON.parse(clean);
   } catch (error) {
-    // Log parse failure to PGC_Prompt.error_log
     const errorEntry = {
       at:              new Date().toISOString(),
       error_type:      'invalid_json',
@@ -463,25 +477,22 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
       action_type:     'heavy_lift',
       confidence:      'heavy_lift',
       workflow_name:   null,
-      workflow_id:     null,
       domain:          domainHint,
       ad_hoc_step:     null,
+      search_term:     null,
     };
   }
 
-  // Named workflow matched
+  // Named workflow matched — resolve id from pre-loaded rows
   if (workflow_name) {
-    // Look up workflow_id from the rows already loaded above — avoids a second DB round-trip
-    const workflowId = workflowRows.find(r => r.name === workflow_name)?.id ?? null;
-
     return {
       intent_category: intent_category ?? workflow_name,
       action_type:     'workflow',
       confidence:      'llm_classified',
       workflow_name,
-      workflow_id:     workflowId,
       domain:          domainHint,
       ad_hoc_step:     null,
+      search_term:     null,
     };
   }
 
@@ -491,9 +502,9 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
     action_type:     'crud',
     confidence:      'llm_classified',
     workflow_name:   null,
-    workflow_id:     null,
     domain:          domainHint,
     ad_hoc_step:     null,
+    search_term:     null,
   };
 }
 
@@ -502,10 +513,9 @@ async function tier2(userInput, domainHint, intentRows, traceId) {
 // ---------------------------------------------------------------------------
 
 async function handoff(result, callback, traceId, userInput) {
-  // Named workflow matched — look up PGC_Workflow by name to get the id,
-  // then create PGC_WorkflowRun and enqueue WORKFLOW_STEP execute_top.
-  // workflow_id is no longer carried on PGC_IntentMap — we always resolve
-  // by name so the intent map and workflow table remain structurally independent.
+  // Named workflow matched — look up workflow from pre-loaded rows passed through
+  // the result object, create PGC_WorkflowRun, and enqueue WORKFLOW_STEP execute_top.
+  // search_term is passed generically as input.search — no per-workflow special cases.
   if (result.action_type === 'workflow' && result.workflow_name) {
     const wfResp = await getRows(
       'PGC_Workflow',
@@ -517,24 +527,12 @@ async function handoff(result, callback, traceId, userInput) {
     }
     const workflowId = wfResp.rows[0].id;
 
-    // For get_<domain> workflows, extract the search term from the user input.
-    // Everything after the verb + optional 'my' + domain name becomes input.search.
-    // e.g. 'get my recipes sweet potato chili' → search: 'sweet potato chili'
-    // e.g. 'show recipes pasta'                → search: 'pasta'
-    // The get_<domain> workflow step uses {{input.search}} as the LIKE filter value.
-    let workflowInput = { userInput };
-    if (result.workflow_name?.startsWith('get_')) {
-      const domain = result.workflow_name.slice(4); // strip 'get_'
-      // Strip leading verb (get|show|find|display|look up), optional 'my', domain name
-      const searchMatch = userInput.match(
-        new RegExp(`(?:get|show|find|display|look\\s+up)\\s+(?:my\\s+)?(?:${domain}|${domain.replace(/_/g, '\\s+')})[s]?\\s*(.*)`, 'i')
-      );
-      const search = searchMatch?.[1]?.trim() ?? userInput;
-      workflowInput = { userInput, search };
-      console.info('classify-intent: handoff — get workflow search extracted', {
-        domain, search, traceId,
-      });
-    }
+    // Build workflow input — search_term populated by Pass 2 matchWorkflowByKeywords()
+    // for retrieval workflows. handoff() spreads it generically — no per-workflow cases.
+    const workflowInput = {
+      userInput,
+      ...(result.search_term ? { search: result.search_term } : {}),
+    };
 
     const runResp = await insertRow('PGC_WorkflowRun', {
       workflow_id:  workflowId,
@@ -550,7 +548,9 @@ async function handoff(result, callback, traceId, userInput) {
       throw new Error(`handoff: failed to create PGC_WorkflowRun: ${runResp.error}`);
     }
     const workflowRunId = runResp.row.id;
-    console.info('classify-intent: handoff — WorkflowRun created', { workflowRunId, traceId });
+    console.info('classify-intent: handoff — WorkflowRun created', {
+      workflowRunId, workflow: result.workflow_name, search_term: result.search_term ?? null, traceId,
+    });
 
     await enqueueWorkflow({
       type:          'WORKFLOW_STEP',
@@ -562,12 +562,6 @@ async function handoff(result, callback, traceId, userInput) {
   }
 
   // CRUD verb present but request is ambiguous — return instructive error.
-  // Sub-cases:
-  //   insert, no field=value pairs         → list table fields
-  //   update, no ID                        → ask for id=<number>
-  //   update, no field=value pairs         → list table fields
-  //   delete, no ID                        → ask for id=<number>
-  //   unknown domain, any CRUD verb        → list registered domains
   if (result.action_type === 'crud_ambiguous') {
     const domainList  = formatKnownDomains(result.known_domains);
     const fieldList   = result.table_columns?.length
@@ -589,7 +583,6 @@ async function handoff(result, callback, traceId, userInput) {
           message: `To update a ${result.domain} record I need an explicit ID.${fieldList}\n\nTry: /mind update my ${result.domain} id=<number> ${firstField}=New Value\n\nTo find the ID first, use: /mind list my ${result.domain}`,
         });
       } else {
-        // no_fields — ID was present but no field=value pairs
         await enqueueCallback(callback, {
           type:    'WORKFLOW_NOTIFY',
           traceId,
@@ -612,7 +605,7 @@ async function handoff(result, callback, traceId, userInput) {
     return;
   }
 
-  // CRUD — execute ad_hoc_step directly and post result as WORKFLOW_NOTIFY.
+  // CRUD — execute ad_hoc_step directly and post result as WORKFLOW_NOTIFY
   if (result.action_type === 'crud' && result.ad_hoc_step) {
     await executeCrudStep(result, callback, traceId, userInput);
     return;
@@ -642,7 +635,6 @@ async function handoff(result, callback, traceId, userInput) {
       return;
     }
 
-    // CREATE_DOMAIN or CREATE_WORKFLOW — forward to existing entry points
     await enqueueWorkflow({
       type:      sqsType,
       userInput,
@@ -667,13 +659,12 @@ async function handoff(result, callback, traceId, userInput) {
 // CRUD ad_hoc_step execution
 // ---------------------------------------------------------------------------
 
-// Executes a single ad_hoc_step built by Pass 1c directly, without a full
-// PGC_WorkflowRun lifecycle. A minimal run context is constructed in-memory
-// so executeStep receives the shape it expects.
+// Executes a single ad_hoc_step built by Pass 1 or Pass 2 CRUD fallback directly,
+// without a full PGC_WorkflowRun lifecycle. A minimal run context is constructed
+// in-memory so executeStep receives the shape it expects.
 //
-// Supported step types: serv_query, serv_insert, serv_delete (ID required —
-//   enforced upstream in matchCrudVerb; ambiguous deletes never reach here).
-// serv_update is not produced by Pass 1c today (no ad_hoc update pattern).
+// Supported step types: serv_query, serv_insert, serv_delete, serv_update
+// Ambiguous steps never reach here — they are caught upstream in classify().
 
 async function executeCrudStep(result, callback, traceId, userInput) {
   const step = result.ad_hoc_step;
@@ -732,7 +723,6 @@ function formatCrudResult(stepType, domain, outputValue, insertedRow = {}) {
     if (rows.length === 0) {
       return `No ${domain ?? 'records'} found.`;
     }
-    // Show up to 10 rows. Use 'name' field if present, otherwise first non-system field.
     const SYSTEM_FIELDS = new Set(['id', 'created_at', 'updated_at']);
     const labelField = (rows[0] && Object.keys(rows[0]).find(k => k === 'name'))
       ?? Object.keys(rows[0] ?? {}).find(k => !SYSTEM_FIELDS.has(k))
@@ -767,11 +757,12 @@ function formatCrudResult(stepType, domain, outputValue, insertedRow = {}) {
       : `Nothing deleted — no matching record found.`;
   }
 
-  // Fallback for any future step types routed here
   return `Done. ${JSON.stringify(outputValue ?? {}).slice(0, 200)}`;
 }
 
-
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function titleCase(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
