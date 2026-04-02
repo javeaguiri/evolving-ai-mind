@@ -128,10 +128,11 @@ export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
   for (const wf of domainWorkflows) {
     const keywords = Array.isArray(wf.intent_keywords) ? wf.intent_keywords : [];
     for (const keyword of keywords) {
-      // Token presence — keyword must appear as a word boundary match to avoid
-      // "add" matching inside "addition" or "address"
-      const pattern = new RegExp(`\\b${keyword.toLowerCase()}\\b`);
-      if (pattern.test(input)) {
+      // substring includes — handles both single-token ("get") and multi-word
+      // ("look up") keywords without regex construction per keyword.
+      // Domain scoping already limits candidates to this domain's workflows,
+      // so cross-domain false positives are not a risk.
+      if (input.includes(keyword.toLowerCase())) {
         matches.push(wf);
         break; // one keyword is enough to count this workflow as a candidate
       }

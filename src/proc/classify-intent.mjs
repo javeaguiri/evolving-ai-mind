@@ -30,6 +30,7 @@ import {
   matchIntentMap,
   matchDomainAlias,
   matchWorkflowByKeywords,
+  extractSearchTerm,
   matchCrudVerb,
   hasCrudVerb,
   buildTier2Prompt,
@@ -122,94 +123,70 @@ async function classify(userInput, sessionId, traceId) {
   if (intentMatch) {
     console.info('classify-intent: Pass 1 match', { pattern: intentMatch.pattern, traceId });
 
-    // workflow and heavy_lift: return immediately — domain resolution not needed.
-    // workflow_name is the intent_category; handoff() looks up the workflow by name.
+    // workflow and heavy_lift — apply two guards before short-circuiting:
+    //
+    // Guard 1 (fix 2): structured input present (id=N or field=value pairs).
+    // A technically savvy user targeting a domain record by id or explicit fields
+    // should reach the CRUD path, not a named workflow. Yield to Pass 2 — the
+    // keyword scan runs first; if it matches, the workflow still wins. If not,
+    // the CRUD fallback handles the structured input correctly.
+    // This also prevents "get recipes id=1" from routing to get_recipes workflow
+    // where {{input.search}} would resolve to null and match nothing.
+    //
+    // Guard 2 (fix 1): extract search_term for retrieval workflows.
+    // Pass 1 short-circuits before matchWorkflowByKeywords runs, so
+    // extractSearchTerm must be called here for search_term to be populated.
     if (intentMatch.action_type !== 'crud') {
-      return {
-        intent_category: intentMatch.intent_category,
-        action_type:     intentMatch.action_type,
-        confidence:      'exact',
-        workflow_name:   intentMatch.action_type === 'workflow' ? intentMatch.intent_category : null,
-        domain:          null,
-        ad_hoc_step:     null,
-        search_term:     null,
-      };
+      if (intentMatch.action_type === 'workflow' && hasStructuredInput(userInput)) {
+        console.info('classify-intent: Pass 1 workflow match with structured input — yielding to Pass 2', {
+          pattern: intentMatch.pattern, traceId,
+        });
+        // Fall through to Pass 2 below
+      } else {
+        const domain     = intentMatch.intent_category.replace(/^(get|list|search)_/, '');
+        const isRetrieval = /^(get|search)_/.test(intentMatch.intent_category);
+        const searchTerm = isRetrieval ? extractSearchTerm(userInput, domain) : null;
+        return {
+          intent_category: intentMatch.intent_category,
+          action_type:     intentMatch.action_type,
+          confidence:      'exact',
+          workflow_name:   intentMatch.action_type === 'workflow' ? intentMatch.intent_category : null,
+          domain:          null,
+          ad_hoc_step:     null,
+          search_term:     searchTerm,
+        };
+      }
     }
 
     // crud: extract domain from intent_category (e.g. "add_recipes" → "recipes"),
     // resolve the root table, and build the ad_hoc_step.
     // This is the table-level CRUD path — operates on the root table only.
     // Domain-level operations (multi-table, child rows) are handled by workflows.
-    const domain = intentMatch.intent_category.replace(/^(list|add|insert|update|edit|delete|remove)_/, '');
-    const domainRow = domainRows.find(r => r.domain === domain) ?? { domain };
+    // Guard 1 above may have set action_type to workflow and fallen through — only
+    // enter this block for genuine crud intent map rows.
+    if (intentMatch.action_type === 'crud') {
+      const domain = intentMatch.intent_category.replace(/^(list|add|insert|update|edit|delete|remove)_/, '');
+      const domainRow = domainRows.find(r => r.domain === domain) ?? { domain };
 
-    const entityResp = await getRows('PGC_EntitySchema', [
-      { column: 'entity_name', op: 'like', value: `%${titleCase(domain)}%` },
-    ]);
-    let rootTable = entityResp.rows?.[0]?.root_table ?? null;
-
-    if (!rootTable) {
-      const schemaResp = await getRows('PGC_Schema', [
-        { column: 'domain', op: 'eq', value: domain },
-        { column: 'target', op: 'eq', value: 'pgd' },
+      const entityResp = await getRows('PGC_EntitySchema', [
+        { column: 'entity_name', op: 'like', value: `%${titleCase(domain)}%` },
       ]);
-      const tables = schemaResp.rows ?? [];
-      const primary = tables.find(t => !t.foreign_keys || t.foreign_keys.length === 0);
-      rootTable = primary?.table_name ?? (tables[0]?.table_name ?? null);
-    }
+      let rootTable = entityResp.rows?.[0]?.root_table ?? null;
 
-    if (!rootTable) {
-      // Domain registered in intent map but no tables found — treat as ambiguous
-      return {
-        intent_category: intentMatch.intent_category,
-        action_type:     'crud_ambiguous',
-        confidence:      'exact',
-        workflow_name:   null,
-        domain,
-        ad_hoc_step:     null,
-        search_term:     null,
-        known_domains:   domainRows.map(r => r.domain),
-      };
-    }
-
-    const crudMatch = matchCrudVerb(userInput, domainRow, rootTable);
-    if (crudMatch) {
-      console.info('classify-intent: Pass 1 crud resolved', {
-        action: crudMatch.action, domain, rootTable, traceId,
-      });
-
-      // Insert verb found but no field=value pairs — yield to Tier 2 with domain hint.
-      // Tier 2 routes to add_<domain> workflow if registered.
-      if (crudMatch.ambiguous && crudMatch.action === 'insert') {
-        console.info('classify-intent: Pass 1 crud insert ambiguous — yielding to Tier 2', {
-          domain, traceId,
-        });
-        return await tier2(userInput, domain, workflowRows, intentRows, traceId);
+      if (!rootTable) {
+        const schemaResp = await getRows('PGC_Schema', [
+          { column: 'domain', op: 'eq', value: domain },
+          { column: 'target', op: 'eq', value: 'pgd' },
+        ]);
+        const tables = schemaResp.rows ?? [];
+        const primary = tables.find(t => !t.foreign_keys || t.foreign_keys.length === 0);
+        rootTable = primary?.table_name ?? (tables[0]?.table_name ?? null);
       }
 
-      if (crudMatch.ambiguous && crudMatch.action === 'update') {
-        const schemaRow = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: rootTable }]);
-        const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
-        const columns = (schemaRow.rows?.[0]?.columns ?? [])
-          .filter(c => !SYSTEM_COLS.has(c.name)).map(c => c.name);
+      if (!rootTable) {
+        // Domain registered in intent map but no tables found — treat as ambiguous
         return {
-          intent_category:  `update_${domain}`,
-          action_type:      'crud_ambiguous',
-          confidence:       'exact',
-          workflow_name:    null,
-          domain,
-          ad_hoc_step:      null,
-          search_term:      null,
-          known_domains:    domainRows.map(r => r.domain),
-          table_columns:    columns,
-          root_table:       rootTable,
-          ambiguous_reason: crudMatch.reason,
-        };
-      }
-
-      if (crudMatch.ambiguous && crudMatch.action === 'delete') {
-        return {
-          intent_category: `delete_${domain}`,
+          intent_category: intentMatch.intent_category,
           action_type:     'crud_ambiguous',
           confidence:      'exact',
           workflow_name:   null,
@@ -217,23 +194,72 @@ async function classify(userInput, sessionId, traceId) {
           ad_hoc_step:     null,
           search_term:     null,
           known_domains:   domainRows.map(r => r.domain),
-          table_columns:   [],
-          root_table:      rootTable,
         };
       }
 
-      return {
-        intent_category: intentMatch.intent_category,
-        action_type:     'crud',
-        confidence:      'exact',
-        workflow_name:   null,
-        domain,
-        ad_hoc_step:     crudMatch.adHocStep,
-        search_term:     null,
-      };
+      const crudMatch = matchCrudVerb(userInput, domainRow, rootTable);
+      if (crudMatch) {
+        console.info('classify-intent: Pass 1 crud resolved', {
+          action: crudMatch.action, domain, rootTable, traceId,
+        });
+
+        // Insert verb found but no field=value pairs — yield to Tier 2 with domain hint.
+        // Tier 2 routes to add_<domain> workflow if registered.
+        if (crudMatch.ambiguous && crudMatch.action === 'insert') {
+          console.info('classify-intent: Pass 1 crud insert ambiguous — yielding to Tier 2', {
+            domain, traceId,
+          });
+          return await tier2(userInput, domain, workflowRows, intentRows, traceId);
+        }
+
+        if (crudMatch.ambiguous && crudMatch.action === 'update') {
+          const schemaRow = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: rootTable }]);
+          const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+          const columns = (schemaRow.rows?.[0]?.columns ?? [])
+            .filter(c => !SYSTEM_COLS.has(c.name)).map(c => c.name);
+          return {
+            intent_category:  `update_${domain}`,
+            action_type:      'crud_ambiguous',
+            confidence:       'exact',
+            workflow_name:    null,
+            domain,
+            ad_hoc_step:      null,
+            search_term:      null,
+            known_domains:    domainRows.map(r => r.domain),
+            table_columns:    columns,
+            root_table:       rootTable,
+            ambiguous_reason: crudMatch.reason,
+          };
+        }
+
+        if (crudMatch.ambiguous && crudMatch.action === 'delete') {
+          return {
+            intent_category: `delete_${domain}`,
+            action_type:     'crud_ambiguous',
+            confidence:      'exact',
+            workflow_name:   null,
+            domain,
+            ad_hoc_step:     null,
+            search_term:     null,
+            known_domains:   domainRows.map(r => r.domain),
+            table_columns:   [],
+            root_table:      rootTable,
+          };
+        }
+
+        return {
+          intent_category: intentMatch.intent_category,
+          action_type:     'crud',
+          confidence:      'exact',
+          workflow_name:   null,
+          domain,
+          ad_hoc_step:     crudMatch.adHocStep,
+          search_term:     null,
+        };
+      }
     }
 
-    // Pattern matched but no CRUD verb detected — fall through to Pass 2
+    // No crud verb detected, or Guard 1 yielded — fall through to Pass 2
   }
 
   // ── Pass 2 — Domain-Workflow Lookup ───────────────────────────────────────
@@ -763,6 +789,23 @@ function formatCrudResult(stepType, domain, outputValue, insertedRow = {}) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Returns true if userInput contains structured data — either an explicit id
+ * reference (id=N, id:N, id N) or at least one field=value pair.
+ * Used by Pass 1 to detect when a workflow pattern match should yield to Pass 2
+ * so the CRUD path can handle the structured portion correctly.
+ *
+ * @param {string} userInput
+ * @returns {boolean}
+ */
+function hasStructuredInput(userInput) {
+  if (/\bid\s*[=:]\s*\d+\b/i.test(userInput)) return true;
+  if (/\bid\s+\d+\b/i.test(userInput)) return true;
+  // field=value pair: word= followed by a non-space value
+  if (/\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s=]+)/.test(userInput)) return true;
+  return false;
+}
 
 function titleCase(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
