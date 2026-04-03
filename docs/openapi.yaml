@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.3.5
+  version: 3.4.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -713,7 +713,8 @@ components:
             PGC_Session.session_id UUID. Present when the request arrived via
             /mind in an existing thread. Omit on fresh /mind calls and direct
             HTTP test calls. When present, classify-intent reads recent
-            PGC_SessionEntry rows for context injection into Tier 1c and Tier 2.
+            PGC_SessionEntry rows for context injection into Pass 2 domain
+            fallback and Tier 2 sonar prompt (Phase 3).
           format: uuid
         callback:
           $ref: '#/components/schemas/Callback'
@@ -727,36 +728,57 @@ components:
         intent_category:
           type: string
           description: Classified intent category
-          example: create_domain
+          example: get_recipes
         action_type:
           type: string
-          enum: [crud, workflow, heavy_lift]
+          enum: [crud, workflow, heavy_lift, crud_ambiguous]
           description: >
-            crud — known CRUD verb against a resolved domain.
-            workflow — a named PGC_Workflow was matched.
-            heavy_lift — requires LLM-driven workflow creation or domain creation.
+            workflow       — a named PGC_Workflow was matched. handoff() creates
+                             PGC_WorkflowRun and enqueues WORKFLOW_STEP execute_top.
+            heavy_lift     — requires LLM-driven workflow or domain creation.
+            crud           — direct table operation via serv/table/*. ad_hoc_step is set.
+            crud_ambiguous — intent identified but cannot execute without more information
+                             (missing verb, missing id, missing field values). Instructive
+                             error posted to user. No DB operation performed.
         confidence:
           type: string
-          enum: [exact, alias, crud, llm_classified, heavy_lift]
+          enum: [exact, keyword_match, crud, llm_classified, heavy_lift]
           description: >
-            exact — Pass 1a PGC_IntentMap regex matched. Zero LLM cost.
-            alias — Pass 1b PGC_DomainHelp alias matched. Zero LLM cost.
-            crud — Pass 1c CRUD verb detected against resolved domain. Zero LLM cost.
+            exact         — Pass 1 PGC_IntentMap regex matched. Zero LLM cost.
+            keyword_match — Pass 2 PGC_Workflow.intent_keywords token scan matched. Zero LLM cost.
+            crud          — Pass 2 CRUD fallback for PGC_/PGD_-prefixed table input. Zero LLM cost.
             llm_classified — Tier 2 sonar call produced the classification.
-            heavy_lift — Tier 3 routed to create_domain or create_workflow.
+            heavy_lift    — Tier 3 routed to create_domain or create_workflow.
         workflow_name:
           type: string
-          description: PGC_Workflow.name if a workflow was matched — null otherwise
-          example: meal_planner
+          description: >
+            PGC_Workflow.name when action_type is workflow — null for all other action types.
+            handoff() looks up this workflow by name to create PGC_WorkflowRun.
+          example: get_recipes
         domain:
           type: string
-          description: Resolved domain name if Pass 1b alias matched — null otherwise
+          description: >
+            Resolved domain name. Set when action_type is crud or crud_ambiguous (direct table
+            path). Null when action_type is workflow or heavy_lift — handoff() does not need it.
           example: recipes
+        search_term:
+          type: string
+          nullable: true
+          description: >
+            Extracted search string for retrieval workflows (get_*, search_*).
+            Set by Pass 1 extractSearchTerm() or Pass 2 matchWorkflowByKeywords()
+            when the matched workflow is a retrieval type and extra tokens follow
+            the verb and domain name. Passed as input.search to PGC_WorkflowRun —
+            the workflow step uses {{input.search}} as its filter value.
+            Null for all non-retrieval workflows and all non-workflow action types.
+          example: sweet potato chili
         ad_hoc_step:
           type: object
           description: >
-            CRUD step definition built by Pass 1c. Built but not yet executed —
-            execution requires serv_query/serv_update/serv_delete step types (Phase 3).
+            Direct table operation step built for PGC_/PGD_-prefixed table input.
+            Set when action_type is crud. Executed immediately by executeCrudStep()
+            in classify-intent.mjs — no PGC_WorkflowRun is created.
+            Null for all other action types.
           example:
             type: serv_query
             input:
@@ -1990,7 +2012,7 @@ paths:
         sessionId is generated fresh on every call and PROC ignores it.
 
         classify-intent.mjs picks up the CLASSIFY_INTENT message and runs the
-        three-tier classification pipeline (Section 6.4).
+        two-pass, domain-workflow-aware classification pipeline (Section 6.3).
       tags: [UI-Slack]
       requestBody:
         required: true
@@ -2061,7 +2083,13 @@ paths:
         terminates the workflow.
 
         **execute_top** — Execute the step at the top of the execution stack.
-        Phase 2 item 5 — not yet implemented. Returns 501 stub today.
+        Loads PGC_WorkflowRun by workflowRunId, inspects the top frame, finds
+        the current step in PGC_Workflow.steps, executes it via the step type
+        handler, writes PGC_WorkflowRunStep audit row, persists updated stack
+        and state to PGC_WorkflowRun, then enqueues the next execute_top message
+        to continue the run. One SQS message per step — one step per invocation.
+        Idempotency: checks PGC_WorkflowRunStep for (run_id, frame_id, step_key)
+        before executing — SQS redeliveries are detected and discarded safely.
 
         **cancel** — Immediately cancel the workflow run regardless of current
         state. Sets PGC_WorkflowRun.status = cancelled.
@@ -2195,42 +2223,48 @@ paths:
           description: >
             Run is not in awaiting_human_gate status — duplicate resume_gate
             delivery (SQS at-least-once) or stale button click
-        '501':
-          description: execute_top — Step Processor not yet implemented (Phase 2 item 5)
         '500':
           description: DB read, state mutation, or SQS enqueue failed
 
   /api/v1/proc/classify-intent:
     post:
-      summary: Intent Preprocessor — three-tier natural language classification
+      summary: Intent Preprocessor — two-pass, domain-workflow-aware classification
       description: >
         Classifies free-form user input into a routable intent using a cost-ordered
-        three-tier pipeline. LLM is only invoked when coded logic cannot classify.
+        pipeline. LLM is only invoked when coded logic cannot classify.
 
-        **Tier 1 — Coded logic (zero LLM cost):**
+        Pre-loads PGC_IntentMap, PGC_DomainHelp, and PGC_Workflow in parallel
+        before classification begins — all three tables are needed across passes.
 
-          Pass 1a — regex test against PGC_IntentMap.pattern rows.
-          All rows loaded once. Input lowercased and tested against each pattern.
-          First match returns intent_category + action_type + workflow_id.
-          SHORT-CIRCUIT — PGC_DomainHelp never read if this matches.
+        **Pass 1 — PGC_IntentMap regex match (zero LLM cost):**
+
+          All rows loaded. Sorted: workflow > heavy_lift > crud; lower id wins within tier.
+          Input lowercased and tested against each pattern.
+          Match with action_type workflow or heavy_lift → SHORT-CIRCUIT immediately.
+          Match with action_type workflow + structured input (id=N or field=value pairs)
+          present → YIELD to Pass 2 (Guard 1 — retrieval workflows only).
+          Match with action_type workflow → extractSearchTerm() called for get_*/search_*
+          workflows before returning (Guard 2 — populates search_term).
+          Match with action_type crud → extract domain, resolve root table, build ad_hoc_step.
           confidence: exact
 
-          Pass 1b — tokenise input, scan PGC_DomainHelp.aliases arrays.
-          Resolves a domain name. Only reached if Pass 1a missed.
-          confidence: alias
+        **Pass 2 — Domain-Workflow Lookup (zero LLM cost):**
 
-          Pass 1c — CRUD verb detection (list, add, update, delete, show).
-          Only reached if Pass 1b resolved a domain.
-          Builds ad_hoc_step. confidence: crud
-          Session fallback (Phase 3): if no alias token in input, check recent
-          PGC_SessionEntry rows for the most recently active domain.
+          Step 1: tokenise input, scan PGC_DomainHelp.aliases — resolve domain name.
+          Step 2: scan PGC_Workflow.intent_keywords for resolved domain — token presence
+          match (substring includes, handles multi-word keywords). Disambiguation:
+          get_<domain> wins over list_<domain> when extra tokens follow verb+domain
+          (search term present). confidence: keyword_match
+          Step 3 (CRUD fallback): only reached when no keyword matched AND input contains
+          PGC_/PGD_ table prefix with a verb. Builds ad_hoc_step. confidence: crud
+          Phase 3: if no alias token in input, check recent PGC_SessionEntry rows
+          for the most recently active domain. confidence: session_context
 
         **Tier 2 — Cheap LLM classification (perplexity/sonar):**
 
-          Called when Tier 1 produces no match.
-          Domain hint from Pass 1b injected if available.
-          Session context block injected if sessionId present (Phase 3) —
-          assembled from last 20 PGC_SessionEntry.content rows, plain text.
+          Called when Pass 1 and Pass 2 produce no match.
+          Domain hint from Pass 2 injected if available.
+          Session context block injected if sessionId present (Phase 3).
           Returns: { intent_category, workflow_name, action_type, referenced_entities }
           confidence: llm_classified
 
@@ -2258,23 +2292,38 @@ paths:
             schema:
               $ref: '#/components/schemas/ClassifyIntentRequest'
             examples:
-              tier1a_test:
-                summary: Tier 1a — exact pattern match (no LLM)
+              pass1_workflow_add:
+                summary: "UC 1.1 — Pass 1 exact match — add_recipes workflow"
                 value:
-                  userInput: build me a new domain for tracking stocks
+                  userInput: add recipe pasta carbonara with ingredients and steps
                   traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              tier1b_test:
-                summary: Tier 1b — alias match, Tier 1c — CRUD verb
+              pass1_workflow_list:
+                summary: "UC 1.2 — Pass 1 exact match — list_recipes workflow"
                 value:
-                  userInput: list my recipes
+                  userInput: list recipes
                   traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              tier2_test:
-                summary: Tier 2 — sonar classification (no domain alias, no exact match)
+              pass1_workflow_get_search:
+                summary: "UC 1.3 — Pass 1 exact match — get_recipes workflow with search term"
                 value:
-                  userInput: plan my meals for next week
+                  userInput: get recipes sweet potato chili
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass1_workflow_update:
+                summary: "UC 1.5 — Pass 1 exact match — update_recipes workflow"
+                value:
+                  userInput: update recipes id=42 difficulty=hard
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass2_keyword_match:
+                summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb"
+                value:
+                  userInput: show recipes pasta carbonara
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier2_novel:
+                summary: "UC 2.5 — Tier 2 sonar — novel domain creation intent"
+                value:
+                  userInput: I want to track my golf scores
                   traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
               tier2_with_session:
-                summary: Tier 2 — ambiguous input resolved with session context (Phase 3)
+                summary: "Tier 2 — ambiguous input resolved with session context (Phase 3)"
                 value:
                   userInput: make that a three-course meal plan
                   sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
@@ -2284,9 +2333,9 @@ paths:
                     threadId: "1234567890.123456"
                   traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
               sqs_delivery:
-                summary: SQS CLASSIFY_INTENT delivery from /mind
+                summary: "SQS CLASSIFY_INTENT delivery from /mind (production path)"
                 value:
-                  userInput: show me my pasta recipes
+                  userInput: get recipes sweet potato chili
                   sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
                   callback:
                     provider: slack
@@ -2304,61 +2353,128 @@ paths:
               schema:
                 $ref: '#/components/schemas/ClassifyIntentResponse'
               examples:
-                exact_match:
-                  summary: Tier 1a exact match — create_domain intent
+                pass1_add_workflow:
+                  summary: "UC 1.1 — Pass 1 exact — add_recipes workflow"
+                  value:
+                    intent_category: add_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: add_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_list_workflow:
+                  summary: "UC 1.2 — Pass 1 exact — list_recipes workflow"
+                  value:
+                    intent_category: list_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: list_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_get_with_search:
+                  summary: "UC 1.3 — Pass 1 exact — get_recipes workflow with search_term"
+                  value:
+                    intent_category: get_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: get_recipes
+                    domain: null
+                    search_term: sweet potato chili
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_update_workflow:
+                  summary: "UC 1.5 — Pass 1 exact — update_recipes workflow"
+                  value:
+                    intent_category: update_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: update_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_delete_workflow:
+                  summary: "UC 1.6 — Pass 1 exact — delete_recipes workflow"
+                  value:
+                    intent_category: delete_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: delete_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass2_keyword_match:
+                  summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb with search_term"
+                  value:
+                    intent_category: get_recipes
+                    action_type: workflow
+                    confidence: keyword_match
+                    workflow_name: get_recipes
+                    domain: null
+                    search_term: pasta carbonara
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                heavy_lift_create_domain:
+                  summary: "UC 2.1 — Pass 1 exact — create_domain heavy lift"
                   value:
                     intent_category: create_domain
                     action_type: heavy_lift
                     confidence: exact
                     workflow_name: null
                     domain: null
+                    search_term: null
                     ad_hoc_step: null
                     traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                crud_match:
-                  summary: Tier 1b+1c — alias + CRUD verb — ad_hoc_step built
+                crud_ambiguous_no_verb:
+                  summary: "UC 3.6 — crud_ambiguous — PGD table with no verb (Phase B)"
                   value:
-                    intent_category: domain_crud
-                    action_type: crud
+                    intent_category: unknown_table_intent
+                    action_type: crud_ambiguous
                     confidence: crud
                     workflow_name: null
-                    domain: recipes
-                    ad_hoc_step:
-                      type: serv_query
-                      input:
-                        tableName: PGD_Recipes
-                        filters: [{ column: name, op: like, value: "%pasta%" }]
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
                     traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                workflow_matched:
-                  summary: Tier 2 — sonar matched a named workflow
+                tier2_workflow_matched:
+                  summary: "Tier 2 — sonar matched a named workflow"
                   value:
                     intent_category: meal_planner
                     action_type: workflow
                     confidence: llm_classified
                     workflow_name: meal_planner
                     domain: null
+                    search_term: null
                     ad_hoc_step: null
                     traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                workflow_with_entities:
-                  summary: Tier 2 — workflow matched with session referenced_entities (Phase 3)
+                tier2_workflow_with_entities:
+                  summary: "Tier 2 — workflow matched with session referenced_entities (Phase 3)"
                   value:
                     intent_category: meal_planner
                     action_type: workflow
                     confidence: llm_classified
                     workflow_name: meal_planner
-                    domain: recipes
+                    domain: null
+                    search_term: null
                     ad_hoc_step: null
                     referenced_entities:
                       - { entity: Recipe, id: 42, name: Carbonara }
                       - { entity: Recipe, id: 43, name: "Cacio e Pepe" }
                     traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
                 heavy_lift_unknown:
-                  summary: Tier 3 — unknown heavy lift — WORKFLOW_NOTIFY posted
+                  summary: "UC 2.6 — Tier 3 — unknown heavy lift — WORKFLOW_NOTIFY posted"
                   value:
                     intent_category: unknown
                     action_type: heavy_lift
                     confidence: heavy_lift
                     workflow_name: null
                     domain: null
+                    search_term: null
                     ad_hoc_step: null
                     traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
         '400':
@@ -2368,7 +2484,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: PGC_IntentMap or PGC_DomainHelp read failed, or Tier 2 LLM call failed
+          description: PGC_IntentMap, PGC_DomainHelp, or PGC_Workflow read failed, or Tier 2 LLM call failed
 
   /api/v1/proc/delete-domain:
     post:
