@@ -16,8 +16,8 @@
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
 //   js_transform — built-ins: columnSummary, buildHelpOptions, resolveHelpContent,
-//                  buildEntitySchema, formatRecordList; transform_type required;
-//                  generic sandbox is Phase 3
+//                  buildEntitySchema, formatRecordList, buildChildInserts;
+//                  transform_type required; generic sandbox is Phase 3
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
@@ -362,7 +362,7 @@ async function executeJsTransform({ step, localState, traceId }) {
 
         // Fallback: parse FK column from join.on e.g. "s.recipe_id = r.id"
         if (fkCols.length === 0 && join.on) {
-          const onMatch = join.on.match(/(w+).(w+)s*=s*r.id/);
+          const onMatch = join.on.match(/(\w+)\.(\w+)\s*=\s*r\.id/);
           if (onMatch) fkCols.push(onMatch[2]);
         }
 
@@ -445,7 +445,10 @@ async function executeJsTransform({ step, localState, traceId }) {
         });
         const rootLine = `• ${rootParts.join(' | ')}`;
 
-        // Child arrays — render each as an indented sub-list
+        // Child arrays — suppressed when step.root_only is true (list_entity).
+        // get_entity and other detail workflows omit root_only so children render.
+        if (step.root_only) return rootLine;
+
         const childLines = childKeys.flatMap(key => {
           const children = row[key];
           if (!Array.isArray(children) || children.length === 0) return [];
@@ -476,12 +479,73 @@ async function executeJsTransform({ step, localState, traceId }) {
         rowCount:    rows.length,
         colCount:    cols.length,
         childKeys:   childKeys.length > 0 ? childKeys : undefined,
+        root_only:   step.root_only ?? false,
         capped:      capped.length,
         traceId,
       });
 
       return {
         outputValue: formatted,
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+
+    case 'buildChildInserts': {
+      // Build a flat array of { tableName, row } objects for all child rows
+      // across all child tables of a domain entity. Used by add_entity to
+      // drive a single generic iterator step instead of per-domain iterators.
+      //
+      // Reads from local_state:
+      //   full_entity_schema — output of buildEntitySchema: children[].table,
+      //                        children[].fk_column, children[].output_key
+      //   parsed_entity      — output of parse_entity_input LLM: child arrays
+      //                        keyed by output_key (e.g. ingredients, steps)
+      //   new_record         — output of root serv_insert: { id }
+      //
+      // Output: array of { tableName, row } — one element per child row,
+      //   with fk_column injected as the FK to the new root record.
+      const entitySchema = resolvePath(localState, 'full_entity_schema');
+      const parsedEntity = resolvePath(localState, 'parsed_entity');
+      const newRecord    = resolvePath(localState, 'new_record');
+
+      if (!entitySchema || !parsedEntity || !newRecord) {
+        throw new Error(
+          'js_transform buildChildInserts: requires full_entity_schema, parsed_entity, ' +
+          `and new_record in local_state. Got: ${Object.keys(localState).join(', ')}`
+        );
+      }
+
+      const rootId   = newRecord.id;
+      const children = Array.isArray(entitySchema.children) ? entitySchema.children : [];
+      const inserts  = [];
+
+      for (const child of children) {
+        const { table, fk_column, output_key } = child;
+        if (!table || !fk_column || !output_key) {
+          console.warn('step-executor: buildChildInserts — skipping child with missing table/fk_column/output_key', {
+            child, traceId,
+          });
+          continue;
+        }
+        const childRows = parsedEntity[output_key];
+        if (!Array.isArray(childRows) || childRows.length === 0) continue;
+
+        for (const childRow of childRows) {
+          inserts.push({
+            tableName: table,
+            row: { ...childRow, [fk_column]: rootId },
+          });
+        }
+      }
+
+      console.info('step-executor: js_transform — buildChildInserts', {
+        childTableCount: children.length,
+        insertCount:     inserts.length,
+        traceId,
+      });
+
+      return {
+        outputValue: inserts,
         nextAction:  resolveNextAction(step.on_success, null),
       };
     }

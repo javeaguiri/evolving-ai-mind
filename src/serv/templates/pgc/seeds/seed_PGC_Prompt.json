@@ -899,6 +899,188 @@
     "prompt_text": "You are helping build a personal automation system called evolving-mind-ai.\n\nA new data domain has been created with these details:\nDomain name: {{domain}}\nTables: {{tables}}\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\nThe JSON must match this exact shape:\n\n{\n  \"domainHelp\": {\n    \"domain\": \"{{domain}}\",\n    \"aliases\": [\"<domain_name>\", \"<singular_form>\", \"<any other natural aliases>\"],\n    \"description\": \"<one sentence>\",\n    \"commands\": [\n      { \"verb\": \"list\",   \"syntax\": \"/mind list my {{domain}}\",                                \"description\": \"List all records\" },\n      { \"verb\": \"add\",    \"syntax\": \"/mind add my {{domain}} <description of what to add>\",    \"description\": \"Add a record — describe it in natural language\" },\n      { \"verb\": \"update\", \"syntax\": \"/mind update my {{domain}} id=<number> <field>=<value>\",   \"description\": \"Update a record\" },\n      { \"verb\": \"delete\", \"syntax\": \"/mind delete my {{domain}} id=<number>\",                   \"description\": \"Delete a record\" }\n    ]\n  },\n  \"workflows\": [\n    {\n      \"name\": \"list_{{domain}}\",\n      \"domain\": \"{{domain}}\",\n      \"description\": \"List all {{domain}} records\",\n      \"intent_keywords\": [\"list {{domain}}\", \"show {{domain}}\", \"get {{domain}}\"],\n      \"state_strategy\": \"sequential\",\n      \"version\": 1,\n      \"steps\": [\n        { \"step\": \"1\", \"type\": \"serv_entity_query\", \"description\": \"List all entities with joins and child arrays assembled.\", \"input\": { \"entityName\": \"<PascalCase entity name e.g. Recipe>\", \"orderBy\": { \"column\": \"<primary display column e.g. name>\", \"direction\": \"asc\" }, \"limit\": 50 }, \"output_key\": \"results\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"2\", \"type\": \"js_transform\", \"transform_type\": \"formatRecordList\", \"description\": \"Format entity results including child arrays into a human-readable Slack message.\", \"input_key\": \"results\", \"columns\": [\"<col1>\", \"<col2>\", \"<col3>\"], \"max_rows\": 20, \"output_key\": \"results_display\", \"on_success\": \"next\" },\n        { \"step\": \"3\", \"type\": \"notify\",      \"message_template\": \"{{results_display}}\", \"on_success\": \"end\" },\n        { \"step\": \"4\", \"type\": \"end\" }\n      ]\n    },\n    {\n      \"name\": \"add_{{domain}}\",\n      \"domain\": \"{{domain}}\",\n      \"description\": \"Add a new {{domain}} record from natural language input. LLM parses the user description into structured data. User confirms before writing to the database.\",\n      \"intent_keywords\": [\"add {{domain}}\", \"create {{domain}}\", \"new {{domain}}\"],\n      \"state_strategy\": \"sequential_with_confirmation\",\n      \"version\": 1,\n      \"steps\": [\n        { \"step\": \"1\", \"type\": \"serv_query\",   \"description\": \"Load entity schema — provides join topology and child table relationships.\", \"input\": { \"tableName\": \"PGC_EntitySchema\", \"filters\": [{ \"column\": \"entity_name\", \"op\": \"eq\", \"value\": \"<PascalCase entity name e.g. Recipe>\" }], \"limit\": 1 }, \"output_key\": \"entity_schema_rows\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"2\", \"type\": \"js_transform\", \"transform_type\": \"buildEntitySchema\", \"description\": \"Combine PGC_EntitySchema join topology with live PGC_Schema column definitions for root and all child tables. Single source of truth — columns always reflect the current schema.\", \"input_key\": \"entity_schema_rows.0\", \"output_key\": \"full_entity_schema\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"3\", \"type\": \"llm_call\",    \"description\": \"Parse the user's natural language description into a structured entity object using the full schema.\", \"input\": { \"prompt\": \"parse_entity_input\", \"userInput\": \"{{input.userInput}}\", \"full_entity_schema\": \"{{full_entity_schema}}\" }, \"output_key\": \"parsed_entity\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"4\", \"type\": \"human_gate\", \"gate_type\": \"review_object\", \"description\": \"User reviews the parsed entity before any DB write.\", \"message_template\": \"Here\\u2019s what I parsed from your description. Does this look right?\", \"context_key\": \"parsed_entity\", \"options\": [{ \"label\": \"Looks good\", \"action\": \"confirm\", \"on_select\": \"next\" }, { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }], \"on_success\": \"next\", \"on_failure\": \"cancel\" },\n        { \"step\": \"5\", \"type\": \"serv_insert\", \"description\": \"Insert the root row using the parsed root fields. System columns and child arrays are excluded automatically.\", \"input\": { \"tableName\": \"<root_table_name>\", \"row\": \"{{parsed_entity.root}}\" }, \"output_key\": \"new_record\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        <CHILD_ITERATOR_STEPS — one iterator step per child table in this domain. If there are no child tables omit this placeholder entirely and go straight to the notify step. For a domain with child tables use this pattern for each child table:\n        { \"step\": \"6\", \"type\": \"iterator\", \"description\": \"Insert each child row, injecting the new root id as the foreign key.\", \"items_key\": \"parsed_entity.<child_key>\", \"item_step\": { \"type\": \"serv_insert\", \"input\": { \"tableName\": \"<child_table_name>\", \"row\": { \"<fk_column>\": \"{{new_record.id}}\", \"<other_field>\": \"{{item.<other_field>}}\" } }, \"on_failure\": \"human_feedback\" }, \"output_key\": \"inserted_<child_key>\", \"on_complete\": \"next\", \"on_failure\": \"human_feedback\" }>\n        { \"step\": \"<N+1>\", \"type\": \"notify\", \"message_template\": \"Added {{domain}} record (id: {{new_record.id}}).\", \"on_success\": \"end\" },\n        { \"step\": \"<N+2>\", \"type\": \"end\" }\n      ]\n    },\n    {\n      \"name\": \"update_{{domain}}\",\n      \"domain\": \"{{domain}}\",\n      \"description\": \"Update a {{domain}} record by id\",\n      \"intent_keywords\": [\"update {{domain}}\", \"edit {{domain}}\", \"change {{domain}}\"],\n      \"state_strategy\": \"sequential_with_confirmation\",\n      \"version\": 1,\n      \"steps\": [\n        { \"step\": \"1\", \"type\": \"human_gate\", \"gate_type\": \"confirm\", \"message_template\": \"Update {{domain}} id={{input.id}} with provided changes?\", \"options\": [{ \"label\": \"Confirm\", \"action\": \"confirm\", \"on_select\": \"next\" }, { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }], \"on_success\": \"next\", \"on_failure\": \"cancel\" },\n        { \"step\": \"2\", \"type\": \"serv_update\", \"input\": { \"tableName\": \"<root_table_name>\", \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{input.id}}\" }], \"updates\": \"{{input.updates}}\" }, \"output_key\": \"updated_record\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"3\", \"type\": \"notify\",      \"message_template\": \"Updated {{domain}} record (id: {{input.id}}).\", \"on_success\": \"end\" },\n        { \"step\": \"4\", \"type\": \"end\" }\n      ]\n    },\n    {\n      \"name\": \"get_{{domain}}\",\n      \"domain\": \"{{domain}}\",\n      \"description\": \"Find and display a {{domain}} record by name or id, including all child data.\",\n      \"intent_keywords\": [\"get {{domain}}\", \"get my {{domain}}\", \"show {{domain}}\", \"show my {{domain}}\", \"find {{domain}}\", \"find my {{domain}}\"],\n      \"state_strategy\": \"sequential\",\n      \"version\": 1,\n      \"steps\": [\n        { \"step\": \"1\", \"type\": \"serv_entity_query\", \"description\": \"Search for the entity by the user's input. Use a 'like' filter on the primary display column.\", \"input\": { \"entityName\": \"<PascalCase entity name e.g. Recipe>\", \"filters\": [{ \"column\": \"<primary display column e.g. name>\", \"op\": \"like\", \"value\": \"{{input.search}}\" }], \"limit\": 5 }, \"output_key\": \"results\", \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"2\", \"type\": \"js_transform\", \"transform_type\": \"formatRecordList\", \"description\": \"Format the matched entity with all child data into a readable Slack message.\", \"input_key\": \"results\", \"columns\": [\"<col1>\", \"<col2>\", \"<col3>\"], \"max_rows\": 5, \"output_key\": \"results_display\", \"on_success\": \"next\" },\n        { \"step\": \"3\", \"type\": \"notify\", \"message_template\": \"{{results_display}}\", \"on_success\": \"end\" },\n        { \"step\": \"4\", \"type\": \"end\" }\n      ]\n    },\n    {\n      \"name\": \"delete_{{domain}}\",\n      \"domain\": \"{{domain}}\",\n      \"description\": \"Delete a {{domain}} record by id\",\n      \"intent_keywords\": [\"delete {{domain}}\", \"remove {{domain}}\"],\n      \"state_strategy\": \"sequential_with_confirmation\",\n      \"version\": 1,\n      \"steps\": [\n        { \"step\": \"1\", \"type\": \"human_gate\", \"gate_type\": \"confirm\", \"message_template\": \"Delete {{domain}} id={{input.id}}? This cannot be undone.\", \"options\": [{ \"label\": \"Confirm delete\", \"action\": \"confirm\", \"on_select\": \"next\" }, { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }], \"on_success\": \"next\", \"on_failure\": \"cancel\" },\n        { \"step\": \"2\", \"type\": \"serv_delete\", \"input\": { \"tableName\": \"<root_table_name>\", \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{input.id}}\" }] }, \"on_success\": \"next\", \"on_failure\": \"human_feedback\" },\n        { \"step\": \"3\", \"type\": \"notify\",      \"message_template\": \"Deleted {{domain}} record (id: {{input.id}}).\", \"on_success\": \"end\" },\n        { \"step\": \"4\", \"type\": \"end\" }\n      ]\n    }\n  ],\n  \"intentMapRows\": [\n    { \"pattern\": \"list.{{domain}}|list {{domain}}|list my {{domain}}\",           \"intent_category\": \"list_{{domain}}\",   \"action_type\": \"workflow\" },\n    { \"pattern\": \"get.{{domain}}|get {{domain}}|get my {{domain}}|show {{domain}}|show my {{domain}}|find {{domain}}|find my {{domain}}\", \"intent_category\": \"get_{{domain}}\",    \"action_type\": \"workflow\" },\n    { \"pattern\": \"add.{{domain}}|add {{domain}}|add my {{domain}}\",               \"intent_category\": \"add_{{domain}}\",    \"action_type\": \"workflow\" },\n    { \"pattern\": \"update.{{domain}}|update {{domain}}|edit my {{domain}}\",        \"intent_category\": \"update_{{domain}}\", \"action_type\": \"workflow\" },\n    { \"pattern\": \"delete.{{domain}}|delete {{domain}}|remove my {{domain}}\",      \"intent_category\": \"delete_{{domain}}\", \"action_type\": \"workflow\" }\n  ],\n  \"entitySchemas\": [\n    {\n      \"entity_name\": \"<PascalCase singular name — e.g. Recipe, Stock, Workout>\",\n      \"description\": \"<one sentence describing what this entity represents>\",\n      \"root_table\":   \"<the primary PGD_ table — the one with no FK to other domain tables>\",\n      \"joins\": [\n        {\n          \"type\":  \"LEFT\",\n          \"table\": \"<child PGD_ table name>\",\n          \"alias\": \"<short alias e.g. i for PGD_Ingredients>\",\n          \"on\":    \"<alias>.<fk_column> = r.id\"\n        }\n      ],\n      \"aggregations\": [\n        {\n          \"alias\":     \"<must match join alias above>\",\n          \"columns\":   [\"<column1>\", \"<column2>\"],\n          \"outputKey\": \"<key name in entity response e.g. ingredients, steps, tags>\"\n        }\n      ]\n    }\n  ]\n}\n\nRules for add_<domain> workflow:\n- Step 1 is always a serv_query on PGC_EntitySchema filtered by entity_name. Replace <PascalCase entity name e.g. Recipe> with the actual PascalCase singular entity name for this domain.\n- Step 2 is always a js_transform with transform_type: \"buildEntitySchema\". input_key must be \"entity_schema_rows.0\". This queries PGC_Schema for all tables in the entity and returns a full_entity_schema object with live column definitions.\n- Step 3 is always an llm_call with prompt: \"parse_entity_input\". The full_entity_schema input must be \"{{full_entity_schema}}\" — the assembled schema from step 2.\n- Step 4 is always a review_object human_gate. context_key is \"parsed_entity\".\n- Step 5 is always a serv_insert for the root table. row must be \"{{parsed_entity.root}}\" — the parse prompt returns a root object and child arrays separately.\n- If the domain has child tables: add one iterator step per child table after step 5 starting at step 6. Each iterator reads parsed_entity.<child_key> (e.g. parsed_entity.steps, parsed_entity.ingredients). The item_step inserts into the child table and injects new_record.id as the FK column value. Use real column names from the tables definition.\n- If the domain has no child tables (single-table domain): skip iterator steps entirely. Go straight from step 5 (serv_insert) to the notify step.\n- The notify step references new_record.id. Use sequential step numbers — no gaps.\n- Replace every <root_table_name> with the actual tableName of the primary table (the one with no foreignKeys).\n- Replace every {{domain}} placeholder with the actual domain name: {{domain}}.\n- aliases must include: the domain name itself, its singular form, and any natural language synonyms.\n- intentMapRows must NOT include workflow_id — that field is resolved by the seed process.\n- entity_name must be PascalCase singular (Recipe not Recipes, Stock not Stocks).\n- root_table must be the table with no foreignKeys array entries (or empty foreignKeys).\n- joins: one entry per child table. If there are no child tables, use an empty array [].\n- aggregations: one entry per join. columns must be real column names from that child table excluding id, created_at, updated_at.\n- The root table alias in all ON conditions is always r.\n- list_{{domain}} step 1 is always a serv_entity_query. entityName must be the PascalCase singular entity name (e.g. Recipe). Replace <primary display column e.g. name> with the actual primary display column of the root table.\n- list_{{domain}} step 2 is always a js_transform with transform_type: \"formatRecordList\". input_key must be \"results\". columns must be real non-system root column names — replace <col1>, <col2>, <col3> placeholders with actual column names. max_rows is 20. output_key is \"results_display\".\n- list_{{domain}} step 3 notify message_template must be \"{{results_display}}\" — not a count string.\n- get_{{domain}} step 1 is always a serv_entity_query with a \"like\" filter on the primary display column (e.g. name, title, ticker). The filter value must be \"{{input.search}}\" — this is the search term extracted from the user input after stripping the verb and domain name. entityName is PascalCase singular. limit is 5.\n- get_{{domain}} step 2 is always a js_transform formatRecordList with max_rows: 5. columns must list real non-system root column names.\n- get_{{domain}} step 3 notify message_template must be \"{{results_display}}\".\n- intentMapRows must have exactly 5 rows: list, get, add, update, delete. intentMapRows must NOT include workflow_id.\n- The get pattern must include \"my\" variants: e.g. \"get my {{domain}}|show my {{domain}}|find my {{domain}}\" in addition to the base forms. This ensures \"get my recipes sweet potato\" routes correctly.\n- workflows array must have exactly 5 entries: list, get, add, update, delete.\n- Return ONLY the JSON object, nothing else."
   },
   {
+    "intent_category": "generate_crud_workflows",
+    "version": 9,
+    "model": "anthropic/claude-sonnet-4-5",
+    "was_successful": null,
+    "input_variables": [
+      {
+        "name": "domain",
+        "required": true,
+        "description": "Snake_case domain name"
+      },
+      {
+        "name": "tables",
+        "required": true,
+        "description": "JSON array of confirmed table definitions"
+      }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": [
+        "domainHelp",
+        "intentMapRows",
+        "entitySchemas"
+      ],
+      "properties": {
+        "domainHelp": {
+          "type": "object",
+          "required": [
+            "domain",
+            "aliases",
+            "description",
+            "commands"
+          ],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "aliases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        "intentMapRows": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "intent_category",
+              "action_type"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "intent_category": {
+                "type": "string",
+                "enum": [
+                  "list_entity",
+                  "get_entity",
+                  "add_entity",
+                  "update_entity",
+                  "delete_entity"
+                ],
+                "description": "Must be one of the five generic entity intent categories"
+              },
+              "action_type": {
+                "type": "string",
+                "enum": [
+                  "workflow"
+                ]
+              }
+            }
+          }
+        },
+        "entitySchemas": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "entity_name",
+              "description",
+              "root_table",
+              "joins",
+              "aggregations"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "entity_name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]+$",
+                "description": "PascalCase singular noun"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 5
+              },
+              "root_table": {
+                "type": "string",
+                "pattern": "^PGD_[A-Z][A-Za-z0-9]+$"
+              },
+              "joins": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "table",
+                    "alias",
+                    "on"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "LEFT",
+                        "INNER"
+                      ]
+                    },
+                    "table": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": "string"
+                    },
+                    "on": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "aggregations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "alias",
+                    "columns",
+                    "outputKey"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "alias": {
+                      "type": "string"
+                    },
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1
+                    },
+                    "outputKey": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "prompt_text": "You are helping build a personal automation system called evolving-mind-ai.\n\nA new data domain has been created with these details:\nDomain name: {{domain}}\nTables: {{tables}}\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\nThe JSON must match this exact shape:\n\n{\n  \"domainHelp\": {\n    \"domain\": \"{{domain}}\",\n    \"aliases\": [\"<domain_name>\", \"<singular_form>\", \"<any other natural aliases>\"],\n    \"description\": \"<one sentence>\",\n    \"commands\": [\n      { \"verb\": \"list\",   \"syntax\": \"/m list {{domain}}\",                              \"description\": \"List all records\" },\n      { \"verb\": \"get\",    \"syntax\": \"/m get {{domain}} <name or keywords>\",            \"description\": \"Find a record by name\" },\n      { \"verb\": \"add\",    \"syntax\": \"/m add {{domain}} <description of what to add>\",  \"description\": \"Add a record — describe it in natural language\" },\n      { \"verb\": \"update\", \"syntax\": \"/m update {{domain}} id=<number> <field>=<value>\",\"description\": \"Update a record\" },\n      { \"verb\": \"delete\", \"syntax\": \"/m delete {{domain}} id=<number>\",                \"description\": \"Delete a record\" }\n    ]\n  },\n  \"intentMapRows\": [\n    { \"pattern\": \"list.{{domain}}|list {{domain}}|list my {{domain}}\",                                                                    \"intent_category\": \"list_entity\",   \"action_type\": \"workflow\" },\n    { \"pattern\": \"get.{{domain}}|get {{domain}}|get my {{domain}}|show {{domain}}|show my {{domain}}|find {{domain}}|find my {{domain}}\", \"intent_category\": \"get_entity\",    \"action_type\": \"workflow\" },\n    { \"pattern\": \"add.{{domain}}|add {{domain}}|add my {{domain}}\",                                                                       \"intent_category\": \"add_entity\",    \"action_type\": \"workflow\" },\n    { \"pattern\": \"update.{{domain}}|update {{domain}}|edit my {{domain}}\",                                                                \"intent_category\": \"update_entity\", \"action_type\": \"workflow\" },\n    { \"pattern\": \"delete.{{domain}}|delete {{domain}}|remove my {{domain}}\",                                                              \"intent_category\": \"delete_entity\", \"action_type\": \"workflow\" }\n  ],\n  \"entitySchemas\": [\n    {\n      \"entity_name\": \"<PascalCase singular name — e.g. Recipe, Stock, Workout>\",\n      \"description\": \"<one sentence describing what this entity represents>\",\n      \"root_table\":   \"<the primary PGD_ table — the one with no FK to other domain tables>\",\n      \"joins\": [\n        {\n          \"type\":  \"LEFT\",\n          \"table\": \"<child PGD_ table name>\",\n          \"alias\": \"<short alias e.g. i for PGD_Ingredients>\",\n          \"on\":    \"<alias>.<fk_column> = r.id\"\n        }\n      ],\n      \"aggregations\": [\n        {\n          \"alias\":     \"<must match join alias above>\",\n          \"columns\":   [\"<column1>\", \"<column2>\"],\n          \"outputKey\": \"<key name in entity response e.g. ingredients, steps, tags>\"\n        }\n      ]\n    }\n  ]\n}\n\nRules:\n- intentMapRows must have exactly 5 rows: list, get, add, update, delete.\n- intentMapRows intent_category values must be EXACTLY: list_entity, get_entity, add_entity, update_entity, delete_entity. Never use domain-specific values like list_recipes or add_stocks. These are fixed constants that route to generic workflows.\n- intentMapRows must NOT include workflow_id.\n- The get pattern must include \"my\" variants to ensure \"get my {{domain}} <search term>\" routes correctly.\n- domainHelp aliases must include: the domain name itself, its singular form, and any natural language synonyms.\n- entity_name must be PascalCase singular (Recipe not Recipes, Stock not Stocks).\n- root_table must be the PGD_ table with no foreignKeys array entries (or empty foreignKeys).\n- joins: one entry per child table. If there are no child tables use an empty array [].\n- aggregations: one entry per join. columns must be real column names from that child table excluding id, created_at, updated_at.\n- The root table alias in all ON conditions is always r.\n- Return ONLY the JSON object, nothing else.\n"
+  },
+  {
     "intent_category": "parse_entity_input",
     "version": 3,
     "model": "anthropic/claude-sonnet-4-5",
