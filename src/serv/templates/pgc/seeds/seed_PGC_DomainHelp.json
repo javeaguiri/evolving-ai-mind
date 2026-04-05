@@ -1,0 +1,34 @@
+[
+  {
+    "domain": "system",
+    "aliases": ["system", "system commands", "ping", "shutdown"],
+    "description": "System commands",
+    "commands": [
+      {
+        "verb": "create-domain",
+        "syntax": "/create-domain <description>",
+        "description": "Design and build a new data domain"
+      },
+      {
+        "verb": "create-workflow",
+        "syntax": "/mind create workflow <description>",
+        "description": "Design and register a new workflow"
+      },
+      {
+        "verb": "help",
+        "syntax": "/mind help",
+        "description": "Show this help"
+      },
+      {
+        "verb": "shutdown",
+        "syntax": "/shutdown <runId>",
+        "description": "Emergency stop a running workflow"
+      },
+      {
+        "verb": "ping",
+        "syntax": "/ping <target>",
+        "description": "Ping a system component — targets: llm, db, sqs, e2e"
+      }
+    ]
+  }
+]
