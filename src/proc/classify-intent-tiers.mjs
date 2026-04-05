@@ -6,14 +6,14 @@
 // Pure classification functions — no I/O, no imports, directly unit-testable.
 // Called by classify-intent.mjs which owns all DB reads and SQS writes.
 //
-// Phase A — domain CRUD workflow path only (UC 1.1–1.6, docs/user-intent-use-cases.md).
-// Phase B will add: matchCrudVerb, hasCrudVerb, PGC_/PGD_ table-prefix detection.
-//
 // Pass 1 — PGC_IntentMap regex match (zero LLM)
 //
 // Pass 2 — Domain-Workflow Lookup (zero LLM):
 //   Step 1: alias token scan against PGC_DomainHelp rows
 //   Step 2: workflow keyword scan against PGC_Workflow.intent_keywords
+//
+// Phase B — direct table operations (PGC_*/PGD_* prefix path):
+//   hasTablePrefix, extractTableName, hasCrudVerb, matchCrudVerb
 //
 // Tier 2 — cheap LLM classification (perplexity/sonar via LLM_CHAT_URL)
 //   Called by classify-intent.mjs — this module builds the prompt only.
@@ -111,7 +111,7 @@ export function matchDomainAlias(userInput, domainRows) {
  */
 export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
   const input = userInput.toLowerCase();
-  const domainWorkflows = workflowRows.filter(r => r.domain === domain);
+  const domainWorkflows = workflowRows.filter(r => r.domain === domain || r.domain === null);
 
   if (domainWorkflows.length === 0) return null;
 
@@ -232,6 +232,155 @@ export function parseFieldValues(userInput) {
     }
   }
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Phase B — direct table operations (PGC_*/PGD_* prefix path)
+// ---------------------------------------------------------------------------
+
+// Verb→action→stepType mapping used exclusively by the table-prefix pre-pass.
+// Ordered longest-phrase-first to avoid "update" matching before "show" in
+// inputs like "show me updates".
+const CRUD_PATTERNS = [
+  { verbs: ['list', 'show me', 'get all', 'find all'], action: 'list',   stepType: 'serv_query'  },
+  { verbs: ['show', 'find', 'get', 'fetch'],           action: 'list',   stepType: 'serv_query'  },
+  { verbs: ['add', 'create', 'insert', 'new'],         action: 'insert', stepType: 'serv_insert' },
+  { verbs: ['update', 'edit', 'change', 'modify'],     action: 'update', stepType: 'serv_update' },
+  { verbs: ['delete', 'remove', 'drop'],               action: 'delete', stepType: 'serv_delete' },
+];
+
+/**
+ * Returns true if userInput contains a PGC_* or PGD_* table-name token.
+ * This is the sole trigger for the direct-table CRUD path (Groups 3–4).
+ *
+ * @param {string} userInput
+ * @returns {boolean}
+ */
+export function hasTablePrefix(userInput) {
+  return /\b(PGC|PGD)_\w+/i.test(userInput);
+}
+
+/**
+ * Extract the first PGC_* or PGD_* table-name token from userInput.
+ * Returns the token in its original casing as provided by the user.
+ *
+ * @param {string} userInput
+ * @returns {string|null}
+ */
+export function extractTableName(userInput) {
+  const match = userInput.match(/\b((?:PGC|PGD)_\w+)/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Returns true if userInput contains any CRUD verb from CRUD_PATTERNS.
+ * Used after Pass 2 domain miss to short-circuit Tier 2 with a helpful
+ * error instead of spending a sonar LLM call on an unresolvable intent.
+ *
+ * @param {string} userInput
+ * @returns {boolean}
+ */
+export function hasCrudVerb(userInput) {
+  const input = userInput.toLowerCase();
+  for (const pattern of CRUD_PATTERNS) {
+    for (const verb of pattern.verbs) {
+      if (input.includes(verb)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build an ad_hoc_step for a direct table operation.
+ * Called only when hasTablePrefix() returned true — tableName is the extracted
+ * PGC_ or PGD_ prefixed token. The table name is the complete routing target.
+ *
+ * List accepts optional field=value filters. Insert requires at least one
+ * field=value pair. Delete and update require id=N. Missing required inputs
+ * return an ambiguous result so classify-intent.mjs posts an instructive error.
+ *
+ * @param {string} userInput
+ * @param {string} tableName  Extracted table name, e.g. "PGD_Recipes"
+ * @returns {{ action: string, stepType: string, adHocStep: object }
+ *          | { action: string, ambiguous: true, reason?: string }
+ *          | null}
+ */
+export function matchCrudVerb(userInput, tableName) {
+  const input = userInput.toLowerCase();
+
+  for (const pattern of CRUD_PATTERNS) {
+    for (const verb of pattern.verbs) {
+      if (input.includes(verb)) {
+
+        if (pattern.action === 'list') {
+          const fields = parseFieldValues(userInput);
+          const filters = Object.entries(fields).map(([column, value]) => ({
+            column,
+            op: 'eq',
+            value,
+          }));
+          return {
+            action:   'list',
+            stepType: 'serv_query',
+            adHocStep: {
+              type:  'serv_query',
+              input: { tableName, ...(filters.length > 0 ? { filters } : {}) },
+            },
+          };
+        }
+
+        if (pattern.action === 'insert') {
+          const row = parseFieldValues(userInput);
+          if (Object.keys(row).length === 0) {
+            return { action: 'insert', ambiguous: true };
+          }
+          return {
+            action:   'insert',
+            stepType: 'serv_insert',
+            adHocStep: { type: 'serv_insert', input: { tableName, row } },
+          };
+        }
+
+        if (pattern.action === 'delete') {
+          const idMatch = userInput.match(/\bid\s*[=:]\s*(\d+)\b/i)
+                       ?? userInput.match(/\bid\s+(\d+)\b/i);
+          if (!idMatch) return { action: 'delete', ambiguous: true };
+          return {
+            action:   'delete',
+            stepType: 'serv_delete',
+            adHocStep: {
+              type:  'serv_delete',
+              input: { tableName, filters: [{ column: 'id', op: 'eq', value: parseInt(idMatch[1], 10) }] },
+            },
+          };
+        }
+
+        if (pattern.action === 'update') {
+          const idMatch = userInput.match(/\bid\s*[=:]\s*(\d+)\b/i)
+                       ?? userInput.match(/\bid\s+(\d+)\b/i);
+          if (!idMatch) return { action: 'update', ambiguous: true, reason: 'no_id' };
+          const updates = parseFieldValues(userInput);
+          delete updates.id;
+          if (Object.keys(updates).length === 0) {
+            return { action: 'update', ambiguous: true, reason: 'no_fields' };
+          }
+          return {
+            action:   'update',
+            stepType: 'serv_update',
+            adHocStep: {
+              type:  'serv_update',
+              input: {
+                tableName,
+                filters: [{ column: 'id', op: 'eq', value: parseInt(idMatch[1], 10) }],
+                updates,
+              },
+            },
+          };
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
