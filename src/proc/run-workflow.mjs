@@ -449,10 +449,12 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
-  // For dynamic confirm gates (context_key present, no matched option in options array)
-  // the userResponse is a runtime value (e.g. a domain name) not known at workflow
-  // authoring time. Write it to output_key and route via on_success.
-  if (!matchedOption && gateType === 'confirm' && stepRef.context_key && stepRef.output_key) {
+  // For dynamic confirm gates (context_key present), always write userResponse to
+  // output_key — regardless of whether userResponse matched a static option.
+  // The previous guard (!matchedOption) caused selections that happened to share an
+  // action name with a static option (e.g. "system") to bypass the write entirely,
+  // leaving output_key undefined in local_state for downstream steps.
+  if (gateType === 'confirm' && stepRef.context_key && stepRef.output_key) {
     setPath(localState, stepRef.output_key, userResponse);
     frame.local_state = localState;
     console.info('run-workflow: dynamic confirm gate — selection written to local_state', {
