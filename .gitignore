@@ -7,7 +7,7 @@ node_modules/
 .aws-sam/
 samconfig.toml
 # If you have private environment variables
-.env
+.env.test
 
 # Builds
 dist/
