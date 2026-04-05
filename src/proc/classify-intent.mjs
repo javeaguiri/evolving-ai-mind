@@ -364,6 +364,22 @@ async function handoff(result, callback, traceId, userInput) {
                    ?? userInput.match(/\bid\s+(\d+)\b/i);
       parsedId = idMatch ? parseInt(idMatch[1], 10) : null;
 
+      // No id provided — post instructive error instead of creating a WorkflowRun.
+      // The workflow cannot proceed without an explicit id.
+      if (parsedId === null) {
+        const verb      = result.workflow_name === 'delete_entity' ? 'delete' : 'update';
+        const domain    = result.domain ?? 'entity';
+        const exampleId = 1;
+        await enqueueCallback(callback, {
+          type:    'WORKFLOW_NOTIFY',
+          traceId,
+          message: `To ${verb} a ${domain} record I need an explicit id.\n\n` +
+                   `Use: \`/m list ${domain}\` to find the id, then:\n` +
+                   `\`/m ${verb} ${domain} id=<number>${result.workflow_name === 'update_entity' ? ' <field>=<value>' : ''}\``,
+        });
+        return;
+      }
+
       if (result.workflow_name === 'update_entity') {
         const updates = parseFieldValues(userInput);
         delete updates.id;
