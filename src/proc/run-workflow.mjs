@@ -538,7 +538,122 @@ async function startIterator({ step, frame, run, traceId }) {
 
 async function executeIteratorItem({ run, traceId }) {
   const frame = topFrame(run);
-  const item  = frame.items[frame.current_index];
+
+  // For sequential iterators, process all remaining items inline in this
+  // Lambda invocation rather than one SQS hop per item. This eliminates
+  // the concurrency throttling issue where rapid SQS messages from large
+  // iterators hit the Lambda concurrency limit and get dropped.
+  // execution_mode: 'sequential' (the default for all generated workflows)
+  // triggers this path. Non-sequential iterators fall through to the
+  // original one-item-per-invocation path.
+  if (frame.execution_mode === 'sequential' || !frame.execution_mode) {
+    return executeIteratorInline({ run, frame, traceId });
+  }
+
+  return executeIteratorOneItem({ run, frame, traceId });
+}
+
+// Process all remaining iterator items in a single Lambda invocation.
+// Writes stack + step_count once at the end rather than once per item.
+async function executeIteratorInline({ run, frame, traceId }) {
+  const stepStart0 = Date.now();
+
+  while (frame.current_index < frame.items.length) {
+    const item          = frame.items[frame.current_index];
+    const itemLocalState = { ...frame.local_state, item };
+    const itemStep      = frame.item_step;
+
+    console.info('run-workflow: iterator item', {
+      workflowRunId: run.id,
+      index:         frame.current_index,
+      total:         frame.items.length,
+      tableName:     item.tableName,
+      traceId,
+    });
+
+    const stepStart = Date.now();
+    let result;
+    try {
+      result = await executeStep({ step: itemStep, localState: itemLocalState, run, traceId });
+    } catch (itemError) {
+      await recordStepAudit(
+        run.id, frame.frame_id, frame.current_index,
+        itemStep.type, 'failed', { tableName: item.tableName }, null,
+        itemError.message, Date.now() - stepStart
+      );
+      const msg = `Iterator step "${frame.parent_step}" failed at index ${frame.current_index} (${item.tableName}): ${itemError.message}. Run id: ${run.id}`;
+      console.error('run-workflow: iterator item failed', {
+        workflowRunId: run.id, index: frame.current_index,
+        tableName: item.tableName, error: itemError.message, traceId,
+      });
+      await updateRows('PGC_WorkflowRun',
+        [{ column: 'id', op: 'eq', value: run.id }],
+        { status: 'failed', error: { step: frame.parent_step, index: frame.current_index, tableName: item.tableName, message: itemError.message } }
+      );
+      if (run.callback) {
+        await enqueueCallback(run.callback, {
+          type:          'WORKFLOW_ERROR',
+          workflowRunId: run.id,
+          step:          frame.parent_step,
+          message:       msg,
+          traceId,
+        });
+      }
+      throw itemError;
+    }
+
+    await recordStepAudit(
+      run.id, frame.frame_id, frame.current_index,
+      itemStep.type, 'completed',
+      { tableName: item.tableName },
+      result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 100) } : null,
+      null, Date.now() - stepStart
+    );
+
+    frame.results.push(result.outputValue ?? { tableName: item.tableName, status: 'created' });
+    frame.current_index++;
+  }
+
+  // All items done — pop iterator frame, advance parent
+  const results     = frame.results;
+  run.stack.pop();
+  const parentFrame = topFrame(run);
+
+  if (parentFrame && frame.output_key) {
+    setPath(parentFrame.local_state, frame.output_key, results);
+  }
+
+  if (parentFrame) {
+    const steps    = await loadSteps(run.workflow_name, traceId);
+    const nextStep = resolveNextStep(steps, frame.parent_step, frame.on_complete);
+    parentFrame.current_step = nextStep;
+  }
+
+  await updateRows('PGC_WorkflowRun',
+    [{ column: 'id', op: 'eq', value: run.id }],
+    {
+      stack:      run.stack,
+      state:      { local_state: parentFrame?.local_state ?? {} },
+      step_count: (run.step_count ?? 0) + results.length + 1,
+    }
+  );
+
+  console.info('run-workflow: iterator complete (inline sequential)', {
+    workflowRunId: run.id,
+    parentStep:    frame.parent_step,
+    nextStep:      parentFrame?.current_step,
+    total:         frame.items.length,
+    totalMs:       Date.now() - stepStart0,
+    traceId,
+  });
+
+  await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
+  return { action: 'iterator_complete', results };
+}
+
+// Original one-item-per-invocation path — kept for non-sequential iterators.
+async function executeIteratorOneItem({ run, frame, traceId }) {
+  const item = frame.items[frame.current_index];
 
   if (!item) {
     // All items done — pop iterator frame, write output_key, advance parent

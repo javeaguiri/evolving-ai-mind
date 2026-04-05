@@ -219,10 +219,13 @@ async function executeJsTransform({ step, localState, traceId }) {
       // System option and Cancel are prepended/appended by the workflow gate options array —
       // this transform only produces the per-domain buttons and the lookup map.
       const domains = resolvePath(localState, step.input_key) ?? [];
-      const domainButtons = domains.map(d => ({
-        action: d.domain,
-        label:  `${d.domain}${d.description ? ` — ${d.description}` : ''}`,
-      }));
+      const domainButtons = domains.map(d => {
+        const label = `${d.domain}${d.description ? ` — ${d.description}` : ''}`;
+        return {
+          action: d.domain,
+          label:  label.length > 75 ? label.slice(0, 72) + '…' : label,
+        };
+      });
       const domainMap = Object.fromEntries(domains.map(d => [d.domain, d]));
       console.info('step-executor: js_transform — buildHelpOptions', {
         domainCount: domains.length, traceId,
@@ -437,13 +440,15 @@ async function executeJsTransform({ step, localState, traceId }) {
         : scalarKeys;
 
       const lines = capped.map(row => {
-        // Root scalar fields — "col=val | col=val"
+        // Always show id first so the user can reference it for update/delete.
+        // Then show the requested columns (or auto-derived scalar keys).
+        const idPart   = `id=${row.id ?? '—'}`;
         const rootParts = cols.map(col => {
           const val = row[col];
           const display = val === null || val === undefined ? '—' : String(val);
           return `${col}=${display}`;
         });
-        const rootLine = `• ${rootParts.join(' | ')}`;
+        const rootLine = `• ${[idPart, ...rootParts].join(' | ')}`;
 
         // Child arrays — suppressed when step.root_only is true (list_entity).
         // get_entity and other detail workflows omit root_only so children render.
@@ -527,7 +532,7 @@ async function executeJsTransform({ step, localState, traceId }) {
           });
           continue;
         }
-        const childRows = parsedEntity[output_key];
+        const childRows = parsedEntity.children?.[output_key];
         if (!Array.isArray(childRows) || childRows.length === 0) continue;
 
         for (const childRow of childRows) {
