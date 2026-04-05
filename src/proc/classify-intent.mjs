@@ -5,22 +5,20 @@
 // Handles POST /api/v1/proc/classify-intent
 //         SQS  CLASSIFY_INTENT
 //
-// Intent Preprocessor — Phase A: domain CRUD workflow path.
-// See architecture Section 6.3 and docs/user-intent-use-cases.md (UC 1.1–1.6).
+// Intent Preprocessor — two-pass, domain-workflow-aware classification pipeline.
+// See architecture Section 6.3 and docs/user-intent-use-cases.md.
 //
-// Phase A implements:
-//   Pass 1 — PGC_IntentMap regex match → workflow and heavy_lift routes
-//   Pass 2 — domain alias → workflow keyword scan → workflow route
-//   Tier 2 — sonar LLM fallback (unchanged from pre-redesign)
-//   Tier 3 — heavy lift routing (unchanged)
-//
-// Phase B will add: PGC_/PGD_ table-prefix detection, direct serv/table/* routing.
+// Pre-pass — PGC_*/PGD_* table-prefix detection → direct serv/table/* (Groups 3–4)
+// Pass 1   — PGC_IntentMap regex match → workflow and heavy_lift routes
+// Pass 2   — domain alias → workflow keyword scan → workflow route
+// Tier 2   — sonar LLM fallback
+// Tier 3   — heavy lift routing (no LLM)
 //
 // Transport-agnostic — req.source ('http' | 'sqs') determines response path only.
 // All business logic is identical for both transports.
 
 import { ok, err }                          from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, updateRows }   from '../shared/serv-client.mjs';
+import { getRows, insertRow, updateRows, deleteRows } from '../shared/serv-client.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import {
   matchIntentMap,
@@ -28,6 +26,10 @@ import {
   matchWorkflowByKeywords,
   extractSearchTerm,
   parseFieldValues,
+  hasTablePrefix,
+  extractTableName,
+  matchCrudVerb,
+  hasCrudVerb,
   buildTier2Prompt,
   resolveTier3Route,
 } from './classify-intent-tiers.mjs';
@@ -110,6 +112,59 @@ async function classify(userInput, sessionId, traceId) {
   const domainRows   = domainHelpResp.rows ?? [];
   const workflowRows = workflowResp.rows   ?? [];
 
+  // ── Pre-pass — PGC_*/PGD_* table-prefix detection ────────────────────────
+  // Short-circuits the entire pipeline. A user who types a raw table name is
+  // performing a direct admin or debug operation — never a domain workflow.
+  // No DB reads required beyond what is already pre-loaded.
+  if (hasTablePrefix(userInput)) {
+    const tableName = extractTableName(userInput);
+    console.info('classify-intent: pre-pass table prefix detected', { tableName, traceId });
+    const crudMatch = matchCrudVerb(userInput, tableName);
+
+    if (!crudMatch) {
+      // Table name present but no verb — ambiguous.
+      return {
+        intent_category: `unknown_${tableName}`,
+        action_type:     'crud_ambiguous',
+        confidence:      'exact',
+        workflow_name:   null,
+        domain:          null,
+        ad_hoc_step:     null,
+        search_term:     null,
+        record_id:       null,
+        table_name:      tableName,
+        ambiguous_reason: 'no_verb',
+      };
+    }
+
+    if (crudMatch.ambiguous) {
+      return {
+        intent_category:  `${crudMatch.action}_${tableName}`,
+        action_type:      'crud_ambiguous',
+        confidence:       'exact',
+        workflow_name:    null,
+        domain:           null,
+        ad_hoc_step:      null,
+        search_term:      null,
+        record_id:        null,
+        table_name:       tableName,
+        ambiguous_reason: crudMatch.reason ?? crudMatch.action,
+      };
+    }
+
+    return {
+      intent_category: `${crudMatch.action}_${tableName}`,
+      action_type:     'crud',
+      confidence:      'exact',
+      workflow_name:   null,
+      domain:          null,
+      ad_hoc_step:     crudMatch.adHocStep,
+      search_term:     null,
+      record_id:       null,
+      table_name:      tableName,
+    };
+  }
+
   // ── Pass 1 — PGC_IntentMap regex ─────────────────────────────────────────
   const intentMatch = matchIntentMap(userInput, intentRows);
   if (intentMatch) {
@@ -183,7 +238,27 @@ async function classify(userInput, sessionId, traceId) {
     return await tier2(userInput, domainMatch.domain, workflowRows, traceId);
   }
 
-  // ── No Pass 1 or Pass 2 match — Tier 2 ───────────────────────────────────
+  // ── Pass 2 domain miss — CRUD verb short-circuit ─────────────────────────
+  // A CRUD verb with no recognised domain wastes a sonar call. Return a
+  // crud_ambiguous result with the registered domain list so the user can
+  // correct their input without an LLM round-trip.
+  if (hasCrudVerb(userInput)) {
+    console.info('classify-intent: CRUD verb with no domain match — short-circuit', { traceId });
+    return {
+      intent_category:  'unknown_domain_crud',
+      action_type:      'crud_ambiguous',
+      confidence:       'crud',
+      workflow_name:    null,
+      domain:           null,
+      ad_hoc_step:      null,
+      search_term:      null,
+      record_id:        null,
+      known_domains:    domainRows.map(r => r.domain),
+      ambiguous_reason: 'unknown_domain',
+    };
+  }
+
+  // ── No Pre-pass, Pass 1, or Pass 2 match — Tier 2 ────────────────────────
   return await tier2(userInput, null, workflowRows, traceId);
 }
 
@@ -448,20 +523,51 @@ async function handoff(result, callback, traceId, userInput) {
     return;
   }
 
-  // ── CRUD from Tier 2 — Phase B ────────────────────────────────────────────
-  // Tier 2 returned action_type: crud but no ad_hoc_step can be built without
-  // a table prefix. Post an informative message until Phase B is implemented.
-  if (result.action_type === 'crud') {
-    const domainText = result.domain ? ` in your ${result.domain} domain` : '';
-    await enqueueCallback(callback, {
-      type:    'WORKFLOW_NOTIFY',
-      traceId,
-      message: `I understood you want to ${result.intent_category.replace(/_/g, ' ')}${domainText}, but I could not determine which table to use. Try being more specific or use /create-domain to register this domain.`,
-    });
+  // ── CRUD — direct table operation (Groups 3–4) ───────────────────────────
+  if (result.action_type === 'crud' && result.ad_hoc_step) {
+    await executeCrudStep(result, callback, traceId);
     return;
   }
 
-  // ── Fallback — should not be reached in Phase A ───────────────────────────
+  // ── CRUD ambiguous — post instructive error ───────────────────────────────
+  if (result.action_type === 'crud_ambiguous') {
+    const table  = result.table_name ?? null;
+    const reason = result.ambiguous_reason ?? '';
+    let message;
+
+    if (reason === 'no_verb' && table) {
+      message = `Please include a verb with the table name.\n\n` +
+                `Examples:\n` +
+                `• \`/m list ${table}\`\n` +
+                `• \`/m add ${table} field=value\`\n` +
+                `• \`/m update ${table} id=N field=value\`\n` +
+                `• \`/m delete ${table} id=N\``;
+    } else if (reason === 'insert' && table) {
+      message = `To insert a row into \`${table}\` I need at least one field=value pair.\n\n` +
+                `Example: \`/m add ${table} name=MyItem\``;
+    } else if (reason === 'no_id' && table) {
+      message = `To update a row in \`${table}\` I need \`id=N\`.\n\n` +
+                `Example: \`/m update ${table} id=42 field=value\``;
+    } else if (reason === 'no_fields' && table) {
+      message = `To update a row in \`${table}\` I need at least one field=value pair.\n\n` +
+                `Example: \`/m update ${table} id=42 name=NewValue\``;
+    } else if (reason === 'delete' && table) {
+      message = `To delete a row from \`${table}\` I need \`id=N\`.\n\n` +
+                `Example: \`/m delete ${table} id=42\``;
+    } else if (reason === 'unknown_domain') {
+      const domainList = Array.isArray(result.known_domains) && result.known_domains.length > 0
+        ? `\n\nYour registered domains are: ${result.known_domains.join(', ')}`
+        : '\n\nYou have no domains registered yet. Use /create-domain to create one.';
+      message = `I could not match a domain for that request.${domainList}`;
+    } else {
+      message = `I could not complete that request — please be more specific.`;
+    }
+
+    await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message });
+    return;
+  }
+
+  // ── Fallback — should not be reached ─────────────────────────────────────
   console.warn('classify-intent: unhandled result in handoff', { result, traceId });
   if (callback) {
     await enqueueCallback(callback, {
@@ -502,12 +608,101 @@ function toEntityName(domain) {
   return titled.join('');
 }
 
+// ---------------------------------------------------------------------------
+// Table CRUD execution — Groups 3 and 4
+// ---------------------------------------------------------------------------
+
 /**
- * Format a list of known domain names for display in error messages.
+ * Execute an ad_hoc_step built by the pre-pass table-prefix path.
+ * Calls SERV directly via serv-client helpers. No WorkflowRun lifecycle.
  */
-function formatKnownDomains(domains) {
-  if (!Array.isArray(domains) || domains.length === 0) {
-    return '\n\nYou have no domains registered yet. Use /create-domain to create one.';
+async function executeCrudStep(result, callback, traceId) {
+  const step      = result.ad_hoc_step;
+  const tableName = result.table_name ?? step.input?.tableName ?? 'unknown';
+
+  console.info('classify-intent: executeCrudStep', { stepType: step.type, tableName, traceId });
+
+  let output;
+  try {
+    if (step.type === 'serv_query') {
+      const resp = await getRows(tableName, step.input?.filters ?? []);
+      if (!resp.success) throw new Error(resp.error ?? 'getRows failed');
+      output = resp.rows ?? [];
+    } else if (step.type === 'serv_insert') {
+      const resp = await insertRow(tableName, step.input?.row ?? {});
+      if (!resp.success) throw new Error(resp.error ?? 'insertRow failed');
+      output = resp.row;
+    } else if (step.type === 'serv_update') {
+      const resp = await updateRows(tableName, step.input?.filters ?? [], step.input?.updates ?? {});
+      if (!resp.success) throw new Error(resp.error ?? 'updateRows failed');
+      output = resp;
+    } else if (step.type === 'serv_delete') {
+      const resp = await deleteRows(tableName, step.input?.filters ?? []);
+      if (!resp.success) throw new Error(resp.error ?? 'deleteRows failed');
+      output = resp;
+    } else {
+      throw new Error(`executeCrudStep: unsupported step type "${step.type}"`);
+    }
+  } catch (stepError) {
+    console.error('classify-intent: executeCrudStep failed', {
+      stepType: step.type, tableName, error: stepError.message, traceId,
+    });
+    await enqueueCallback(callback, {
+      type:    'WORKFLOW_NOTIFY',
+      traceId,
+      message: `Something went wrong with your ${step.type.replace('serv_', '')} on \`${tableName}\`: ${stepError.message}`,
+    });
+    return;
   }
-  return `\n\nYour registered domains are: ${domains.join(', ')}`;
+
+  const message = formatTableCrudResult(step.type, tableName, output, step.input?.row);
+  await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message });
+}
+
+/**
+ * Format the result of a direct table CRUD operation for display to the user.
+ * Table name is shown explicitly — this is an admin/debug path, not a
+ * domain-friendly workflow result.
+ */
+function formatTableCrudResult(stepType, tableName, output, insertedRow = {}) {
+  if (stepType === 'serv_query') {
+    const rows = Array.isArray(output) ? output : [];
+    if (rows.length === 0) return `No rows found in \`${tableName}\`.`;
+    const SYSTEM_FIELDS = new Set(['created_at', 'updated_at']);
+    const labelField = Object.keys(rows[0]).find(k => k === 'name')
+                    ?? Object.keys(rows[0]).find(k => !SYSTEM_FIELDS.has(k))
+                    ?? 'id';
+    const preview = rows.slice(0, 10)
+      .map((r, i) => `${i + 1}. ${r[labelField] ?? r.id} (id: ${r.id})`)
+      .join('\n');
+    const suffix = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
+    return `Found ${rows.length} row${rows.length !== 1 ? 's' : ''} in \`${tableName}\`:\n${preview}${suffix}`;
+  }
+
+  if (stepType === 'serv_insert') {
+    const id = output?.id ?? null;
+    const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
+    const summary = Object.entries(insertedRow ?? {})
+      .filter(([k]) => !SYSTEM_COLS.has(k))
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ');
+    const detail = summary ? ` (${summary})` : '';
+    return `Inserted row into \`${tableName}\`${detail}${id != null ? ` — id: ${id}` : ''}.`;
+  }
+
+  if (stepType === 'serv_update') {
+    const count = output?.updatedCount ?? 0;
+    return count > 0
+      ? `Updated ${count} row${count !== 1 ? 's' : ''} in \`${tableName}\`.`
+      : `No rows updated in \`${tableName}\` — no matching record found.`;
+  }
+
+  if (stepType === 'serv_delete') {
+    const count = output?.deletedCount ?? 0;
+    return count > 0
+      ? `Deleted ${count} row${count !== 1 ? 's' : ''} from \`${tableName}\`.`
+      : `No rows deleted from \`${tableName}\` — no matching record found.`;
+  }
+
+  return `Done. ${JSON.stringify(output ?? {}).slice(0, 200)}`;
 }
