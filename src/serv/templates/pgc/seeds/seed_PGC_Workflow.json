@@ -318,11 +318,6 @@
         "output_key": "help_selection",
         "options": [
           {
-            "label": "System commands",
-            "action": "system",
-            "on_select": "next"
-          },
-          {
             "label": "Cancel",
             "action": "cancel",
             "on_select": "cancel"

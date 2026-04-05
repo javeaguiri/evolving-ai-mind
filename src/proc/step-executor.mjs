@@ -240,50 +240,39 @@ async function executeJsTransform({ step, localState, traceId }) {
       // Resolve the selected help topic into a formatted string for notify.
       // Reads help_selection (set by the dynamic confirm gate) and domainMap
       // (set by buildHelpOptions) from local_state.
-      // Returns: { isSystem, content } where content is a mrkdwn string.
-      const selection  = resolvePath(localState, step.selection_key  ?? 'help_selection');
-      const domainMap  = resolvePath(localState, step.domain_map_key ?? 'help_options.domainMap') ?? {};
-      const systemKey  = step.system_key ?? 'system';
+      //
+      // Pure data-driven — every selection (including "system") is looked up in
+      // domainMap. The system commands row lives in PGC_DomainHelp alongside user
+      // domains, so adding or updating system commands requires only a data change.
+      //
+      // Returns: { selection, content } where content is a mrkdwn string.
+      const selection = resolvePath(localState, step.selection_key  ?? 'help_selection');
+      const domainMap = resolvePath(localState, step.domain_map_key ?? 'help_options.domainMap') ?? {};
 
       let content;
-      let isSystem = false;
+      const domain = selection ? domainMap[selection] : null;
 
-      if (!selection || selection === systemKey) {
-        isSystem = true;
-        content = [
-          '*System commands:*',
-          '• `/create-domain <description>` — design and build a new data domain',
-          '• `/mind create workflow <description>` — design and register a new workflow',
-          '• `/mind help` — show this help',
-          '• `/shutdown <runId>` — emergency stop a running workflow',
-        ].join('\n');
+      if (!domain) {
+        content = selection
+          ? `No help found for "${selection}".`
+          : 'No topic selected.';
       } else {
-        const domain = domainMap[selection];
-        if (!domain) {
-          content = `No help found for "${selection}".`;
-        } else {
-          const lines = [
-            `*${domain.domain}*`,
-            domain.description ? `_${domain.description}_` : '',
-            '',
-            domain.aliases?.length
-              ? `*Aliases:* ${domain.aliases.join(', ')}`
-              : '',
-            '',
-            '*Commands:*',
-            ...(domain.commands ?? []).map(
-              c => `• \`${c.syntax}\` — ${c.description}`
-            ),
-          ].filter(l => l !== undefined);
-          content = lines.join('\n');
-        }
+        const lines = [
+          `*${domain.description ?? domain.domain}*`,
+          '',
+          '*Commands:*',
+          ...(domain.commands ?? []).map(
+            c => `• \`${c.syntax}\` — ${c.description}`
+          ),
+        ].filter(l => l !== undefined);
+        content = lines.join('\n');
       }
 
       console.info('step-executor: js_transform — resolveHelpContent', {
-        selection, isSystem, traceId,
+        selection, traceId,
       });
       return {
-        outputValue: { isSystem, selection, content },
+        outputValue: { selection, content },
         nextAction:  resolveNextAction(step.on_success, null),
       };
     }
@@ -712,10 +701,9 @@ export function buildDialog(step, localState) {
             })),
           });
         } else {
-          // No items — show a placeholder so the gate is not blank
           fields.push({
-            type: 'typography',
-            value: '_(No items available)_',
+            type:  'typography',
+            value: '_(No domains registered yet — use /create-domain to add one)_',
           });
         }
       }

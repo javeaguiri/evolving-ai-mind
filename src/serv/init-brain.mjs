@@ -30,11 +30,12 @@ import PGC_WorkflowRunLock from './templates/pgc/PGC_WorkflowRunLock.json' with 
 import PGC_SystemContext   from './templates/pgc/PGC_SystemContext.json'   with { type: 'json' };
 import PGC_StepType        from './templates/pgc/PGC_StepType.json'        with { type: 'json' };
 import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with { type: 'json' };
-import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'    with { type: 'json' };
-import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json'  with { type: 'json' };
-import seedWorkflow     from './templates/pgc/seeds/seed_PGC_Workflow.json'  with { type: 'json' };
-import seedIntentMap    from './templates/pgc/seeds/seed_PGC_IntentMap.json' with { type: 'json' };
-import seedPrompt       from './templates/pgc/seeds/seed_PGC_Prompt.json'    with { type: 'json' };
+import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'      with { type: 'json' };
+import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json'    with { type: 'json' };
+import seedDomainHelp   from './templates/pgc/seeds/seed_PGC_DomainHelp.json'  with { type: 'json' };
+import seedWorkflow     from './templates/pgc/seeds/seed_PGC_Workflow.json'    with { type: 'json' };
+import seedIntentMap    from './templates/pgc/seeds/seed_PGC_IntentMap.json'   with { type: 'json' };
+import seedPrompt       from './templates/pgc/seeds/seed_PGC_Prompt.json'      with { type: 'json' };
 
 const { Client } = pg;
 
@@ -159,6 +160,9 @@ export async function bootstrap(req) {
 
     // Step 8 — seed PGC_Prompt system prompt rows
     await seedPGCPrompt(client);
+
+    // Step 9 — seed PGC_DomainHelp system rows (e.g. system commands)
+    await seedPGCDomainHelp(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -522,4 +526,23 @@ async function seedPGCPrompt(client) {
     );
   }
   console.info('init-brain: PGC_Prompt seeded');
+}
+
+async function seedPGCDomainHelp(client) {
+  const rows = Array.isArray(seedDomainHelp) ? seedDomainHelp : [seedDomainHelp];
+  for (const row of rows) {
+    await client.query(
+      `INSERT INTO "PGC_DomainHelp"
+         (domain, aliases, description, commands)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (domain) DO NOTHING`,
+      [
+        row.domain,
+        JSON.stringify(row.aliases ?? []),
+        row.description ?? null,
+        JSON.stringify(row.commands ?? []),
+      ]
+    );
+  }
+  console.info('init-brain: PGC_DomainHelp seeded');
 }
