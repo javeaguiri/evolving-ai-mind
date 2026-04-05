@@ -313,10 +313,15 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Level 1 — What would you like help with? System commands or a specific domain.",
-        "message_template": "🧠 *What would you like help with?*",
+        "message_template": "What would you like help with?",
         "context_key": "help_options.domainButtons",
         "output_key": "help_selection",
         "options": [
+          {
+            "label": "System commands",
+            "action": "system",
+            "on_select": "next"
+          },
           {
             "label": "Cancel",
             "action": "cancel",
