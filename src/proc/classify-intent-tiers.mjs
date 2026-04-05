@@ -227,7 +227,7 @@ export function parseFieldValues(userInput) {
   while ((match = pattern.exec(userInput)) !== null) {
     const key   = match[1];
     const value = (match[2] ?? match[3] ?? match[4] ?? '').trim();
-    if (!SYSTEM_COLS.has(key) && value !== '') {
+    if (!SYSTEM_COLS.has(key.toLowerCase()) && value !== '') {
       row[key] = value;
     }
   }
