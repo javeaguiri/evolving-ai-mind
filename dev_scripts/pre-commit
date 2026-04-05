@@ -1,0 +1,48 @@
+#!/bin/bash
+# .git/hooks/pre-commit
+# Runs before every commit. Blocks commit on unit test failure or missing
+# copyright headers in staged .mjs files.
+# Install: cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# 1. Copyright header check — all .mjs files under src/
+# ---------------------------------------------------------------------------
+
+EXPECTED_LINE1="// Copyright (c) 2026 Javea Guiri. All rights reserved."
+FAILED_COPYRIGHT=0
+
+echo "Checking copyright headers..."
+while IFS= read -r file; do
+  FIRST_LINE=$(head -n 1 "$file")
+  if [ "$FIRST_LINE" != "$EXPECTED_LINE1" ]; then
+    echo "  MISSING copyright header: $file"
+    FAILED_COPYRIGHT=1
+  fi
+done < <(find src -name "*.mjs" -type f)
+
+if [ "$FAILED_COPYRIGHT" -ne 0 ]; then
+  echo ""
+  echo "Copyright check failed. Every .mjs file must start with:"
+  echo "  $EXPECTED_LINE1"
+  echo ""
+  echo "Commit aborted."
+  exit 1
+fi
+echo "Copyright headers OK."
+
+# ---------------------------------------------------------------------------
+# 2. Unit tests
+# ---------------------------------------------------------------------------
+
+echo "Running unit tests..."
+node --test tests/unit/*.test.mjs
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "Unit tests failed — commit aborted."
+  exit 1
+fi
+echo "Unit tests passed."
+
+exit 0
