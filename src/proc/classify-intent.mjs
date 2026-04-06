@@ -180,7 +180,10 @@ async function classify(userInput, sessionId, traceId) {
         const domainMatch = matchDomainAlias(userInput, domainRows);
         domain = domainMatch?.domain ?? null;
       } else {
-        domain = intentMatch.intent_category.replace(/^(get|list|add|update|delete|search)_/, '');
+        // Strip verb prefix — null if result does not match a registered domain
+        // (e.g. intent_category 'help' → stripped 'help' → no domain row → null).
+        const stripped = intentMatch.intent_category.replace(/^(get|list|add|update|delete|search)_/, '');
+        domain = domainRows.some(r => r.domain === stripped) ? stripped : null;
       }
 
       const isRetrieval = /^(get|search)_/.test(intentMatch.intent_category);
@@ -398,22 +401,6 @@ async function handoff(result, callback, traceId, userInput) {
   // ── Workflow ──────────────────────────────────────────────────────────────
   if (result.action_type === 'workflow' && result.workflow_name) {
 
-    // record_id present — user typed "get recipes id=1". The generic get_entity
-    // workflow uses a name LIKE filter and cannot filter by id without a
-    // condition step (Phase 3). Post an instructive error instead.
-    if (result.record_id !== null && result.record_id !== undefined) {
-      const domainLabel = result.domain ?? 'entity';
-      await enqueueCallback(callback, {
-        type:    'WORKFLOW_NOTIFY',
-        traceId,
-        message: `To fetch a ${domainLabel} record by id, use:\n` +
-                 `• /m list ${domainLabel} — to see all records with their ids\n` +
-                 `• /m get ${domainLabel} <name> — to search by name\n\n` +
-                 `Example: /m get ${domainLabel} sweet potato chili`,
-      });
-      return;
-    }
-
     const wfResp = await getRows(
       'PGC_Workflow',
       [{ column: 'name', op: 'eq', value: result.workflow_name }],
@@ -459,13 +446,26 @@ async function handoff(result, callback, traceId, userInput) {
         const updates = parseFieldValues(userInput);
         delete updates.id;
         parsedUpdates = Object.keys(updates).length > 0 ? updates : null;
+
+        // No field=value pairs provided — post instructive error without creating a WorkflowRun.
+        if (!parsedUpdates) {
+          const domain = result.domain ?? 'entity';
+          await enqueueCallback(callback, {
+            type:    'WORKFLOW_NOTIFY',
+            traceId,
+            message: `To update a ${domain} record I need at least one field=value pair.\n\n` +
+                     `Example: \`/m update ${domain} id=${parsedId} <field>=<value>\``,
+          });
+          return;
+        }
       }
     }
 
     const workflowInput = {
       userInput,
       ...(result.domain      ? { entity_name: toEntityName(result.domain) } : {}),
-      ...(result.search_term ? { search: result.search_term }               : {}),
+      ...(result.search_term                                           ? { search: result.search_term } : {}),
+      ...(result.record_id !== null && result.record_id !== undefined ? { id: result.record_id }     : {}),
       ...(parsedId !== null  ? { id: parsedId }                             : {}),
       ...(parsedUpdates      ? { updates: parsedUpdates }                   : {}),
     };

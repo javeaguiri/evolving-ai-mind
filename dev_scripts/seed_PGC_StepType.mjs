@@ -228,6 +228,19 @@ const STEP_TYPES = [
     status: 'live',
   },
   {
+    step_type:   'condition',
+    description: 'Evaluates a template expression against local_state and routes to one of two named steps without performing any I/O. Truthy: non-empty, non-"null", non-"undefined", non-"0". on_truthy and on_falsy are bare step keys (e.g. "2", "3") — the executor prefixes them to step:N internally. No output_key is written.',
+    input_contract: [
+      { field: 'expression', type: 'string', required: true,  description: '{{template}} expression resolved against local_state — e.g. "{{input.id}}"' },
+      { field: 'on_truthy',  type: 'string', required: true,  description: 'Bare step key to route to when expression is truthy — e.g. "2"' },
+      { field: 'on_falsy',   type: 'string', required: true,  description: 'Bare step key to route to when expression is falsy — e.g. "3"' },
+    ],
+    output_contract:    null,
+    on_success_options: [],
+    on_failure_options: [],
+    status: 'live',
+  },
+  {
     step_type:   'end',
     description: 'Terminal step — marks the workflow run as completed. No input or output fields. Every workflow must have exactly one end step as its final step.',
     input_contract:  [],

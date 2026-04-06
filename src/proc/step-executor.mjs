@@ -26,12 +26,13 @@
 //   serv_entity_get   — calls SERV getEntity by id, writes entity object to output_key
 //   serv_update  — calls SERV updateRows, generic filter + updates shape
 //   serv_delete  — calls SERV deleteRows, generic filter shape
+//   condition    — resolves expression, routes on_truthy/on_falsy — no I/O
 //   simulate     — static analysis + optional path simulation of a step array
 //   notify       — enqueues result message to SlackResults
 //   end          — signals workflow complete
 //
 // Deferred step types (return NotImplemented error):
-//   sub_workflow, condition
+//   sub_workflow
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 // All SQS enqueue calls go through sqs-callback.mjs (imported by run-workflow.mjs).
@@ -79,9 +80,9 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'notify':       return executeNotify({ step, localState, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
+    case 'condition':    return executeCondition({ step, localState, traceId });
 
     case 'sub_workflow':
-    case 'condition':
       throw new Error(`step type "${step.type}" not yet implemented (Phase 3)`);
 
     default:
@@ -405,11 +406,18 @@ async function executeJsTransform({ step, localState, traceId }) {
       // Output: a mrkdwn string ready for a notify message_template.
       //
       // Phase 3 replacement: generic js_transform sandbox.
-      const rows = resolvePath(localState, step.input_key);
+      const resolved = resolvePath(localState, step.input_key);
+      // serv_entity_get returns a single object; serv_entity_query returns an array.
+      // Normalise to array so formatRecordList handles both without workflow changes.
+      const rows = Array.isArray(resolved)
+        ? resolved
+        : (resolved !== null && resolved !== undefined && typeof resolved === 'object')
+          ? [resolved]
+          : null;
       if (!Array.isArray(rows)) {
         throw new Error(
-          `js_transform formatRecordList: input_key "${step.input_key}" did not resolve to an array — ` +
-          `got ${JSON.stringify(rows)}`
+          `js_transform formatRecordList: input_key "${step.input_key}" did not resolve to an array or object — ` +
+          `got ${JSON.stringify(resolved)}`
         );
       }
 
@@ -1214,6 +1222,11 @@ function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
+    if (s.type === 'condition') {
+      // on_truthy/on_falsy are bare step keys — normalise to step:N for ROUTING_TOKEN_RE validation
+      if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: `step:${s.on_truthy}` });
+      if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: `step:${s.on_falsy}`  });
+    }
     for (const opt of s.options ?? []) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action}].on_select`, value: opt.on_select });
     }
@@ -1413,7 +1426,11 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     if (currentStep.type === 'notify') {
       // notify is a side-effect — advance to next, no output_key
-      nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_success ?? 'next');
+      // condition steps have no on_success — follow on_truthy (happy path) for simulation
+    const simNextAction = currentStep.type === 'condition'
+      ? (currentStep.on_truthy ? `step:${currentStep.on_truthy}` : 'next')
+      : (currentStep.on_success ?? 'next');
+    nextKey = resolveSimNextKey(steps, currentKey, simNextAction);
       transitions.push(transition);
       currentKey = nextKey;
       continue;
@@ -1616,6 +1633,40 @@ function findClosestKey(keys, search) {
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// condition
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure control-flow step — resolves a template expression against local_state
+ * and routes to on_truthy or on_falsy without performing any I/O.
+ *
+ * Truthy: resolved value is non-empty string, not "null", not "undefined", not "0".
+ * on_truthy / on_falsy must be bare step keys (e.g. "2", "3") — returned as "step:N".
+ *
+ * No output_key is written — condition steps produce no state output.
+ */
+function executeCondition({ step, localState, traceId }) {
+  if (!step.expression) throw new Error('condition step missing expression');
+  if (!step.on_truthy)  throw new Error('condition step missing on_truthy');
+  if (!step.on_falsy)   throw new Error('condition step missing on_falsy');
+
+  const resolved = resolveTemplate(step.expression, localState);
+  const isTruthy = resolved !== '' && resolved !== 'null' && resolved !== 'undefined' && resolved !== '0';
+
+  const nextStep = isTruthy ? step.on_truthy : step.on_falsy;
+
+  console.info('step-executor: condition', {
+    expression: step.expression,
+    resolved,
+    isTruthy,
+    nextStep,
+    traceId,
+  });
+
+  return { outputValue: null, nextAction: `step:${nextStep}` };
+}
 
 async function executeNotify({ step, localState, traceId }) {
   const message = resolveTemplate(step.message_template ?? '', localState);
