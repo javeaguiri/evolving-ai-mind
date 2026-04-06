@@ -16,8 +16,9 @@
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
 //   js_transform — built-ins: columnSummary, buildHelpOptions, resolveHelpContent,
-//                  buildEntitySchema, formatRecordList, buildChildInserts;
-//                  transform_type required; generic sandbox is Phase 3
+//                  formatRecordList, buildChildInserts (transform_type);
+//                  generic expression sandbox via acorn AST gate + vm.runInNewContext
+//   serv_entity_schema — reads PGC_EntitySchema + PGC_Schema, assembles full entity schema
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
 //   serv_insert  — calls SERV insertRow
@@ -37,6 +38,8 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 // All SQS enqueue calls go through sqs-callback.mjs (imported by run-workflow.mjs).
 
+import vm                   from 'node:vm';
+import * as acorn           from 'acorn';
 import { callLlm }          from '../shared/llm-client.mjs';
 import { validate }         from './review-output.mjs';
 import { servPost, getRows, insertRow, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
@@ -73,7 +76,8 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_insert':  return executeServInsert({ step, localState, traceId });
     case 'serv_query':        return executeServQuery({ step, localState, traceId });
     case 'serv_entity_query': return executeServEntityQuery({ step, localState, traceId });
-    case 'serv_entity_get':   return executeServEntityGet({ step, localState, traceId });
+    case 'serv_entity_get':    return executeServEntityGet({ step, localState, traceId });
+    case 'serv_entity_schema': return executeServEntitySchema({ step, localState, traceId });
     case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
@@ -174,12 +178,23 @@ async function executeLlmCall({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 async function executeJsTransform({ step, localState, traceId }) {
-  // transform_type is required — no fallback. A missing or unrecognised
-  // transform_type is a step definition error and must surface immediately.
-  // Generic sandboxed JS (acorn AST gate + vm.runInNewContext) is Phase 3.
-  const transformType = step.transform_type;
-  if (!transformType) {
-    throw new Error('js_transform step missing transform_type — generic sandbox is Phase 3');
+  const { transform_type: transformType, expression } = step;
+
+  // Exactly one of transform_type (built-in) or expression (sandbox) must be present.
+  if (transformType && expression) {
+    throw new Error('js_transform step must have transform_type OR expression, not both');
+  }
+  if (!transformType && !expression) {
+    throw new Error('js_transform step missing transform_type or expression');
+  }
+
+  // Generic expression sandbox path
+  if (expression) {
+    if (!step.input_key) throw new Error('js_transform expression step missing input_key');
+    if (!step.output_key) throw new Error('js_transform expression step missing output_key');
+    const items  = resolvePath(localState, step.input_key);
+    const result = runSandboxedExpression(expression, items, traceId);
+    return { outputValue: result, nextAction: resolveNextAction(step.on_success, null) };
   }
 
   switch (transformType) {
@@ -274,119 +289,6 @@ async function executeJsTransform({ step, localState, traceId }) {
       });
       return {
         outputValue: { selection, content },
-        nextAction:  resolveNextAction(step.on_success, null),
-      };
-    }
-
-    case 'buildEntitySchema': {
-      // Build a full entity schema object by combining PGC_EntitySchema (join topology)
-      // with PGC_Schema (live column definitions for root and all child tables).
-      //
-      // PGC_EntitySchema owns: root_table, joins (which child tables exist and how they
-      // relate), aggregations (output_key and alias per child). It does NOT own column
-      // lists — those are owned by PGC_Schema and are the single source of truth.
-      //
-      // This transform queries PGC_Schema for all tables in the entity (root + every
-      // join table) in a single 'in' call, then assembles:
-      //   {
-      //     entity_name, description,
-      //     root: { table, columns: [{ name, type }] },   ← includes type for jsonb handling
-      //     children: [{ table, alias, fk_column, output_key, columns: [{ name, type }] }]
-      //   }
-      //
-      // input_key must resolve to a PGC_EntitySchema row (not an array).
-      // System columns (id, created_at, updated_at) and FK columns are excluded
-      // from all column lists — the workflow injects FKs at insert time.
-      const entitySchema = resolvePath(localState, step.input_key);
-      if (!entitySchema || typeof entitySchema !== 'object') {
-        throw new Error(
-          `js_transform buildEntitySchema: input_key "${step.input_key}" did not resolve to an entity schema row`
-        );
-      }
-
-      const rootTable   = entitySchema.root_table;
-      const joins       = Array.isArray(entitySchema.joins)        ? entitySchema.joins        : [];
-      const aggregations = Array.isArray(entitySchema.aggregations) ? entitySchema.aggregations : [];
-
-      // Collect all table names — root first, then child tables from joins
-      const allTables = [rootTable, ...joins.map(j => j.table)].filter(Boolean);
-
-      // Single PGC_Schema query for all tables
-      const schemaResp = await getRows(
-        'PGC_Schema',
-        [{ column: 'table_name', op: 'in', value: allTables }],
-        undefined,
-        allTables.length + 1
-      );
-
-      if (!schemaResp.success) {
-        throw new Error(`js_transform buildEntitySchema: PGC_Schema query failed: ${schemaResp.error}`);
-      }
-
-      // Build lookup: tableName → column array
-      const schemaByTable = {};
-      for (const row of schemaResp.rows ?? []) {
-        schemaByTable[row.table_name] = row.columns ?? [];
-      }
-
-      // Helper: extract non-system, non-FK columns from a schema row's columns.
-      // Returns { name, type } objects so the LLM knows which columns are jsonb
-      // and can produce valid JSON values instead of bare strings.
-      const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
-      function userColumns(tableName, fkColumnsToExclude = []) {
-        const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
-        return (schemaByTable[tableName] ?? [])
-          .filter(c => !exclude.has(c.name))
-          .map(c => ({ name: c.name, type: c.type }));
-      }
-
-      // Root table — no FK columns to exclude (root has no FK to other domain tables)
-      const rootColumns = userColumns(rootTable);
-
-      // Child tables — exclude the FK column that references the root table's id.
-      // FK column is found by looking at the PGC_Schema foreign_keys for the child.
-      // Fallback: derive from join.on expression (e.g. "s.recipe_id = r.id" → "recipe_id")
-      const children = joins.map(join => {
-        const agg = aggregations.find(a => a.alias === join.alias) ?? {};
-
-        // Try to find FK column from PGC_Schema foreign_keys on the child table
-        const childSchemaRow = (schemaResp.rows ?? []).find(r => r.table_name === join.table);
-        const fkCols = (childSchemaRow?.foreign_keys ?? []).map(fk => fk.column);
-
-        // Fallback: parse FK column from join.on e.g. "s.recipe_id = r.id"
-        if (fkCols.length === 0 && join.on) {
-          const onMatch = join.on.match(/(\w+)\.(\w+)\s*=\s*r\.id/);
-          if (onMatch) fkCols.push(onMatch[2]);
-        }
-
-        return {
-          table:      join.table,
-          alias:      join.alias,
-          fk_column:  fkCols[0] ?? null,
-          output_key: agg.outputKey ?? join.alias,
-          columns:    userColumns(join.table, fkCols),
-        };
-      });
-
-      const result = {
-        entity_name:  entitySchema.entity_name,
-        description:  entitySchema.description,
-        root: {
-          table:   rootTable,
-          columns: rootColumns,
-        },
-        children,
-      };
-
-      console.info('step-executor: js_transform — buildEntitySchema', {
-        entity:       result.entity_name,
-        rootTable,
-        childCount:   children.length,
-        traceId,
-      });
-
-      return {
-        outputValue: result,
         nextAction:  resolveNextAction(step.on_success, null),
       };
     }
@@ -553,8 +455,99 @@ async function executeJsTransform({ step, localState, traceId }) {
     }
 
     default:
-      throw new Error(`js_transform: unknown transform_type "${transformType}" — generic sandbox is Phase 3`);
+      throw new Error(`js_transform: unknown transform_type "${transformType}"`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// AST gate — rejects unsafe node types before vm execution
+// ---------------------------------------------------------------------------
+
+const BLOCKED_IDENTIFIERS = new Set(['require', 'eval', 'fetch', 'XMLHttpRequest', 'Function']);
+const BLOCKED_GLOBALS     = new Set(['process', 'global', '__dirname', '__filename']);
+
+function assertSafeAst(node) {
+  if (!node || typeof node !== 'object') return;
+
+  const type = node.type;
+
+  if (type === 'ImportDeclaration') {
+    throw new Error('js_transform expression: import statements are not allowed');
+  }
+  if (type === 'AwaitExpression') {
+    throw new Error('js_transform expression: await is not allowed — expressions must be synchronous');
+  }
+  if ((type === 'FunctionDeclaration' || type === 'ArrowFunctionExpression' || type === 'FunctionExpression') && node.async) {
+    throw new Error('js_transform expression: async functions are not allowed');
+  }
+  if (type === 'CallExpression') {
+    const callee = node.callee;
+    if (callee?.type === 'Identifier' && BLOCKED_IDENTIFIERS.has(callee.name)) {
+      throw new Error(`js_transform expression: "${callee.name}" is not allowed`);
+    }
+  }
+  if (type === 'NewExpression') {
+    const callee = node.callee;
+    if (callee?.type === 'Identifier' && callee.name === 'Function') {
+      throw new Error('js_transform expression: new Function() is not allowed');
+    }
+  }
+  if (type === 'MemberExpression') {
+    const obj = node.object;
+    if (obj?.type === 'Identifier' && BLOCKED_GLOBALS.has(obj.name)) {
+      throw new Error(`js_transform expression: "${obj.name}" is not allowed`);
+    }
+  }
+
+  // Recurse into all child nodes
+  for (const key of Object.keys(node)) {
+    if (key === 'type') continue;
+    const child = node[key];
+    if (Array.isArray(child)) {
+      child.forEach(assertSafeAst);
+    } else if (child && typeof child === 'object' && child.type) {
+      assertSafeAst(child);
+    }
+  }
+}
+
+/**
+ * Execute a pure synchronous JS expression in a sandboxed vm context.
+ * The resolved input_key value is bound as `items` in the sandbox.
+ * Safe globals only — no Node.js APIs, no network, no async.
+ *
+ * @param {string} expression   JS value expression (no return, no semicolons)
+ * @param {*}      items        Resolved input_key value from local_state
+ * @param {string} traceId
+ * @returns {*}                 Expression result
+ */
+function runSandboxedExpression(expression, items, traceId) {
+  // Parse and gate
+  let ast;
+  try {
+    ast = acorn.parse(expression, { ecmaVersion: 2022 });
+  } catch (parseErr) {
+    throw new Error(`js_transform expression: syntax error — ${parseErr.message}`);
+  }
+  assertSafeAst(ast);
+
+  // Execute in isolated context — 200ms timeout kills synchronous loops
+  const sandbox = {
+    items,
+    JSON, Math, Array, Object, String, Number, Boolean, Date,
+  };
+  let result;
+  try {
+    result = vm.runInNewContext(expression, sandbox, { timeout: 200 });
+  } catch (vmErr) {
+    if (vmErr.message?.includes('Script execution timed out')) {
+      throw new Error('js_transform expression: execution timed out after 200ms — possible infinite loop');
+    }
+    throw new Error(`js_transform expression: runtime error — ${vmErr.message}`);
+  }
+
+  console.info('step-executor: js_transform — expression', { traceId });
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +950,119 @@ async function executeServEntityGet({ step, localState, traceId }) {
 
   return {
     outputValue: resp.entity ?? null,
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_entity_schema — load full entity schema from PGC_EntitySchema + PGC_Schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads PGC_EntitySchema for join topology then PGC_Schema for live column
+ * definitions across root and all child tables. Assembles and returns a full
+ * entity schema object used by downstream llm_call steps (e.g. parse_entity_input).
+ *
+ * Replaces the two-step serv_query PGC_EntitySchema → js_transform buildEntitySchema
+ * pattern. I/O does not belong in js_transform.
+ *
+ * Output shape written to output_key:
+ *   {
+ *     entity_name, description,
+ *     root:     { table, columns: [{ name, type }] },
+ *     children: [{ table, alias, fk_column, output_key, columns: [{ name, type }] }]
+ *   }
+ *
+ * System columns (id, created_at, updated_at) and FK columns are excluded from
+ * all column lists. Column definitions are read live — not cached — so new columns
+ * are immediately visible without recreating the domain.
+ */
+async function executeServEntitySchema({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { entityName } = resolvedInput;
+
+  if (!entityName) throw new Error('serv_entity_schema step missing input.entityName');
+
+  // Load entity topology from PGC_EntitySchema
+  const entityResp = await getRows(
+    'PGC_EntitySchema',
+    [{ column: 'entity_name', op: 'eq', value: entityName }],
+    undefined,
+    1
+  );
+  if (!entityResp.success || (entityResp.count ?? 0) === 0) {
+    throw new Error(`serv_entity_schema: entity "${entityName}" not found in PGC_EntitySchema`);
+  }
+  const entitySchema  = entityResp.rows[0];
+  const rootTable     = entitySchema.root_table;
+  const joins         = Array.isArray(entitySchema.joins)        ? entitySchema.joins        : [];
+  const aggregations  = Array.isArray(entitySchema.aggregations) ? entitySchema.aggregations : [];
+
+  // Load live column definitions for all tables in one query
+  const allTables = [rootTable, ...joins.map(j => j.table)].filter(Boolean);
+  const schemaResp = await getRows(
+    'PGC_Schema',
+    [{ column: 'table_name', op: 'in', value: allTables }],
+    undefined,
+    allTables.length + 1
+  );
+  if (!schemaResp.success) {
+    throw new Error(`serv_entity_schema: PGC_Schema query failed: ${schemaResp.error}`);
+  }
+
+  // Build tableName → column array lookup
+  const schemaByTable = {};
+  for (const row of schemaResp.rows ?? []) {
+    schemaByTable[row.table_name] = row.columns ?? [];
+  }
+
+  // Returns non-system, non-FK { name, type } columns for a table
+  const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
+  function userColumns(tableName, fkColumnsToExclude = []) {
+    const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
+    return (schemaByTable[tableName] ?? [])
+      .filter(c => !exclude.has(c.name))
+      .map(c => ({ name: c.name, type: c.type }));
+  }
+
+  const rootColumns = userColumns(rootTable);
+
+  const children = joins.map(join => {
+    const agg = aggregations.find(a => a.alias === join.alias) ?? {};
+
+    // FK column from PGC_Schema foreign_keys, or parsed from join.on expression
+    const childSchemaRow = (schemaResp.rows ?? []).find(r => r.table_name === join.table);
+    const fkCols = (childSchemaRow?.foreign_keys ?? []).map(fk => fk.column);
+    if (fkCols.length === 0 && join.on) {
+      const onMatch = join.on.match(/(\w+)\.(\w+)\s*=\s*r\.id/);
+      if (onMatch) fkCols.push(onMatch[2]);
+    }
+
+    return {
+      table:      join.table,
+      alias:      join.alias,
+      fk_column:  fkCols[0] ?? null,
+      output_key: agg.outputKey ?? join.alias,
+      columns:    userColumns(join.table, fkCols),
+    };
+  });
+
+  const result = {
+    entity_name:  entitySchema.entity_name,
+    description:  entitySchema.description,
+    root:         { table: rootTable, columns: rootColumns },
+    children,
+  };
+
+  console.info('step-executor: serv_entity_schema', {
+    entityName,
+    rootTable,
+    childCount: children.length,
+    traceId,
+  });
+
+  return {
+    outputValue: result,
     nextAction:  resolveNextAction(step.on_success, null),
   };
 }
