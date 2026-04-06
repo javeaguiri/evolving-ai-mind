@@ -1865,11 +1865,12 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ llm_call     ║ Load prompt from PGC_Prompt, call LLM, run           ║ ✅ Implemented   ║
 ║              ║ review-output validation (2-attempt correction loop) ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
-║ js_transform ║ Run a named built-in transform on local_state data.  ║ ✅ Implemented   ║
-║              ║ Built-ins: columnSummary, buildHelpOptions,          ║ (built-ins only) ║
-║              ║ resolveHelpContent, buildEntitySchema,               ║                  ║
-║              ║ formatRecordList.                                    ║                  ║
-║              ║ Generic AST sandbox Phase 3.                         ║                  ║
+║ js_transform ║ Run a named built-in transform on local_state data,  ║ ✅ Implemented   ║
+║              ║ or evaluate a sandboxed JS expression via acorn AST  ║                  ║
+║              ║ gate + vm.runInNewContext. Built-ins: columnSummary, ║                  ║
+║              ║ buildHelpOptions, resolveHelpContent,                ║                  ║
+║              ║ formatRecordList, buildChildInserts.                 ║                  ║
+║              ║ Generic expression field: Session 19.                ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
 ║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
@@ -1900,9 +1901,15 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ end          ║ Mark run completed, stop                             ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ Load full entity schema: reads PGC_EntitySchema for   ║ ✅ Implemented   ║
+║ schema       ║ join topology + PGC_Schema for live column defs.     ║ Session 19       ║
+║              ║ Collapses the serv_query + buildEntitySchema          ║                  ║
+║              ║ two-step pattern into one step. See Section 6.12.    ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ sub_workflow ║ Push child workflow frame, inherit local_state        ║ ⬜ Phase 3       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
-║ condition    ║ Evaluate expression, branch on if_true / if_false    ║ ⬜ Phase 3       ║
+║ condition    ║ Evaluate {{expression}} against local_state, route   ║ ✅ Implemented   ║
+║              ║ to on_truthy / on_falsy step keys. No I/O.           ║ Session 19       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Phase 3       ║
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
@@ -1942,10 +1949,29 @@ Output is the parsed JSON object from the LLM, stored at `output_key` in `local_
   "on_success": "next"
 }
 ```
-`transform_type` is required — there is no fallback. Unknown types throw.
+`transform_type` and `expression` are mutually exclusive — exactly one must be present.
+Both present, or neither present, throws immediately.
+
+`transform_type` selects a named built-in (see Section 6.11 for the full list).
 `columnSummary` enriches each table object with a `columnSummary` string
 listing the first four non-system column names — used as secondary text in
 `edit_list` gates.
+
+**Generic `expression` sandbox** — see Section 6.11 for the full design.
+```json
+{
+  "step": "3", "type": "js_transform",
+  "expression": "items.filter(r => r.score > 0).map(r => ({ id: r.id, score: r.score }))",
+  "input_key":  "quiz_results",
+  "output_key": "passing_results",
+  "on_success": "next"
+}
+```
+`expression` is a pure synchronous JS expression string. The resolved `input_key`
+value is bound as `items`. The expression must not use `await`, `import`, `require`,
+`fetch`, `eval`, or `process`. The acorn AST gate enforces this before any code runs.
+`vm.runInNewContext` executes the expression with a 200ms timeout and a safe globals
+context (`JSON`, `Math`, `Array`, `Object`, `String`, `Number`, `Boolean`, `Date`).
 
 **`formatRecordList`** — formats a `serv_query` rows array into a Slack `mrkdwn`
 string for display. Used by `list_<domain>` workflows.
@@ -2968,47 +2994,45 @@ Uses `buildEntitySchema` to load live column definitions from `PGC_Schema` for
 root and all child tables — single source of truth, immune to schema drift.
 
 ```
-Step 1  serv_query PGC_EntitySchema  (filter: entity_name = <PascalCase>)
-          output_key: entity_schema_rows
-
-Step 2  js_transform buildEntitySchema
-          input_key:  entity_schema_rows.0
+Step 1  serv_entity_schema  (input.entityName = <PascalCase>)
           output_key: full_entity_schema
-          Queries PGC_Schema for all tables in the entity (single IN call).
+          Reads PGC_EntitySchema for join topology + PGC_Schema for live column defs.
           Returns: {
             entity_name, description,
             root:     { table, columns: [non-system, non-FK col names] },
             children: [{ table, alias, fk_column, output_key, columns }]
           }
 
-Step 3  llm_call parse_entity_input  v2
+Step 2  llm_call parse_entity_input  v2
           input: { userInput: "{{input.userInput}}",
                    full_entity_schema: "{{full_entity_schema}}" }
           output_key: parsed_entity
           Returns: { root: { <field>: <value> },
                      children: { <output_key>: [rows] } }
 
-Step 4  human_gate review_object
+Step 3  human_gate review_object
           context_key: parsed_entity
           "Here's what I parsed — does this look right?"
           ├── Looks good → next
           └── Cancel     → cancelled
 
-Step 5  serv_insert <root_table>
+Step 4  serv_insert <root_table>
           row: "{{parsed_entity.root}}"
           output_key: new_record
 
-Step 6  iterator over parsed_entity.<child_output_key>   (one per child table)
+Step 5  js_transform buildChildInserts
+          output_key: child_inserts
+
+Step 6  iterator over child_inserts
           item_step: serv_insert <child_table>
             row: { <fk_column>: "{{new_record.id}}", <col>: "{{item.<col>}}" }
-          (step numbers increment sequentially per additional child table)
 
-Step N    notify → "Added <domain> record (id: {{new_record.id}})."
-Step N+1  end
+Step 7  notify → "Added <domain> record (id: {{new_record.id}})."
+Step 8  end
 ```
 
 **Key design decisions:**
-- `buildEntitySchema` (step 2) fetches live column definitions from `PGC_Schema` at
+- `serv_entity_schema` (step 1) fetches live column definitions from `PGC_Schema` at
   every run — not from `PGC_EntitySchema.aggregations.columns`, which is set at domain
   creation time and can drift. New columns added to any table are immediately visible
   to the LLM without recreating the domain.
@@ -3355,6 +3379,176 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 ```
 
 
+### 6.11 `js_transform` Generic Sandbox
+
+#### Purpose
+
+The `js_transform` step type serves two distinct modes:
+
+1. **Named built-ins** — selected by `transform_type`. Implemented in `step-executor.mjs`
+   as `case` branches. Used for system-level transforms that have complex data access
+   requirements (e.g. `buildChildInserts`) or that predate the sandbox.
+
+2. **Generic expression sandbox** — selected by `expression`. A pure synchronous JS
+   expression evaluated by `vm.runInNewContext` after passing an acorn AST gate.
+   Used for all LLM-generated data transformation steps in workflows.
+
+`transform_type` and `expression` are mutually exclusive. Exactly one must be present.
+
+#### The constraint boundary
+
+`js_transform` is restricted to **pure synchronous data transformation** — operate on
+data already in `local_state` and return a new value. It never fetches, never writes,
+never calls external services. The distinction is architecturally enforced:
+
+- "Transform data I already have" → `js_transform` with `expression`
+- "Fetch data I don't have" → `serv_*` step type or `capability_call` (Phase 3)
+
+`vm.runInNewContext({ timeout: 200 })` reliably kills synchronous infinite loops.
+It does NOT apply to async operations — async is prohibited by the AST gate,
+not by the VM. See Section 15.2 for the full safety analysis.
+
+#### AST gate — rejection rules
+
+The acorn parser walks the generated AST before `vm.runInNewContext` is called.
+Any of the following causes an immediate throw — the code never executes:
+
+| Rejected AST node | What it blocks |
+|---|---|
+| `ImportDeclaration` | `import` statements |
+| `CallExpression` where callee is Identifier `require` | `require()` calls |
+| `MemberExpression` with object Identifier `process` or `global` | Node.js globals |
+| `AwaitExpression` | Any `await` |
+| `FunctionDeclaration` or `ArrowFunctionExpression` with `async: true` | Async functions |
+| `NewExpression` where callee is Identifier `Function` | `new Function()` |
+| `CallExpression` where callee resolves to `eval`, `fetch`, `XMLHttpRequest` | Network and eval |
+
+#### Sandbox context
+
+`vm.runInNewContext` receives only what is explicitly injected — nothing else is in scope:
+
+| Binding | Value |
+|---|---|
+| `items` | The resolved `input_key` value from `local_state` |
+| `JSON` | `JSON` |
+| `Math` | `Math` |
+| `Array` | `Array` |
+| `Object` | `Object` |
+| `String` | `String` |
+| `Number` | `Number` |
+| `Boolean` | `Boolean` |
+| `Date` | `Date` |
+
+#### Step definition
+
+```json
+{
+  "step": "3",
+  "type": "js_transform",
+  "expression": "items.filter(r => r.score > 0).length",
+  "input_key":  "quiz_results",
+  "output_key": "pass_count",
+  "on_success": "next"
+}
+```
+
+`expression` is a JS value expression — not a statement. No `return`, no semicolons,
+no variable declarations. The resolved `input_key` value is bound as `items`.
+The expression result is written to `output_key` in `local_state`.
+
+#### Example expressions for the LLM
+
+These examples are injected into `PGC_StepType.input_contract` for the
+`generate_workflow_steps` prompt. They define the class of operation in scope.
+
+| Use case | Expression |
+|---|---|
+| Count passing results | `items.filter(r => r.score > 0).length` |
+| Sum a numeric field | `items.reduce((acc, r) => acc + (r.score \|\| 0), 0)` |
+| Map to display strings | `items.map(r => r.name + ': ' + r.value).join('\n')` |
+| Filter by field | `items.filter(r => r.status === 'active')` |
+| Pluck a field | `items.map(r => r.name)` |
+| Single value from object | `items.total_score` |
+| Format a score summary | `` `You scored ${items.correct} out of ${items.total}.` `` |
+
+#### Built-ins retained
+
+The following named built-ins remain in `step-executor.mjs` as `transform_type` cases.
+They are not replaced by expressions in this session — that is a separate session once
+the sandbox is proven in production:
+
+| transform_type | Status | Reason retained |
+|---|---|---|
+| `columnSummary` | Retained | Used by `create_domain` — proven stable |
+| `buildHelpOptions` | Retained | Used by `help` workflow |
+| `resolveHelpContent` | Retained | Used by `help` workflow |
+| `formatRecordList` | Retained | Used by `list_entity`, `get_entity` |
+| `buildChildInserts` | Retained | Used by `add_entity` — complex FK injection logic |
+| `buildEntitySchema` | **Removed** | Replaced by `serv_entity_schema` step type (Section 6.12) |
+
+---
+
+### 6.12 `serv_entity_schema` Step Type
+
+#### Purpose
+
+Loads a full entity schema object by combining:
+- `PGC_EntitySchema` — join topology (root table, child tables, FK relationships)
+- `PGC_Schema` — live column definitions for all tables in the entity
+
+This replaces the two-step pattern (`serv_query PGC_EntitySchema` → `js_transform
+buildEntitySchema`) with a single step. I/O does not belong in `js_transform`.
+
+#### Step definition
+
+```json
+{
+  "step": "1",
+  "type": "serv_entity_schema",
+  "input": { "entityName": "{{input.entity_name}}" },
+  "output_key": "full_entity_schema",
+  "on_success": "next",
+  "on_failure": "human_feedback"
+}
+```
+
+#### Output shape
+
+```json
+{
+  "entity_name": "Recipe",
+  "description": "A cooking recipe with ingredients and steps",
+  "root": {
+    "table":   "PGD_Recipes",
+    "columns": [{ "name": "name", "type": "text" }, ...]
+  },
+  "children": [
+    {
+      "table":      "PGD_RecipeIngredients",
+      "alias":      "ingredients",
+      "fk_column":  "recipe_id",
+      "output_key": "ingredients",
+      "columns":    [{ "name": "ingredient_name", "type": "text" }, ...]
+    }
+  ]
+}
+```
+
+System columns (`id`, `created_at`, `updated_at`) and FK columns are excluded
+from all column lists. Column definitions are read from `PGC_Schema` at runtime —
+not cached — so new columns are immediately visible without recreating the domain.
+
+#### Implementation
+
+The handler (`executeServEntitySchema` in `step-executor.mjs`) performs the same
+two SERV reads that `buildEntitySchema` performed as a `js_transform` built-in:
+1. `getRows('PGC_EntitySchema', [{ column: 'entity_name', op: 'eq', value: entityName }])`
+2. `getRows('PGC_Schema', [{ column: 'table_name', op: 'in', value: allTables }])`
+
+The assembly logic is identical to the former built-in.
+
+---
+
 ## 7. Tech Debt Register
 
 | Item | Priority | Notes |
@@ -3366,7 +3560,7 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `WORKFLOW_GATE` → `callback.mjs` `chat.update` |
 | Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — now unblocked, fix in Phase 2 item 4a |
 | `create_domain` prompt produces varying schemas across runs | Medium | LLM variance at `temperature: 0.2`. Correct fix: right-brain prompt evolution via `PGC_WorkflowStats` + `PGC_Prompt.error_log`. Do not invest in defensive patching before the feedback loop exists |
-| `js_transform` built-in `columnSummary` only | Medium | Generic sandboxed JS (acorn AST gate + `vm.runInNewContext`) not implemented. New built-ins added: `buildHelpOptions`, `resolveHelpContent` (interactive help workflow), `resolveIntentMapWorkflowIds` (removed — wrong fix). Generic sandbox deferred to Phase 3 |
+| ~~`js_transform` built-in `columnSummary` only~~ | ~~Medium~~ | ✅ Resolved — generic sandbox implemented in Session 19. `expression` field added to `js_transform` step type. acorn AST gate rejects async, network, eval, and Node globals before `vm.runInNewContext` executes. Built-ins retained as named transforms; `buildEntitySchema` removed and replaced by `serv_entity_schema` step type. See Section 6.11 |
 | `PGC_WorkflowRunStep` idempotency uses `parseInt(stepNumber)` | ~~Medium~~ | ✅ Resolved — `step_key text` column added to `PGC_WorkflowRunStep`. `checkIdempotency` queries on `(run_id, frame_id, step_key)` string comparison. `parseInt` never used in idempotency paths. `migrate-step-key.mjs` backfilled existing rows |
 | `created_tables_summary` hardcoded in iterator | ~~Low~~ | ✅ Resolved — `notify` step message_template now uses `proposed_scaffold.domain` and explicit command examples instead of the hardcoded iterator summary |
 | `domain: null` on DDL-created tables | ~~Medium~~ | ✅ Resolved in Phase 2 item 4a — `js_transform` at step 2 enriches each table object with `domain: proposed_scaffold.domain` before the DDL iterator runs. `serv_schema createTable` writes domain to both `PGC_Schema` and `PGC_TableMap` |
@@ -3466,12 +3660,11 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `@aws-sdk/client-sqs` | ^3 | ~5M | Apache-2.0 | SQS SendMessage — WorkflowQueue + SlackResultsQueue | bootstrap |
 | `@slack/web-api` | ^7 | ~1M | MIT | Slack API — chat.postMessage, chat.update, Block Kit | bootstrap |
 | `ajv` | ^8 | ~100M | MIT | JSON Schema validation — right-brain output validation loop | v3.2-design-domain-foundation |
+| `acorn` | ^8 | ~50M | MIT | AST parser for `js_transform` sandbox gate — see Section 6.11 | Session 19 |
 
 ### Candidates approved for future addition
 
 | Package | Weekly DL | License | Purpose | When |
-|---|---|---|---|---|
-| `acorn` | ~50M | MIT | AST parser for `js_transform` sandbox gate (Section 6.11) | Phase 2 item 3a JS validation |
 | `ajv-formats` | ~20M | MIT | Adds `date-time`, `uuid` format validators to Ajv | When output schemas use format keywords |
 
 ---
@@ -3603,7 +3796,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | Type | Status | Notes |
 |---|---|---|
 | `llm_call` | ✅ live | Loads prompt from `PGC_Prompt`, calls LLM, runs `review-output` validation |
-| `js_transform` | ✅ live (built-in only) | Built-ins: `columnSummary`, `buildHelpOptions`, `resolveHelpContent`, `buildEntitySchema`, `formatRecordList`. Generic AST sandbox Phase 3 |
+| `js_transform` | ✅ live (built-ins + generic expression sandbox) | Built-ins: `columnSummary`, `buildHelpOptions`, `resolveHelpContent`, `formatRecordList`, `buildChildInserts`. Generic `expression` sandbox via acorn AST gate + `vm.runInNewContext`. See Section 6.11 |
 | `human_gate` | ✅ live | `confirm` + `edit_list` proven end-to-end |
 | `serv_schema` | ✅ live | `createTable` via SERV |
 | `serv_insert` | ✅ live | `insertRow` via SERV |
@@ -3636,7 +3829,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | # | Task |
 |---|---|
 | 1 | SERV-Query — cross-entity parameterised SELECT with pagination |
-| 2 | Generic `js_transform` sandbox — acorn AST gate + `vm.runInNewContext`. Replaces built-ins `formatRecordList`, `buildEntitySchema`, `columnSummary`, `buildHelpOptions`, `resolveHelpContent` |
+| 2 | ~~Generic `js_transform` sandbox~~ | ✅ Implemented Session 19 — see Section 6.11 |
 | ~~3~~ | ~~`serv_query`, `serv_update`, `serv_delete` step types~~ ✅ live — v3.2-crud-adhoc-complete |
 | 4 | `sub_workflow` and `condition` step types |
 | 5 | `capability_call` step type + External API Registry (Section 15.1) |
