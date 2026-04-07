@@ -209,29 +209,49 @@ async function postServNotification(message) {
 
 // Generic workflow notification — used by any workflow notify step
 // that does not set a custom notify_type.
+//
+// Slack section blocks have a 3000-character hard limit. Long workflow
+// results (e.g. recipes with many ingredients and steps) exceed this.
+// Split on newlines into chunks ≤ BLOCK_CHAR_LIMIT — one section block
+// per chunk. The context block is always appended last and is always short.
 async function postWorkflowNotify(message) {
   const { callback, message: text, traceId, workflowRunId } = message;
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
-  await routeCallback(callback, text, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: contextText,
-        },
-      ],
-    },
-  ]);
+
+  const BLOCK_CHAR_LIMIT = 2800;
+  const blocks = [];
+
+  if (text.length <= BLOCK_CHAR_LIMIT) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
+  } else {
+    // Split on newlines and accumulate into ≤2800-char chunks
+    const lines  = text.split('\n');
+    let   chunk  = '';
+    for (const line of lines) {
+      const candidate = chunk ? chunk + '\n' + line : line;
+      if (candidate.length > BLOCK_CHAR_LIMIT) {
+        if (chunk) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });
+        // If a single line itself exceeds the limit, hard-truncate it
+        chunk = line.length > BLOCK_CHAR_LIMIT ? line.slice(0, BLOCK_CHAR_LIMIT - 3) + '...' : line;
+      } else {
+        chunk = candidate;
+      }
+    }
+    if (chunk) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });
+  }
+
+  blocks.push({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: contextText }],
+  });
+
+  await routeCallback(callback, text.slice(0, 150), blocks);
   console.info('callback: WORKFLOW_NOTIFY posted', {
-    channel: callback.channel,
+    channel:    callback.channel,
     traceId,
+    blockCount: blocks.length,
   });
 }
 

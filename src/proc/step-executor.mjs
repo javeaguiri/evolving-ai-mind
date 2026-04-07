@@ -310,12 +310,13 @@ async function executeJsTransform({ step, localState, traceId }) {
       // Phase 3 replacement: generic js_transform sandbox.
       const resolved = resolvePath(localState, step.input_key);
       // serv_entity_get returns a single object; serv_entity_query returns an array.
-      // Normalise to array so formatRecordList handles both without workflow changes.
+      // Normalise: array → use as-is; plain object → wrap in []; null/undefined → [].
+      // [] renders as "No records found." — never fails the workflow.
       const rows = Array.isArray(resolved)
         ? resolved
         : (resolved !== null && resolved !== undefined && typeof resolved === 'object')
           ? [resolved]
-          : null;
+          : [];
       if (!Array.isArray(rows)) {
         throw new Error(
           `js_transform formatRecordList: input_key "${step.input_key}" did not resolve to an array or object — ` +
@@ -945,6 +946,18 @@ async function executeServEntityGet({ step, localState, traceId }) {
   const resp = await getEntityById(entityName, id);
 
   if (!resp.success) {
+    // Not-found is not a workflow error — write null to output_key and route
+    // on_success so downstream steps (e.g. formatRecordList) produce a
+    // user-friendly "No records found." message rather than failing the run.
+    const isNotFound = typeof resp.error === 'string'
+      && /not found/i.test(resp.error);
+    if (isNotFound) {
+      console.info('step-executor: serv_entity_get — not found', { entityName, id, traceId });
+      return {
+        outputValue: [],   // empty array — formatRecordList renders "No records found."
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
     throw new Error(`serv_entity_get failed for "${entityName}" id=${id}: ${resp.error ?? resp.statusCode}`);
   }
 
@@ -1759,7 +1772,14 @@ function executeCondition({ step, localState, traceId }) {
   if (!step.on_falsy)   throw new Error('condition step missing on_falsy');
 
   const resolved = resolveTemplate(step.expression, localState);
-  const isTruthy = resolved !== '' && resolved !== 'null' && resolved !== 'undefined' && resolved !== '0';
+  // Treat unresolved template literals as falsy — resolveTemplate returns the
+  // original {{token}} when the path is absent from local_state. A condition
+  // step must not route truthy on a key that was never set.
+  const isTruthy = resolved !== ''
+    && resolved !== 'null'
+    && resolved !== 'undefined'
+    && resolved !== '0'
+    && !resolved.includes('{{');
 
   const nextStep = isTruthy ? step.on_truthy : step.on_falsy;
 

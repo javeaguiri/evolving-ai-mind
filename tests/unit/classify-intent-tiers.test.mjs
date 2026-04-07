@@ -18,6 +18,10 @@ import {
   matchWorkflowByKeywords,
   extractSearchTerm,
   parseFieldValues,
+  hasTablePrefix,
+  extractTableName,
+  hasCrudVerb,
+  matchCrudVerb,
 } from '../../src/proc/classify-intent-tiers.mjs';
 
 import { intentMapRows, systemIntentRows, allIntentRows } from '../fixtures/intent-map-rows.js';
@@ -309,6 +313,18 @@ describe('extractSearchTerm', () => {
     const { search_term } = extractSearchTerm('get my stock portfolio AAPL', 'stock_portfolio');
     assert.equal(search_term, 'AAPL');
   });
+
+  it('strips leading field= prefix from search term', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes name=French Ratatouille', 'recipes');
+    assert.equal(search_term, 'French Ratatouille');
+    assert.equal(record_id, null);
+  });
+
+  it('does not strip id= prefix — handled as record_id', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes id=7', 'recipes');
+    assert.equal(search_term, null);
+    assert.equal(record_id, 7);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -370,5 +386,144 @@ describe('parseFieldValues', () => {
     const result = parseFieldValues('add recipes name=Sweet Potato Chili servings=4');
     assert.equal(result.name, 'Sweet Potato Chili');
     assert.equal(result.servings, '4');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasTablePrefix
+// ---------------------------------------------------------------------------
+
+describe('hasTablePrefix', () => {
+  it('returns true for PGD_ prefix', () => {
+    assert.equal(hasTablePrefix('list PGD_Recipes'), true);
+  });
+
+  it('returns false with no prefix', () => {
+    assert.equal(hasTablePrefix('list recipes'), false);
+  });
+
+  it('returns true for PGC_ prefix', () => {
+    assert.equal(hasTablePrefix('PGC_Workflow'), true);
+  });
+
+  it('is case-insensitive', () => {
+    assert.equal(hasTablePrefix('pgd_recipes something'), true);
+  });
+
+  it('returns false for empty string', () => {
+    assert.equal(hasTablePrefix(''), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractTableName
+// ---------------------------------------------------------------------------
+
+describe('extractTableName', () => {
+  it('extracts PGD_ table name from a list command', () => {
+    assert.equal(extractTableName('list PGD_Recipes name=Pasta'), 'PGD_Recipes');
+  });
+
+  it('extracts PGC_ table name from an update command', () => {
+    assert.equal(extractTableName('update PGC_Workflow id=1'), 'PGC_Workflow');
+  });
+
+  it('returns null when no prefixed table name is present', () => {
+    assert.equal(extractTableName('list recipes'), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasCrudVerb
+// ---------------------------------------------------------------------------
+
+describe('hasCrudVerb', () => {
+  it('returns true for "list"', () => {
+    assert.equal(hasCrudVerb('list PGD_Recipes'), true);
+  });
+
+  it('returns true for "show me" multi-word verb', () => {
+    assert.equal(hasCrudVerb('show me PGD_Recipes'), true);
+  });
+
+  it('returns false when no CRUD verb is present', () => {
+    assert.equal(hasCrudVerb('something unrelated'), false);
+  });
+
+  it('returns false for empty string', () => {
+    assert.equal(hasCrudVerb(''), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// matchCrudVerb
+// ---------------------------------------------------------------------------
+
+describe('matchCrudVerb', () => {
+  it('list with no filters — serv_query, no filters array', () => {
+    const result = matchCrudVerb('list PGD_Recipes', 'PGD_Recipes');
+    assert.equal(result.action, 'list');
+    assert.equal(result.adHocStep.type, 'serv_query');
+    assert.ok(!result.adHocStep.input.filters, 'filters should be absent');
+  });
+
+  it('list with field=value — serv_query, filters populated', () => {
+    const result = matchCrudVerb('list PGD_Recipes name=Pasta', 'PGD_Recipes');
+    assert.equal(result.action, 'list');
+    assert.equal(result.adHocStep.type, 'serv_query');
+    assert.ok(Array.isArray(result.adHocStep.input.filters));
+    assert.equal(result.adHocStep.input.filters[0].column, 'name');
+    assert.equal(result.adHocStep.input.filters[0].value, 'Pasta');
+  });
+
+  it('insert with fields — serv_insert, row populated', () => {
+    const result = matchCrudVerb('add PGD_Recipes name=Carbonara', 'PGD_Recipes');
+    assert.equal(result.action, 'insert');
+    assert.equal(result.adHocStep.type, 'serv_insert');
+    assert.equal(result.adHocStep.input.row.name, 'Carbonara');
+  });
+
+  it('insert with no fields — ambiguous insert', () => {
+    const result = matchCrudVerb('add PGD_Recipes', 'PGD_Recipes');
+    assert.equal(result.ambiguous, true);
+    assert.equal(result.action, 'insert');
+  });
+
+  it('update with id and fields — serv_update, filters and updates populated', () => {
+    const result = matchCrudVerb('update PGD_Recipes id=5 difficulty=easy', 'PGD_Recipes');
+    assert.equal(result.action, 'update');
+    assert.equal(result.adHocStep.type, 'serv_update');
+    assert.equal(result.adHocStep.input.filters[0].value, 5);
+    assert.equal(result.adHocStep.input.updates.difficulty, 'easy');
+  });
+
+  it('update with id but no fields — ambiguous, reason no_fields', () => {
+    const result = matchCrudVerb('update PGD_Recipes id=5', 'PGD_Recipes');
+    assert.equal(result.ambiguous, true);
+    assert.equal(result.reason, 'no_fields');
+  });
+
+  it('update with no id — ambiguous, reason no_id', () => {
+    const result = matchCrudVerb('update PGD_Recipes difficulty=easy', 'PGD_Recipes');
+    assert.equal(result.ambiguous, true);
+    assert.equal(result.reason, 'no_id');
+  });
+
+  it('delete with id — serv_delete, filters populated', () => {
+    const result = matchCrudVerb('delete PGD_Recipes id=3', 'PGD_Recipes');
+    assert.equal(result.action, 'delete');
+    assert.equal(result.adHocStep.type, 'serv_delete');
+    assert.equal(result.adHocStep.input.filters[0].value, 3);
+  });
+
+  it('delete with no id — ambiguous delete', () => {
+    const result = matchCrudVerb('delete PGD_Recipes', 'PGD_Recipes');
+    assert.equal(result.ambiguous, true);
+    assert.equal(result.action, 'delete');
+  });
+
+  it('no verb matched — returns null', () => {
+    const result = matchCrudVerb('PGD_Recipes', 'PGD_Recipes');
+    assert.equal(result, null);
   });
 });
