@@ -199,7 +199,14 @@ export function extractSearchTerm(userInput, domain) {
     return { search_term: null, record_id: parseInt(idOnly[1], 10) };
   }
 
-  return { search_term: stripped, record_id: null };
+  // Strip a leading field=value prefix (e.g. "name=French Ratatouille" → "French Ratatouille").
+  // Users sometimes type field=value syntax from habit when performing a name search.
+  // Only strip the first word if it is a bare identifier followed by = and no digits-only value
+  // (which would be an id= pattern already caught above).
+  const fieldPrefix = stripped.match(/^\w+\s*=\s*(.+)$/);
+  const searchTerm  = fieldPrefix ? fieldPrefix[1].trim() : stripped;
+
+  return { search_term: searchTerm, record_id: null };
 }
 
 // ---------------------------------------------------------------------------
