@@ -5,6 +5,7 @@
   "columns": [
     { "name": "id",            "type": "serial",                         "primaryKey": true },
     { "name": "entity_name",   "type": "text",    "nullable": false,     "unique": true },
+    { "name": "domain",        "type": "text",    "nullable": true       },
     { "name": "description",   "type": "text",    "nullable": true       },
     { "name": "root_table",    "type": "text",    "nullable": false      },
     { "name": "joins",         "type": "jsonb",   "nullable": false,     "default": "'[]'::jsonb" },
