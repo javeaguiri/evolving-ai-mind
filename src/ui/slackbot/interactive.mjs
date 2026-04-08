@@ -56,6 +56,12 @@ export async function handle(req) {
     return handleViewSubmission(payload, req.correlationId);
   }
 
+  // view_closed — modal dismissed without submitting (notify_on_close: true required on view).
+  // Enqueues resume_gate with userResponse: 'cancel' so the workflow routes to step 3a cancel path.
+  if (payload.type === 'view_closed') {
+    return handleViewClosed(payload, req.correlationId);
+  }
+
   if (payload.type !== 'block_actions') {
     console.info('interactive: ignoring payload type', { type: payload.type });
     return ok({}, req.correlationId);
@@ -85,15 +91,21 @@ export async function handle(req) {
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
   }
 
-  // text_input gate — open a Slack modal using trigger_id (expires in 3s, must be synchronous).
-  // The workflow is already suspended at the text_input step waiting for resume_gate.
-  // The WORKFLOW_GATE callback will post nothing (textbox case emits no blocks).
-  // Modal submission arrives as view_submission and is handled by handleViewSubmission below.
-  if (userResponse === 'add_table') {
-    const triggerId = payload.trigger_id;
-    const channel   = payload.channel?.id;
-    const threadId  = payload.container?.message_ts ?? payload.message?.ts;
-    const traceId   = req.correlationId || randomUUID();
+  // Modal-trigger buttons carry a `modal` descriptor in the button value.
+  // This is the generic path for any button that requires a text input modal —
+  // interactive.mjs has no knowledge of workflow-specific action names.
+  // The modal descriptor (title, input_label, placeholder, multiline) is set
+  // by callback.mjs when building the button from the workflow step definition.
+  if (buttonValue.modal) {
+    const modal      = buttonValue.modal;
+    const triggerId  = payload.trigger_id;
+    const channel    = payload.channel?.id;
+    const threadId   = payload.container?.message_ts ?? payload.message?.ts;
+    const traceId    = req.correlationId || randomUUID();
+    const gateText   = payload.message?.text ?? '';
+    const gateContext = gateText ? `
+> _${gateText}_` : '';
+
     if (triggerId) {
       try {
         await slack.views.open({
@@ -101,33 +113,68 @@ export async function handle(req) {
           view: {
             type:             'modal',
             callback_id:      'text_input_gate',
-            private_metadata: JSON.stringify({ workflowRunId, traceId, callback: { provider: 'slack', channel, threadId } }),
-            title:    { type: 'plain_text', text: 'Add a table' },
-            submit:   { type: 'plain_text', text: 'Submit' },
-            close:    { type: 'plain_text', text: 'Cancel' },
+            notify_on_close:  true,
+            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, callback: { provider: 'slack', channel, threadId } }),
+            title:   { type: 'plain_text', text: modal.title ?? 'Input' },
+            submit:  { type: 'plain_text', text: 'Submit' },
+            close:   { type: 'plain_text', text: 'Cancel' },
             blocks: [
               {
                 type:     'input',
                 block_id: 'text_input_block',
-                label:    { type: 'plain_text', text: 'Describe the table' },
+                label:    { type: 'plain_text', text: modal.input_label ?? 'Enter your input' },
                 element: {
                   type:        'plain_text_input',
                   action_id:   'text_input_value',
-                  multiline:   true,
-                  placeholder: { type: 'plain_text', text: 'What it stores and how it relates to the other tables.' },
+                  multiline:   modal.multiline ?? false,
+                  placeholder: { type: 'plain_text', text: modal.placeholder ?? '' },
                 },
               },
             ],
           },
         });
-        console.info('interactive: text_input modal opened', { workflowRunId, traceId });
+        console.info('interactive: modal opened', { workflowRunId, action: userResponse, traceId });
       } catch (error) {
         console.error('interactive: views.open failed', { error: error.message, traceId });
-        return err(500, \`views.open failed: \${error.message}\`, req.correlationId);
+        return err(500, `views.open failed: ${error.message}`, req.correlationId);
       }
     } else {
-      console.warn('interactive: add_table missing trigger_id', { workflowRunId, traceId });
+      console.warn('interactive: modal button missing trigger_id — proceeding with resume_gate only', { workflowRunId, action: userResponse, traceId });
     }
+
+    // Acknowledge the button click — replace gate message to prevent duplicate clicks.
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadId,
+        text:   `📝 ${modal.title ?? 'Input'}...${gateContext}`,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `📝 ${modal.title ?? 'Input'}...${gateContext}` } }],
+      });
+    } catch (error) {
+      console.warn('interactive: chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+
+    // Advance the workflow to the text_input gate step.
+    // That step suspends immediately — callback.mjs skips posting for text_input.
+    // The modal submission resumes it via handleViewSubmission.
+    try {
+      await sqs.send(new SendMessageCommand({
+        QueueUrl:    process.env.SQS_WORKFLOW_URL,
+        MessageBody: JSON.stringify({
+          type:          'WORKFLOW_STEP',
+          action:        'resume_gate',
+          workflowRunId,
+          userResponse,
+          callback:      { provider: 'slack', channel, threadId },
+          traceId,
+          enqueuedAt:    new Date().toISOString(),
+        }),
+      }));
+    } catch (error) {
+      console.error('interactive: modal resume_gate SQS enqueue failed', { error: error.message, traceId });
+      return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
+    }
+
     return { statusCode: 200, body: '' };
   }
 
@@ -271,7 +318,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(400, 'Invalid private_metadata', correlationId);
   }
 
-  const { workflowRunId, traceId: metaTraceId, callback } = meta;
+  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, callback } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_submission missing workflowRunId or callback', { meta, traceId });
     return err(400, 'view_submission private_metadata must contain workflowRunId and callback', correlationId);
@@ -289,6 +336,7 @@ async function handleViewSubmission(payload, correlationId) {
 
   console.info('interactive: view_submission resume_gate enqueuing', {
     workflowRunId,
+    action: modalUserResponse,
     hasInput: !!inputValue,
     traceId: metaTraceId ?? traceId,
   });
@@ -313,5 +361,53 @@ async function handleViewSubmission(payload, correlationId) {
   }
 
   // Returning null body with 200 closes the modal — Slack interprets empty response as success.
+  return { statusCode: 200, body: '' };
+}
+
+// ---------------------------------------------------------------------------
+// view_closed — modal dismissed without submitting
+// Fires only when notify_on_close: true is set on the view.
+// Enqueues resume_gate cancel so the workflow routes step 3a on_failure → cancel.
+// ---------------------------------------------------------------------------
+
+async function handleViewClosed(payload, correlationId) {
+  const traceId = correlationId || randomUUID();
+
+  let meta;
+  try {
+    meta = JSON.parse(payload.view?.private_metadata ?? '{}');
+  } catch {
+    console.warn('interactive: view_closed private_metadata parse failed', { traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  const { workflowRunId, traceId: metaTraceId, callback } = meta;
+  if (!workflowRunId || !callback) {
+    console.warn('interactive: view_closed missing workflowRunId or callback', { meta, traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  console.info('interactive: view_closed — enqueuing cancel resume_gate', {
+    workflowRunId,
+    traceId: metaTraceId ?? traceId,
+  });
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:          'WORKFLOW_STEP',
+        action:        'resume_gate',
+        workflowRunId,
+        userResponse:  'cancel',
+        callback,
+        traceId:       metaTraceId ?? traceId,
+        enqueuedAt:    new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: view_closed SQS enqueue failed', { error: error.message, traceId });
+  }
+
   return { statusCode: 200, body: '' };
 }

@@ -496,12 +496,19 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'actions': {
+        // btn.modal is an optional descriptor for buttons that require a text input modal.
+        // When present it is encoded into the button value so interactive.mjs can open
+        // the modal generically without any knowledge of workflow-specific action names.
         const elements = (field.buttons ?? []).map(btn => ({
           type:      'button',
           style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
           text:      { type: 'plain_text', text: btn.label },
           action_id: `workflow_action_${btn.action}`,
-          value:     JSON.stringify({ workflowRunId, action: btn.action }),
+          value:     JSON.stringify({
+            workflowRunId,
+            action: btn.action,
+            ...(btn.modal ? { modal: btn.modal } : {}),
+          }),
         }));
         if (elements.length > 0) {
           blocks.push({ type: 'actions', elements });

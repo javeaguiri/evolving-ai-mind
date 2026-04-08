@@ -59,7 +59,13 @@
           {
             "label": "Add a table",
             "action": "add_table",
-            "on_select": "step:3a"
+            "on_select": "step:3a",
+            "modal": {
+              "title": "Add a table",
+              "input_label": "Describe the table",
+              "placeholder": "What it stores and how it relates to the other tables.",
+              "multiline": true
+            }
           },
           {
             "label": "Cancel",
@@ -75,7 +81,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "User describes the table they want to add.",
-        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
+        "message_template": "Describe the table you want to add \u2014 what it stores and how it relates to the other tables.",
         "options": [
           {
             "label": "Submit",
@@ -177,7 +183,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "Derive domain registration data deterministically from confirmed scaffold — no LLM. Produces domainHelp, intentMapRows, and entitySchemas. Entity name uses the same toEntityName convention as classify-intent.mjs (TitleCase singular). This is the single authoritative source for entity naming — never an LLM.",
+        "description": "Derive domain registration data deterministically from confirmed scaffold \u2014 no LLM. Produces domainHelp, intentMapRows, and entitySchemas. Entity name uses the same toEntityName convention as classify-intent.mjs (TitleCase singular). This is the single authoritative source for entity naming \u2014 never an LLM.",
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' '), entityName.toLowerCase(), words[words.length - 1]])); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ] }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { return !t.foreignKeys || t.foreignKeys.length === 0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()",
@@ -220,7 +226,7 @@
       {
         "step": "9",
         "type": "iterator",
-        "description": "Insert the 5 PGC_IntentMap rows produced by step 6. intent_category values are *_entity (generic) — derived deterministically from domain name.",
+        "description": "Insert the 5 PGC_IntentMap rows produced by step 6. intent_category values are *_entity (generic) \u2014 derived deterministically from domain name.",
         "items_key": "generated.intentMapRows",
         "item_step": {
           "type": "serv_insert",
@@ -257,7 +263,7 @@
         "step": "11",
         "type": "notify",
         "description": "Confirm domain creation with concrete command examples.",
-        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n• /m list {{proposed_scaffold.domain}}\n• /m get {{proposed_scaffold.domain}} <name>\n• /m add {{proposed_scaffold.domain}} <description>\n• /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n• /m delete {{proposed_scaffold.domain}} id=<number>",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n\u2022 /m list {{proposed_scaffold.domain}}\n\u2022 /m get {{proposed_scaffold.domain}} <name>\n\u2022 /m add {{proposed_scaffold.domain}} <description>\n\u2022 /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n\u2022 /m delete {{proposed_scaffold.domain}} id=<number>",
         "on_success": "end"
       },
       {
@@ -269,7 +275,7 @@
   {
     "name": "help",
     "domain": null,
-    "description": "Interactive help — shows system commands or live domain help. Queries PGC_DomainHelp at runtime so the list grows as domains are added.",
+    "description": "Interactive help \u2014 shows system commands or live domain help. Queries PGC_DomainHelp at runtime so the list grows as domains are added.",
     "intent_keywords": [
       "help",
       "what can you do",
@@ -309,7 +315,7 @@
         "step": "3",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 1 — What would you like help with? System commands or a specific domain.",
+        "description": "Level 1 \u2014 What would you like help with? System commands or a specific domain.",
         "message_template": "What would you like help with?",
         "context_key": "help_options.domainButtons",
         "output_key": "help_selection",
@@ -344,7 +350,7 @@
         "step": "5",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 2 — Display the resolved help content as the gate message. User can go back to the topic selector or dismiss.",
+        "description": "Level 2 \u2014 Display the resolved help content as the gate message. User can go back to the topic selector or dismiss.",
         "message_template": "{{resolved_help.content}}",
         "options": [
           {
@@ -391,7 +397,7 @@
       {
         "step": "1",
         "type": "llm_call",
-        "description": "Classify the workflow intent — extract domain, operation_type, target_tables, and a one-sentence description.",
+        "description": "Classify the workflow intent \u2014 extract domain, operation_type, target_tables, and a one-sentence description.",
         "input": {
           "prompt": "classify_workflow_intent",
           "userIntent": "{{input.userIntent}}",
@@ -444,7 +450,7 @@
       {
         "step": "4",
         "type": "simulate",
-        "description": "Level 1 static analysis only — no mocks needed. Validates routing values, dead targets, missing templates, and gate structure.",
+        "description": "Level 1 static analysis only \u2014 no mocks needed. Validates routing values, dead targets, missing templates, and gate structure.",
         "input": {
           "steps_key": "draft_workflow.steps"
         },
@@ -467,7 +473,7 @@
       {
         "step": "6",
         "type": "llm_call",
-        "description": "Generate named simulation paths — happy path, cancel paths per gate, failure paths per llm_call and serv_* step.",
+        "description": "Generate named simulation paths \u2014 happy path, cancel paths per gate, failure paths per llm_call and serv_* step.",
         "input": {
           "prompt": "generate_workflow_paths",
           "steps": "{{draft_workflow.steps}}",
@@ -480,7 +486,7 @@
       {
         "step": "7",
         "type": "simulate",
-        "description": "Level 2 + Level 3 — full path execution using mock outputs and decision scripts. Validates data flow, template resolution, and terminal states.",
+        "description": "Level 2 + Level 3 \u2014 full path execution using mock outputs and decision scripts. Validates data flow, template resolution, and terminal states.",
         "input": {
           "steps_key": "draft_workflow.steps",
           "mock_outputs_key": "mock_outputs",
@@ -564,7 +570,7 @@
   {
     "name": "get_entity",
     "domain": null,
-    "description": "Find and display a domain entity record by id or name search including all child data. Generic — works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
+    "description": "Find and display a domain entity record by id or name search including all child data. Generic \u2014 works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
     "intent_keywords": [
       "get",
       "show",
@@ -641,7 +647,7 @@
   {
     "name": "list_entity",
     "domain": null,
-    "description": "List all records for a domain entity with root columns and ids. Generic — works for any domain. Requires input.entity_name.",
+    "description": "List all records for a domain entity with root columns and ids. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "list",
       "show all",
@@ -656,7 +662,7 @@
       {
         "step": "1",
         "type": "serv_entity_query",
-        "description": "List all entities ordered by name. Returns root and child columns — child arrays suppressed by root_only in step 2.",
+        "description": "List all entities ordered by name. Returns root and child columns \u2014 child arrays suppressed by root_only in step 2.",
         "input": {
           "entityName": "{{input.entity_name}}",
           "orderBy": {
@@ -672,7 +678,7 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Format list results — root columns only. Child arrays suppressed by root_only flag to keep list output concise.",
+        "description": "Format list results \u2014 root columns only. Child arrays suppressed by root_only flag to keep list output concise.",
         "transform_type": "formatRecordList",
         "input_key": "results",
         "max_rows": 20,
@@ -695,7 +701,7 @@
   {
     "name": "add_entity",
     "domain": null,
-    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic — works for any domain. Requires input.entity_name.",
+    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "add",
       "create",
@@ -806,7 +812,7 @@
   {
     "name": "update_entity",
     "domain": null,
-    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic — works for any domain.",
+    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "update",
       "edit",
@@ -891,7 +897,7 @@
   {
     "name": "delete_entity",
     "domain": null,
-    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic — works for any domain.",
+    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "delete",
       "remove"
@@ -922,7 +928,7 @@
       {
         "step": "2",
         "type": "human_gate",
-        "description": "Confirm before deleting — this cannot be undone.",
+        "description": "Confirm before deleting \u2014 this cannot be undone.",
         "gate_type": "confirm",
         "message_template": "Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.",
         "options": [
