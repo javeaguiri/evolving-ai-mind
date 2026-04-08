@@ -81,7 +81,7 @@ export async function handle(req) {
     return ok({ ...result, traceId }, traceId);
   }
 
-  await handoff(result, callback, traceId, userInput);
+  await handoff(result, callback, traceId, userInput, entitySchemaRows);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,10 +92,11 @@ async function classify(userInput, sessionId, traceId) {
   // Pre-load all three tables in parallel — all are needed across passes.
   // PGC_Workflow is included so Pass 2 keyword scan and handoff() share the
   // same rows without a second DB round-trip.
-  const [intentMapResp, domainHelpResp, workflowResp] = await Promise.all([
+  const [intentMapResp, domainHelpResp, workflowResp, entitySchemaResp] = await Promise.all([
     getRows('PGC_IntentMap'),
     getRows('PGC_DomainHelp'),
     getRows('PGC_Workflow'),
+    getRows('PGC_EntitySchema'),
   ]);
 
   if (intentMapResp.statusCode !== 200) {
@@ -107,10 +108,14 @@ async function classify(userInput, sessionId, traceId) {
   if (workflowResp.statusCode !== 200) {
     throw new Error(`PGC_Workflow read failed: ${workflowResp.error || workflowResp.statusCode}`);
   }
+  if (entitySchemaResp.statusCode !== 200) {
+    throw new Error(`PGC_EntitySchema read failed: ${entitySchemaResp.error || entitySchemaResp.statusCode}`);
+  }
 
-  const intentRows   = intentMapResp.rows  ?? [];
-  const domainRows   = domainHelpResp.rows ?? [];
-  const workflowRows = workflowResp.rows   ?? [];
+  const intentRows       = intentMapResp.rows    ?? [];
+  const domainRows       = domainHelpResp.rows   ?? [];
+  const workflowRows     = workflowResp.rows     ?? [];
+  const entitySchemaRows = entitySchemaResp.rows ?? [];
 
   // ── Pre-pass — PGC_*/PGD_* table-prefix detection ────────────────────────
   // Short-circuits the entire pipeline. A user who types a raw table name is
@@ -397,7 +402,7 @@ async function tier2(userInput, domainHint, workflowRows, traceId) {
 // SQS handoff — route result to downstream
 // ---------------------------------------------------------------------------
 
-async function handoff(result, callback, traceId, userInput) {
+async function handoff(result, callback, traceId, userInput, entitySchemaRows) {
   // ── Workflow ──────────────────────────────────────────────────────────────
   if (result.action_type === 'workflow' && result.workflow_name) {
 
@@ -461,13 +466,19 @@ async function handoff(result, callback, traceId, userInput) {
       }
     }
 
+    // entity_name read from PGC_EntitySchema.domain — single source of truth.
+    // Fallback to toEntityName() covers domains created before the domain column existed.
+    const domainEntity = result.domain
+      ? (entitySchemaRows.find(r => r.domain === result.domain)?.entity_name ?? toEntityName(result.domain))
+      : null;
+
     const workflowInput = {
       userInput,
-      ...(result.domain      ? { entity_name: toEntityName(result.domain) } : {}),
-      ...(result.search_term                                           ? { search: result.search_term } : {}),
-      ...(result.record_id !== null && result.record_id !== undefined ? { id: result.record_id }     : {}),
-      ...(parsedId !== null  ? { id: parsedId }                             : {}),
-      ...(parsedUpdates      ? { updates: parsedUpdates }                   : {}),
+      ...(domainEntity                                                        ? { entity_name: domainEntity }      : {}),
+      ...(result.search_term                                                  ? { search: result.search_term }     : {}),
+      ...(result.record_id !== null && result.record_id !== undefined         ? { id: result.record_id }           : {}),
+      ...(parsedId !== null                                                   ? { id: parsedId }                   : {}),
+      ...(parsedUpdates                                                       ? { updates: parsedUpdates }         : {}),
     };
 
     const runResp = await insertRow('PGC_WorkflowRun', {
@@ -487,7 +498,7 @@ async function handoff(result, callback, traceId, userInput) {
     console.info('classify-intent: handoff — WorkflowRun created', {
       workflowRunId,
       workflow:     result.workflow_name,
-      entity_name:  result.domain ? toEntityName(result.domain) : null,
+      entity_name:  domainEntity ?? null,
       search_term:  result.search_term ?? null,
       traceId,
     });

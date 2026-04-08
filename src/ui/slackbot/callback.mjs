@@ -329,6 +329,13 @@ async function postDesignDomainError(message) {
 async function postWorkflowGate(message) {
   const { callback, gate_type: gateType, dialog, workflowRunId, message_ts, traceId } = message;
 
+  // text_input gates are handled via Slack modal opened in interactive.mjs.
+  // The modal is already open at this point — nothing to post.
+  if (gateType === 'text_input') {
+    console.info('callback: WORKFLOW_GATE text_input skipped (modal handles this)', { workflowRunId, traceId });
+    return;
+  }
+
   const blocks = dialogToBlocks(dialog, workflowRunId);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate — please review and respond.';
@@ -420,21 +427,10 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'textbox':
-        // Slack does not support input blocks in regular messages — only modals.
-        // Use a plain_text_input element inside an actions block alongside Submit/Cancel.
-        // The typed value arrives in payload.state.values in the block_actions payload.
-        // action_id on the input element must be unique so interactive.mjs can read it.
-        blocks.push({
-          type: 'actions',
-          elements: [
-            {
-              type:        'plain_text_input',
-              action_id:   field.name ?? 'text_input_value',
-              placeholder: { type: 'plain_text', text: field.label ?? 'Type here...' },
-              multiline:   false,
-            },
-          ],
-        });
+        // text_input gates are handled via Slack modal (views.open in interactive.mjs).
+        // The modal is opened synchronously when the user clicks the trigger button,
+        // using trigger_id before it expires. No block posted here — the modal is
+        // already open. plain_text_input is invalid in channel messages.
         break;
 
       case 'review_object': {
