@@ -1865,10 +1865,10 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ llm_call     ║ Load prompt from PGC_Prompt, call LLM, run           ║ ✅ Implemented   ║
 ║              ║ review-output validation (2-attempt correction loop) ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
-║ js_transform ║ Run a named built-in transform on local_state data,  ║ ✅ Implemented   ║
-║              ║ or evaluate a sandboxed JS expression via acorn AST  ║                  ║
-║              ║ gate + vm.runInNewContext. Built-ins: columnSummary, ║                  ║
-║              ║ buildHelpOptions, resolveHelpContent,                ║                  ║
+║ js_transform ║ Run a named built-in transform on local_state data   ║ ✅ Implemented   ║
+║              ║ (depricated), or evaluate a sandboxed JS expression  ║                  ║
+║              ║ via acorn AST gate + vm.runInNewContext. Built-ins:  ║                  ║
+║              ║ columnSummary,buildHelpOptions, resolveHelpContent,  ║                  ║
 ║              ║ formatRecordList, buildChildInserts.                 ║                  ║
 ║              ║ Generic expression field: Session 19.                ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
@@ -2152,7 +2152,7 @@ Level 1 static analysis validates both targets as `step:N` routing tokens.
 Two modes, mutually exclusive. Exactly one of `transform_type` or `expression` must be present.
 Both present, or neither present, throws immediately.
 
-**Mode 1 — named built-in (`transform_type`)**
+**Mode 1 depricated — named built-in (`transform_type`)**
 
 Built-ins are implemented in `step-executor.mjs` as named `case` branches. Used for transforms
 with complex internal logic or data access requirements that predate the sandbox.

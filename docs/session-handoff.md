@@ -50,7 +50,9 @@ The current flash card domain has two problems:
 **Problem A — missing FlashCardSet parent table.**
 Flash cards need a parent grouping concept (deck, set, topic) so the quiz workflow
 can say "quiz me on the colours set" rather than querying all flash cards regardless
-of topic. The correct schema has three tables:
+of topic. Analyze the existing flash card schema with this proposed schema by 
+looking at how flash card tests (i.e. flash card workflow) will leverage the schema
+in order to provide the desired user experience:
 
 ```
 PGD_FlashCardSets       — id, name, description, language, created_at, updated_at
@@ -67,21 +69,346 @@ correctly linked to a set rather than floating free.
 
 **Problem B — session/metrics tables were created as a separate domain.**
 The session metrics tables belong to the flash card domain, not to a separate domain.
-When the domain is recreated, all three tables must be in the same domain with the
-correct FK relationships.
+When the domain is recreated, all tables must be in the same domain with the
+correct FK relationships, e.g.
 
 **Entity design:**
 - Entity `FlashCardSet` — root: `PGD_FlashCardSets`, children: `PGD_FlashCards`
 - Entity `FlashCardSession` — root: `PGD_FlashCardSessions`, no child tables
 
-The quiz workflow operates on a set (not the whole domain) and writes session rows
+The quiz workflow will operate on a set (not the whole domain) and write session rows
 to `PGD_FlashCardSessions`.
 
-**Before redesigning:** share the current generated schema from the flash card
-domain create attempt (available via `/m list PGC_Schema` or CloudWatch logs from
-the `create_domain` run) so the LLM prompt variance that produced the wrong design
-can be diagnosed before the next run.
-
+Here are the records currently in PGC_Schema for the spanish_flashcard domain 
+```
+{
+	"success": true,
+	"tableName": "PGC_Schema",
+	"count": 4,
+	"rows": [
+		{
+			"id": 1366,
+			"table_name": "PGD_Flashcards",
+			"target": "pgd",
+			"domain": "spanish_flashcards",
+			"description": "Stores Spanish vocabulary and grammar flashcards with front (Spanish) and back (definition in Spanish or English)",
+			"columns": [
+				{
+					"name": "id",
+					"type": "serial",
+					"primaryKey": true
+				},
+				{
+					"name": "created_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "updated_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "front_text",
+					"type": "text",
+					"nullable": false
+				},
+				{
+					"name": "back_text",
+					"type": "text",
+					"nullable": false
+				},
+				{
+					"name": "card_type",
+					"type": "varchar",
+					"nullable": false
+				},
+				{
+					"name": "difficulty_level",
+					"type": "varchar",
+					"nullable": true
+				},
+				{
+					"name": "tags",
+					"type": "jsonb",
+					"nullable": true
+				},
+				{
+					"name": "notes",
+					"type": "text",
+					"nullable": true
+				}
+			],
+			"foreign_keys": [],
+			"constraints": [],
+			"triggers": [
+				{
+					"name": "trg_flashcards_updated_at",
+					"timing": "BEFORE UPDATE",
+					"function": "set_updated_at()"
+				}
+			],
+			"created_at": "2026-04-07T13:50:37.859Z",
+			"updated_at": "2026-04-07T13:50:37.859Z"
+		},
+		{
+			"id": 1367,
+			"table_name": "PGD_StudySessions",
+			"target": "pgd",
+			"domain": "spanish_flashcards",
+			"description": "Tracks individual study sessions when flashcards are reviewed",
+			"columns": [
+				{
+					"name": "id",
+					"type": "serial",
+					"primaryKey": true
+				},
+				{
+					"name": "created_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "updated_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "session_date",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "session_duration_minutes",
+					"type": "integer",
+					"nullable": true
+				},
+				{
+					"name": "total_cards_reviewed",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				},
+				{
+					"name": "cards_passed",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				},
+				{
+					"name": "cards_failed",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				}
+			],
+			"foreign_keys": [],
+			"constraints": [],
+			"triggers": [
+				{
+					"name": "trg_studysessions_updated_at",
+					"timing": "BEFORE UPDATE",
+					"function": "set_updated_at()"
+				}
+			],
+			"created_at": "2026-04-07T13:50:38.107Z",
+			"updated_at": "2026-04-07T13:50:38.107Z"
+		},
+		{
+			"id": 1368,
+			"table_name": "PGD_ReviewLogs",
+			"target": "pgd",
+			"domain": "spanish_flashcards",
+			"description": "Logs each individual flashcard review attempt with pass/fail result",
+			"columns": [
+				{
+					"name": "id",
+					"type": "serial",
+					"primaryKey": true
+				},
+				{
+					"name": "created_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "updated_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "flashcard_id",
+					"type": "integer",
+					"nullable": false
+				},
+				{
+					"name": "session_id",
+					"type": "integer",
+					"nullable": true
+				},
+				{
+					"name": "reviewed_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "result",
+					"type": "varchar",
+					"nullable": false
+				},
+				{
+					"name": "response_time_seconds",
+					"type": "integer",
+					"nullable": true
+				},
+				{
+					"name": "notes",
+					"type": "text",
+					"nullable": true
+				}
+			],
+			"foreign_keys": [
+				{
+					"name": "fk_reviewlogs_flashcards",
+					"column": "flashcard_id",
+					"onDelete": "CASCADE",
+					"references": {
+						"table": "PGD_Flashcards",
+						"column": "id"
+					}
+				},
+				{
+					"name": "fk_reviewlogs_studysessions",
+					"column": "session_id",
+					"onDelete": "SET NULL",
+					"references": {
+						"table": "PGD_StudySessions",
+						"column": "id"
+					}
+				}
+			],
+			"constraints": [],
+			"triggers": [
+				{
+					"name": "trg_reviewlogs_updated_at",
+					"timing": "BEFORE UPDATE",
+					"function": "set_updated_at()"
+				}
+			],
+			"created_at": "2026-04-07T13:50:38.377Z",
+			"updated_at": "2026-04-07T13:50:38.377Z"
+		},
+		{
+			"id": 1369,
+			"table_name": "PGD_CardStatistics",
+			"target": "pgd",
+			"domain": "spanish_flashcards",
+			"description": "Aggregate statistics for each flashcard tracking total reviews, pass rate, and spaced repetition data",
+			"columns": [
+				{
+					"name": "id",
+					"type": "serial",
+					"primaryKey": true
+				},
+				{
+					"name": "created_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "updated_at",
+					"type": "timestamptz",
+					"default": "now()",
+					"nullable": false
+				},
+				{
+					"name": "flashcard_id",
+					"type": "integer",
+					"nullable": false
+				},
+				{
+					"name": "total_reviews",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				},
+				{
+					"name": "total_passes",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				},
+				{
+					"name": "total_fails",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				},
+				{
+					"name": "pass_rate_percent",
+					"type": "numeric",
+					"nullable": true
+				},
+				{
+					"name": "last_reviewed_at",
+					"type": "timestamptz",
+					"nullable": true
+				},
+				{
+					"name": "next_review_due",
+					"type": "timestamptz",
+					"nullable": true
+				},
+				{
+					"name": "mastery_level",
+					"type": "integer",
+					"default": "0",
+					"nullable": false
+				}
+			],
+			"foreign_keys": [
+				{
+					"name": "fk_cardstatistics_flashcards",
+					"column": "flashcard_id",
+					"onDelete": "CASCADE",
+					"references": {
+						"table": "PGD_Flashcards",
+						"column": "id"
+					}
+				}
+			],
+			"constraints": [
+				{
+					"name": "uq_cardstatistics_flashcard_id",
+					"type": "unique",
+					"columns": [
+						"flashcard_id"
+					]
+				}
+			],
+			"triggers": [
+				{
+					"name": "trg_cardstatistics_updated_at",
+					"timing": "BEFORE UPDATE",
+					"function": "set_updated_at()"
+				}
+			],
+			"created_at": "2026-04-07T13:50:38.631Z",
+			"updated_at": "2026-04-07T13:50:38.631Z"
+		}
+	],
+	"correlationId": "e187d9aa-e7f7-4a1a-8512-ad4170c1c5e9"
+}
+```
 ---
 
 ### Item 3 — `add_entity` child FK interdependency bug
@@ -118,7 +445,7 @@ framework gaps systematically. The design must be correct before running
 | Work on a named set | No set concept yet | `FlashCardSet` entity (Item 2) |
 | Per-card proficiency tracking | No `proficiency_level` column yet | Corrected schema (Item 2) |
 | Session tracking | Session tables exist but floating | Linked to set (Item 2) |
-| Loop N cards from a set | `iterator` exists | `serv_entity_query` with set filter |
+| Loop N cards from a set until proficient and all cards in set is completed| `iterator` exists | `serv_entity_query` with set filter |
 | Evaluate translation quality | `llm_call` exists | New `evaluate_translation` prompt in PGC_Prompt |
 | Update proficiency after evaluation | `serv_update` exists | `update_entity` or direct `serv_update` |
 | Score summary at end | `js_transform` expression sandbox exists | `items.reduce(...)` expression |
