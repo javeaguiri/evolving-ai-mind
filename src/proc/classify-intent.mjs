@@ -50,9 +50,9 @@ export async function handle(req) {
 
   console.info('classify-intent: start', { traceId, userInput, sessionId });
 
-  let result;
+  let result, entitySchemaRows;
   try {
-    result = await classify(userInput, sessionId, traceId);
+    ({ result, entitySchemaRows } = await classify(userInput, sessionId, traceId));
   } catch (error) {
     console.error('classify-intent: classification failed', { traceId, error: error.message });
     if (req.source === 'sqs' && callback) {
@@ -117,6 +117,9 @@ async function classify(userInput, sessionId, traceId) {
   const workflowRows     = workflowResp.rows     ?? [];
   const entitySchemaRows = entitySchemaResp.rows ?? [];
 
+  // Wrap a result object with entitySchemaRows so handle() can pass both to handoff().
+  const wrap = result => ({ result, entitySchemaRows });
+
   // ── Pre-pass — PGC_*/PGD_* table-prefix detection ────────────────────────
   // Short-circuits the entire pipeline. A user who types a raw table name is
   // performing a direct admin or debug operation — never a domain workflow.
@@ -128,7 +131,7 @@ async function classify(userInput, sessionId, traceId) {
 
     if (!crudMatch) {
       // Table name present but no verb — ambiguous.
-      return {
+      return wrap({
         intent_category: `unknown_${tableName}`,
         action_type:     'crud_ambiguous',
         confidence:      'exact',
@@ -139,11 +142,11 @@ async function classify(userInput, sessionId, traceId) {
         record_id:       null,
         table_name:      tableName,
         ambiguous_reason: 'no_verb',
-      };
+      });
     }
 
     if (crudMatch.ambiguous) {
-      return {
+      return wrap({
         intent_category:  `${crudMatch.action}_${tableName}`,
         action_type:      'crud_ambiguous',
         confidence:       'exact',
@@ -154,10 +157,10 @@ async function classify(userInput, sessionId, traceId) {
         record_id:        null,
         table_name:       tableName,
         ambiguous_reason: crudMatch.reason ?? crudMatch.action,
-      };
+      });
     }
 
-    return {
+    return wrap({
       intent_category: `${crudMatch.action}_${tableName}`,
       action_type:     'crud',
       confidence:      'exact',
@@ -167,7 +170,7 @@ async function classify(userInput, sessionId, traceId) {
       search_term:     null,
       record_id:       null,
       table_name:      tableName,
-    };
+    });
   }
 
   // ── Pass 1 — PGC_IntentMap regex ─────────────────────────────────────────
@@ -196,7 +199,7 @@ async function classify(userInput, sessionId, traceId) {
         ? extractSearchTerm(userInput, domain)
         : { search_term: null, record_id: null };
 
-      return {
+      return wrap({
         intent_category: intentMatch.intent_category,
         action_type:     intentMatch.action_type,
         confidence:      'exact',
@@ -205,7 +208,7 @@ async function classify(userInput, sessionId, traceId) {
         ad_hoc_step:     null,
         search_term,
         record_id,
-      };
+      });
     }
 
     // action_type === 'crud' — Phase B handles direct table operations.
@@ -229,7 +232,7 @@ async function classify(userInput, sessionId, traceId) {
         record_id:     kwMatch.record_id   ?? null,
         traceId,
       });
-      return {
+      return wrap({
         intent_category: kwMatch.workflow_name,
         action_type:     'workflow',
         confidence:      'keyword_match',
@@ -238,12 +241,12 @@ async function classify(userInput, sessionId, traceId) {
         ad_hoc_step:     null,
         search_term:     kwMatch.search_term ?? null,
         record_id:       kwMatch.record_id   ?? null,
-      };
+      });
     }
 
     // Domain resolved but no keyword match — fall to Tier 2 with domain hint.
     // Tier 2 sonar will classify the intent with the domain already known.
-    return await tier2(userInput, domainMatch.domain, workflowRows, traceId);
+    return wrap(await tier2(userInput, domainMatch.domain, workflowRows, traceId));
   }
 
   // ── Pass 2 domain miss — CRUD verb short-circuit ─────────────────────────
@@ -252,7 +255,7 @@ async function classify(userInput, sessionId, traceId) {
   // correct their input without an LLM round-trip.
   if (hasCrudVerb(userInput)) {
     console.info('classify-intent: CRUD verb with no domain match — short-circuit', { traceId });
-    return {
+    return wrap({
       intent_category:  'unknown_domain_crud',
       action_type:      'crud_ambiguous',
       confidence:       'crud',
@@ -263,11 +266,11 @@ async function classify(userInput, sessionId, traceId) {
       record_id:        null,
       known_domains:    domainRows.map(r => r.domain),
       ambiguous_reason: 'unknown_domain',
-    };
+    });
   }
 
   // ── No Pre-pass, Pass 1, or Pass 2 match — Tier 2 ────────────────────────
-  return await tier2(userInput, null, workflowRows, traceId);
+  return wrap(await tier2(userInput, null, workflowRows, traceId));
 }
 
 // ---------------------------------------------------------------------------
