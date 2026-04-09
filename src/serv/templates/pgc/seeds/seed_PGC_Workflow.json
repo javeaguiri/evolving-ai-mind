@@ -28,12 +28,12 @@
       {
         "step": "2",
         "type": "js_transform",
-        "transform_type": "columnSummary",
-        "description": "Enrich each table with columnSummary (display) and domain field (fixes domain:null on DDL rows).",
+        "description": "Enrich each table with columnSummary and domain field.",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "on_failure": "human_feedback",
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } return enrich(items, local_state.proposed_scaffold.domain); })()"
       },
       {
         "step": "3",
@@ -115,12 +115,12 @@
       {
         "step": "3c",
         "type": "js_transform",
-        "transform_type": "columnSummary",
-        "description": "Merge new table into proposed_scaffold.tables and re-enrich. on_success loops back to step 3.",
+        "description": "Merge new_table from local_state into proposed_scaffold.tables, re-enrich. Loops back to step 3.",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "step:3",
-        "on_failure": "human_feedback"
+        "on_failure": "human_feedback",
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } var merged = local_state.new_table ? items.concat([local_state.new_table]) : items; return enrich(merged, local_state.proposed_scaffold.domain); })()"
       },
       {
         "step": "3d",
@@ -304,12 +304,12 @@
       {
         "step": "2",
         "type": "js_transform",
-        "transform_type": "buildHelpOptions",
-        "description": "Build per-domain button list and domain lookup map from query results.",
+        "description": "Build per-domain button list and domain lookup map from registered_domains.",
         "input_key": "registered_domains",
         "output_key": "help_options",
         "on_success": "next",
-        "on_failure": "next"
+        "on_failure": "next",
+        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' \u2014 ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '\u2026' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
       },
       {
         "step": "3",
@@ -337,14 +337,12 @@
       {
         "step": "4",
         "type": "js_transform",
-        "transform_type": "resolveHelpContent",
-        "description": "Resolve the selected topic (system or domain name) into formatted help text.",
-        "selection_key": "help_selection",
-        "domain_map_key": "help_options.domainMap",
-        "system_key": "system",
+        "description": "Resolve selected help topic into formatted mrkdwn content.",
         "output_key": "resolved_help",
         "on_success": "next",
-        "on_failure": "next"
+        "on_failure": "next",
+        "input_key": "help_options",
+        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '\u2022 `' + c.syntax + '` \u2014 ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
       {
         "step": "5",
@@ -625,12 +623,11 @@
       {
         "step": "4",
         "type": "js_transform",
-        "description": "Format matched entity with all root columns and child arrays into a readable Slack message.",
-        "transform_type": "formatRecordList",
+        "description": "Format matched entity with root columns and child arrays into Slack mrkdwn.",
         "input_key": "results",
-        "max_rows": 5,
         "output_key": "results_display",
-        "on_success": "next"
+        "on_success": "next",
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  if (false) return rootLine;  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "5",
@@ -678,13 +675,11 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Format list results \u2014 root columns only. Child arrays suppressed by root_only flag to keep list output concise.",
-        "transform_type": "formatRecordList",
+        "description": "Format list results \u2014 root columns only, child arrays suppressed.",
         "input_key": "results",
-        "max_rows": 20,
-        "root_only": true,
         "output_key": "results_display",
-        "on_success": "next"
+        "on_success": "next",
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  if (true) return rootLine;  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "3",
@@ -773,11 +768,12 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "Build flat array of child row inserts from parsed entity children, injecting FK to new root record.",
-        "transform_type": "buildChildInserts",
+        "description": "Build flat array of child row inserts from parsed entity, injecting FK. Reads full_entity_schema, parsed_entity, new_record from local_state.",
         "output_key": "child_inserts",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "on_failure": "human_feedback",
+        "input_key": "full_entity_schema",
+        "expression": "(function() { var entitySchema = items; var parsedEntity = local_state.parsed_entity; var newRecord = local_state.new_record; if (!entitySchema || !parsedEntity || !newRecord) return []; var rootId = newRecord.id; var children = Array.isArray(entitySchema.children) ? entitySchema.children : []; var inserts = []; children.forEach(function(child) {  var table = child.table, fk = child.fk_column, outKey = child.output_key;  if (!table || !fk || !outKey) return;  var childRows = parsedEntity.children && parsedEntity.children[outKey];  if (!Array.isArray(childRows) || childRows.length === 0) return;  childRows.forEach(function(row) {   var r = Object.assign({}, row); r[fk] = rootId;   inserts.push({ tableName: table, row: r });  }); }); return inserts;})()"
       },
       {
         "step": "6",
