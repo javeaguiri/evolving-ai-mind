@@ -15,9 +15,9 @@
 //
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
-//   js_transform — built-ins: columnSummary, buildHelpOptions, resolveHelpContent,
-//                  formatRecordList, buildChildInserts (transform_type);
-//                  generic expression sandbox via acorn AST gate + vm.runInNewContext
+//   js_transform — expression sandbox via acorn AST gate + vm.runInNewContext.
+//                  `items` = resolved input_key value. `local_state` = full workflow state.
+//                  transform_type built-ins removed — all transforms are self-contained expressions.
 //   serv_entity_schema — reads PGC_EntitySchema + PGC_Schema, assembles full entity schema
 //   human_gate   — builds dialog, returns suspend
 //   serv_schema  — calls SERV createTable
@@ -49,9 +49,6 @@ import {
   resolveInput,
   evalItemCondition,
 } from './template-resolver.mjs';
-
-// System columns excluded from columnSummary derivation
-const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
 
 // ---------------------------------------------------------------------------
 // Public dispatch — routes to the correct handler by step.type
@@ -180,12 +177,13 @@ async function executeLlmCall({ step, localState, run, traceId }) {
 async function executeJsTransform({ step, localState, traceId }) {
   const { transform_type: transformType, expression } = step;
 
-  // Exactly one of transform_type (built-in) or expression (sandbox) must be present.
-  if (transformType && expression) {
-    throw new Error('js_transform step must have transform_type OR expression, not both');
-  }
-  if (!transformType && !expression) {
-    throw new Error('js_transform step missing transform_type or expression');
+  // Only expression sandbox is supported — transform_type built-ins are removed.
+  // All js_transform steps must use the expression field.
+  if (!expression) {
+    throw new Error(
+      `js_transform step "${step.step}" missing expression. ` +
+      'transform_type built-ins have been removed — use expression with local_state instead.'
+    );
   }
 
   // Generic expression sandbox path
@@ -193,271 +191,11 @@ async function executeJsTransform({ step, localState, traceId }) {
     if (!step.input_key) throw new Error('js_transform expression step missing input_key');
     if (!step.output_key) throw new Error('js_transform expression step missing output_key');
     const items  = resolvePath(localState, step.input_key);
-    const result = runSandboxedExpression(expression, items, traceId);
+    const result = runSandboxedExpression(expression, items, localState, traceId);
     return { outputValue: result, nextAction: resolveNextAction(step.on_success, null) };
   }
 
-  switch (transformType) {
 
-    case 'columnSummary': {
-      // Enrich each table object with:
-      //   columnSummary — first 4 non-system column names joined with ', '
-      //   domain        — from proposed_scaffold.domain (fixes domain: null on DDL rows)
-      // input_key must resolve to an array of table objects.
-      const source = resolvePath(localState, step.input_key);
-      if (!Array.isArray(source)) {
-        throw new Error(
-          `js_transform columnSummary: input_key "${step.input_key}" did not resolve to an array — ` +
-          `got ${JSON.stringify(source)}`
-        );
-      }
-      const domain   = resolvePath(localState, 'proposed_scaffold.domain') ?? null;
-      const enriched = source.map(item => {
-        if (!item.columns) return item;
-        const nonSystem = item.columns
-          .filter(c => !SYSTEM_COLS.has(c.name))
-          .slice(0, 4)
-          .map(c => c.name);
-        return { ...item, columnSummary: nonSystem.join(', '), domain };
-      });
-      console.info('step-executor: js_transform — columnSummary', {
-        itemCount: enriched.length, domain, traceId,
-      });
-      return { outputValue: enriched, nextAction: resolveNextAction(step.on_success, null) };
-    }
-
-    case 'buildHelpOptions': {
-      // Build the domain button list for the Level 2 help gate.
-      // input_key must resolve to the registered_domains array from PGC_DomainHelp.
-      // Produces: { domainButtons, domainMap }
-      //   domainButtons — array of { action, label } for the dynamic confirm gate
-      //   domainMap     — object keyed by domain name for fast lookup at Level 3
-      // System option and Cancel are prepended/appended by the workflow gate options array —
-      // this transform only produces the per-domain buttons and the lookup map.
-      const domains = resolvePath(localState, step.input_key) ?? [];
-      const domainButtons = domains.map(d => {
-        const label = `${d.domain}${d.description ? ` — ${d.description}` : ''}`;
-        return {
-          action: d.domain,
-          label:  label.length > 75 ? label.slice(0, 72) + '…' : label,
-        };
-      });
-      const domainMap = Object.fromEntries(domains.map(d => [d.domain, d]));
-      console.info('step-executor: js_transform — buildHelpOptions', {
-        domainCount: domains.length, traceId,
-      });
-      return {
-        outputValue: { domainButtons, domainMap },
-        nextAction:  resolveNextAction(step.on_success, null),
-      };
-    }
-
-    case 'resolveHelpContent': {
-      // Resolve the selected help topic into a formatted string for notify.
-      // Reads help_selection (set by the dynamic confirm gate) and domainMap
-      // (set by buildHelpOptions) from local_state.
-      //
-      // Pure data-driven — every selection (including "system") is looked up in
-      // domainMap. The system commands row lives in PGC_DomainHelp alongside user
-      // domains, so adding or updating system commands requires only a data change.
-      //
-      // Returns: { selection, content } where content is a mrkdwn string.
-      const selection = resolvePath(localState, step.selection_key  ?? 'help_selection');
-      const domainMap = resolvePath(localState, step.domain_map_key ?? 'help_options.domainMap') ?? {};
-
-      let content;
-      const domain = selection ? domainMap[selection] : null;
-
-      if (!domain) {
-        content = selection
-          ? `No help found for "${selection}".`
-          : 'No topic selected.';
-      } else {
-        const lines = [
-          `*${domain.description ?? domain.domain}*`,
-          '',
-          '*Commands:*',
-          ...(domain.commands ?? []).map(
-            c => `• \`${c.syntax}\` — ${c.description}`
-          ),
-        ].filter(l => l !== undefined);
-        content = lines.join('\n');
-      }
-
-      console.info('step-executor: js_transform — resolveHelpContent', {
-        selection, traceId,
-      });
-      return {
-        outputValue: { selection, content },
-        nextAction:  resolveNextAction(step.on_success, null),
-      };
-    }
-
-    case 'formatRecordList': {
-      // Format an array of DB rows or assembled entities into a Slack mrkdwn string.
-      // Handles both flat rows (serv_query) and entity results (serv_entity_query)
-      // which may contain child arrays (ingredients, steps, tags, etc.).
-      //
-      // Step definition fields:
-      //   input_key   — dot-path to the rows/entities array in local_state (required)
-      //   columns     — optional array of root column names to show. Auto-derived
-      //                 from first row keys if absent, system cols excluded.
-      //                 Child array keys are always appended as sub-lists.
-      //   max_rows    — optional integer cap on rows shown. Default: 20.
-      //
-      // Output: a mrkdwn string ready for a notify message_template.
-      //
-      // Phase 3 replacement: generic js_transform sandbox.
-      const resolved = resolvePath(localState, step.input_key);
-      // serv_entity_get returns a single object; serv_entity_query returns an array.
-      // Normalise: array → use as-is; plain object → wrap in []; null/undefined → [].
-      // [] renders as "No records found." — never fails the workflow.
-      const rows = Array.isArray(resolved)
-        ? resolved
-        : (resolved !== null && resolved !== undefined && typeof resolved === 'object')
-          ? [resolved]
-          : [];
-      if (!Array.isArray(rows)) {
-        throw new Error(
-          `js_transform formatRecordList: input_key "${step.input_key}" did not resolve to an array or object — ` +
-          `got ${JSON.stringify(resolved)}`
-        );
-      }
-
-      const maxRows = step.max_rows ?? 20;
-      const capped  = rows.slice(0, maxRows);
-
-      // Separate scalar columns from child array keys on the first row
-      const firstRow     = capped[0] ?? {};
-      const allKeys      = Object.keys(firstRow);
-      const childKeys    = allKeys.filter(k => Array.isArray(firstRow[k]));
-      const scalarKeys   = allKeys.filter(k => !Array.isArray(firstRow[k]) && !SYSTEM_COLS.has(k));
-
-      // Columns to show for the root row — use step.columns if provided,
-      // otherwise auto-derive scalar (non-child, non-system) keys.
-      let cols = (step.columns && step.columns.length > 0)
-        ? step.columns.filter(k => !childKeys.includes(k))  // exclude child keys if accidentally included
-        : scalarKeys;
-
-      const lines = capped.map(row => {
-        // Always show id first so the user can reference it for update/delete.
-        // Then show the requested columns (or auto-derived scalar keys).
-        const idPart   = `id=${row.id ?? '—'}`;
-        const rootParts = cols.map(col => {
-          const val = row[col];
-          const display = val === null || val === undefined ? '—' : String(val);
-          return `${col}=${display}`;
-        });
-        const rootLine = `• ${[idPart, ...rootParts].join(' | ')}`;
-
-        // Child arrays — suppressed when step.root_only is true (list_entity).
-        // get_entity and other detail workflows omit root_only so children render.
-        if (step.root_only) return rootLine;
-
-        const childLines = childKeys.flatMap(key => {
-          const children = row[key];
-          if (!Array.isArray(children) || children.length === 0) return [];
-          const header = `  _${key}:_`;
-          const items  = children.map(child => {
-            if (typeof child !== 'object' || child === null) return `    ◦ ${child}`;
-            // Show all non-system, non-id scalar fields of the child
-            const childParts = Object.entries(child)
-              .filter(([k]) => !SYSTEM_COLS.has(k) && !Array.isArray(child[k]))
-              .map(([k, v]) => `${k}=${v ?? '—'}`);
-            return `    ◦ ${childParts.join(' | ')}`;
-          });
-          return [header, ...items];
-        });
-
-        return [rootLine, ...childLines].join('\n');
-      });
-
-      const truncated = rows.length > maxRows
-        ? `\n_... and ${rows.length - maxRows} more record(s) not shown._`
-        : '';
-
-      const formatted = rows.length === 0
-        ? 'No records found.'
-        : `Found ${rows.length} record(s).\n${lines.join('\n')}${truncated}`;
-
-      console.info('step-executor: js_transform — formatRecordList', {
-        rowCount:    rows.length,
-        colCount:    cols.length,
-        childKeys:   childKeys.length > 0 ? childKeys : undefined,
-        root_only:   step.root_only ?? false,
-        capped:      capped.length,
-        traceId,
-      });
-
-      return {
-        outputValue: formatted,
-        nextAction:  resolveNextAction(step.on_success, null),
-      };
-    }
-
-    case 'buildChildInserts': {
-      // Build a flat array of { tableName, row } objects for all child rows
-      // across all child tables of a domain entity. Used by add_entity to
-      // drive a single generic iterator step instead of per-domain iterators.
-      //
-      // Reads from local_state:
-      //   full_entity_schema — output of buildEntitySchema: children[].table,
-      //                        children[].fk_column, children[].output_key
-      //   parsed_entity      — output of parse_entity_input LLM: child arrays
-      //                        keyed by output_key (e.g. ingredients, steps)
-      //   new_record         — output of root serv_insert: { id }
-      //
-      // Output: array of { tableName, row } — one element per child row,
-      //   with fk_column injected as the FK to the new root record.
-      const entitySchema = resolvePath(localState, 'full_entity_schema');
-      const parsedEntity = resolvePath(localState, 'parsed_entity');
-      const newRecord    = resolvePath(localState, 'new_record');
-
-      if (!entitySchema || !parsedEntity || !newRecord) {
-        throw new Error(
-          'js_transform buildChildInserts: requires full_entity_schema, parsed_entity, ' +
-          `and new_record in local_state. Got: ${Object.keys(localState).join(', ')}`
-        );
-      }
-
-      const rootId   = newRecord.id;
-      const children = Array.isArray(entitySchema.children) ? entitySchema.children : [];
-      const inserts  = [];
-
-      for (const child of children) {
-        const { table, fk_column, output_key } = child;
-        if (!table || !fk_column || !output_key) {
-          console.warn('step-executor: buildChildInserts — skipping child with missing table/fk_column/output_key', {
-            child, traceId,
-          });
-          continue;
-        }
-        const childRows = parsedEntity.children?.[output_key];
-        if (!Array.isArray(childRows) || childRows.length === 0) continue;
-
-        for (const childRow of childRows) {
-          inserts.push({
-            tableName: table,
-            row: { ...childRow, [fk_column]: rootId },
-          });
-        }
-      }
-
-      console.info('step-executor: js_transform — buildChildInserts', {
-        childTableCount: children.length,
-        insertCount:     inserts.length,
-        traceId,
-      });
-
-      return {
-        outputValue: inserts,
-        nextAction:  resolveNextAction(step.on_success, null),
-      };
-    }
-
-    default:
-      throw new Error(`js_transform: unknown transform_type "${transformType}"`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -514,15 +252,19 @@ function assertSafeAst(node) {
 
 /**
  * Execute a pure synchronous JS expression in a sandboxed vm context.
- * The resolved input_key value is bound as `items` in the sandbox.
+ * `items` is bound to the resolved input_key value.
+ * `local_state` is bound to the full local_state object, giving expressions
+ * access to any workflow state key — required for cross-key transformations
+ * such as merging a new table into an existing array.
  * Safe globals only — no Node.js APIs, no network, no async.
  *
  * @param {string} expression   JS value expression (no return, no semicolons)
  * @param {*}      items        Resolved input_key value from local_state
+ * @param {object} localState   Full local_state — exposed as local_state in sandbox
  * @param {string} traceId
  * @returns {*}                 Expression result
  */
-function runSandboxedExpression(expression, items, traceId) {
+function runSandboxedExpression(expression, items, localState, traceId) {
   // Parse and gate
   let ast;
   try {
@@ -533,8 +275,10 @@ function runSandboxedExpression(expression, items, traceId) {
   assertSafeAst(ast);
 
   // Execute in isolated context — 200ms timeout kills synchronous loops
+  // local_state gives expressions access to any workflow state key.
   const sandbox = {
     items,
+    local_state: localState,
     JSON, Math, Array, Object, String, Number, Boolean, Date,
   };
   let result;
