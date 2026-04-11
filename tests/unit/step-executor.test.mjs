@@ -211,7 +211,7 @@ describe('create_domain step 2 — columnSummary expression', () => {
 });
 
 describe('create_domain step 3c — merge + columnSummary expression', () => {
-  it('merges new_table from local_state and re-enriches all tables', () => {
+  it('merges new_table (child FK) from local_state and re-enriches all tables', () => {
     const step = getStep('create_domain', '3c');
     const result = runSandboxedExpression(
       step.expression,
@@ -226,6 +226,51 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
     assert.ok(added.columnSummary.includes('name'));
     assert.ok(added.columnSummary.includes('language'));
     assert.ok(!added.columnSummary.includes('id'));
+    assert.ok(!('existing_table_modifications' in added),
+      'existing_table_modifications must be stripped from stored table');
+  });
+
+  it('applies existing_table_modifications when new table is a parent/grouping concept', () => {
+    const step = getStep('create_domain', '3c');
+    const newParentTable = {
+      tableName: 'PGD_FlashCardSets',
+      foreignKeys: [],
+      columns: [
+        { name: 'id', type: 'serial' },
+        { name: 'name', type: 'text' },
+        { name: 'language', type: 'text' },
+        { name: 'created_at', type: 'timestamptz' },
+        { name: 'updated_at', type: 'timestamptz' },
+      ],
+      existing_table_modifications: [
+        {
+          tableName: 'PGD_Flashcards',
+          add_columns: [{ name: 'flashcard_set_id', type: 'integer', nullable: true }],
+          add_foreign_keys: [{
+            name: 'fk_flashcards_flashcardsets',
+            column: 'flashcard_set_id',
+            references: { table: 'PGD_FlashCardSets', column: 'id' },
+            onDelete: 'SET NULL',
+          }],
+        },
+      ],
+    };
+    const result = runSandboxedExpression(
+      step.expression,
+      TABLES,
+      { proposed_scaffold: SCAFFOLD, new_table: newParentTable },
+      'test'
+    );
+    assert.equal(result.length, 3, 'new table must be appended');
+    const flashcards = result.find(t => t.tableName === 'PGD_Flashcards');
+    assert.equal(flashcards.foreignKeys.length, 1, 'FK must be added to PGD_Flashcards');
+    assert.equal(flashcards.foreignKeys[0].column, 'flashcard_set_id');
+    assert.equal(flashcards.foreignKeys[0].references.table, 'PGD_FlashCardSets');
+    assert.ok(flashcards.columnSummary.includes('flashcard_set_id'),
+      'columnSummary must include the new FK column');
+    const sets = result.find(t => t.tableName === 'PGD_FlashCardSets');
+    assert.ok(!('existing_table_modifications' in sets),
+      'existing_table_modifications must be stripped from stored table');
   });
 
   it('re-enriches without merge when new_table is null', () => {
@@ -237,7 +282,6 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
       'test'
     );
     assert.equal(result.length, 2, 'table count must be unchanged');
-    // Still re-enriched
     assert.ok(result[0].columnSummary);
     assert.equal(result[0].domain, 'spanish_flashcards');
   });
