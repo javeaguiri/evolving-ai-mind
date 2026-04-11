@@ -264,7 +264,7 @@ function assertSafeAst(node) {
  * @param {string} traceId
  * @returns {*}                 Expression result
  */
-function runSandboxedExpression(expression, items, localState, traceId) {
+export function runSandboxedExpression(expression, items, localState, traceId) {
   // Parse and gate
   let ast;
   try {
@@ -519,10 +519,13 @@ export function buildDialog(step, localState) {
   // actions — from step.options
   fields.push({
     type:    'actions',
+    // o.modal is forwarded when present so callback.mjs can encode it into the
+    // button value, enabling interactive.mjs to open a modal generically.
     buttons: (step.options ?? []).map(o => ({
       action: o.action,
       label:  o.label,
       style:  o.action === 'confirm' ? 'primary' : 'default',
+      ...(o.modal ? { modal: o.modal } : {}),
     })),
   });
 
