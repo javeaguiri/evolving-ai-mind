@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 6,
+    "version": 7,
     "steps": [
       {
         "step": "1",
@@ -115,12 +115,12 @@
       {
         "step": "3c",
         "type": "js_transform",
-        "description": "Merge new_table from local_state into proposed_scaffold.tables, re-enrich. Loops back to step 3.",
+        "description": "Merge new_table, apply existing_table_modifications to patched tables, re-enrich. Loops back to step 3.",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "step:3",
         "on_failure": "human_feedback",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } var merged = local_state.new_table ? items.concat([local_state.new_table]) : items; return enrich(merged, local_state.proposed_scaffold.domain); })()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } var newTable = local_state.new_table; var domain = local_state.proposed_scaffold.domain; var mods = (newTable && Array.isArray(newTable.existing_table_modifications))   ? newTable.existing_table_modifications : []; var patched = items.map(function(t) {  var mod = mods.find(function(m) { return m.tableName === t.tableName; });  if (!mod) return t;  var extraCols = Array.isArray(mod.add_columns) ? mod.add_columns : [];  var extraFKs  = Array.isArray(mod.add_foreign_keys) ? mod.add_foreign_keys : [];  return Object.assign({}, t, {   columns:     (t.columns || []).concat(extraCols),   foreignKeys: (t.foreignKeys || []).concat(extraFKs)  }); }); var cleanNew = null; if (newTable) {  cleanNew = Object.assign({}, newTable);  delete cleanNew.existing_table_modifications; } var merged = cleanNew ? patched.concat([cleanNew]) : patched; return enrich(merged, domain);})()"
       },
       {
         "step": "3d",
@@ -338,6 +338,7 @@
         "step": "4",
         "type": "js_transform",
         "description": "Resolve selected help topic into formatted mrkdwn content.",
+        "system_key": "system",
         "output_key": "resolved_help",
         "on_success": "next",
         "on_failure": "next",
@@ -625,6 +626,7 @@
         "type": "js_transform",
         "description": "Format matched entity with root columns and child arrays into Slack mrkdwn.",
         "input_key": "results",
+        "max_rows": 5,
         "output_key": "results_display",
         "on_success": "next",
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  if (false) return rootLine;  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
@@ -677,6 +679,8 @@
         "type": "js_transform",
         "description": "Format list results \u2014 root columns only, child arrays suppressed.",
         "input_key": "results",
+        "max_rows": 20,
+        "root_only": true,
         "output_key": "results_display",
         "on_success": "next",
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  if (true) return rootLine;  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
@@ -768,7 +772,7 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "Build flat array of child row inserts from parsed entity, injecting FK. Reads full_entity_schema, parsed_entity, new_record from local_state.",
+        "description": "Build flat array of child row inserts from parsed entity, injecting FK.",
         "output_key": "child_inserts",
         "on_success": "next",
         "on_failure": "human_feedback",
