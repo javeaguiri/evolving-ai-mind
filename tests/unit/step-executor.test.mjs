@@ -1,0 +1,476 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
+// tests/unit/step-executor.test.mjs
+//
+// Unit tests for step-executor.mjs pure functions:
+//   buildDialog()              — dialog construction from step definition
+//   runSandboxedExpression()   — js_transform expression sandbox
+//
+// Tests are deliberately import-free from AWS/DB dependencies.
+// Both functions are pure and side-effect-free.
+//
+// Run: node --test tests/unit/step-executor.test.mjs
+
+import { describe, it }        from 'node:test';
+import assert                  from 'node:assert/strict';
+import { readFileSync }        from 'node:fs';
+import { buildDialog, runSandboxedExpression } from '../../src/proc/step-executor.mjs';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const seed = JSON.parse(readFileSync(
+  new URL('../../src/serv/templates/pgc/seeds/seed_PGC_Workflow.json', import.meta.url)
+));
+
+function getStep(workflowName, stepKey) {
+  const wf = seed.find(w => w.name === workflowName);
+  if (!wf) throw new Error(`workflow ${workflowName} not found in seed`);
+  const step = wf.steps.find(s => s.step === stepKey);
+  if (!step) throw new Error(`step ${stepKey} not found in workflow ${workflowName}`);
+  return step;
+}
+
+const TABLES = [
+  {
+    tableName: 'PGD_Flashcards',
+    foreignKeys: [],
+    columns: [
+      { name: 'id', type: 'serial' },
+      { name: 'front_text', type: 'text' },
+      { name: 'back_text', type: 'text' },
+      { name: 'card_type', type: 'text' },
+      { name: 'created_at', type: 'timestamptz' },
+      { name: 'updated_at', type: 'timestamptz' },
+    ],
+  },
+  {
+    tableName: 'PGD_ReviewLogs',
+    foreignKeys: [{ column: 'flashcard_id', references: 'PGD_Flashcards.id' }],
+    columns: [
+      { name: 'id', type: 'serial' },
+      { name: 'flashcard_id', type: 'integer' },
+      { name: 'result', type: 'text' },
+      { name: 'created_at', type: 'timestamptz' },
+    ],
+  },
+];
+
+const NEW_TABLE = {
+  tableName: 'PGD_FlashCardSets',
+  foreignKeys: [],
+  columns: [
+    { name: 'id', type: 'serial' },
+    { name: 'name', type: 'text' },
+    { name: 'language', type: 'text' },
+    { name: 'created_at', type: 'timestamptz' },
+  ],
+};
+
+const SCAFFOLD = {
+  domain: 'spanish_flashcards',
+  tables: TABLES,
+};
+
+// ---------------------------------------------------------------------------
+// buildDialog — modal descriptor passthrough (the regression)
+// ---------------------------------------------------------------------------
+
+describe('buildDialog — modal descriptor passthrough', () => {
+  it('passes modal field through to button value when option carries modal descriptor', () => {
+    const step = {
+      step:        '3',
+      type:        'human_gate',
+      gate_type:   'edit_list',
+      description: 'Review tables',
+      context_key: 'proposed_scaffold.tables',
+      options: [
+        { action: 'confirm',   label: 'Looks good', on_select: 'step:3d' },
+        {
+          action:    'add_table',
+          label:     'Add a table',
+          on_select: 'step:3a',
+          modal: {
+            title:       'Add a table',
+            input_label: 'Describe the table',
+            placeholder: 'What it stores and how it relates to the other tables.',
+            multiline:   true,
+          },
+        },
+        { action: 'cancel', label: 'Cancel', on_select: 'cancel' },
+      ],
+    };
+    const localState = { proposed_scaffold: { domain: 'test_domain', tables: [] } };
+
+    const dialog = buildDialog(step, localState);
+    const actionsField = dialog.fields.find(f => f.type === 'actions');
+    assert.ok(actionsField, 'actions field must be present');
+
+    const addTableBtn = actionsField.buttons.find(b => b.action === 'add_table');
+    assert.ok(addTableBtn, 'add_table button must be present');
+    assert.deepEqual(addTableBtn.modal, step.options[1].modal,
+      'modal descriptor must be forwarded verbatim to the button');
+  });
+
+  it('does not add modal field to buttons that have no modal descriptor', () => {
+    const step = {
+      step:        '3',
+      type:        'human_gate',
+      gate_type:   'edit_list',
+      context_key: 'proposed_scaffold.tables',
+      options: [
+        { action: 'confirm', label: 'Looks good', on_select: 'next' },
+        { action: 'cancel',  label: 'Cancel',     on_select: 'cancel' },
+      ],
+    };
+    const localState = { proposed_scaffold: { domain: 'test_domain', tables: [] } };
+
+    const dialog = buildDialog(step, localState);
+    const actionsField = dialog.fields.find(f => f.type === 'actions');
+    for (const btn of actionsField.buttons) {
+      assert.ok(!('modal' in btn), `button ${btn.action} must not have modal field`);
+    }
+  });
+
+  it('create_domain step 3 seed carries modal descriptor on add_table option', () => {
+    // Guard: catches any future seed edit that accidentally drops the modal field
+    const step = getStep('create_domain', '3');
+    const addTableOpt = step.options.find(o => o.action === 'add_table');
+    assert.ok(addTableOpt, 'add_table option must exist on step 3');
+    assert.ok(addTableOpt.modal,                    'modal field must be present');
+    assert.ok(addTableOpt.modal.title,               'modal.title must be present');
+    assert.ok(addTableOpt.modal.input_label,         'modal.input_label must be present');
+    assert.ok(typeof addTableOpt.modal.multiline === 'boolean', 'modal.multiline must be boolean');
+
+    const localState = { proposed_scaffold: { domain: 'spanish_flashcards', tables: [] } };
+    const dialog = buildDialog(step, localState);
+    const actionsField = dialog.fields.find(f => f.type === 'actions');
+    const btn = actionsField.buttons.find(b => b.action === 'add_table');
+    assert.ok(btn.modal, 'modal must survive buildDialog()');
+    assert.equal(btn.modal.title, addTableOpt.modal.title);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSandboxedExpression — local_state access
+// ---------------------------------------------------------------------------
+
+describe('runSandboxedExpression — local_state binding', () => {
+  it('exposes local_state in sandbox so expressions can read cross-key values', () => {
+    const result = runSandboxedExpression(
+      'local_state.foo + items',
+      10,
+      { foo: 32 },
+      'test'
+    );
+    assert.equal(result, 42);
+  });
+
+  it('items resolves to the input_key value', () => {
+    const result = runSandboxedExpression('items.length', [1, 2, 3], {}, 'test');
+    assert.equal(result, 3);
+  });
+
+  it('throws on syntax error', () => {
+    assert.throws(
+      () => runSandboxedExpression('items ???', [], {}, 'test'),
+      /syntax error/
+    );
+  });
+
+  it('throws on timeout for infinite loop', () => {
+    assert.throws(
+      () => runSandboxedExpression('(function(){ while(true){} })()', [], {}, 'test'),
+      /timed out/
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// create_domain expressions
+// ---------------------------------------------------------------------------
+
+describe('create_domain step 2 — columnSummary expression', () => {
+  it('enriches tables with columnSummary and domain, excluding system columns', () => {
+    const step = getStep('create_domain', '2');
+    const result = runSandboxedExpression(
+      step.expression,
+      TABLES,
+      { proposed_scaffold: SCAFFOLD },
+      'test'
+    );
+    assert.equal(result.length, 2);
+    assert.equal(result[0].domain, 'spanish_flashcards');
+    assert.ok(result[0].columnSummary.includes('front_text'));
+    assert.ok(!result[0].columnSummary.includes('id'));
+    assert.ok(!result[0].columnSummary.includes('created_at'));
+    assert.ok(!result[0].columnSummary.includes('updated_at'));
+  });
+});
+
+describe('create_domain step 3c — merge + columnSummary expression', () => {
+  it('merges new_table from local_state and re-enriches all tables', () => {
+    const step = getStep('create_domain', '3c');
+    const result = runSandboxedExpression(
+      step.expression,
+      TABLES,
+      { proposed_scaffold: SCAFFOLD, new_table: NEW_TABLE },
+      'test'
+    );
+    assert.equal(result.length, 3, 'new table must be appended');
+    const added = result.find(t => t.tableName === 'PGD_FlashCardSets');
+    assert.ok(added, 'PGD_FlashCardSets must be present in merged result');
+    assert.equal(added.domain, 'spanish_flashcards');
+    assert.ok(added.columnSummary.includes('name'));
+    assert.ok(added.columnSummary.includes('language'));
+    assert.ok(!added.columnSummary.includes('id'));
+  });
+
+  it('re-enriches without merge when new_table is null', () => {
+    const step = getStep('create_domain', '3c');
+    const result = runSandboxedExpression(
+      step.expression,
+      TABLES,
+      { proposed_scaffold: SCAFFOLD, new_table: null },
+      'test'
+    );
+    assert.equal(result.length, 2, 'table count must be unchanged');
+    // Still re-enriched
+    assert.ok(result[0].columnSummary);
+    assert.equal(result[0].domain, 'spanish_flashcards');
+  });
+
+  it('re-enriches without merge when new_table is absent from local_state', () => {
+    const step = getStep('create_domain', '3c');
+    const result = runSandboxedExpression(
+      step.expression,
+      TABLES,
+      { proposed_scaffold: SCAFFOLD },
+      'test'
+    );
+    assert.equal(result.length, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// help expressions
+// ---------------------------------------------------------------------------
+
+describe('help step 2 — buildHelpOptions expression', () => {
+  const DOMAINS = [
+    { domain: 'recipes',             description: 'Manage recipes' },
+    { domain: 'spanish_flashcards',  description: 'Flash card practice' },
+  ];
+
+  it('produces domainButtons array with action and label per domain', () => {
+    const step = getStep('help', '2');
+    const result = runSandboxedExpression(step.expression, DOMAINS, {}, 'test');
+    assert.equal(result.domainButtons.length, 2);
+    assert.equal(result.domainButtons[0].action, 'recipes');
+    assert.ok(result.domainButtons[0].label.includes('recipes'));
+  });
+
+  it('produces domainMap keyed by domain name', () => {
+    const step = getStep('help', '2');
+    const result = runSandboxedExpression(step.expression, DOMAINS, {}, 'test');
+    assert.ok(result.domainMap.recipes);
+    assert.ok(result.domainMap.spanish_flashcards);
+  });
+
+  it('truncates labels longer than 75 characters', () => {
+    const step = getStep('help', '2');
+    const longDesc = 'A'.repeat(80);
+    const result = runSandboxedExpression(
+      step.expression,
+      [{ domain: 'x', description: longDesc }],
+      {},
+      'test'
+    );
+    assert.ok(result.domainButtons[0].label.length <= 75);
+  });
+});
+
+describe('help step 4 — resolveHelpContent expression', () => {
+  const HELP_OPTIONS = {
+    domainButtons: [],
+    domainMap: {
+      recipes: {
+        domain:      'recipes',
+        description: 'Manage your recipe collection',
+        commands: [
+          { syntax: '/m list recipes',   description: 'List all recipes' },
+          { syntax: '/m add recipe ...',  description: 'Add a new recipe' },
+        ],
+      },
+    },
+  };
+
+  it('resolves content for a known selection', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: 'recipes', help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.equal(result.selection, 'recipes');
+    assert.ok(result.content.includes('Manage your recipe collection'));
+    assert.ok(result.content.includes('/m list recipes'));
+  });
+
+  it('returns fallback message for unknown selection', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: 'unknown_domain', help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.ok(result.content.includes('No help found'));
+  });
+
+  it('returns fallback message when selection is null', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: null, help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.ok(result.content.includes('No topic selected'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_entity / list_entity expressions
+// ---------------------------------------------------------------------------
+
+describe('get_entity step 4 — formatRecordList expression (with children)', () => {
+  const RESULTS = [
+    {
+      id:           1,
+      front_text:   'hola',
+      back_text:    'hello',
+      created_at:   '2026-01-01',
+      updated_at:   '2026-01-01',
+      review_logs:  [{ id: 10, result: 'pass', created_at: '2026-01-01' }],
+    },
+  ];
+
+  it('formats root columns and includes child arrays', () => {
+    const step = getStep('get_entity', '4');
+    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
+    assert.ok(typeof result === 'string');
+    assert.ok(result.includes('front_text=hola'));
+    assert.ok(result.includes('review_logs'));
+    assert.ok(!result.includes('created_at='));  // system cols suppressed
+  });
+
+  it('returns "No records found." for empty array', () => {
+    const step = getStep('get_entity', '4');
+    const result = runSandboxedExpression(step.expression, [], {}, 'test');
+    assert.equal(result, 'No records found.');
+  });
+});
+
+describe('list_entity step 2 — formatRecordList expression (root only)', () => {
+  const RESULTS = [
+    { id: 1, front_text: 'hola', back_text: 'hello', created_at: '2026', updated_at: '2026',
+      review_logs: [{ result: 'pass' }] },
+    { id: 2, front_text: 'adiós', back_text: 'goodbye', created_at: '2026', updated_at: '2026',
+      review_logs: [] },
+  ];
+
+  it('formats root columns and suppresses child arrays', () => {
+    const step = getStep('list_entity', '2');
+    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
+    assert.ok(result.includes('front_text=hola'));
+    assert.ok(!result.includes('review_logs'), 'child arrays must be suppressed');
+  });
+
+  it('includes record count in output', () => {
+    const step = getStep('list_entity', '2');
+    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
+    assert.ok(result.includes('Found 2 record(s)'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// add_entity step 5 — buildChildInserts expression
+// ---------------------------------------------------------------------------
+
+describe('add_entity step 5 — buildChildInserts expression', () => {
+  const ENTITY_SCHEMA = {
+    children: [
+      { table: 'PGD_ReviewLogs', fk_column: 'flashcard_id', output_key: 'review_logs' },
+    ],
+  };
+  const PARSED_ENTITY = {
+    root:     { front_text: 'hola', back_text: 'hello' },
+    children: { review_logs: [{ result: 'pass', notes: 'good' }] },
+  };
+  const NEW_RECORD = { id: 42 };
+
+  it('builds flat child insert array with FK injected', () => {
+    const step = getStep('add_entity', '5');
+    const result = runSandboxedExpression(
+      step.expression,
+      ENTITY_SCHEMA,
+      { parsed_entity: PARSED_ENTITY, new_record: NEW_RECORD },
+      'test'
+    );
+    assert.equal(result.length, 1);
+    assert.equal(result[0].tableName, 'PGD_ReviewLogs');
+    assert.equal(result[0].row.flashcard_id, 42, 'FK must be injected as root record id');
+    assert.equal(result[0].row.result, 'pass');
+  });
+
+  it('returns empty array when child rows array is empty', () => {
+    const step = getStep('add_entity', '5');
+    const result = runSandboxedExpression(
+      step.expression,
+      ENTITY_SCHEMA,
+      {
+        parsed_entity: { root: {}, children: { review_logs: [] } },
+        new_record: { id: 1 },
+      },
+      'test'
+    );
+    assert.equal(result.length, 0, 'empty child rows must produce empty inserts array');
+  });
+
+  it('returns empty array when required local_state keys are missing', () => {
+    const step = getStep('add_entity', '5');
+    const result = runSandboxedExpression(step.expression, ENTITY_SCHEMA, {}, 'test');
+    assert.equal(result.length, 0, 'missing local_state keys must produce empty inserts array');
+  });
+
+  it('handles multiple child tables', () => {
+    const step = getStep('add_entity', '5');
+    const schema = {
+      children: [
+        { table: 'PGD_Ingredients', fk_column: 'recipe_id', output_key: 'ingredients' },
+        { table: 'PGD_Steps',       fk_column: 'recipe_id', output_key: 'steps' },
+      ],
+    };
+    const parsed = {
+      root:     { name: 'Pasta' },
+      children: {
+        ingredients: [{ name: 'pasta', quantity: 200 }, { name: 'egg', quantity: 2 }],
+        steps:       [{ order: 1, instruction: 'Boil water' }],
+      },
+    };
+    const result = runSandboxedExpression(
+      step.expression,
+      schema,
+      { parsed_entity: parsed, new_record: { id: 7 } },
+      'test'
+    );
+    assert.equal(result.length, 3);
+    assert.ok(result.every(r => r.row.recipe_id === 7));
+    assert.equal(result.filter(r => r.tableName === 'PGD_Ingredients').length, 2);
+    assert.equal(result.filter(r => r.tableName === 'PGD_Steps').length, 1);
+  });
+});
