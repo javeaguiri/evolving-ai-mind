@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 7,
+    "version": 8,
     "steps": [
       {
         "step": "1",
@@ -115,12 +115,12 @@
       {
         "step": "3c",
         "type": "js_transform",
-        "description": "Merge new_table, apply existing_table_modifications to patched tables, re-enrich. Loops back to step 3.",
+        "description": "Merge new_table, apply existing_table_modifications, topological sort so FK targets precede referencing tables (prevents CREATE TABLE FK errors), re-enrich. Loops back to step 3.",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "step:3",
         "on_failure": "human_feedback",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } var newTable = local_state.new_table; var domain = local_state.proposed_scaffold.domain; var mods = (newTable && Array.isArray(newTable.existing_table_modifications))   ? newTable.existing_table_modifications : []; var patched = items.map(function(t) {  var mod = mods.find(function(m) { return m.tableName === t.tableName; });  if (!mod) return t;  var extraCols = Array.isArray(mod.add_columns) ? mod.add_columns : [];  var extraFKs  = Array.isArray(mod.add_foreign_keys) ? mod.add_foreign_keys : [];  return Object.assign({}, t, {   columns:     (t.columns || []).concat(extraCols),   foreignKeys: (t.foreignKeys || []).concat(extraFKs)  }); }); var cleanNew = null; if (newTable) {  cleanNew = Object.assign({}, newTable);  delete cleanNew.existing_table_modifications; } var merged = cleanNew ? patched.concat([cleanNew]) : patched; return enrich(merged, domain);})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } function topoSort(tables) {  var nameToTable = {};  tables.forEach(function(t) { nameToTable[t.tableName] = t; });  var deps = {};  tables.forEach(function(t) {   var d = [];   (t.foreignKeys || []).forEach(function(fk) {    var ref = fk.references && fk.references.table;    if (ref && nameToTable[ref] && ref !== t.tableName) d.push(ref);   });   deps[t.tableName] = d;  });  var result = [], visited = {}, inStack = {};  function visit(name) {   if (visited[name]) return;   if (inStack[name]) return;   inStack[name] = true;   (deps[name] || []).forEach(visit);   inStack[name] = false;   visited[name] = true;   if (nameToTable[name]) result.push(nameToTable[name]);  }  tables.forEach(function(t) { visit(t.tableName); });  return result; } var newTable = local_state.new_table; var domain = local_state.proposed_scaffold.domain; var mods = (newTable && Array.isArray(newTable.existing_table_modifications))   ? newTable.existing_table_modifications : []; var patched = items.map(function(t) {  var mod = mods.find(function(m) { return m.tableName === t.tableName; });  if (!mod) return t;  var extraCols = Array.isArray(mod.add_columns) ? mod.add_columns : [];  var extraFKs  = Array.isArray(mod.add_foreign_keys) ? mod.add_foreign_keys : [];  return Object.assign({}, t, {   columns:     (t.columns || []).concat(extraCols),   foreignKeys: (t.foreignKeys || []).concat(extraFKs)  }); }); var cleanNew = null; if (newTable) {  cleanNew = Object.assign({}, newTable);  delete cleanNew.existing_table_modifications; } var merged = cleanNew ? patched.concat([cleanNew]) : patched; var ordered = topoSort(merged); return enrich(ordered, domain);})()"
       },
       {
         "step": "3d",
