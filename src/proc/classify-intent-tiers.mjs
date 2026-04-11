@@ -96,13 +96,13 @@ export function matchDomainAlias(userInput, domainRows) {
  * Scan PGC_Workflow rows for the resolved domain and test each workflow's
  * intent_keywords array for token presence in userInput.
  *
- * Matching uses substring includes — handles both single-token ("get") and
- * multi-word ("look up") keywords. Domain scoping prevents cross-domain
- * false positives.
+ * Matching uses word-boundary regex — handles single-token ("get") and
+ * multi-word ("look up") keywords while preventing false positives where a
+ * keyword appears as a substring inside a longer word (e.g. "list" inside
+ * the Spanish word "simplista").
  *
- * Disambiguation: when multiple workflows match, get_<domain> wins over
- * list_<domain> when extra tokens follow the verb and domain name — those
- * tokens are a search term, not a broad list request.
+ * Disambiguation: prefer get_entity when search/id tokens present.
+ * Tiebreaker: earliest keyword position in input (verb-first), then lowest id.
  *
  * @param {string}   userInput     Raw user input (lowercased internally)
  * @param {string}   domain        Resolved domain name, e.g. "recipes"
@@ -115,29 +115,50 @@ export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
 
   if (domainWorkflows.length === 0) return null;
 
+  // Word-boundary keyword test — prevents substring false positives where a keyword
+  // appears inside a longer word (e.g. "list" inside the Spanish word "simplista").
+  // Non-word chars (spaces, punctuation, newlines) count as boundaries.
+  // Multi-word keywords (e.g. "show all") are tested across word sequences.
+  function keywordMatchesWordBoundary(keyword, text) {
+    const escaped = keyword.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+    return new RegExp('(?<![a-z0-9\u00c0-\u024f])' + escaped + '(?![a-z0-9\u00c0-\u024f])', 'i').test(text);
+  }
+
+  // For each matching workflow, record the earliest position of any keyword hit
+  // so verb-first ordering can be used as the tiebreaker.
   const matches = [];
   for (const wf of domainWorkflows) {
     const keywords = Array.isArray(wf.intent_keywords) ? wf.intent_keywords : [];
+    let earliestPos = Infinity;
     for (const keyword of keywords) {
-      if (input.includes(keyword.toLowerCase())) {
-        matches.push(wf);
-        break;
+      const kw = keyword.toLowerCase();
+      if (keywordMatchesWordBoundary(kw, input)) {
+        const idx = input.indexOf(kw);
+        if (idx < earliestPos) earliestPos = idx;
       }
+    }
+    if (earliestPos < Infinity) {
+      matches.push({ wf, earliestPos });
     }
   }
 
   if (matches.length === 0) return null;
 
   // Disambiguation: prefer get_<domain> or get_entity when search/id tokens present
-  const getWorkflow = matches.find(wf => wf.name === `get_${domain}` || wf.name === 'get_entity');
+  const getMatch = matches.find(m => m.wf.name === `get_${domain}` || m.wf.name === 'get_entity');
   const { search_term, record_id } = extractSearchTerm(userInput, domain);
 
-  if (getWorkflow && (search_term || record_id !== null)) {
-    return { workflow_name: getWorkflow.name, search_term, record_id };
+  if (getMatch && (search_term || record_id !== null)) {
+    return { workflow_name: getMatch.wf.name, search_term, record_id };
   }
 
-  // Lowest id wins within remaining candidates
-  const best = matches.sort((a, b) => (a.id ?? 0) - (b.id ?? 0))[0];
+  // Primary tiebreaker: earliest keyword position in input (verb-first semantics).
+  // Secondary tiebreaker: lowest DB id (stable ordering for equal positions).
+  matches.sort((a, b) => a.earliestPos !== b.earliestPos
+    ? a.earliestPos - b.earliestPos
+    : (a.wf.id ?? 0) - (b.wf.id ?? 0)
+  );
+  const best = matches[0].wf;
   const isRetrieval = best.name.startsWith('get_') || best.name.startsWith('search_')
                    || best.name === 'get_entity' || best.name === 'search_entity';
   return {

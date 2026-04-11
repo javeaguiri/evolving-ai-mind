@@ -661,13 +661,9 @@
       {
         "step": "1",
         "type": "serv_entity_query",
-        "description": "List all entities ordered by name. Returns root and child columns \u2014 child arrays suppressed by root_only in step 2.",
+        "description": "List all entities. Returns root and child columns \u2014 child arrays suppressed by root_only in step 2.",
         "input": {
           "entityName": "{{input.entity_name}}",
-          "orderBy": {
-            "column": "name",
-            "direction": "asc"
-          },
           "limit": 50
         },
         "output_key": "results",
