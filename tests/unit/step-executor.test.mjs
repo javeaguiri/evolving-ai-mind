@@ -271,6 +271,10 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
     const sets = result.find(t => t.tableName === 'PGD_FlashCardSets');
     assert.ok(!('existing_table_modifications' in sets),
       'existing_table_modifications must be stripped from stored table');
+    // FK target must precede referencing table so CREATE TABLE succeeds
+    const names = result.map(t => t.tableName);
+    assert.ok(names.indexOf('PGD_FlashCardSets') < names.indexOf('PGD_Flashcards'),
+      'PGD_FlashCardSets must be ordered before PGD_Flashcards (FK dependency)');
   });
 
   it('re-enriches without merge when new_table is null', () => {
