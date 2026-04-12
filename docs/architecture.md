@@ -3208,19 +3208,119 @@ Step 3  notify → "Deleted <domain> record (id: {{input.id}})."
 Step 4  end
 ```
 
+#### Gap taxonomy retrospective — what create_domain handles implicitly
+
+`create_domain` was built before the gap taxonomy (Section 6.11) was formalised.
+Mapping its current steps against that taxonomy reveals what works, what is handled
+post-hoc, and what would improve under a future L/R collaboration pass.
+
+**Type 1 — Preference gaps (user decisions that affect schema structure)**
+
+Not handled before the LLM call. The user types one line — "stock portfolios" —
+and the LLM guesses at every structural choice: how many tables, whether to track
+transactions or only holdings, whether multi-currency support is needed, whether
+to model positions as a derived view or a materialised table. These are genuine
+preference questions that produce structurally different schemas. The user sees the
+result at step 3 and can remove tables or add one via the add-table branch — but
+this is post-hoc correction, not pre-design guidance. The LLM already made all the
+choices; the user is editing the output rather than directing the input.
+
+The `temperature: 0.2` variance entry in the tech debt register is a direct symptom
+of this: the LLM produces different schemas for the same description across runs
+because no design constraints were provided before the call.
+
+**Type 2 — Knowledge gaps (domain best practices the LLM does not reliably know)**
+
+Not handled. There is no right-brain research pass. The `create_domain` LLM call
+is general-purpose Sonnet receiving a one-line description with no domain context
+injection. A stock portfolio schema designed without domain research will likely
+miss: position-level cost basis tracking, the distinction between realised and
+unrealised P&L, the need for a transaction log as an append-only audit trail, and
+the convention of separating ticker metadata from position data. These are Type 2
+knowledge gaps that a research pass would resolve before schema generation begins.
+
+**Type 3 — Schema gaps (structural dependencies within the produced output)**
+
+Partially handled — and handled correctly where it exists. The topological sort in
+step 3c is the system's first Type 3 resolution: it detects FK ordering dependencies
+between the LLM-produced tables and sorts them so parent tables are created before
+child tables reference them. This was introduced in Session 20 after FK constraint
+errors in DDL. The `existing_table_modifications` field in the `design_table` prompt
+is also a Type 3 resolution — it allows the add-table branch to patch FK columns
+into existing tables when a new parent concept is introduced mid-design.
+
+**Type 4a / 4b — Missing prompts and step types**
+
+Not applicable. `create_domain` does not generate prompts or require step types
+beyond what already exists.
+
+**Type 5 — Ambiguity (intent underspecified)**
+
+Not handled. If the user types `/m create domain stock portfolio` and
+`stock_portfolio` already exists, the workflow re-runs the LLM and overwrites the
+existing schema. A `serv_query` pre-check step before step 1 would detect the
+existing domain and surface the choice: update aliases only, recreate from scratch,
+or cancel. This is a Type 5 gap and is the correct fix for the duplicate domain
+detection entry in the tech debt register — a single `serv_query` step, not an
+architectural change.
+
+**What a future create_domain v9 would look like with L/R**
+
+Applying the L/R architecture would follow the same pattern as `create_workflow` v3.
+The change is entirely in the steps before the existing step 1 LLM call:
+
+```
+Pre-check  serv_query PGC_DomainHelp — does this domain already exist?
+           If yes → human_gate: update aliases / recreate / cancel  (Type 5)
+
+Step 1R    RIGHT BRAIN: research_domain_schema (Perplexity sonar)
+           Input: userInput + inferred domain category
+           Retrieves: data modelling best practices for this domain type,
+             canonical table structures, normalisation patterns, common pitfalls
+           Surfaces: Tier 1 preference questions where the answer changes
+             schema structure (e.g. "Track individual transactions or
+             current holdings only?", "Multi-currency support?")
+
+Step 1a    js_transform: build preference gate descriptors from research output
+
+Step 1b    condition: any preference questions?
+           → iterator: Tier 1 preference gates — user answers structural choices
+
+Step 1c    LEFT BRAIN: llm_call create_domain
+           Now receives: userInput + research findings + confirmed preferences
+           Produces a schema implementing known choices, not guesses
+           → proposed_scaffold
+
+Steps 2–12  unchanged from current implementation
+```
+
+The user review gate at step 3 (edit_list) remains — the user can still remove
+tables or add one. But by step 3 the schema already reflects stated preferences
+and domain best practice. The gate becomes refinement rather than correction.
+
+**Why this is deferred**
+
+The right-brain improvement loop (Backlog item 8) will address `create_domain`
+variance by observing failed domains via `PGC_WorkflowStats` and improving the
+prompt from evidence — a lower-cost path than a full L/R pass. The L/R pass
+belongs in `create_domain` v9 once the improvement loop has been running long
+enough to identify which preference questions produce the most variance. The
+duplicate domain detection (Type 5) should be fixed sooner — it is a `serv_query`
+pre-check step and does not require the L/R architecture.
+
 ---
 
-### 6.9 create_workflow Workflow — Phase 2
+### 6.9 create_workflow Workflow 
 
 `create_workflow` is the workflow that makes the brain self-extending. When a user
-says `/mind create a workflow that sends me a weekly portfolio summary`, the brain
-designs the step array, validates it, simulates it, and registers it — without
-any code changes. Every new workflow becomes immediately available to the Intent
-Preprocessor.
+says `/m create a workflow Spanish vocabulary quiz`, the brain researches the domain,
+elicits design preferences, produces a complete design specification, generates a
+validated step array, and registers the workflow — without any code changes. Every
+new workflow becomes immediately available to the Intent Preprocessor.
 
 ---
 
-#### Why `create_workflow` is harder than `create_domain`
+#### Why create_workflow is harder than create_domain
 
 `create_domain` asks an LLM to produce a PostgreSQL schema. The schema is
 self-contained — every field in the output is a leaf value or a well-bounded
@@ -3238,204 +3338,311 @@ the step array — see Section 6.5.6 Level 1) and **simulation** (execution-time
 data flow validation — see Section 6.5.6 Levels 2 and 3). Both run before the
 workflow is registered.
 
+But there is a deeper problem than validation. A single LLM call asked to
+simultaneously understand the domain, research best practices, resolve design
+tradeoffs, map schema, design dialog boxes, and generate valid step arrays produces
+inconsistent results for behaviourally complex workflows. The failure mode is not an
+obviously wrong answer but a subtly inconsistent one that passes Ajv and only breaks
+at simulation time. The correct solution is to decompose the cognitive work before
+any step array is generated — which is what the L/R collaboration architecture does.
+
 ---
 
-#### Decision: decomposed LLM generation
+#### Decision: L/R collaboration architecture (v3)
 
-A single LLM call producing steps + mock_outputs + output_schema + simulation_paths
-simultaneously is unreliable. The four structures are interdependent — mock shapes
-must match `output_key` fields, simulation paths must reference step keys, the
-output_schema must describe mock shapes — and LLMs are increasingly unreliable at
-global referential integrity as the number of cross-references grows. The failure
-mode is not an obviously wrong answer but a subtly inconsistent one that passes
-Ajv and only breaks at simulation time.
+`create_workflow` v3 applies the gap taxonomy (Section 6.11) as its primary design
+principle. Every gap type is resolved by its correct owner at the correct point in
+the pipeline — before the step generator receives its input.
 
-The solution is **dependency-ordered generation**: each structure is produced in
-a separate `llm_call` step, using the confirmed output of the prior step as input.
-Each call is narrow, well-scoped, and independently correctable by the 2-attempt
-correction loop.
+The key insight is the role separation:
 
-| Step | LLM call | Input | Output |
+- **Right brain** retrieves world knowledge the system does not have: what are best
+  practices for this type of workflow? What design options exist? Which have clear
+  winners? Which require user preference to decide?
+- **User** resolves genuine preference tradeoffs surfaced by the right brain —
+  decisions the system cannot make because there is no objectively better answer,
+  only the user's answer.
+- **Left brain** designs the implementation given known preferences and research.
+  It inspects the live domain schema, maps state requirements, designs every dialog
+  box, identifies missing prompts (and writes them), and detects schema gaps. It
+  produces a complete `design_spec` — a gap-free plain-language description of every
+  step in the workflow.
+- **Step generator** translates `design_spec` into a step array. It is a
+  code-generation call, not a design call. All design decisions are already made.
+
+This decomposition is what makes the architecture reliable. Each LLM call is narrow,
+well-scoped, and independently correctable by the 2-attempt correction loop.
+
+---
+
+#### Decision: right brain first, user second, left brain third
+
+The right brain runs before the left brain — not after — because the left brain
+designs better when it starts with domain knowledge already in hand. This is not
+how the system was first envisioned (left brain first pass → right brain fills gaps
+→ left brain synthesises), but it is the correct order. The right brain's job is to
+research the domain, not to respond to the left brain's gap list. A domain expert
+does not wait to be asked what they know — they bring knowledge before analysis begins.
+
+The right brain uses Perplexity sonar (`LLM_CHAT_URL`) because this is a retrieval
+task: retrieve current, sourced best practices about the domain. Sonar is built for
+this. Sonnet generates structured output from a complete specification — it is not
+the right model for open-ended domain research.
+
+User preference gates run between right brain and left brain. By the time the left
+brain designs the workflow, all preference questions are answered. The left brain
+receives a partially resolved specification and produces a fully resolved one.
+
+---
+
+#### Decision: PGC_SystemContext injection into executeLlmCall
+
+`generate_workflow_steps` and `analyze_and_design_workflow` receive step type
+contracts and routing rules from `PGC_SystemContext` — not from inline prompt text.
+`executeLlmCall` in `step-executor.mjs` loads all `PGC_SystemContext` rows after
+building `resolvedInput`, filters on `inject_always = true` OR
+`inject_for.includes(intentCategory)`, and merges the matching rows into the
+substitution map before `prompt_text` reduction.
+
+Priority: `step.input` values (resolved from `local_state`) take precedence over
+context rows. Context fills placeholders not supplied by step input.
+
+When a new step type goes live, `PGC_StepType` is updated and `upsert-system-context.mjs`
+re-derives `step_type_contracts`. The prompt does not change. This is the correct
+locus of control for evolving the instruction set.
+
+---
+
+#### Decision: left brain writes missing prompts inline
+
+When `analyze_and_design_workflow` identifies a required prompt that does not exist
+in `PGC_Prompt` (Type 4a gap), it writes the full `prompt_text`, `output_shape`,
+and `model` in the `prompts_needed` entry with `exists: false`. A `js_transform`
+step filters these entries, then an iterator seeds them into `PGC_Prompt` before
+`generate_workflow_steps` runs. The step generator can reference the new prompt
+`intent_category` immediately.
+
+This eliminates the previous requirement to manually seed prompts like
+`evaluate_translation` before running `create_workflow`. The left brain writes them
+as part of its design pass.
+
+---
+
+#### Decision: schema gap gate cancels cleanly with domain suggestion
+
+When `analyze_and_design_workflow` detects a blocking schema gap (Type 3b), it
+includes a `domain_suggestion` field in `schema_changes[]` — the suggested input
+for `/m create domain` to create the missing table. The schema gap gate shows the
+user what is missing, what they gain, and what they lose without it, with a concrete
+command suggestion. The user chooses: create the table first, build without it, or
+cancel. Sub-workflow dependency tracking (returning to `create_workflow` after
+`create_domain` completes) is Backlog.
+
+---
+
+#### Five-phase step structure (v3)
+
+```
+PHASE 0 — DATA LOAD
+Step 1   serv_query PGC_Schema (domain filter)
+         → domain_schema
+
+PHASE 1 — L/R COLLABORATION
+Step 2   RIGHT BRAIN: llm_call research_workflow_domain (Perplexity sonar)
+         Input:  { workflow_description: "{{input.userInput}}",
+                   domain: "{{input.domain}}" }
+         Output: right_brain_research
+                 { findings: [...], preference_questions: [...], out_of_scope: [...] }
+         on_failure: next  ← research failure is non-blocking; left brain
+                              proceeds without enrichment
+
+Step 3   js_transform — build Tier 1 preference gate descriptors
+         Reads: right_brain_research.preference_questions
+         Output: preference_gates (array of gate descriptors with options)
+
+Step 4   condition — any preference questions?
+         on_truthy: next (step 5 iterator)
+         on_falsy: step:6 (skip directly to step type load)
+
+Step 5   iterator — Tier 1 USER PREFERENCE GATES (sequential)
+         One human_gate confirm per preference question.
+         Each gate writes its selection to user_preferences array.
+         Output: user_preferences [{ id, selected_value }, ...]
+
+Step 6   serv_query PGC_StepType (status = 'live')
+         → step_type_contracts
+
+Step 7   LEFT BRAIN: llm_call analyze_and_design_workflow (Sonnet)
+         Input:  { userInput, domain, domain_schema, right_brain_research,
+                   user_preferences, step_type_contracts }
+         Output: design_spec
+         {
+           process_design:   [plain-language step descriptions],
+           state_map:        { key: { type, written_by, read_by } },
+           dialog_designs:   [{ step_label, gate_type, message_template, options }],
+           prompts_needed:   [{ intent_category, exists, prompt_text?, model? }],
+           schema_changes:   [{ table, blocking, recommendation, domain_suggestion? }],
+           deferred:         [{ what, why, how_to_add }],
+           confidence:       "complete" | "needs_user_input" | "needs_schema" | "blocked",
+           blocked_reason?:  string
+         }
+
+PHASE 2 — GAP RESOLUTION
+Step 8   js_transform — evaluate routing flags from design_spec
+         Output: routing_flags { skip_all_gates, needs_schema, is_blocked, has_nonblocking }
+
+Step 9   condition — is_blocked?
+         on_truthy: step:9a (hard stop — missing step type capability)
+         on_falsy: next
+
+Step 9a  notify — "Cannot build this workflow: {{design_spec.blocked_reason}}"
+         → end  (Type 4b hard stop)
+
+Step 10  condition — needs_schema?
+         on_truthy: step:10a (schema gap gate)
+         on_falsy: next
+
+Step 10a js_transform — build schema gap message from design_spec.schema_changes
+Step 10b human_gate confirm — show gap + domain suggestion + options:
+         [Create table first → cancel with suggestion]
+         [Build without it   → next]
+         [Cancel             → cancel]
+
+Step 11a js_transform — filter prompts_needed to exists=false entries
+Step 11b condition — any missing prompts?
+         on_truthy: step:11c
+         on_falsy: step:12
+Step 11c iterator — seed each missing prompt to PGC_Prompt (Type 4a resolution)
+
+PHASE 3 — STEP GENERATION
+Step 12  llm_call generate_workflow_steps v2 (Sonnet)
+         Input:  { design_spec, user_preferences, domain_schema,
+                   step_type_contracts [from PGC_SystemContext injection],
+                   example [from PGC_SystemContext injection] }
+         Output: draft_workflow { name, description, intent_keywords, steps }
+         The LLM translates the complete design_spec into steps.
+         It does not make design decisions — all decisions were made in Phase 1.
+
+PHASE 4 — VALIDATION
+Step 13  human_gate review_object — user reviews draft steps
+         context_key: draft_workflow.steps
+         Options: [Looks good → next] [Request changes → step:12] [Cancel → cancel]
+
+Step 14  simulate Level 1 — static analysis
+         on_failure: step:13  (route back with failures shown in gate context)
+
+Step 15  llm_call generate_workflow_mocks — produce representative mock outputs
+Step 16  llm_call generate_workflow_paths — produce named simulation paths
+Step 17  simulate Level 2 + Level 3 — full path execution with mocks
+         on_failure: step:13
+
+PHASE 5 — REGISTRATION
+Step 18  human_gate confirm — show simulation results, ask to register
+Step 19  serv_insert PGC_Workflow
+Step 20  serv_insert PGC_IntentMap
+         row: { pattern: draft_workflow.name, intent_category: draft_workflow.name,
+                action_type: workflow }
+         NOTE: no workflow_id column — PGC_IntentMap and PGC_Workflow are structurally
+         independent. Routing uses action_type + intent_category name lookup only.
+Step 21  notify — "Workflow {{draft_workflow.name}} registered.
+                   {{design_spec.deferred.length}} enhancements deferred."
+Step 22  end
+```
+
+---
+
+#### Gap taxonomy applied — per gap type
+
+| Gap type | Who owns it | When resolved | How resolved in v3 |
 |---|---|---|---|
-| 2 | `generate_workflow_steps` v1 | User intent + domain schema + `PGC_StepType` contracts (live only) + `create_domain` as worked example | `draft_workflow` — name, description, steps array only |
-| 5 | `generate_workflow_mocks` v1 | Confirmed `draft_workflow.steps` | `mock_outputs` keyed by step number |
-| 6 | `generate_workflow_paths` v1 | Confirmed `draft_workflow.steps` + `mock_outputs` | `simulation_paths` decision scripts |
-
-This means three LLM calls instead of one. The cost is justified: each call is
-cheaper individually (narrower context), independently correctable (the correction
-loop targets only the failing call), and the simulation that follows is the primary
-quality gate.
-
-**`output_schema` is not generated by the LLM.** `llm_call` steps in generated
-workflows reference existing prompts in `PGC_Prompt` — those prompts already have
-`output_schema` defined. If a workflow requires a new prompt, that is a separate
-`create_prompt` workflow (Backlog), not part of `create_workflow`.
+| Type 1 — Preference | User | After right brain, before left brain | Tier 1 preference gate iterator (steps 3–5) |
+| Type 2 — Knowledge | Right brain | Before left brain | `research_workflow_domain` sonar call (step 2) |
+| Type 3a — Schema non-blocking | User | After left brain | Schema gap gate (steps 10–10b), user chooses to proceed |
+| Type 3b — Schema blocking | User | After left brain | Schema gap gate cancels cleanly with domain creation suggestion |
+| Type 4a — Missing prompt | Left brain | After left brain, before step generation | Inline prompt authoring in `design_spec.prompts_needed`, auto-seeded (steps 11a–11c) |
+| Type 4b — Missing step type | Developer (hard stop) | After left brain | `confidence: "blocked"` → notify user → end (steps 9–9a) |
+| Type 5 — Ambiguity | User | Pre-step (not yet implemented) | Future: clarification gate before step 1 when intent is underspecified |
 
 ---
 
-#### Decision: PGC_SystemContext injection, not inline rules
+#### Preference gate iterator contract
 
-The `generate_workflow_steps` prompt is deliberately short. It does not embed step
-type contracts as inline text. Instead it injects at runtime:
+Tier 1 preference gates use the standard `human_gate confirm` type with an iterator
+driving sequential gates — one gate per `preference_questions` entry from
+`right_brain_research`. The user cannot get more than one gate at a time. The
+iterator collects all selections into `user_preferences` as an array of
+`{ id, selected_value }` objects before the left brain runs.
 
-- `PGC_StepType` rows where `status = 'live'` — input/output contracts per type, valid routing values
-- `PGC_SystemContext` rows where `inject_for` includes `create_workflow` — naming
-  conventions, routing value enumeration, template syntax rules
-- `create_domain` annotated example from Section 6.7 — the worked example that
-  makes the instruction set concrete
-
-When a new step type goes live, `PGC_StepType` is updated. The prompt does not
-change. This is the correct locus of control for evolving the instruction set.
-
----
-
-#### Decision: routing values formally enumerated in PGC_StepType
-
-`on_success`, `on_failure`, and `on_select` currently accept any string, with
-unknown values silently falling through to `"next"` in `resolveNextAction()`.
-This is a known gap (see tech debt register). For `create_workflow` to produce
-correct routing values, the valid set must be formally enumerated.
-
-`PGC_StepType.on_success_options` and `on_failure_options` jsonb columns are
-seeded with the valid values per step type before `create_workflow` is implemented.
-The `generate_workflow_steps` prompt receives these from the injected `PGC_StepType`
-context. Level 1 static analysis in the `simulate` step validates every routing
-value against the seeded enum before simulation begins.
+The right brain is instructed to surface preference questions **only when the answer
+materially changes the step structure** of the generated workflow. If best practice
+clearly recommends one approach, the right brain resolves it in `findings` and does
+not surface a preference question. The number of preference gates in practice should
+be 0–3 for most workflows.
 
 ---
 
-#### Decision: `human_feedback` implemented before `create_workflow` ships
+#### design_spec as the interface between cognition and code generation
 
-`human_feedback` appears on every `on_failure` in every workflow definition but is
-currently unimplemented — it silently falls through to `"next"`, and the run is
-marked `failed` by the catch block before routing logic is ever consulted. This is
-acceptable in `create_domain` where a step failure is a terminal event. It is not
-acceptable in user-generated workflows where the user expects recovery options.
+`design_spec` is the contract between the left brain and the step generator. It is
+a plain-language, gap-free description of every step in the workflow — what it does,
+what data it reads, what data it writes, what the user sees, and how routing works.
+The step generator receives this specification and produces the step array.
 
-`human_feedback` must be implemented in `run-workflow.mjs` before `create_workflow`
-is deployed. The behaviour: when a step throws and `on_failure === "human_feedback"`,
-the Step Processor pushes a recovery `human_gate` with three options (Retry, Skip,
-Cancel) instead of immediately marking the run failed. The existing `human_gate`
-machinery handles the gate — no new step type, no schema change, no new SQS queue.
-The only new code is in the failure catch blocks of `executeTop` and
-`executeIteratorItem`.
+The step generator (`generate_workflow_steps` v2) is a code-generation prompt, not
+a design prompt. It does not need to understand the domain, research best practices,
+or make tradeoff decisions. It only needs to translate a complete specification into
+valid step definitions — a well-scoped task that produces consistent results.
+
+This is the fundamental difference from v1/v2 where `generate_workflow_steps`
+received a raw intent string and was expected to be simultaneously an architect,
+a researcher, a UX designer, and a coder.
 
 ---
 
-#### Step definition
+#### Prompt dependencies (v3)
 
-```
-Step 1   llm_call (classify_workflow_intent v1)
-           input:  { userIntent: "{{input.userIntent}}", domain: "{{input.domain}}" }
-           output: workflow_intent = { domain, operation_type, target_tables, description }
+| Step | Prompt `intent_category` | Model | Output stored at |
+|---|---|---|---|
+| 2 | `research_workflow_domain` v1 | `perplexity/sonar` | `right_brain_research` |
+| 7 | `analyze_and_design_workflow` v1 | `anthropic/claude-sonnet-4-5` | `design_spec` |
+| 12 | `generate_workflow_steps` v2 | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
+| 15 | `generate_workflow_mocks` v1 | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
+| 16 | `generate_workflow_paths` v1 | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
 
-Step 2   llm_call (generate_workflow_steps v1)
-           input:  { workflow_intent: "{{workflow_intent}}",
-                     domain_schema: "{{domain_schema}}",
-                     steptypes: injected from PGC_StepType (live rows),
-                     example: injected from PGC_SystemContext }
-           output: draft_workflow = { name, description, intent_keywords, steps }
-
-Step 3   human_gate (review_object)
-           context_key:      "draft_workflow.steps"
-           message_template: "Review the proposed steps for {{draft_workflow.name}}."
-           options:
-             Looks good      → next
-             Request changes → step:2
-             Cancel          → cancel
-
-Step 4   simulate (Level 1 — static analysis only)
-           input:  { steps_key: "draft_workflow.steps" }
-           output: static_analysis_result
-           on_success: next
-           on_failure: step:3   (routes back with Level 1 failures shown in gate context)
-
-Step 5   llm_call (generate_workflow_mocks v1)
-           input:  { steps: "{{draft_workflow.steps}}" }
-           output: mock_outputs = { "<step_key>": <representative output object> }
-
-Step 6   llm_call (generate_workflow_paths v1)
-           input:  { steps: "{{draft_workflow.steps}}", mock_outputs: "{{mock_outputs}}" }
-           output: simulation_paths = [ { path_name, decisions, expected_terminal }, ... ]
-
-Step 7   simulate (Level 2 + 3 — full path simulation)
-           input:  { steps_key:        "draft_workflow.steps",
-                     mock_outputs_key: "mock_outputs",
-                     paths_key:        "simulation_paths" }
-           output: simulation_result
-           on_success: next
-           on_failure: step:3   (routes back with path failure details in gate context)
-
-Step 8   human_gate (confirm)
-           message_template: "Simulation passed {{simulation_result.paths_passed}} of
-                              {{simulation_result.paths_run}} paths. Ready to register
-                              {{draft_workflow.name}}?"
-           options:
-             Register → next
-             Cancel   → cancel
-
-Step 9   serv_insert PGC_Workflow
-           input:  { tableName: "PGC_Workflow",
-                     row: { name:             "{{draft_workflow.name}}",
-                            domain:           "{{workflow_intent.domain}}",
-                            description:      "{{draft_workflow.description}}",
-                            intent_keywords:  "{{draft_workflow.intent_keywords}}",
-                            steps:            "{{draft_workflow.steps}}",
-                            version:          1 } }
-           output: registered_workflow
-
-Step 10  iterator over generated_intent_map_rows
-           item_step: serv_insert PGC_IntentMap
-           output: registered_intent_rows
-
-Step 11  notify
-           message_template: "Workflow {{draft_workflow.name}} is registered and ready.
-                              Try: /mind {{draft_workflow.description}}"
-           on_success: end
-
-Step 12  end
-```
+PGC_SystemContext rows injected into steps 7 and 12 via `executeLlmCall`:
+- `step_type_contracts` — full live step type catalogue (`inject_for: ["generate_workflow_steps", "analyze_and_design_workflow"]`)
+- `routing_value_rules` — valid routing tokens and Guard 3 rule
+- `create_domain_example` v4 — annotated create_domain + flat loop quiz example
 
 ---
 
 #### Gate-bounded correction loops
 
-Steps 3–4 and steps 3–7 form gate-bounded correction loops. The backward jump
-from step 4 (or step 7) to step 3 is safe because every path from step 3 back to
-step 4 or step 7 passes through the step 3 `human_gate`. This satisfies Guard 3’s
-cycle-safety rule: a backward reference is safe if there is at least one
-`human_gate` on the path from the target step back to the source step.
+Steps 13–14 and 13–17 form gate-bounded correction loops. The backward jump from
+step 14 (or step 17) to step 13 is safe because every path from step 13 back to
+step 14 or step 17 passes through the step 13 `human_gate`. This satisfies Guard 3's
+cycle-safety rule.
 
-The user is the circuit breaker for these loops. If simulation repeatedly fails
-and the user cannot resolve the issues, they cancel at step 3. There is no
-automated retry limit on human-gate-bounded loops.
-
----
-
-#### Prompt dependencies
-
-| Step | Prompt `intent_category` | Output stored at |
-|---|---|---|
-| 1 | `classify_workflow_intent` v1 | `workflow_intent` |
-| 2 | `generate_workflow_steps` v1 | `draft_workflow` |
-| 5 | `generate_workflow_mocks` v1 | `mock_outputs` |
-| 6 | `generate_workflow_paths` v1 | `simulation_paths` |
-
-All four prompts must have `output_schema` defined before `create_workflow` is
-deployed. The correction loop in `review-output.mjs` runs on all four independently.
+The user is the circuit breaker for these loops. If simulation repeatedly fails and
+the user cannot resolve the issues, they cancel at step 13. There is no automated
+retry limit on human-gate-bounded loops.
 
 ---
 
-#### Prerequisites before implementation
+#### Implementation notes
 
-All prerequisites are now complete as of `v3.2-create-workflow-complete`:
+- `input.domain` comes from `resolveTier3Route()` in `classify-intent.mjs` via the
+  heavy-lift SQS dispatch. Currently only `userInput` is passed — `domain` extraction
+  from the userInput string is done inside `analyze_and_design_workflow` prompt.
+- `execute_top` root frame initialises `current_step: '1'` — step numbering in v3
+  starts at `'1'` (serv_query) not at a prior classification step.
+- The `example` field in step 12's input is populated from `PGC_SystemContext`
+  injection, not from `local_state`. The step definition passes `"example":
+  "injected_from_pgc_system_context"` as a placeholder; `executeLlmCall` replaces
+  it with the live `create_domain_example` content before the LLM call.
 
-1. ✅ `simulate` step type implemented in `step-executor.mjs` (Section 6.5.6)
-2. ✅ `on_failure: "human_feedback"` implemented in `run-workflow.mjs`
-3. ✅ `PGC_StepType` rows seeded with live step types and routing value contracts
-4. ✅ Routing value semantic validation rule in `review-output.mjs` (Pass 2b)
-5. ✅ `PGC_SystemContext` rows seeded with `inject_for: ["create_workflow"]` context
-6. ✅ Four new prompts in `seed_PGC_Prompt.json` and live in DB
+---
+
 
 ---
 
@@ -3501,6 +3708,236 @@ Turn 3  /mind make that a three-course meal plan using those recipes
   → workflow_name = 'meal_planner', referenced_entities = [Carbonara, ...]
   → execute_top, local_state.context pre-seeded with referenced_entities
 ```
+
+
+### 6.11 Gap Taxonomy — Reusable Design Pattern
+
+When a workflow is generated by the brain (via `create_workflow`) or built by a
+developer, it may require information or capabilities that are not immediately
+available. These deficiencies are **design gaps**. The gap taxonomy classifies every
+type of gap by its nature, its owner, and its correct resolution path.
+
+Applying the taxonomy is mandatory for any `create_*` workflow. It explains which
+decisions belong to the user, which belong to the right brain, which belong to the
+left brain, and which are hard blockers requiring system capability changes. Resolving
+gaps through the wrong path — for example, asking the user a question the right brain
+could answer, or asking the right brain a question only the user can answer — produces
+either unnecessary user friction or incorrect defaults.
+
+---
+
+#### The five gap types
+
+**Type 1 — Preference gap**
+
+A design choice where multiple valid implementations exist and the correct choice
+depends on what the user personally wants. The system cannot resolve these
+analytically because there is no objectively better answer — only the user's answer.
+
+Examples: LLM-graded quiz answers vs self-report; one pass through flashcards vs
+repeat until a score threshold; track transaction history vs current holdings only;
+multi-currency portfolio vs single-currency.
+
+Owner: **User**. Presented as structured gate options — never as free text. The
+user picks from options derived from right brain research, not from a blank field.
+
+Timing: **After right brain, before left brain.** The left brain designs the
+implementation of known preferences, not the preferences themselves. If preference
+gates run after the left brain, the design must be partially redone.
+
+Surface condition: Surface to the user only when the answer produces a structurally
+different step array. If best practice clearly favours one option, the right brain
+resolves it in `findings` and it never becomes a user question.
+
+---
+
+**Type 2 — Knowledge gap**
+
+A question about the subject matter domain that the left brain cannot answer from
+schema inspection or step type contracts. The gap is in the system's knowledge about
+the world, not about the user's data.
+
+Examples: What scoring rubric should `evaluate_translation` use for near-miss answers?
+What session length is optimal for vocabulary retention? What normalisation conventions
+apply to stock portfolio data? What is the canonical pattern for a recipe with
+ingredients?
+
+Owner: **Right brain**. Resolved by `research_workflow_domain` (Perplexity sonar)
+before the left brain runs. Never surfaced to the user directly. If the right brain
+cannot resolve a knowledge gap — "no clear best practice found" — the left brain uses
+a reasonable default and notes it in `design_spec.deferred`. The workflow may be
+suboptimal but it will function.
+
+Timing: **First** — before any other cognitive work begins. The right brain researches
+from the raw user input and domain name. It does not need the left brain's analysis
+to know what to research.
+
+Surface condition: Never surface to user. Always resolve internally. The right brain
+should bring its full domain knowledge regardless of what the left brain later identifies.
+
+---
+
+**Type 3 — Schema gap**
+
+The workflow would benefit from, or requires, a table or column that does not exist
+in the current domain schema. Detected by the left brain during schema inspection.
+
+Two subtypes with different resolution paths:
+
+**Type 3a — Non-blocking:** The workflow can function without the missing structure,
+at reduced capability. The user is informed what they gain and lose.
+
+Examples: No `PGD_QuizResults` table — quiz runs fine, no history stored; no
+`difficulty` column — no difficulty-weighted card selection.
+
+Owner: **User**. Presented via schema gap gate after left brain inspection. Options:
+create the missing table first (cancel workflow, run `create_domain`, return) or
+build the simpler version now. The gate message includes a concrete domain creation
+suggestion from `design_spec.schema_changes[].domain_suggestion`.
+
+**Type 3b — Blocking:** The workflow cannot function at all without the missing
+structure. There is no graceful degradation.
+
+Examples: No `PGD_Flashcards` table in a flashcard quiz workflow; no `term` or
+`definition` column on the cards table.
+
+Owner: Hard stop. `design_spec.confidence = "needs_schema"`. Schema gap gate always
+appears. There is no "build without it" option for blocking gaps.
+
+Timing: **After left brain schema inspection.** Never ask about tables before knowing
+whether they exist. Asking speculatively about tables that might exist is confusing.
+
+---
+
+**Type 4 — Capability gap**
+
+The workflow requires something the system cannot currently provide.
+
+**Type 4a — Missing prompt:** A required LLM prompt does not exist in `PGC_Prompt`.
+Detected by the left brain as part of `design_spec.prompts_needed[]`.
+
+Owner: **Left brain**. Resolved automatically — the left brain writes the full
+`prompt_text` in `prompts_needed` with `exists: false`. A seed iterator inserts it
+into `PGC_Prompt` before step generation runs. Never blocking. Never surfaced to user.
+
+**Type 4b — Missing step type:** The workflow requires a capability with no `live`
+entry in `PGC_StepType`. For example, `capability_call` for external API access, or
+`sub_workflow` for nested execution.
+
+Owner: **Developer** (system architect). Hard stop — `design_spec.confidence = "blocked"`.
+The workflow cannot be generated. A `notify` step informs the user what capability is
+missing and that it is noted for future implementation. No user decision is possible;
+this is a system limitation.
+
+Timing: Detected by left brain during step type mapping. Hard stop before any gate
+is presented to the user.
+
+---
+
+**Type 5 — Ambiguity gap**
+
+The user's intent is underspecified in a way that affects workflow or schema structure,
+and the ambiguity cannot be resolved from context, research, or schema inspection.
+
+Examples: "Create a quiz workflow" with no domain specified; "track my progress"
+with no indication of what metric; "send me a weekly summary" with no indication
+of what to summarise.
+
+Owner: **User**. Resolved by a clarification gate before any other processing. The
+gate asks a targeted question — not an open field — to collect the minimum information
+needed to proceed.
+
+Timing: **Before the right brain runs.** The right brain's research query may be
+incorrect if the intent is ambiguous. The condition check runs on `input.userInput`
+specificity before step 1. For most intents this condition passes immediately with no
+gate shown.
+
+---
+
+#### Gap resolution sequence
+
+Gaps must be resolved in this order. Resolving in the wrong order produces either
+wasted LLM calls (running the right brain before ambiguity is resolved) or incorrect
+designs (running the left brain before preferences are confirmed).
+
+```
+Type 5 — Ambiguity      Pre-step clarification gate (if needed)
+                                │
+Type 2 — Knowledge      Right brain research
+                                │
+Type 1 — Preference     User preference gates (derived from research)
+                                │
+Left brain analysis (schema inspection, state mapping, dialog design)
+                                │
+Type 4a — Missing prompt    Auto-seeded inline
+Type 3a — Schema non-blocking   User decision gate
+Type 3b — Schema blocking       Hard stop with suggestion
+Type 4b — Missing step type     Hard stop with explanation
+                                │
+Step generation (implements the complete, gap-free design_spec)
+```
+
+---
+
+#### Gap type ownership summary
+
+| Type | Name | Owner | Surface to user? | Blocking? | When resolved |
+|---|---|---|---|---|---|
+| 1 | Preference | User | Yes — structured options | Structural (not fatal) | After right brain |
+| 2 | Knowledge | Right brain | Never | Never | First — before everything |
+| 3a | Schema non-blocking | User | Yes — schema gap gate | No | After left brain |
+| 3b | Schema blocking | User | Yes — hard stop | Yes | After left brain |
+| 4a | Missing prompt | Left brain | Never | Never | After left brain, auto-seeded |
+| 4b | Missing step type | Developer | Yes — informational stop | Yes | After left brain |
+| 5 | Ambiguity | User | Yes — clarification gate | Yes | Before right brain |
+
+---
+
+#### Design rules derived from the taxonomy
+
+**Never surface to the user what the system can resolve internally.** Type 2 gaps
+are knowledge gaps the right brain owns. Type 4a gaps are prompt gaps the left brain
+owns. Showing these to the user adds friction with no benefit.
+
+**Surface Type 1 questions before the left brain designs.** If the left brain runs
+before preferences are confirmed, it must guess — reproducing the problem that the
+taxonomy is designed to eliminate.
+
+**Type 3a gives the user a genuine choice; Type 3b does not.** A non-blocking schema
+gap is a real tradeoff the user decides. A blocking schema gap is not a tradeoff —
+it is a prerequisite. Present it as "you must create this first" not as a question.
+
+**Type 4b is informational, not correctable by the user.** The user is told what
+capability is missing. Do not ask them whether to proceed — they cannot. Route
+directly to `end` after the notify.
+
+**Type 5 clarification gates must be narrow.** Ask the minimum question needed to
+make the intent specific enough to research. Not "what exactly do you want?" but
+"which domain should this workflow operate on?" or "what data should the summary
+include?".
+
+---
+
+#### Applying the taxonomy to new create_* workflows
+
+Any future `create_*` workflow — `create_report`, `create_alert`,
+`create_schedule`, `create_integration` — starts by classifying its gaps against
+this taxonomy. The questions to answer before writing a step definition:
+
+1. Is the intent specific enough to proceed? (Type 5)
+2. What does the world know about doing this well? (Type 2)
+3. What structural choices require user input? (Type 1)
+4. What tables or columns are needed — do they exist? (Type 3)
+5. What prompts are needed — do they exist? (Type 4a)
+6. What step types are needed — do they exist? (Type 4b)
+
+The answers determine the pre-generation pipeline. For simple workflows (well-known
+domain, no schema gaps, obvious implementation), the right brain may find no
+preference questions, the left brain may find no gaps, and step generation runs with
+a single pass — fast and cheap. For complex workflows, the full pipeline runs and the
+user is only interrupted where their specific input is genuinely required.
+
+---
 
 
 ## 7. Tech Debt Register
