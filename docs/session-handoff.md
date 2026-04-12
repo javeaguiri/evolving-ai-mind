@@ -1,12 +1,12 @@
-# evolving-mind-ai — Session 22 Handoff
+# evolving-mind-ai — Session 21 Handoff
 
 **Date:** 2026-04-12  
 **Git tag:** `v3.2-local-state-sandbox-builtins-removed`  
-**Last session:** 21 — js_transform local_state sandbox, built-ins removed, add_table modal generic, existing_table_modifications, topological sort, word-boundary keyword matching  
+**Last session:** 20 — js_transform local_state sandbox, built-ins removed, add_table modal generic, existing_table_modifications, topological sort, word-boundary keyword matching  
 
 ---
 
-## Session 21 completion status
+## Session 20 completion status
 
 All items complete. Spanish flashcards domain created end-to-end including:
 - add_table modal flow fully working (PGD_FlashcardSets added with FK patched into PGD_Flashcards)
@@ -26,7 +26,7 @@ All items complete. Spanish flashcards domain created end-to-end including:
 | `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json` | `design_table` v2: `existing_table_modifications` in output schema and prompt |
 | `src/proc/classify-intent.mjs` | `classify()` returns `{ result, entitySchemaRows }` via `wrap()` helper |
 | `tests/unit/step-executor.test.mjs` | New file — 26 tests for `buildDialog` and `runSandboxedExpression` |
-| `docs/architecture.md` | Session 21 updates (this handoff) |
+| `docs/architecture.md` | Session 20 updates (this handoff) |
 | `docs/unit-test-setup.md` | `step-executor.test.mjs` section added |
 
 ### Deploy checklist (if not already done)
@@ -67,7 +67,7 @@ it('does not match keyword as substring inside a longer word — Spanish body te
 
 ---
 
-## Session 22 primary goal: `create_workflow`
+## Session 21 primary goal: `create_workflow`
 
 ### Context
 
@@ -80,7 +80,7 @@ The first test case (Session 19 handoff) is **the Spanish vocabulary quiz** — 
 no cross-domain logic, no external APIs, tests the iterator/loop pattern.
 
 `create_workflow` was previously implemented in Session 11 (`v3.2-create-workflow-complete`)
-and is already in the DB. The Session 22 work is to run it against the quiz use case, identify
+and is already in the DB. The Session 21 work is to run it against the quiz use case, identify
 gaps, and fix them.
 
 ### Current state of create_workflow
@@ -147,7 +147,7 @@ A new prompt `evaluate_translation` must be seeded into `PGC_Prompt` before the 
 can run. The prompt receives `{{ term }}`, `{{ definition }}`, and `{{ user_answer }}` and
 returns `{ result: "pass"|"fail", feedback: string, score: 0-100 }`.
 
-### Session 22 task sequence
+### Session 21 task sequence
 
 1. Read `architecture.md` Section 6 (step types) and Section 9 (create_workflow build order)
 2. Share current `seed_PGC_Workflow.json` and `seed_PGC_Prompt.json`
