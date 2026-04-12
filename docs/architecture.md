@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Session 20 complete  
-Last updated: 2026-04-08 (session 20 — domain registration deterministic, Option C entity name from DB, delete-domain fixes, text_input modal, view_submission handler)
+Last updated: 2026-04-12 (session 20 — js_transform local_state sandbox, built-ins removed, add_table modal generic, existing_table_modifications, topological table sort, word-boundary keyword matching, PGC_Schema migration discipline)
 
 ---
 
@@ -1566,6 +1566,13 @@ The routing rules are final — do not add per-workflow special cases here:
 No per-workflow cases. The extraction logic that sets `search_term` lives in
 `matchWorkflowByKeywords()` in `classify-intent-tiers.mjs`, where the workflow type is known.
 
+**Word-boundary matching (Session 20):** The keyword scan uses a Unicode-aware word-boundary
+regex instead of `String.includes()`. This prevents false positives where a keyword appears as
+a substring inside a longer word — e.g. `"list"` matching inside the Spanish word `"simplista"`.
+Accented characters (U+00C0–U+024F) count as word characters so boundaries do not form inside
+accented Spanish words. Tiebreaker changed from lowest DB id to earliest keyword position in input
+(verb-first semantics), with DB id as secondary.
+
 **`PGC_IntentMap` has no `workflow_id` column.** This was removed as a structural
 error — there is no genuine FK relationship between the intent map and workflow
 table. `handoff()` looks up the workflow by name from pre-loaded rows. `action_type`
@@ -1710,8 +1717,9 @@ altered. Child-row insertion via iterator was impossible to generate generically
 because child table names and FK columns varied per domain. Generic workflows read
 `PGC_EntitySchema` at runtime, making them schema-agnostic.
 
-**`buildEntitySchema` js_transform built-in:** Step 2 of `add_entity` executes a
-`buildEntitySchema` built-in that queries `PGC_Schema` live for column definitions.
+**`add_entity` child inserts:** Step 5 of `add_entity` uses a `js_transform` expression
+(replacing the former `buildChildInserts` built-in) to read `local_state.full_entity_schema`,
+`local_state.parsed_entity`, and `local_state.new_record` and build the flat child insert array.
 This is the single source of truth — the LLM receives actual column names and never
 guesses. New columns added to any table are immediately visible without recreating
 the domain.
@@ -1940,58 +1948,51 @@ fields are available to the prompt template via `{{variable}}` substitution.
 Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
 
 ##### `js_transform`
+
+Every `js_transform` step requires an `expression` field — a pure synchronous JavaScript
+value expression executed in a sandboxed `vm.runInNewContext` context. Two bindings are
+available in the sandbox:
+
+- **`items`** — the resolved value of `input_key` from `local_state`
+- **`local_state`** — the full local_state object, enabling cross-key reads
+
+The `expression` must evaluate to a value (no `return` keyword, no semicolons at top level).
+Wrap multi-statement logic in an IIFE: `(function() { ... })()`
+
 ```json
 {
   "step": "2", "type": "js_transform",
-  "transform_type": "columnSummary",
-  "input_key":  "proposed_scaffold.tables",
+  "description": "Enrich table list with columnSummary and domain field.",
+  "input_key": "proposed_scaffold.tables",
   "output_key": "proposed_scaffold.tables",
-  "on_success": "next"
+  "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) { return tables.map(function(t) { if (!t.columns) return t; var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain }); }); } return enrich(items, local_state.proposed_scaffold.domain); })()",
+  "on_success": "next",
+  "on_failure": "human_feedback"
 }
 ```
-`transform_type` and `expression` are mutually exclusive — exactly one must be present.
-Both present, or neither present, throws immediately.
 
-`transform_type` selects a named built-in (see `js_transform` full detail below).
-`columnSummary` enriches each table object with a `columnSummary` string
-listing the first four non-system column names — used as secondary text in
-`edit_list` gates.
+Reading cross-key values via `local_state` — used when the primary input is insufficient:
 
-**Generic `expression` sandbox** — see full detail below.
 ```json
 {
-  "step": "3", "type": "js_transform",
-  "expression": "items.filter(r => r.score > 0).map(r => ({ id: r.id, score: r.score }))",
-  "input_key":  "quiz_results",
-  "output_key": "passing_results",
-  "on_success": "next"
+  "step": "3c", "type": "js_transform",
+  "input_key": "proposed_scaffold.tables",
+  "output_key": "proposed_scaffold.tables",
+  "expression": "(function() { var newTable = local_state.new_table; var merged = newTable ? items.concat([newTable]) : items; return merged; })()"
 }
 ```
-`expression` is a pure synchronous JS expression string. The resolved `input_key`
-value is bound as `items`. The expression must not use `await`, `import`, `require`,
-`fetch`, `eval`, or `process`. The acorn AST gate enforces this before any code runs.
-`vm.runInNewContext` executes the expression with a 200ms timeout and a safe globals
-context (`JSON`, `Math`, `Array`, `Object`, `String`, `Number`, `Boolean`, `Date`).
 
-**`formatRecordList`** — formats a `serv_query` rows array into a Slack `mrkdwn`
-string for display. Used by `list_<domain>` workflows.
-```json
-{
-  "step": "2", "type": "js_transform",
-  "transform_type": "formatRecordList",
-  "input_key":  "results",
-  "columns":    ["name", "description", "created_at"],
-  "max_rows":   20,
-  "output_key": "results_display",
-  "on_success": "next"
-}
-```
-`columns` — optional array of column names to show. If absent, auto-derived from
-first row keys, system cols (`id`, `created_at`, `updated_at`) excluded.
-`max_rows` — optional row cap, default 20. Appends a truncation note if exceeded.
-Output is a `mrkdwn` string: count header + one `• col=val | col=val` line per row.
-Phase 2 replacement complete: generic `js_transform` sandbox (Session 19).
+**Sandbox constraints:** pure synchronous transforms only — no `require`, no `import`, no
+async, no network, no filesystem. Timeout: 200ms. Safe globals available: `JSON`, `Math`,
+`Array`, `Object`, `String`, `Number`, `Boolean`, `Date`.
 
+**`transform_type` built-ins removed (Session 20).** All five named built-ins
+(`columnSummary`, `buildHelpOptions`, `resolveHelpContent`, `formatRecordList`,
+`buildChildInserts`) have been replaced by self-contained `expression` steps in the seed
+workflows. Any step using `transform_type` now throws a hard error at runtime — no silent
+fallback.
+
+The constraint boundary: `js_transform` is restricted to **pure synchronous data transformation** —
 ##### `human_gate`
 ```json
 {
@@ -2068,7 +2069,7 @@ inside `item_step.input`. Results are collected into an array at `output_key`.
   "input": {
     "entityName": "Recipe",
     "filters":    [{ "column": "name", "op": "like", "value": "{{input.search}}" }],
-    "orderBy":    { "column": "name", "direction": "asc" },
+    # orderBy removed — hardcoded "name" column is domain-specific assumption
     "limit":      20
   },
   "output_key": "results",
@@ -2149,25 +2150,22 @@ Level 1 static analysis validates both targets as `step:N` routing tokens.
 
 ##### `js_transform` — full detail
 
-Two modes, mutually exclusive. Exactly one of `transform_type` or `expression` must be present.
-Both present, or neither present, throws immediately.
+Only one mode: `expression`. The `transform_type` field is removed — all built-ins replaced
+by self-contained expressions. Any step using `transform_type` throws immediately at runtime.
 
-**Mode 1 depricated — named built-in (`transform_type`)**
+**Sandbox bindings (Session 20)**
 
-Built-ins are implemented in `step-executor.mjs` as named `case` branches. Used for transforms
-with complex internal logic or data access requirements that predate the sandbox.
+| Binding | Source | Notes |
+|---|---|---|
+| `items` | `resolvePath(localState, step.input_key)` | Primary input — resolved value at `input_key` |
+| `local_state` | Full `localState` object | Cross-key reads — required when input_key is insufficient |
+| `JSON`, `Math`, `Array`, `Object`, `String`, `Number`, `Boolean`, `Date` | Safe globals | No Node.js APIs |
 
-| transform_type | What it does |
-|---|---|
-| `columnSummary` | Enriches table objects with first 4 non-system column names as `columnSummary` string. Used by `create_domain` edit_list gate. |
-| `buildHelpOptions` | Builds `{ domainButtons, domainMap }` from PGC_DomainHelp rows. Used by `help` workflow. |
-| `resolveHelpContent` | Resolves selected help topic to formatted mrkdwn string. Used by `help` workflow. |
-| `formatRecordList` | Formats a rows array or entity array into a Slack mrkdwn string. Handles both flat rows (`serv_query`) and assembled entities (`serv_entity_query`, `serv_entity_get`). Produces "No records found." for empty or null input. |
-| `buildChildInserts` | Builds flat array of `{ tableName, row }` objects from parsed entity children, injecting FK to new root record. Used by `add_entity`. |
+`local_state` enables workflows generated by `create_workflow` to be fully self-contained —
+an expression can read any key already written to the workflow state without needing a
+dedicated step type for every combination.
 
-**Mode 2 — generic expression sandbox (`expression`)**
-
-The constraint boundary: `js_transform` is restricted to **pure synchronous data transformation** —
+**Constraint boundary.** `js_transform` is restricted to **pure synchronous data transformation** —
 operate on data already in `local_state` and return a new value. It never fetches, never writes,
 never calls external services.
 
@@ -2187,27 +2185,28 @@ Any of the following causes an immediate throw:
 | `NewExpression` where callee is Identifier `Function` | `new Function()` |
 | `CallExpression` where callee resolves to `eval`, `fetch`, `XMLHttpRequest` | Network and eval |
 
-**Sandbox context.** `vm.runInNewContext` receives only what is explicitly injected:
-
-| Binding | Value |
-|---|---|
-| `items` | The resolved `input_key` value from `local_state` |
-| `JSON`, `Math`, `Array`, `Object`, `String`, `Number`, `Boolean`, `Date` | Safe globals only |
-
-`vm.runInNewContext({ timeout: 200 })` reliably kills synchronous infinite loops. Async is prohibited
-by the AST gate, not the VM — see Section 15.2 for the full safety analysis.
+`vm.runInNewContext({ timeout: 200 })` reliably kills synchronous infinite loops.
 
 **Example expressions:**
 
 | Use case | Expression |
 |---|---|
+| Enrich tables with columnSummary | `(function() { var SYS = new Set(['id','created_at','updated_at']); return items.map(function(t) { var cols = (t.columns||[]).filter(function(c){return !SYS.has(c.name);}).slice(0,4).map(function(c){return c.name;}); return Object.assign({},t,{columnSummary:cols.join(', ')}); }); })()` |
+| Merge new_table from local_state | `(function() { var n = local_state.new_table; return n ? items.concat([n]) : items; })()` |
 | Count passing results | `items.filter(r => r.score > 0).length` |
 | Sum a numeric field | `items.reduce((acc, r) => acc + (r.score || 0), 0)` |
-| Map to display strings | `items.map(r => r.name + ': ' + r.value).join('\n')` |
 | Filter by field | `items.filter(r => r.status === 'active')` |
-| Pluck a field | `items.map(r => r.name)` |
-| Single value from object | `items.total_score` |
-| Format a score summary | `\`You scored ${items.correct} out of ${items.total}.\`` |
+| Read cross-key value | `items.concat(local_state.extra_items || [])` |
+
+**Former built-ins and their replacements (for migration reference)**
+
+| Former `transform_type` | Replaced by | Workflow / step |
+|---|---|---|
+| `columnSummary` | Expression reading `local_state.proposed_scaffold.domain` | `create_domain` steps 2, 3c |
+| `buildHelpOptions` | Expression over `items` (registered_domains) | `help` step 2 |
+| `resolveHelpContent` | Expression reading `local_state.help_selection` + `local_state.help_options` | `help` step 4 |
+| `formatRecordList` | Expression with root_only variant | `get_entity` step 4, `list_entity` step 2 |
+| `buildChildInserts` | Expression reading `local_state.full_entity_schema`, `local_state.parsed_entity`, `local_state.new_record` | `add_entity` step 5 |
 
 ##### `serv_entity_schema`
 ```json
@@ -3565,9 +3564,17 @@ Turn 3  /mind make that a three-course meal plan using those recipes
 | `parse_entity_input` generic prompt — domain-specific refinement | Low | Generic prompt with entity schema injection works for well-named columns. For domains where column semantics are non-obvious, parse quality may degrade. Right-brain fix — `PGC_Prompt.error_log` records parse failures; right brain generates domain-specific refinement from evidence. Deferred to Backlog item 8 |
 | `iterator` cannot express multi-step per-item sequences | Medium | Requires `sub_workflow` step type (MVP) or flat loop pattern (Option B). Quiz workflow uses flat loop as workaround. |
 | `formatRecordList` renders id-only for tables where the label column is not `name` | Low | `PGC_EntitySchema.entity_name`, `PGC_Workflow.name` etc render as `"N (id: N)"`. Per-table display config or a `display_column` hint in `PGC_TableMap`. Backlog. |
-| `delete-domain` was matching `PGC_IntentMap` by `intent_category LIKE %_<domain>` | ~~Medium~~ | ✅ Fixed Session 20 — now matches on `pattern LIKE %<domain>%` (generic *_entity rows carry domain in pattern, not intent_category) |
-| `delete-domain` was matching `PGC_EntitySchema` by `root_table IN (tableNames)` | ~~Medium~~ | ✅ Fixed Session 20 — now matches by `domain` column (Option C). Unreliable when tableNames empty after partial delete. |
+| `delete-domain` was matching `PGC_IntentMap` by `intent_category LIKE %_<domain>` | ~~Medium~~ | ✅ Fixed Session 19 — now matches on `pattern LIKE %<domain>%` (generic *_entity rows carry domain in pattern, not intent_category) |
+| `delete-domain` was matching `PGC_EntitySchema` by `root_table IN (tableNames)` | ~~Medium~~ | ✅ Fixed Session 19 — now matches by `domain` column (Option C). Unreliable when tableNames empty after partial delete. |
 | `toEntityName()` in `classify-intent.mjs` is now dead code (fallback only) | Low | Option C reads entity_name from `PGC_EntitySchema.domain`. Once all domains are recreated with the domain column populated, `toEntityName()` and its fallback can be removed. |
+| `orderBy` hardcoded as `"name"` in `list_entity` step 1 | ~~Medium~~ | ✅ Fixed Session 19 — `orderBy` removed entirely from `list_entity`. Generic list workflow must not assume any column name. |
+| `list_entity` routed to body text keyword match (`"list"` inside `"simplista"`) | ~~High~~ | ✅ Fixed Session 20 — `matchWorkflowByKeywords` now uses word-boundary regex (Unicode-aware). False positives from Spanish/accented-word bodies eliminated. Tiebreaker changed to verb-first (earliest keyword position). |
+| `design_table` prompt did not support FK on existing tables for parent/grouping concepts | ~~Medium~~ | ✅ Fixed Session 20 — `existing_table_modifications` field added to output schema. LLM returns patches to existing tables when new table is a parent. step 3c applies patches and topologically sorts the table array before re-enriching. |
+| FK dependency ordering in table creation iterator | ~~High~~ | ✅ Fixed Session 20 — step 3c expression applies topological sort (Kahn DFS) so FK target tables are always created before tables that reference them. `CREATE TABLE` FK errors eliminated. |
+| `PGC_Schema` not updated when `ALTER TABLE` adds a column to a PGC table | Medium | The `domain` column was added to `PGC_EntitySchema` via `ALTER TABLE` in Session 20 but the `PGC_Schema` jsonb `columns` array was not updated. `serv_insert` validation failed with "column not found". Rule: every `ALTER TABLE` on a PGC table must be paired with an `UPDATE PGC_Schema SET columns = columns \|\| '[{"name":...}]' WHERE table_name = '...'`. Bootstrap templates (`PGC_EntitySchema.json`) are the authoritative source for the correct columns array. |
+| `orderBy` field in entity queries is not driven by `PGC_EntitySchema` | Low | `serv_entity_query` and `serv_query` accept `orderBy` but workflows hardcode column names. Add optional `display_order_column` to `PGC_EntitySchema` — `list_entity` reads it when present, no ordering when absent. `create_domain` step 6 expression should populate `display_order_column` from the root table's first non-system, non-FK column. |
+| Modal button `modal` descriptor dropped by `buildDialog()` in `step-executor.mjs` | ~~High~~ | ✅ Fixed Session 20 — `buildDialog()` buttons mapping now spreads `o.modal` when present. Regression test added to `step-executor.test.mjs`. |
+| `transform_type` built-ins not accessible to `create_workflow`-generated workflows | ~~High~~ | ✅ Fixed Session 20 — all built-ins replaced by self-contained `expression` steps. `local_state` added to sandbox. Any expression can now read any workflow state key. |
 | `/mind` ACK non-descriptive | ~~Low~~ | ✅ Resolved — ACK now echoes user input truncated to 100 chars. Slack angle-bracket tokens stripped |
 | `matchDomainAlias` did not match domain name itself | ~~Medium~~ | ✅ Resolved — domain name checked as implicit alias before scanning aliases array |
 | CRUD verb ambiguity not enforced uniformly | ~~Medium~~ | ✅ Resolved — insert requires `field=value` pairs, update requires `id=<number>` + `field=value`, delete requires `id=<number>`. Ambiguous requests return instructive errors listing available fields |
@@ -3664,7 +3671,8 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-generic-crud-complete` | Session 17 — generic CRUD workflows replace domain-specific ones. Five universal `*_entity` workflows (`domain: null`) replace all domain-generated CRUD workflows. `create_domain` step 9 now inserts five `PGC_IntentMap` rows with `*_entity` categories directly. `generate_crud_workflows` prompt v9 — `intentMapRows.intent_category` Ajv-enforced enum prevents LLM drift. `buildChildInserts` js_transform built-in for child table insertion. `execution_mode: sequential` inline iterator eliminates Lambda recursive loop detection. Recipes domain operational with full child data (ingredients, steps) |
 | `v3.2-intent-preprocessor-phase-b-complete` | Session 18 — Phase B pre-pass + unit tests. `classify-intent-tiers.mjs`: UC 1.1 fix (`domain: null` universal keyword candidates); `hasTablePrefix`, `extractTableName`, `hasCrudVerb`, `matchCrudVerb` for Groups 3–4. `classify-intent.mjs`: pre-pass before Pass 1 for `PGC_*/PGD_*` inputs; `hasCrudVerb` short-circuit after Pass 2 domain miss; `executeCrudStep` + `formatTableCrudResult` for direct table dispatch; full `crud_ambiguous` instructive error messages. `tests/unit/classify-intent-tiers.test.mjs`: 50 tests, 50 passing. Three fixture files |
 | `v3.2-js-transform-sandbox-serv-entity-schema` | Session 19 — `condition` step type (expression eval, on_truthy/on_falsy). `get_entity` id-branch via `condition`. `js_transform` generic expression sandbox (acorn AST gate + `vm.runInNewContext`). `serv_entity_schema` step type. Intent fixes: Pass 1 domain derivation, `update_entity` missing fields guard, UC 1.4 `record_id` threading. Slack block 3000-char chunking. `serv_entity_get` not-found graceful handling. `extractSearchTerm` field=value prefix stripping. `seed_PGC_StepType.mjs` updated with `serv_entity_query`, `serv_entity_get`, `serv_entity_schema`. |
-| `v3.2-option-c-domain-registration` | Session 20 — deterministic domain registration: `create_domain` step 6 replaced `generate_crud_workflows` LLM call with `js_transform` expression (entity name, aliases, intent map rows, entity schemas derived from scaffold — no LLM, no variance). Option C: `PGC_EntitySchema.domain` column added; `classify-intent.mjs` reads entity name from DB instead of deriving it (`toEntityName()` kept as fallback). `delete-domain.mjs`: `PGC_EntitySchema` filter changed from `root_table IN` to `domain =`; `PGC_IntentMap` filter changed from `intent_category LIKE %_<domain>` to `pattern LIKE %<domain>%`. `text_input` human gates fixed: `interactive.mjs` opens Slack modal via `views.open` on `add_table` click; `handleViewSubmission()` handles `view_submission` payloads; `callback.mjs` skips posting for `text_input` gate type. Backlog audit: all Phase 3 references reclassified as Backlog or MVP per Javear use cases. |
+| `v3.2-option-c-domain-registration` | Session 20 — deterministic domain registration |
+| `v3.2-local-state-sandbox-builtins-removed` | Session 21 — `local_state` added to `js_transform` sandbox; all five `transform_type` built-ins replaced by self-contained expressions in seed workflows; generic modal trigger for `add_table` (word-boundary keyword matching, verb-first tiebreaker); `existing_table_modifications` in `design_table` prompt v2; topological table sort in `create_domain` step 3c; `PGC_Schema` migration discipline; `list_entity` `orderBy` removed |: `create_domain` step 6 replaced `generate_crud_workflows` LLM call with `js_transform` expression (entity name, aliases, intent map rows, entity schemas derived from scaffold — no LLM, no variance). Option C: `PGC_EntitySchema.domain` column added; `classify-intent.mjs` reads entity name from DB instead of deriving it (`toEntityName()` kept as fallback). `delete-domain.mjs`: `PGC_EntitySchema` filter changed from `root_table IN` to `domain =`; `PGC_IntentMap` filter changed from `intent_category LIKE %_<domain>` to `pattern LIKE %<domain>%`. `text_input` human gates fixed: `interactive.mjs` opens Slack modal via `views.open` on `add_table` click; `handleViewSubmission()` handles `view_submission` payloads; `callback.mjs` skips posting for `text_input` gate type. Backlog audit: all Phase 3 references reclassified as Backlog or MVP per Javear use cases. |
 
 ---
 
@@ -3710,7 +3718,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — matchDomainAlias matches domain name as implicit alias | ✅ |
 | | — init-brain concurrent cold-start race fixed | ✅ |
 | | — /mind ACK echoes user input | ✅ |
-| 4a | create_domain workflow revision | ✅ complete — v3.2-create-domain-with-crud |
+| 4a | create_domain workflow revision | ✅ complete — v3.2-local-state-sandbox-builtins-removed (Session 21: modal, existing_table_modifications, topological sort) |
 | | — callback.mjs: text_input and review_object gate types in dialogToBlocks() | ✅ |
 | | — seed_PGC_Prompt.json: design_table v1, create_domain v3, generate_crud_workflows v2 | ✅ |
 | | — seed_PGC_Workflow.json: create_domain v5 (13 steps incl. 3a/3b/3c/3d branch + step 3d review_object) | ✅ |

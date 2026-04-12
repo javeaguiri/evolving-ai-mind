@@ -1,565 +1,195 @@
-## Session 20 handoff — evolving-mind-ai
+# evolving-mind-ai — Session 22 Handoff
+
+**Date:** 2026-04-12  
+**Git tag:** `v3.2-local-state-sandbox-builtins-removed`  
+**Last session:** 21 — js_transform local_state sandbox, built-ins removed, add_table modal generic, existing_table_modifications, topological sort, word-boundary keyword matching  
+
+---
+
+## Session 21 completion status
+
+All items complete. Spanish flashcards domain created end-to-end including:
+- add_table modal flow fully working (PGD_FlashcardSets added with FK patched into PGD_Flashcards)
+- 20 flashcards added via add_entity workflow
+- FK ordering bug fixed (topological sort)
+- PGC_Schema migration discipline established
+
+### Files changed this session
+
+| File | Change |
+|---|---|
+| `src/proc/step-executor.mjs` | `local_state` in sandbox; all built-ins removed; `buildDialog()` modal passthrough; `runSandboxedExpression` exported |
+| `src/proc/classify-intent-tiers.mjs` | `matchWorkflowByKeywords` word-boundary regex; verb-first tiebreaker |
+| `src/ui/slackbot/interactive.mjs` | Generic `buttonValue.modal` handler; `handleViewSubmission`; `handleViewClosed`; `notify_on_close` |
+| `src/ui/slackbot/callback.mjs` | `actions` case spreads `btn.modal`; `text_input` gate early return; `textbox` no-op |
+| `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` | All 7 workflows updated: expressions replace built-ins; `create_domain` v8 (modal, existing_table_modifications, topological sort, add_table option with modal descriptor); `list_entity` orderBy removed |
+| `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json` | `design_table` v2: `existing_table_modifications` in output schema and prompt |
+| `src/proc/classify-intent.mjs` | `classify()` returns `{ result, entitySchemaRows }` via `wrap()` helper |
+| `tests/unit/step-executor.test.mjs` | New file — 26 tests for `buildDialog` and `runSandboxedExpression` |
+| `docs/architecture.md` | Session 21 updates (this handoff) |
+| `docs/unit-test-setup.md` | `step-executor.test.mjs` section added |
+
+### Deploy checklist (if not already done)
+
+```cmd
+sam build && sam deploy
+node dev_scripts/upsert-workflow.mjs create_domain help get_entity list_entity add_entity
+node dev_scripts/upsert-prompt.mjs design_table
+```
+
+### Outstanding DB migration (if not already done)
+
+```sql
+-- PGC_Schema must include the domain column added to PGC_EntitySchema
+UPDATE "PGC_Schema"
+SET columns = columns || '[{"name":"domain","type":"text","nullable":true}]'::jsonb
+WHERE table_name = 'PGC_EntitySchema'
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements(columns) AS col
+    WHERE col->>'name' = 'domain'
+  );
+```
+
+### Word-boundary regression test to add
+
+Add this test to `tests/unit/classify-intent-tiers.test.mjs` in the `matchWorkflowByKeywords` describe block:
+
+```js
+it('does not match keyword as substring inside a longer word — Spanish body text', () => {
+  // "list" is a substring of "simplista" — must not match list_entity
+  // "add" at position 0 must win
+  const input = 'add flashcards\n\ncategoría o descripción simplista y generalizada';
+  const result = matchWorkflowByKeywords(input, 'spanish_flashcards', workflowRows);
+  assert.ok(result, 'expected a match');
+  assert.equal(result.workflow_name, 'add_entity');
+});
+```
+
+---
+
+## Session 22 primary goal: `create_workflow`
 
 ### Context
 
-Session 19 completed: `condition` step type, `get_entity` id-branch, `js_transform`
-generic sandbox (acorn AST gate + `vm.runInNewContext`), `serv_entity_schema` step
-type, intent fixes (Pass 1 domain derivation, `update_entity` missing fields guard,
-UC 1.4 `record_id` threading), Slack block 3000-char chunking, `serv_entity_get`
-not-found graceful handling, `extractSearchTerm` field=value prefix stripping.
+`create_workflow` is the highest-leverage remaining feature. It enables users to define new
+workflows in natural language from Slack — the system designs the steps, validates them via
+simulation, and registers the workflow. Without it, every domain capability beyond basic CRUD
+must be hand-coded.
 
-Current git state: all session 19 changes committed.
-Tag before starting: `v3.2-js-transform-sandbox-serv-entity-schema`
+The first test case (Session 19 handoff) is **the Spanish vocabulary quiz** — self-contained,
+no cross-domain logic, no external APIs, tests the iterator/loop pattern.
 
----
+`create_workflow` was previously implemented in Session 11 (`v3.2-create-workflow-complete`)
+and is already in the DB. The Session 22 work is to run it against the quiz use case, identify
+gaps, and fix them.
 
-### What surfaced from the flash card domain
+### Current state of create_workflow
 
-Creating the flash card domain exposed four structural gaps. These define all of
-Session 20's work. They are ordered by dependency — each item unblocks the next.
+The workflow exists at v2 (12 steps). Key steps:
 
----
-
-### Item 1 — `delete-domain` + `add_table` smoke test before new schema work
-
-Before designing the corrected flash card schema, confirm that the existing
-`delete-domain` endpoint and `add_table` feature work correctly. This is the
-path that will be used to drop and rebuild the flash card domain.
-
-**Steps:**
-1. Run `/create-domain` to confirm `delete-domain` cleanly removes all PGC and PGD
-   artefacts for the flash card domain (tables, schema rows, entity schema,
-   domain help, intent map rows, workflows).
-2. Inspect the `delete-domain` implementation — confirm it removes from all six
-   tables: `PGD_*` physical tables, `PGC_Schema`, `PGC_TableMap`, `PGC_EntitySchema`,
-   `PGC_DomainHelp`, `PGC_IntentMap` (the five `*_entity` rows), `PGC_Workflow`
-   (the five `*_entity` workflows).
-3. Recreate the flash card domain with the corrected schema (Item 2).
-4. Use `add_table` (if it exists in `create_domain`) to add the missing parent table.
-   If `add_table` is not yet functional, document what is missing and fix it.
-
-Share `delete-domain.mjs` and the current `create_domain` workflow definition at
-session start.
-
----
-
-### Item 2 — Corrected flash card schema design
-
-The current flash card domain has two problems:
-
-**Problem A — missing FlashCardSet parent table.**
-Flash cards need a parent grouping concept (deck, set, topic) so the quiz workflow
-can say "quiz me on the colours set" rather than querying all flash cards regardless
-of topic. Analyze the existing flash card schema with this proposed schema by 
-looking at how flash card tests (i.e. flash card workflow) will leverage the schema
-in order to provide the desired user experience:
-
-```
-PGD_FlashCardSets       — id, name, description, language, created_at, updated_at
-PGD_FlashCards          — id, set_id (FK → PGD_FlashCardSets), front, back,
-                           proficiency_level (integer 0–5), last_reviewed_at,
-                           created_at, updated_at
-PGD_FlashCardSessions   — id, set_id (FK → PGD_FlashCardSets), started_at,
-                           completed_at, total_cards, correct_count,
-                           created_at, updated_at
-```
-
-`PGD_FlashCardSessions` is the session/metrics table from the current domain,
-correctly linked to a set rather than floating free.
-
-**Problem B — session/metrics tables were created as a separate domain.**
-The session metrics tables belong to the flash card domain, not to a separate domain.
-When the domain is recreated, all tables must be in the same domain with the
-correct FK relationships, e.g.
-
-**Entity design:**
-- Entity `FlashCardSet` — root: `PGD_FlashCardSets`, children: `PGD_FlashCards`
-- Entity `FlashCardSession` — root: `PGD_FlashCardSessions`, no child tables
-
-The quiz workflow will operate on a set (not the whole domain) and write session rows
-to `PGD_FlashCardSessions`.
-
-Here are the records currently in PGC_Schema for the spanish_flashcard domain 
-```
-{
-	"success": true,
-	"tableName": "PGC_Schema",
-	"count": 4,
-	"rows": [
-		{
-			"id": 1366,
-			"table_name": "PGD_Flashcards",
-			"target": "pgd",
-			"domain": "spanish_flashcards",
-			"description": "Stores Spanish vocabulary and grammar flashcards with front (Spanish) and back (definition in Spanish or English)",
-			"columns": [
-				{
-					"name": "id",
-					"type": "serial",
-					"primaryKey": true
-				},
-				{
-					"name": "created_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "updated_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "front_text",
-					"type": "text",
-					"nullable": false
-				},
-				{
-					"name": "back_text",
-					"type": "text",
-					"nullable": false
-				},
-				{
-					"name": "card_type",
-					"type": "varchar",
-					"nullable": false
-				},
-				{
-					"name": "difficulty_level",
-					"type": "varchar",
-					"nullable": true
-				},
-				{
-					"name": "tags",
-					"type": "jsonb",
-					"nullable": true
-				},
-				{
-					"name": "notes",
-					"type": "text",
-					"nullable": true
-				}
-			],
-			"foreign_keys": [],
-			"constraints": [],
-			"triggers": [
-				{
-					"name": "trg_flashcards_updated_at",
-					"timing": "BEFORE UPDATE",
-					"function": "set_updated_at()"
-				}
-			],
-			"created_at": "2026-04-07T13:50:37.859Z",
-			"updated_at": "2026-04-07T13:50:37.859Z"
-		},
-		{
-			"id": 1367,
-			"table_name": "PGD_StudySessions",
-			"target": "pgd",
-			"domain": "spanish_flashcards",
-			"description": "Tracks individual study sessions when flashcards are reviewed",
-			"columns": [
-				{
-					"name": "id",
-					"type": "serial",
-					"primaryKey": true
-				},
-				{
-					"name": "created_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "updated_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "session_date",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "session_duration_minutes",
-					"type": "integer",
-					"nullable": true
-				},
-				{
-					"name": "total_cards_reviewed",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				},
-				{
-					"name": "cards_passed",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				},
-				{
-					"name": "cards_failed",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				}
-			],
-			"foreign_keys": [],
-			"constraints": [],
-			"triggers": [
-				{
-					"name": "trg_studysessions_updated_at",
-					"timing": "BEFORE UPDATE",
-					"function": "set_updated_at()"
-				}
-			],
-			"created_at": "2026-04-07T13:50:38.107Z",
-			"updated_at": "2026-04-07T13:50:38.107Z"
-		},
-		{
-			"id": 1368,
-			"table_name": "PGD_ReviewLogs",
-			"target": "pgd",
-			"domain": "spanish_flashcards",
-			"description": "Logs each individual flashcard review attempt with pass/fail result",
-			"columns": [
-				{
-					"name": "id",
-					"type": "serial",
-					"primaryKey": true
-				},
-				{
-					"name": "created_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "updated_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "flashcard_id",
-					"type": "integer",
-					"nullable": false
-				},
-				{
-					"name": "session_id",
-					"type": "integer",
-					"nullable": true
-				},
-				{
-					"name": "reviewed_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "result",
-					"type": "varchar",
-					"nullable": false
-				},
-				{
-					"name": "response_time_seconds",
-					"type": "integer",
-					"nullable": true
-				},
-				{
-					"name": "notes",
-					"type": "text",
-					"nullable": true
-				}
-			],
-			"foreign_keys": [
-				{
-					"name": "fk_reviewlogs_flashcards",
-					"column": "flashcard_id",
-					"onDelete": "CASCADE",
-					"references": {
-						"table": "PGD_Flashcards",
-						"column": "id"
-					}
-				},
-				{
-					"name": "fk_reviewlogs_studysessions",
-					"column": "session_id",
-					"onDelete": "SET NULL",
-					"references": {
-						"table": "PGD_StudySessions",
-						"column": "id"
-					}
-				}
-			],
-			"constraints": [],
-			"triggers": [
-				{
-					"name": "trg_reviewlogs_updated_at",
-					"timing": "BEFORE UPDATE",
-					"function": "set_updated_at()"
-				}
-			],
-			"created_at": "2026-04-07T13:50:38.377Z",
-			"updated_at": "2026-04-07T13:50:38.377Z"
-		},
-		{
-			"id": 1369,
-			"table_name": "PGD_CardStatistics",
-			"target": "pgd",
-			"domain": "spanish_flashcards",
-			"description": "Aggregate statistics for each flashcard tracking total reviews, pass rate, and spaced repetition data",
-			"columns": [
-				{
-					"name": "id",
-					"type": "serial",
-					"primaryKey": true
-				},
-				{
-					"name": "created_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "updated_at",
-					"type": "timestamptz",
-					"default": "now()",
-					"nullable": false
-				},
-				{
-					"name": "flashcard_id",
-					"type": "integer",
-					"nullable": false
-				},
-				{
-					"name": "total_reviews",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				},
-				{
-					"name": "total_passes",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				},
-				{
-					"name": "total_fails",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				},
-				{
-					"name": "pass_rate_percent",
-					"type": "numeric",
-					"nullable": true
-				},
-				{
-					"name": "last_reviewed_at",
-					"type": "timestamptz",
-					"nullable": true
-				},
-				{
-					"name": "next_review_due",
-					"type": "timestamptz",
-					"nullable": true
-				},
-				{
-					"name": "mastery_level",
-					"type": "integer",
-					"default": "0",
-					"nullable": false
-				}
-			],
-			"foreign_keys": [
-				{
-					"name": "fk_cardstatistics_flashcards",
-					"column": "flashcard_id",
-					"onDelete": "CASCADE",
-					"references": {
-						"table": "PGD_Flashcards",
-						"column": "id"
-					}
-				}
-			],
-			"constraints": [
-				{
-					"name": "uq_cardstatistics_flashcard_id",
-					"type": "unique",
-					"columns": [
-						"flashcard_id"
-					]
-				}
-			],
-			"triggers": [
-				{
-					"name": "trg_cardstatistics_updated_at",
-					"timing": "BEFORE UPDATE",
-					"function": "set_updated_at()"
-				}
-			],
-			"created_at": "2026-04-07T13:50:38.631Z",
-			"updated_at": "2026-04-07T13:50:38.631Z"
-		}
-	],
-	"correlationId": "e187d9aa-e7f7-4a1a-8512-ad4170c1c5e9"
-}
-```
----
-
-### Item 3 — `add_entity` child FK interdependency bug
-
-`/m add flash cards` is failing due to table interdependencies. The symptom is that
-`buildChildInserts` produces inserts for child tables before the root record id is
-available, or the FK column name derived from `PGC_EntitySchema.joins` does not
-match the actual physical FK column name.
-
-**Diagnosis steps:**
-1. Run `/m add flash cards front=hola back=hello` and share the CloudWatch error.
-2. Inspect the `PGC_EntitySchema` row for the FlashCard entity — specifically the
-   `joins` array and `aggregations` array — to confirm the FK column derivation is
-   correct.
-3. Check whether `buildChildInserts` is reading `fk_column` correctly from the
-   assembled schema produced by `serv_entity_schema`.
-
-Share the CloudWatch log from the failing `add` attempt and the `PGC_EntitySchema`
-row for the FlashCard entity.
-
----
-
-### Item 4 — Flash card quiz workflow design
-
-This is the most significant item in Session 20 and the reason for the corrected
-schema. The quiz workflow is the primary probe for `create_workflow` — it surfaces
-framework gaps systematically. The design must be correct before running
-`create_workflow`, not patched after.
-
-**What the quiz workflow requires that does not yet exist:**
-
-| Requirement | Current state | What is needed |
+| Step | Type | What it does |
 |---|---|---|
-| Work on a named set | No set concept yet | `FlashCardSet` entity (Item 2) |
-| Per-card proficiency tracking | No `proficiency_level` column yet | Corrected schema (Item 2) |
-| Session tracking | Session tables exist but floating | Linked to set (Item 2) |
-| Loop N cards from a set until proficient and all cards in set is completed| `iterator` exists | `serv_entity_query` with set filter |
-| Evaluate translation quality | `llm_call` exists | New `evaluate_translation` prompt in PGC_Prompt |
-| Update proficiency after evaluation | `serv_update` exists | `update_entity` or direct `serv_update` |
-| Score summary at end | `js_transform` expression sandbox exists | `items.reduce(...)` expression |
-| Write session record | `serv_insert` exists | Step in workflow |
+| 1 | `human_gate confirm` | Confirm user intent and domain context |
+| 2 | `llm_call generate_workflow_steps` | LLM designs the workflow steps |
+| 3 | `human_gate review_object` | User reviews the draft steps |
+| 4 | `js_transform` | Validate step structure (simulate) |
+| 5 | `llm_call` | Correct invalid steps |
+| 6–8 | `human_gate`, `serv_insert` | Name, description, confirm, register in PGC_Workflow |
+| 9–10 | `serv_insert` (iterator) | Register PGC_IntentMap rows |
+| 11 | `notify` | Done message |
+| 12 | `end` | |
 
-**Workflow design to confirm before running `create_workflow`:**
+**Known gap:** The `generate_workflow_steps` prompt (step 2) was written before Session 21's
+changes. It may reference `transform_type` built-ins in its output schema or examples. These
+are now removed — the prompt must produce `expression`-based `js_transform` steps.
 
-```
-Step 1  serv_entity_query — fetch N cards from the named set (filter: set_id, limit: N)
-          output_key: quiz_cards
+**The prompt must also know about `local_state`** as a sandbox binding so it can generate
+expressions that read cross-key values.
 
-Step 2  serv_insert PGD_FlashCardSessions — create session record
-          output_key: session
+### Quiz workflow design (Option B — flat loop)
 
-Step 3  iterator over quiz_cards
-          item_step:
-            Step 3a  human_gate text_input — show front, ask for translation
-            Step 3b  llm_call evaluate_translation — score the response
-            Step 3c  js_transform expression — increment correct counter
-            Step 3d  serv_update PGD_FlashCards — update proficiency_level
-                     (condition: correct → level+1, incorrect → max(level-1, 0))
-
-Step 4  js_transform expression — compute final score
-          expression: "items.reduce((a,r) => a + (r.correct ? 1 : 0), 0)"
-          input_key: quiz_cards (augmented with results during iterator)
-
-Step 5  serv_update PGD_FlashCardSessions — write completed_at, correct_count
-
-Step 6  notify — post score summary
-
-Step 7  end
-```
-
-**Before building the quiz workflow:** the `evaluate_translation` prompt must exist
-in `PGC_Prompt`. Design and seed this prompt at session start. It receives
-`front` (the word shown), `expected` (the correct translation), `given` (the user's
-answer) and returns `{ correct: boolean, feedback: string }`.
-
-**The iterator limitation:** the current `iterator` step type executes a single
-`item_step`. Steps 3a–3d above require four sequential steps per card, which the
-iterator cannot currently express as a sub-sequence. Two options:
-
-- **Option A — `sub_workflow` step type** (Phase 3, not yet built). Each iterator
-  item pushes a child workflow frame. This is the architecturally correct solution.
-- **Option B — flatten the loop** using `condition` + backward references. Quiz N
-  cards by maintaining a `current_index` counter in `local_state` and looping via
-  `step:N` backward jumps. This is implementable today with existing step types.
-
-**Recommend Option B for Session 20** — it exercises the `condition` step type and
-backward reference pattern without requiring `sub_workflow`. The loop structure:
+The quiz workflow cannot use `sub_workflow` (MVP backlog). It uses a flat loop pattern:
+a backward step reference from the end of one quiz iteration to the start of the next,
+anchored by a `human_gate` (Guard 3 safe).
 
 ```
-Step 1   serv_entity_query — fetch cards       output_key: quiz_cards
-Step 2   serv_insert — create session          output_key: session
-Step 3   js_transform expression — init        "{ index: 0, correct: 0, total: items.length }"
-           input_key: quiz_cards               output_key: quiz_state
-Step 4   condition — check loop termination    expression: "{{quiz_state.index}} < {{quiz_state.total}}"
-           on_truthy: "5"  on_falsy: "9"
-Step 5   human_gate text_input — show card     output_key: user_answer
-Step 6   llm_call evaluate_translation         output_key: evaluation
-Step 7   js_transform expression — advance     update quiz_state (index++, correct if right)
-Step 8   serv_update — update proficiency      → step:4 (loop back)
-Step 9   notify — score summary
-Step 10  serv_update — write session results
-Step 11  end
+step 1: serv_entity_query — load N flashcards from PGD_Flashcards (filtered by set_id)
+step 2: js_transform — shuffle cards, init index=0, score={passed:0,failed:0}
+step 3: js_transform — pick current card: items[local_state.index]
+step 4: human_gate confirm — show card front, wait for user to flip
+step 5: human_gate text_input — show back, user types their answer
+step 6: llm_call evaluate_translation — LLM scores the answer (pass/fail + feedback)
+step 7: js_transform — increment index, update score
+step 8: human_gate confirm — show result + feedback, "Next card" button
+  on_select: "next card" → step:3 (backward ref — loop anchor is step 8's gate)
+  on_select: "finish" → step:9
+step 9: serv_insert — write quiz result to PGD_ReviewLogs (one row per card)
+step 10: notify — post summary score
+step 11: end
 ```
 
-This design needs Guard 3 cycle detection review before simulation — the backward
-reference at step 8 → step 4 contains a `human_gate` in the path (step 5), satisfying
-the safe-loop rule (Section 6.7: a backward reference is safe if the path from target
-back to source contains at least one `human_gate`).
+Guard 3 requirement: the backward reference (step 8 → step 3) is safe because the path
+from step 3 back to step 8 contains at least one `human_gate` (steps 4, 5, 8).
 
-**Confirm this design before running `create_workflow` in Session 20.**
+### generate_workflow_steps prompt — what needs updating
+
+The prompt must be updated to:
+
+1. Remove any `transform_type` examples — replace with `expression` examples
+2. Add `local_state` to the sandbox description so generated expressions use it correctly
+3. Add the quiz as a worked example (alongside the existing `create_domain` example)
+4. Ensure the output schema accepts backward step references (`on_select: "step:N"`)
+5. Ensure the output schema accepts `text_input` gate type for step 5
+
+### evaluate_translation prompt — needs seeding
+
+A new prompt `evaluate_translation` must be seeded into `PGC_Prompt` before the quiz workflow
+can run. The prompt receives `{{ term }}`, `{{ definition }}`, and `{{ user_answer }}` and
+returns `{ result: "pass"|"fail", feedback: string, score: 0-100 }`.
+
+### Session 22 task sequence
+
+1. Read `architecture.md` Section 6 (step types) and Section 9 (create_workflow build order)
+2. Share current `seed_PGC_Workflow.json` and `seed_PGC_Prompt.json`
+3. Share current `step-executor.mjs` (to verify simulate step is still correct)
+4. Inspect the live `generate_workflow_steps` prompt from DB:
+   ```sql
+   SELECT prompt_text, output_schema, version FROM "PGC_Prompt"
+   WHERE intent_category = 'generate_workflow_steps';
+   ```
+5. Update `generate_workflow_steps` prompt: remove built-in references, add `local_state`,
+   add quiz example
+6. Seed `evaluate_translation` prompt
+7. Run `/m create workflow Spanish vocabulary quiz` and trace through the gates
+8. Fix any step validation or simulation failures
+9. Smoke-test quiz end-to-end in Slack
+
+### Human_feedback routing prerequisite
+
+`on_failure: "human_feedback"` is used in `create_workflow` but the routing must be verified
+as working before trusting the workflow. If LLM step correction fails, the workflow must surface
+the error rather than silently advancing. Confirm in the first run.
 
 ---
 
-### Step-by-step work order for Session 20
+## Key files needed at session start
 
-| Step | Work | Prerequisite |
-|---|---|---|
-| 1 | Inspect and run `delete-domain` on flash card domain | None |
-| 2 | Diagnose `add_entity` FK bug from existing logs | None (parallel) |
-| 3 | Design corrected flash card schema (3 tables, correct FKs) | Step 1 complete |
-| 4 | Recreate flash card domain with corrected schema | Step 3 |
-| 5 | Test `add_table` for the missing FlashCardSet parent | Step 4 |
-| 6 | Verify `/m add flash cards` with corrected schema | Step 4 |
-| 7 | Seed `evaluate_translation` prompt into `PGC_Prompt` | Step 4 |
-| 8 | Confirm quiz workflow Option B design | Step 7 |
-| 9 | Run `create_workflow` for the quiz | Step 8 |
-| 10 | Smoke-test the quiz end-to-end in Slack | Step 9 |
+```
+src/proc/step-executor.mjs             — verify simulate step current state
+src/serv/templates/pgc/seeds/seed_PGC_Workflow.json
+src/serv/templates/pgc/seeds/seed_PGC_Prompt.json
+src/proc/classify-intent.mjs           — may need entity schema fixes for quiz domain
+```
+
+Or share the raw GitHub URLs.
 
 ---
 
-### Key files needed at session start
-
-1. `src/proc/delete-domain.mjs` — for Item 1 inspection
-2. `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` — `create_domain` steps to check `add_table`
-3. CloudWatch log from the failing `/m add flash cards` attempt — for Item 3 diagnosis
-4. `PGC_EntitySchema` row for the FlashCard entity — query via `/m list PGC_EntitySchema`
-5. `docs/architecture.md` — current version (updated in Session 19 close)
-6. `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json` — to add `evaluate_translation`
-
----
-
-### Tech debt items surfaced in Session 19 (not yet in register)
-
-Add these to the Section 7 register at the start of Session 20:
+## Backlog items confirmed this session (add to tech debt register)
 
 | Item | Priority | Notes |
 |---|---|---|
-| `serv_entity_query` and `serv_entity_get` missing from `seed_PGC_StepType.mjs` | ~~Low~~ | ✅ Fixed Session 19 — both added to seed file alongside `serv_entity_schema` |
-| `condition` step unresolved template treated as truthy | ~~Medium~~ | ✅ Fixed Session 19 — `!resolved.includes('{{')` guard added to `isTruthy` check |
-| `extractSearchTerm` passes `field=value` prefix into search | ~~Low~~ | ✅ Fixed Session 19 — leading `fieldname=` stripped before returning `search_term` |
-| `serv_entity_get` throws on not-found instead of graceful empty result | ~~Medium~~ | ✅ Fixed Session 19 — `isNotFound` check returns `[]` and routes `on_success` |
-| `WORKFLOW_NOTIFY` Slack block exceeds 3000-char limit on large entities | ~~Medium~~ | ✅ Fixed Session 19 — `postWorkflowNotify` in `callback.mjs` chunks text on newlines into ≤2800-char section blocks |
-| `iterator` cannot express multi-step per-item sequences | Medium | Requires `sub_workflow` step type (Phase 3) or flat loop pattern. Quiz workflow uses flat loop (Option B) as MVP workaround. |
-| `delete-domain` completeness unknown | Medium | Unverified whether it removes all six artefact types. Verify in Session 20 Step 1. |
+| `orderBy` field in `PGC_EntitySchema` | Low | Add `display_order_column` to entity schema; `list_entity` reads it when present; `create_domain` step 6 populates it from first non-system non-FK column of root table |
+| `PGC_Schema` migration discipline | Medium | Every `ALTER TABLE` on a PGC table must be paired with `UPDATE PGC_Schema SET columns = columns \|\| '[{...}]'` — cannot rely on bootstrap templates alone for live instances |
+| `toEntityName()` dead code in `classify-intent.mjs` | Low | Remove once all domains recreated with `domain` column populated |
+| Word-boundary regression test | Low | Add to `classify-intent-tiers.test.mjs` (template above) |

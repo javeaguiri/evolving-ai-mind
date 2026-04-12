@@ -25,7 +25,8 @@ No Jest, Mocha, or other test frameworks. `node:test` is available natively in N
 ```
 tests/
   unit/
-    classify-intent-tiers.test.mjs   ← pure function tests (no network)
+    classify-intent-tiers.test.mjs   ← classify-intent-tiers.mjs pure functions (no network)
+    step-executor.test.mjs           ← step-executor.mjs pure functions: buildDialog, runSandboxedExpression
   integration/
     classify-intent.test.mjs         ← HTTP endpoint tests (requires SERV_API_URL)
   fixtures/
@@ -87,7 +88,7 @@ node --test tests/unit/classify-intent-tiers.test.mjs
 set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test tests/integration/classify-intent.test.mjs
 ```
 
-### All tests
+### All unit tests
 
 ```cmd
 node --test tests/unit/*.test.mjs
@@ -205,6 +206,61 @@ export const workflowRows = [
 
 ## Known open issues before writing tests
 
-1. **UC 1.1 Pass 2 keyword scan gap** — `matchWorkflowByKeywords` filters by `r.domain === domain` which excludes generic workflows (`domain: null`). Fix: also include rows where `r.domain === null`. This must be fixed before UC 1.1 test can pass.
+1. **UC 1.1 Pass 2 keyword scan gap** — resolved. `matchWorkflowByKeywords` was updated in Session 18 to include `domain: null` rows for any domain.
 
-2. **UC 1.5 `record_id` not set** — update with `id=42` returns `record_id: null`. The id is parsed in `handoff()` separately from `extractSearchTerm`, so it does not appear in the classify-intent HTTP response. This is correct behaviour — `record_id` in the response is only set by `extractSearchTerm` for retrieval workflows. The test for UC 1.5 should assert `record_id: null`.
+2. **UC 1.5 `record_id` not set** — expected behaviour. The id is parsed in `handoff()` separately; tests assert `record_id: null`.
+
+---
+
+## step-executor.test.mjs — Session 21
+
+Tests for `buildDialog()` and `runSandboxedExpression()` exported from `src/proc/step-executor.mjs`.
+The seed file `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` is loaded directly so expressions
+are tested against the live seed — any seed change that breaks an expression is caught immediately.
+
+### Test suites
+
+| Suite | What it tests |
+|---|---|
+| `buildDialog — modal descriptor passthrough` | Regression for the bug where `buildDialog()` dropped `o.modal` from button objects. Three tests: explicit modal, no modal, seed guard. |
+| `runSandboxedExpression — local_state binding` | `items` and `local_state` both available in sandbox; syntax error throws; infinite loop times out. |
+| `create_domain step 2 — columnSummary expression` | Enriches tables array with columnSummary and domain; system columns excluded. |
+| `create_domain step 3c — merge + columnSummary expression` | Merges `new_table` from `local_state`; applies `existing_table_modifications` patches to existing tables; topological sort ensures FK targets precede referencing tables; strips `existing_table_modifications` from stored table; handles null/absent `new_table`. |
+| `help step 2 — buildHelpOptions expression` | Builds `domainButtons` and `domainMap`; truncates long labels. |
+| `help step 4 — resolveHelpContent expression` | Resolves known selection; fallback for unknown; fallback for null. |
+| `get_entity step 4 — formatRecordList (with children)` | Formats root columns and child arrays; empty array. |
+| `list_entity step 2 — formatRecordList (root only)` | Suppresses child arrays; includes record count. |
+| `add_entity step 5 — buildChildInserts expression` | FK injection; empty child rows; missing local_state; multiple child tables. |
+
+### Running
+
+```cmd
+node --test tests/unit/step-executor.test.mjs
+```
+
+### Key regressions guarded
+
+- `add_table` button: `buildDialog()` must forward `o.modal` to button value — if dropped, Slack modal never opens
+- step 3c: `existing_table_modifications` must be applied and then stripped from stored scaffold
+- step 3c: FK targets must be sorted before referencing tables — prevents `CREATE TABLE` failure
+- All 7 workflow expressions: any expression that returns `undefined` fails its test immediately
+
+---
+
+## matchWorkflowByKeywords — word-boundary regression test (Session 21)
+
+Added to `classify-intent-tiers.test.mjs`. Tests that `"list"` does not match as a substring
+inside the Spanish word `"simplista"`, and that `add_entity` is correctly selected when the
+user input contains vocabulary body text:
+
+```js
+it('does not match keyword as substring inside a longer word', () => {
+  const input = 'add flashcards
+
+categoría o descripción simplista y generalizada';
+  const result = matchWorkflowByKeywords(input, 'spanish_flashcards', workflowRows);
+  assert.equal(result.workflow_name, 'add_entity');  // "add" at pos 0 wins; "list" in "simplista" ignored
+});
+```
+
+This test should be added to the existing `matchWorkflowByKeywords` describe block.
