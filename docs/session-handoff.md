@@ -152,11 +152,7 @@ returns `{ result: "pass"|"fail", feedback: string, score: 0-100 }`.
 1. Read `architecture.md` Section 6 (step types) and Section 9 (create_workflow build order)
 2. Share current `seed_PGC_Workflow.json` and `seed_PGC_Prompt.json`
 3. Share current `step-executor.mjs` (to verify simulate step is still correct)
-4. Inspect the live `generate_workflow_steps` prompt from DB:
-   ```sql
-   SELECT prompt_text, output_schema, version FROM "PGC_Prompt"
-   WHERE intent_category = 'generate_workflow_steps';
-   ```
+4. Share live `generate_workflow_steps` from curl statement.
 5. Update `generate_workflow_steps` prompt: remove built-in references, add `local_state`,
    add quiz example
 6. Seed `evaluate_translation` prompt
