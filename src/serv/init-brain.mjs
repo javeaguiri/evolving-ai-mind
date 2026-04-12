@@ -37,6 +37,7 @@ import seedWorkflow      from './templates/pgc/seeds/seed_PGC_Workflow.json'    
 import seedIntentMap     from './templates/pgc/seeds/seed_PGC_IntentMap.json'      with { type: 'json' };
 import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'         with { type: 'json' };
 import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
+import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'      with { type: 'json' };
 
 const { Client } = pg;
 
@@ -167,6 +168,9 @@ export async function bootstrap(req) {
 
     // Step 10 — seed PGC_SystemContext rows (step type contracts, routing rules, worked examples)
     await seedPGCSystemContext(client);
+
+    // Step 11 — seed PGC_StepType rows (live step type catalogue with contracts)
+    await seedPGCStepType(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -575,4 +579,40 @@ async function seedPGCSystemContext(client) {
     );
   }
   console.info('init-brain: PGC_SystemContext seeded');
+}
+
+async function seedPGCStepType(client) {
+  const rows = Array.isArray(seedStepType) ? seedStepType : [seedStepType];
+  for (const row of rows) {
+    // ON CONFLICT (step_type) DO UPDATE — step type contracts evolve as new
+    // capabilities land. Unlike prompts, step type rows are authoritative in
+    // the seed file and should always reflect the current implementation.
+    // Use upsert-step-type.mjs to update individual rows without bootstrap.
+    await client.query(
+      `INSERT INTO "PGC_StepType"
+         (step_type, description, input_contract, output_contract,
+          on_success_options, on_failure_options, requires_capability, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (step_type) DO UPDATE SET
+         description         = EXCLUDED.description,
+         input_contract      = EXCLUDED.input_contract,
+         output_contract     = EXCLUDED.output_contract,
+         on_success_options  = EXCLUDED.on_success_options,
+         on_failure_options  = EXCLUDED.on_failure_options,
+         requires_capability = EXCLUDED.requires_capability,
+         status              = EXCLUDED.status,
+         updated_at          = now()`,
+      [
+        row.step_type,
+        row.description,
+        JSON.stringify(row.input_contract      ?? []),
+        row.output_contract ? JSON.stringify(row.output_contract) : null,
+        JSON.stringify(row.on_success_options  ?? []),
+        JSON.stringify(row.on_failure_options  ?? []),
+        row.requires_capability ?? null,
+        row.status,
+      ]
+    );
+  }
+  console.info('init-brain: PGC_StepType seeded');
 }
