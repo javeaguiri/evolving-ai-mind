@@ -30,12 +30,13 @@ import PGC_WorkflowRunLock from './templates/pgc/PGC_WorkflowRunLock.json' with 
 import PGC_SystemContext   from './templates/pgc/PGC_SystemContext.json'   with { type: 'json' };
 import PGC_StepType        from './templates/pgc/PGC_StepType.json'        with { type: 'json' };
 import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with { type: 'json' };
-import seedSchema       from './templates/pgc/seeds/seed_PGC_Schema.json'      with { type: 'json' };
-import seedTableMap     from './templates/pgc/seeds/seed_PGC_TableMap.json'    with { type: 'json' };
-import seedDomainHelp   from './templates/pgc/seeds/seed_PGC_DomainHelp.json'  with { type: 'json' };
-import seedWorkflow     from './templates/pgc/seeds/seed_PGC_Workflow.json'    with { type: 'json' };
-import seedIntentMap    from './templates/pgc/seeds/seed_PGC_IntentMap.json'   with { type: 'json' };
-import seedPrompt       from './templates/pgc/seeds/seed_PGC_Prompt.json'      with { type: 'json' };
+import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
+import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
+import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
+import seedWorkflow      from './templates/pgc/seeds/seed_PGC_Workflow.json'       with { type: 'json' };
+import seedIntentMap     from './templates/pgc/seeds/seed_PGC_IntentMap.json'      with { type: 'json' };
+import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'         with { type: 'json' };
+import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
 
 const { Client } = pg;
 
@@ -163,6 +164,9 @@ export async function bootstrap(req) {
 
     // Step 9 — seed PGC_DomainHelp system rows (e.g. system commands)
     await seedPGCDomainHelp(client);
+
+    // Step 10 — seed PGC_SystemContext rows (step type contracts, routing rules, worked examples)
+    await seedPGCSystemContext(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -545,4 +549,30 @@ async function seedPGCDomainHelp(client) {
     );
   }
   console.info('init-brain: PGC_DomainHelp seeded');
+}
+
+async function seedPGCSystemContext(client) {
+  const rows = Array.isArray(seedSystemContext) ? seedSystemContext : [seedSystemContext];
+  for (const row of rows) {
+    // ON CONFLICT (key) DO NOTHING — preserve any right-brain improvements already
+    // applied to live rows. Use upsert-system-context.mjs to force content updates.
+    await client.query(
+      `INSERT INTO "PGC_SystemContext"
+         (key, section, content, format, inject_always, inject_for, version)
+       SELECT $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM "PGC_SystemContext" WHERE key = $1
+       )`,
+      [
+        row.key,
+        row.section       ?? null,
+        row.content,
+        row.format        ?? 'prose',
+        row.inject_always ?? false,
+        JSON.stringify(row.inject_for ?? []),
+        row.version       ?? 1,
+      ]
+    );
+  }
+  console.info('init-brain: PGC_SystemContext seeded');
 }

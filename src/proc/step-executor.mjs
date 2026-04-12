@@ -114,16 +114,36 @@ async function executeLlmCall({ step, localState, run, traceId }) {
   // access to domain, existing_tables, and any other input fields.
   const resolvedInput = resolveInput(step.input ?? {}, localState);
 
+  // PGC_SystemContext injection — load context rows whose inject_for array
+  // includes this prompt's intent_category. Each row's key becomes a
+  // substitution variable in prompt_text (e.g. {{step_type_contracts}},
+  // {{example}}, {{routing_value_rules}}). step.input values take precedence
+  // over context rows — context only fills placeholders not already present.
+  // Client-side filter: PGC_SystemContext is small; jsonb array containment
+  // (@>) is not a supported SERV op so we filter after fetch.
+  const contextResp = await getRows('PGC_SystemContext');
+  const contextMap = {};
+  if (contextResp.success && contextResp.rows?.length) {
+    for (const row of contextResp.rows) {
+      const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
+      const injectAlways = row.inject_always === true;
+      if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
+        contextMap[row.key] = row.content;
+      }
+    }
+  }
+
   // Resolve user_input — the primary free-text variable in every llm_call step.
   const userInput = resolveTemplate(
     step.input?.user_input ?? '',
     localState,
   );
 
-  // Substitute {{userInput}} in prompt_text.
-  // Additional variables (e.g. {{domain}}, {{existingTables}}) are substituted
-  // using the full resolvedInput so the prompt gets complete context.
-  const instructions = Object.entries(resolvedInput).reduce((text, [key, val]) => {
+  // Substitute prompt_text placeholders. Priority order:
+  //   1. resolvedInput (step.input fields resolved from local_state)
+  //   2. contextMap (PGC_SystemContext rows for this intent_category)
+  const allSubstitutions = { ...contextMap, ...resolvedInput };
+  const instructions = Object.entries(allSubstitutions).reduce((text, [key, val]) => {
     const placeholder = `{{${key}}}`;
     const substitution = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
     return text.split(placeholder).join(substitution);
