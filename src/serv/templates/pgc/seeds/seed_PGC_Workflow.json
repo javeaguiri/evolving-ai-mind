@@ -51,7 +51,11 @@
           "confirm_template": "Remove {{item.tableName}} from this domain?"
         },
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "step:3d" },
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "step:3d"
+          },
           {
             "label": "Add a table",
             "action": "add_table",
@@ -63,7 +67,11 @@
               "multiline": true
             }
           },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -73,10 +81,18 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "User describes the table they want to add.",
-        "message_template": "Describe the table you want to add \u2014 what it stores and how it relates to the other tables.",
+        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "output_key": "new_table_description",
         "on_success": "next",
@@ -114,8 +130,16 @@
         "message_template": "Here are the full details for all tables in domain {{proposed_scaffold.domain}}. Review the columns before we create them.",
         "context_key": "proposed_scaffold.tables",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -127,8 +151,16 @@
         "description": "Final confirmation before DDL execution.",
         "message_template": "Ready to create domain {{proposed_scaffold.domain}} with {{proposed_scaffold.tables.length}} tables. This will create the physical database tables.",
         "options": [
-          { "label": "Create it", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Create it",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -151,7 +183,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "Derive domain registration data deterministically from confirmed scaffold \u2014 no LLM.",
+        "description": "Derive domain registration data deterministically from confirmed scaffold — no LLM.",
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "on_success": "next",
@@ -166,8 +198,16 @@
         "message_template": "Almost done. Here are the aliases and commands I'll register for your domain. Confirm to proceed.",
         "context_key": "generated.domainHelp",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -176,7 +216,10 @@
         "step": "8",
         "type": "serv_insert",
         "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
-        "input": { "tableName": "PGC_DomainHelp", "row": "{{generated.domainHelp}}" },
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "row": "{{generated.domainHelp}}"
+        },
         "on_success": "next",
         "on_failure": "human_feedback"
       },
@@ -187,7 +230,10 @@
         "items_key": "generated.intentMapRows",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "PGC_IntentMap", "row": "{{item}}" },
+          "input": {
+            "tableName": "PGC_IntentMap",
+            "row": "{{item}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -202,7 +248,10 @@
         "items_key": "generated.entitySchemas",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "PGC_EntitySchema", "row": "{{item}}" },
+          "input": {
+            "tableName": "PGC_EntitySchema",
+            "row": "{{item}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -214,17 +263,25 @@
         "step": "11",
         "type": "notify",
         "description": "Confirm domain creation with concrete command examples.",
-        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n\u2022 /m list {{proposed_scaffold.domain}}\n\u2022 /m get {{proposed_scaffold.domain}} <n>\n\u2022 /m add {{proposed_scaffold.domain}} <description>\n\u2022 /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n\u2022 /m delete {{proposed_scaffold.domain}} id=<number>",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n• /m list {{proposed_scaffold.domain}}\n• /m get {{proposed_scaffold.domain}} <n>\n• /m add {{proposed_scaffold.domain}} <description>\n• /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n• /m delete {{proposed_scaffold.domain}} id=<number>",
         "on_success": "end"
       },
-      { "step": "12", "type": "end" }
+      {
+        "step": "12",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "help",
     "domain": null,
-    "description": "Interactive help \u2014 shows system commands or live domain help.",
-    "intent_keywords": ["help", "what can you do", "commands", "show help"],
+    "description": "Interactive help — shows system commands or live domain help.",
+    "intent_keywords": [
+      "help",
+      "what can you do",
+      "commands",
+      "show help"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 2,
@@ -233,7 +290,13 @@
         "step": "1",
         "type": "serv_query",
         "description": "Load all registered domain help entries.",
-        "input": { "tableName": "PGC_DomainHelp", "orderBy": { "column": "domain", "direction": "asc" } },
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "orderBy": {
+            "column": "domain",
+            "direction": "asc"
+          }
+        },
         "output_key": "registered_domains",
         "on_success": "next",
         "on_failure": "next"
@@ -246,19 +309,27 @@
         "output_key": "help_options",
         "on_success": "next",
         "on_failure": "next",
-        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' \u2014 ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '\u2026' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
+        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
       },
       {
         "step": "3",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 1 \u2014 What would you like help with?",
+        "description": "Level 1 — What would you like help with?",
         "message_template": "What would you like help with?",
         "context_key": "help_options.domainButtons",
         "output_key": "help_selection",
         "options": [
-          { "label": "System commands", "action": "system", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "System commands",
+            "action": "system",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -272,23 +343,38 @@
         "on_success": "next",
         "on_failure": "next",
         "input_key": "help_options",
-        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '\u2022 `' + c.syntax + '` \u2014 ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
+        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '• `' + c.syntax + '` — ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
       {
         "step": "5",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 2 \u2014 Display the resolved help content.",
+        "description": "Level 2 — Display the resolved help content.",
         "message_template": "{{resolved_help.content}}",
         "options": [
-          { "label": "Done", "action": "confirm", "on_select": "next" },
-          { "label": "Go back", "action": "back", "on_select": "step:3" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Done",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Go back",
+            "action": "back",
+            "on_select": "step:3"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
       },
-      { "step": "6", "type": "end" }
+      {
+        "step": "6",
+        "type": "end"
+      }
     ]
   },
   {
@@ -305,7 +391,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 3,
+    "version": 4,
     "steps": [
       {
         "step": "1",
@@ -313,7 +399,13 @@
         "description": "Load domain schema rows for the target domain so the left brain has live column definitions.",
         "input": {
           "tableName": "PGC_Schema",
-          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }]
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ]
         },
         "output_key": "domain_schema",
         "on_success": "next",
@@ -340,7 +432,7 @@
         "output_key": "preference_gates",
         "on_success": "next",
         "on_failure": "next",
-        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var options = (q.options || []).map(function(o) { return { label: o.label + (o.description ? ' \u2014 ' + o.description : ''), action: o.value, on_select: 'next' }; }); options.push({ label: 'Cancel', action: 'cancel', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()"
+        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var options = (q.options || []).map(function(o) { return { label: o.label + (o.description ? ' — ' + o.description : ''), action: o.value, on_select: 'next' }; }); options.push({ label: 'Cancel', action: 'cancel', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()"
       },
       {
         "step": "4",
@@ -376,7 +468,13 @@
         "description": "Load live PGC_StepType contracts for injection into the left brain prompt.",
         "input": {
           "tableName": "PGC_StepType",
-          "filters": [{ "column": "status", "op": "eq", "value": "live" }]
+          "filters": [
+            {
+              "column": "status",
+              "op": "eq",
+              "value": "live"
+            }
+          ]
         },
         "output_key": "step_type_contracts",
         "on_success": "next",
@@ -459,7 +557,11 @@
             "action": "build_without",
             "on_select": "next"
           },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -489,7 +591,10 @@
         "items_key": "missing_prompts",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "PGC_Prompt", "row": "{{item}}" },
+          "input": {
+            "tableName": "PGC_Prompt",
+            "row": "{{item}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -506,8 +611,7 @@
           "design_spec": "{{design_spec}}",
           "user_preferences": "{{user_preferences}}",
           "domain_schema": "{{domain_schema}}",
-          "step_type_contracts": "{{step_type_contracts}}",
-          "example": "injected_from_pgc_system_context"
+          "step_type_contracts": "{{step_type_contracts}}"
         },
         "output_key": "draft_workflow",
         "on_success": "next",
@@ -521,9 +625,21 @@
         "message_template": "Review the proposed steps for {{draft_workflow.name}}. Approve to simulate, or request changes to regenerate.",
         "context_key": "draft_workflow.steps",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next" },
-          { "label": "Request changes", "action": "request_changes", "on_select": "step:12" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Request changes",
+            "action": "request_changes",
+            "on_select": "step:12"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -531,8 +647,10 @@
       {
         "step": "14",
         "type": "simulate",
-        "description": "Level 1 static analysis \u2014 validates routing values, dead targets, missing templates, and gate structure.",
-        "input": { "steps_key": "draft_workflow.steps" },
+        "description": "Level 1 static analysis — validates routing values, dead targets, missing templates, and gate structure.",
+        "input": {
+          "steps_key": "draft_workflow.steps"
+        },
         "output_key": "static_analysis_result",
         "on_success": "next",
         "on_failure": "step:13"
@@ -565,7 +683,7 @@
       {
         "step": "17",
         "type": "simulate",
-        "description": "Level 2 + Level 3 \u2014 full path execution using mock outputs and decision scripts.",
+        "description": "Level 2 + Level 3 — full path execution using mock outputs and decision scripts.",
         "input": {
           "steps_key": "draft_workflow.steps",
           "mock_outputs_key": "mock_outputs",
@@ -582,8 +700,16 @@
         "description": "Show simulation results and ask user to confirm registration.",
         "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
         "options": [
-          { "label": "Register", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Register",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -631,14 +757,24 @@
         "message_template": "Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:*\n{{design_spec.deferred.length}} items noted for future improvement.",
         "on_success": "end"
       },
-      { "step": "22", "type": "end" }
+      {
+        "step": "22",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "get_entity",
     "domain": null,
-    "description": "Find and display a domain entity record by id or name search including all child data. Generic \u2014 works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
-    "intent_keywords": ["get", "show", "find", "fetch", "look up", "search"],
+    "description": "Find and display a domain entity record by id or name search including all child data. Generic — works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
+    "intent_keywords": [
+      "get",
+      "show",
+      "find",
+      "fetch",
+      "look up",
+      "search"
+    ],
     "state_strategy": "sequential",
     "model_used": null,
     "version": 1,
@@ -655,7 +791,10 @@
         "step": "2",
         "type": "serv_entity_get",
         "description": "Fetch entity by exact id.",
-        "input": { "entityName": "{{input.entity_name}}", "id": "{{input.id}}" },
+        "input": {
+          "entityName": "{{input.entity_name}}",
+          "id": "{{input.id}}"
+        },
         "output_key": "results",
         "on_success": "step:4",
         "on_failure": "human_feedback"
@@ -666,7 +805,13 @@
         "description": "Search for the entity by name using a LIKE filter.",
         "input": {
           "entityName": "{{input.entity_name}}",
-          "filters": [{ "column": "name", "op": "like", "value": "{{input.search}}" }],
+          "filters": [
+            {
+              "column": "name",
+              "op": "like",
+              "value": "{{input.search}}"
+            }
+          ],
           "limit": 5
         },
         "output_key": "results",
@@ -681,7 +826,7 @@
         "max_rows": 5,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  var rootLine = '• ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    ◦ ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '—'); });    acc.push('    ◦ ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "5",
@@ -689,14 +834,23 @@
         "message_template": "{{results_display}}",
         "on_success": "end"
       },
-      { "step": "6", "type": "end" }
+      {
+        "step": "6",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "list_entity",
     "domain": null,
-    "description": "List all records for a domain entity with root columns and ids. Generic \u2014 works for any domain. Requires input.entity_name.",
-    "intent_keywords": ["list", "show all", "get all", "find all", "all"],
+    "description": "List all records for a domain entity with root columns and ids. Generic — works for any domain. Requires input.entity_name.",
+    "intent_keywords": [
+      "list",
+      "show all",
+      "get all",
+      "find all",
+      "all"
+    ],
     "state_strategy": "sequential",
     "model_used": null,
     "version": 1,
@@ -705,7 +859,10 @@
         "step": "1",
         "type": "serv_entity_query",
         "description": "List all entities.",
-        "input": { "entityName": "{{input.entity_name}}", "limit": 50 },
+        "input": {
+          "entityName": "{{input.entity_name}}",
+          "limit": 50
+        },
         "output_key": "results",
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -713,13 +870,13 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Format list results \u2014 root columns only, child arrays suppressed.",
+        "description": "Format list results — root columns only, child arrays suppressed.",
         "input_key": "results",
         "max_rows": 20,
         "root_only": true,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  return '\u2022 ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  return '• ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "3",
@@ -727,14 +884,22 @@
         "message_template": "{{results_display}}",
         "on_success": "end"
       },
-      { "step": "4", "type": "end" }
+      {
+        "step": "4",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "add_entity",
     "domain": null,
-    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic \u2014 works for any domain. Requires input.entity_name.",
-    "intent_keywords": ["add", "create", "new", "insert"],
+    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic — works for any domain. Requires input.entity_name.",
+    "intent_keywords": [
+      "add",
+      "create",
+      "new",
+      "insert"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 1,
@@ -743,7 +908,9 @@
         "step": "1",
         "type": "serv_entity_schema",
         "description": "Load full entity schema.",
-        "input": { "entityName": "{{input.entity_name}}" },
+        "input": {
+          "entityName": "{{input.entity_name}}"
+        },
         "output_key": "full_entity_schema",
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -769,8 +936,16 @@
         "message_template": "Here's what I parsed from your description. Does this look right?",
         "context_key": "parsed_entity",
         "options": [
-          { "label": "Looks good", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -779,7 +954,10 @@
         "step": "4",
         "type": "serv_insert",
         "description": "Insert the root entity row.",
-        "input": { "tableName": "{{full_entity_schema.root.table}}", "row": "{{parsed_entity.root}}" },
+        "input": {
+          "tableName": "{{full_entity_schema.root.table}}",
+          "row": "{{parsed_entity.root}}"
+        },
         "output_key": "new_record",
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -801,7 +979,10 @@
         "items_key": "child_inserts",
         "item_step": {
           "type": "serv_insert",
-          "input": { "tableName": "{{item.tableName}}", "row": "{{item.row}}" },
+          "input": {
+            "tableName": "{{item.tableName}}",
+            "row": "{{item.row}}"
+          },
           "on_failure": "human_feedback"
         },
         "execution_mode": "sequential",
@@ -815,14 +996,22 @@
         "on_success": "end",
         "message_template": "Added {{input.entity_name}} record (id: {{new_record.id}})."
       },
-      { "step": "8", "type": "end" }
+      {
+        "step": "8",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "update_entity",
     "domain": null,
-    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic \u2014 works for any domain.",
-    "intent_keywords": ["update", "edit", "modify", "change"],
+    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic — works for any domain.",
+    "intent_keywords": [
+      "update",
+      "edit",
+      "modify",
+      "change"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 1,
@@ -833,7 +1022,13 @@
         "description": "Load entity schema to resolve root table name.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "entity_name", "op": "eq", "value": "{{input.entity_name}}" }],
+          "filters": [
+            {
+              "column": "entity_name",
+              "op": "eq",
+              "value": "{{input.entity_name}}"
+            }
+          ],
           "limit": 1
         },
         "output_key": "entity_schema_rows",
@@ -847,8 +1042,16 @@
         "description": "Confirm before writing changes.",
         "message_template": "Update {{input.entity_name}} id={{input.id}} with the provided changes?",
         "options": [
-          { "label": "Confirm", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Confirm",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -859,7 +1062,13 @@
         "description": "Apply the update to the root table row.",
         "input": {
           "tableName": "{{entity_schema_rows.0.root_table}}",
-          "filters": [{ "column": "id", "op": "eq", "value": "{{input.id}}" }],
+          "filters": [
+            {
+              "column": "id",
+              "op": "eq",
+              "value": "{{input.id}}"
+            }
+          ],
           "updates": "{{input.updates}}"
         },
         "output_key": "updated_record",
@@ -872,14 +1081,20 @@
         "on_success": "end",
         "message_template": "Updated {{input.entity_name}} record (id: {{input.id}})."
       },
-      { "step": "5", "type": "end" }
+      {
+        "step": "5",
+        "type": "end"
+      }
     ]
   },
   {
     "name": "delete_entity",
     "domain": null,
-    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic \u2014 works for any domain.",
-    "intent_keywords": ["delete", "remove"],
+    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic — works for any domain.",
+    "intent_keywords": [
+      "delete",
+      "remove"
+    ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
     "version": 1,
@@ -890,7 +1105,13 @@
         "description": "Load entity schema to resolve root table name.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "entity_name", "op": "eq", "value": "{{input.entity_name}}" }],
+          "filters": [
+            {
+              "column": "entity_name",
+              "op": "eq",
+              "value": "{{input.entity_name}}"
+            }
+          ],
           "limit": 1
         },
         "output_key": "entity_schema_rows",
@@ -904,8 +1125,16 @@
         "description": "Confirm before deleting.",
         "message_template": "Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.",
         "options": [
-          { "label": "Confirm delete", "action": "confirm", "on_select": "next" },
-          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "Confirm delete",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -916,7 +1145,13 @@
         "description": "Delete the root row. FK CASCADE removes all child rows.",
         "input": {
           "tableName": "{{entity_schema_rows.0.root_table}}",
-          "filters": [{ "column": "id", "op": "eq", "value": "{{input.id}}" }]
+          "filters": [
+            {
+              "column": "id",
+              "op": "eq",
+              "value": "{{input.id}}"
+            }
+          ]
         },
         "on_success": "next",
         "on_failure": "human_feedback"
@@ -927,7 +1162,10 @@
         "on_success": "end",
         "message_template": "Deleted {{input.entity_name}} record (id: {{input.id}})."
       },
-      { "step": "5", "type": "end" }
+      {
+        "step": "5",
+        "type": "end"
+      }
     ]
   }
 ]

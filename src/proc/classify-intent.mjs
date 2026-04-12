@@ -50,9 +50,9 @@ export async function handle(req) {
 
   console.info('classify-intent: start', { traceId, userInput, sessionId });
 
-  let result, entitySchemaRows;
+  let result, entitySchemaRows, domainRows;
   try {
-    ({ result, entitySchemaRows } = await classify(userInput, sessionId, traceId));
+    ({ result, entitySchemaRows, domainRows } = await classify(userInput, sessionId, traceId));
   } catch (error) {
     console.error('classify-intent: classification failed', { traceId, error: error.message });
     if (req.source === 'sqs' && callback) {
@@ -81,7 +81,7 @@ export async function handle(req) {
     return ok({ ...result, traceId }, traceId);
   }
 
-  await handoff(result, callback, traceId, userInput, entitySchemaRows);
+  await handoff(result, callback, traceId, userInput, entitySchemaRows, domainRows);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,8 +117,11 @@ async function classify(userInput, sessionId, traceId) {
   const workflowRows     = workflowResp.rows     ?? [];
   const entitySchemaRows = entitySchemaResp.rows ?? [];
 
-  // Wrap a result object with entitySchemaRows so handle() can pass both to handoff().
-  const wrap = result => ({ result, entitySchemaRows });
+  // Wrap a result object with entitySchemaRows and domainRows so handle() can pass
+  // both to handoff(). domainRows is needed by the heavy-lift branch to resolve a
+  // domain from userInput for CREATE_WORKFLOW (Pass 1 matches the system command
+  // but does not run Pass 2 alias lookup, so domain is null without this).
+  const wrap = result => ({ result, entitySchemaRows, domainRows });
 
   // ── Pre-pass — PGC_*/PGD_* table-prefix detection ────────────────────────
   // Short-circuits the entire pipeline. A user who types a raw table name is
@@ -405,7 +408,7 @@ async function tier2(userInput, domainHint, workflowRows, traceId) {
 // SQS handoff — route result to downstream
 // ---------------------------------------------------------------------------
 
-async function handoff(result, callback, traceId, userInput, entitySchemaRows) {
+async function handoff(result, callback, traceId, userInput, entitySchemaRows, domainRows) {
   // ── Workflow ──────────────────────────────────────────────────────────────
   if (result.action_type === 'workflow' && result.workflow_name) {
 
@@ -528,9 +531,28 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows) {
       return;
     }
 
+    // For CREATE_WORKFLOW: Pass 1 matched the heavy_lift intent_category but did
+    // not run Pass 2 alias lookup, so result.domain is null even when userInput
+    // contains a recognisable domain (e.g. "create workflow Spanish vocabulary quiz"
+    // → domain "spanish_flashcards"). Run alias lookup now so create-workflow.mjs
+    // receives input.domain populated and its serv_query schema load works correctly.
+    // CREATE_DOMAIN does the same — it creates the domain from scratch, so domain
+    // is always null there, but we pass null explicitly rather than guessing.
+    let domain = result.domain ?? null;
+    if (sqsType === 'CREATE_WORKFLOW' && !domain && domainRows?.length) {
+      const domainMatch = matchDomainAlias(userInput, domainRows);
+      domain = domainMatch?.domain ?? null;
+      if (domain) {
+        console.info('classify-intent: CREATE_WORKFLOW domain resolved from alias lookup', {
+          domain, traceId,
+        });
+      }
+    }
+
     await enqueueWorkflow({
       type:      sqsType,
       userInput,
+      domain,
       traceId,
       callback,
     });
