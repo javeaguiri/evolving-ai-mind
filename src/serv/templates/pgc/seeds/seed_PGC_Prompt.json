@@ -1641,5 +1641,80 @@
       }
     },
     "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nDesign specification:\n{{design_spec}}\n\nUser preferences (array of { id, selected_value }):\n{{user_preferences}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nAvailable step types and their contracts (use ONLY these — never invent step types):\n{{step_type_contracts}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\" }\n  ]\n}\n\njs_transform sandbox — available bindings:\n-  — the resolved value of input_key from local_state\n-  — the full workflow state object. Use local_state.key_name to read any prior step output. Example: local_state.user_preferences, local_state.quiz_state.index\n- All expressions must be synchronous IIFEs: (function(){ ... return value; })()\n- No await, no fetch, no require.\n\nFlat loop pattern — use when a collection requires human interaction per item (e.g. a quiz):\n- Loop state (index, accumulators) lives in local_state, written by js_transform steps\n- Backward reference from loop anchor gate to loop start step is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\ntext_input gate contract:\n- gate_type: text_input\n- output_key: required — typed value written to local_state[output_key] on submit\n- No context_key\n- options: exactly one Submit (action: confirm, on_select: next) and one Cancel\n\nRules:\n- Every step must have a unique string key in the step field\n- The last step must have type end\n- Every non-end step must have on_success set to: next, end, cancel, human_feedback, or step:<key>\n- Every non-end step that can fail must have on_failure\n- Every human_gate must have at least one option with action: cancel\n- Every {{template}} reference must use a key written by a prior step output_key, or input.* for workflow input\n- js_transform steps must have input_key, output_key, and expression\n- llm_call steps must reference an existing intent_category in PGC_Prompt — see design_spec.prompts_needed for any newly seeded prompts\n- iterator steps must have items_key, item_step, output_key, on_complete, and execution_mode: sequential\n- Return ONLY the JSON object, nothing else"
+  },
+  {
+    "intent_category": "fix_workflow_steps",
+    "version": 1,
+    "model": "anthropic/claude-sonnet-4-5",
+    "was_successful": null,
+    "input_variables": [
+      { "name": "workflow_name",       "required": true,  "description": "Name of the workflow being fixed" },
+      { "name": "broken_steps",        "required": true,  "description": "JSON string of the broken step array" },
+      { "name": "issues",              "required": true,  "description": "JSON array of StaticAnalysisIssue objects from Level 1" },
+      { "name": "step_type_contracts", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
+      { "name": "routing_value_rules", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
+      { "name": "step_usage_patterns", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
+      { "name": "workflow_constraints","required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
+      { "name": "stack_trace",         "required": false, "description": "Optional runtime CloudWatch error string" }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": ["diagnosis", "changes_applied", "corrected_steps"],
+      "additionalProperties": false,
+      "properties": {
+        "diagnosis": { "type": "string", "minLength": 10 },
+        "changes_applied": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["step", "field", "before", "after", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "step":   { "type": "string" },
+              "field":  { "type": "string" },
+              "before": { "type": "string" },
+              "after":  { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "corrected_steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["step", "type"],
+            "additionalProperties": true,
+            "properties": {
+              "step": { "type": "string" },
+              "type": { "type": "string" }
+            }
+          }
+        },
+        "context_updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "updated_content", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "key":             { "type": "string" },
+              "updated_content": { "type": "string" },
+              "reason":          { "type": "string" }
+            }
+          }
+        },
+        "prompt_text_change": {
+          "type": "object",
+          "required": ["intent_category", "recommendation"],
+          "additionalProperties": false,
+          "properties": {
+            "intent_category": { "type": "string" },
+            "recommendation":  { "type": "string" }
+          }
+        }
+      }
+    },
+    "prompt_text": "You are the right-brain repair module for evolving-mind-ai. Your job is to fix structural errors in a registered workflow step array.\n\nYou have been given:\n- The workflow name: {{workflow_name}}\n- The broken step array: {{broken_steps}}\n- The static analysis issues found: {{issues}}\n- The live step type contracts: {{step_type_contracts}}\n- The routing value rules: {{routing_value_rules}}\n- Step usage patterns with common mistakes: {{step_usage_patterns}}\n- Structural constraints: {{workflow_constraints}}\n- An optional runtime stack trace: {{stack_trace}}\n\nCRITICAL RULE — condition steps:\nThe executeCondition handler ALWAYS prepends 'step:' to on_truthy and on_falsy before resolving them. Therefore:\n- on_truthy and on_falsy MUST be bare step keys only (e.g. '5', '9a', '12')\n- NEVER use routing tokens (next, end, cancel, human_feedback) in on_truthy/on_falsy\n- NEVER pre-prefix with step: — 'step:9a' becomes 'step:step:9a' at runtime which fails\n- If on_truthy should advance sequentially, find the next step's key and use it directly\n\nSYSTEM CONTEXT GAPS:\nIf the issues indicate the LLM that generated these steps violated a step type contract, consider whether a PGC_SystemContext row should be updated to prevent recurrence. The four context rows injected into fix_workflow_steps are also injected into generate_workflow_steps and analyze_and_design_workflow — updating them here prevents the same error class from being generated again.\n\nPROMPT TEXT CHANGES:\nIf context updates alone cannot prevent recurrence and you believe a PGC_Prompt.prompt_text change is needed, include a prompt_text_change recommendation. This will be logged for human review — it will NOT be applied automatically. Only include this if context updates are genuinely insufficient.\n\nYOUR TASK:\n1. Analyse the broken steps and static analysis issues\n2. Identify the root cause — not just the symptom. Ask: why did the step generator produce these values? Is a context row missing the correct rule?\n3. Produce a fully corrected step array (complete array — not a diff)\n4. List every individual change: step key, field name, before value, after value, plain-language reason\n5. Write a concise diagnosis explaining what was wrong and why\n6. If a PGC_SystemContext row should be updated to prevent recurrence, include context_updates\n7. If a PGC_Prompt.prompt_text change would be the correct fix but context updates are insufficient, include prompt_text_change\n\nRespond ONLY with a valid JSON object — no markdown fences, no preamble.\n\n{\n  \"diagnosis\": \"Plain-language root cause explanation\",\n  \"changes_applied\": [\n    { \"step\": \"4\", \"field\": \"on_truthy\", \"before\": \"next\", \"after\": \"5\", \"reason\": \"on_truthy must be a bare step key — routing token 'next' is invalid because executeCondition adds step: prefix internally\" }\n  ],\n  \"corrected_steps\": [ /* complete fixed step array */ ],\n  \"context_updates\": [\n    { \"key\": \"routing_value_rules\", \"updated_content\": \"<full updated content>\", \"reason\": \"Missing explicit rule about condition on_truthy/on_falsy\" }\n  ],\n  \"prompt_text_change\": {\n    \"intent_category\": \"generate_workflow_steps\",\n    \"recommendation\": \"<recommendation text>\"\n  }\n}"
   }
 ]
