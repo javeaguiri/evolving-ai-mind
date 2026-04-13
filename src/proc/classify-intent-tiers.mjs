@@ -434,14 +434,11 @@ export function buildTier2Prompt(userInput, domainHint, workflowNames, promptTex
     ? `The user is working with the "${domainHint}" domain.`
     : '';
 
-  const system = promptText
+  const instructions = promptText
     .replace('{{knownWorkflows}}', knownWorkflows)
     .replace('{{domainContext}}', domainContext);
 
-  return [
-    { role: 'system', content: system    },
-    { role: 'user',   content: userInput },
-  ];
+  return { instructions, userMessage: userInput };
 }
 
 // ---------------------------------------------------------------------------

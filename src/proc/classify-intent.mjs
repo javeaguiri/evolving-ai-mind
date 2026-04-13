@@ -20,6 +20,7 @@
 import { ok, err }                          from '../shared/lambda-utils.mjs';
 import { getRows, insertRow, updateRows, deleteRows } from '../shared/serv-client.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
+import { callLlm }                          from '../shared/llm-client.mjs';
 import {
   matchIntentMap,
   matchDomainAlias,
@@ -288,77 +289,17 @@ async function tier2(userInput, domainHint, workflowRows, traceId) {
   if (!promptRow) throw new Error('PGC_Prompt row missing for classify_intent_tier2 — run init-brain');
 
   const workflowNames = workflowRows.map(r => r.name);
-  const messages = buildTier2Prompt(userInput, domainHint, workflowNames, promptRow.prompt_text);
+  const { instructions, userMessage } = buildTier2Prompt(userInput, domainHint, workflowNames, promptRow.prompt_text);
 
   console.info('classify-intent: Tier 2 sonar call', { traceId, domainHint, promptVersion: promptRow.version });
 
-  const llmKey = process.env.LLM_API_KEY;
-  if (!llmKey) throw new Error('LLM_API_KEY env var not set');
-
-  const response = await fetch(process.env.LLM_CHAT_URL, {
-    method:  'POST',
-    headers: {
-      'Authorization': `Bearer ${llmKey}`,
-      'Content-Type':  'application/json',
-    },
-    body: JSON.stringify({
-      model:       promptRow.model ?? 'sonar',
-      messages,
-      temperature: 0.1,
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    const errorEntry = {
-      at:              new Date().toISOString(),
-      error_type:      'llm_http_error',
-      error_message:   `Tier 2 LLM error ${response.status}: ${text}`,
-      llm_raw_output:  text,
-      recovery_action: 'halt',
-    };
-    console.error('classify-intent: Tier 2 LLM HTTP error', { traceId, status: response.status });
-    try {
-      const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
-      await updateRows('PGC_Prompt',
-        [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
-        { error_log: { attempts: [...existingLog, errorEntry] } }
-      );
-    } catch (logErr) {
-      console.warn('classify-intent: error_log write failed', logErr.message);
-    }
-    throw new Error(`Tier 2 LLM error ${response.status}: ${text}`);
-  }
-
-  const data    = await response.json();
-  const rawText = data.choices?.[0]?.message?.content ?? '';
-
-  if (!rawText) throw new Error('Tier 2 LLM returned empty response');
-
-  let parsed;
-  try {
-    const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    parsed = JSON.parse(clean);
-  } catch (error) {
-    const errorEntry = {
-      at:              new Date().toISOString(),
-      error_type:      'invalid_json',
-      error_message:   error.message,
-      llm_raw_output:  rawText.slice(0, 500),
-      recovery_action: 'halt',
-    };
-    console.error('classify-intent: Tier 2 JSON parse failed', { traceId, raw: rawText.slice(0, 200) });
-    try {
-      const existingLog = Array.isArray(promptRow.error_log?.attempts) ? promptRow.error_log.attempts : [];
-      await updateRows('PGC_Prompt',
-        [{ column: 'intent_category', op: 'eq', value: 'classify_intent_tier2' }],
-        { error_log: { attempts: [...existingLog, errorEntry] } }
-      );
-    } catch (logErr) {
-      console.warn('classify-intent: error_log write failed', logErr.message);
-    }
-    throw new Error(`Tier 2 LLM returned invalid JSON: ${error.message}`);
-  }
+  const parsed = await callLlm(
+    promptRow.model,
+    instructions,
+    userMessage,
+    promptRow.output_schema ?? null,
+    traceId,
+  );
 
   const { intent_category, workflow_name, action_type } = parsed;
 

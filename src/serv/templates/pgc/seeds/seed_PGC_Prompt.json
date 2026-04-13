@@ -315,7 +315,7 @@
   {
     "intent_category": "classify_intent_tier2",
     "version": 1,
-    "model": "sonar",
+    "model": "perplexity/sonar",
     "was_successful": null,
     "input_variables": [
       {
@@ -1648,33 +1648,88 @@
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
-      { "name": "workflow_name",       "required": true,  "description": "Name of the workflow being fixed" },
-      { "name": "broken_steps",        "required": true,  "description": "JSON string of the broken step array" },
-      { "name": "issues",              "required": true,  "description": "JSON array of StaticAnalysisIssue objects from Level 1" },
-      { "name": "step_type_contracts", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
-      { "name": "routing_value_rules", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
-      { "name": "step_usage_patterns", "required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
-      { "name": "workflow_constraints","required": false, "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps" },
-      { "name": "stack_trace",         "required": false, "description": "Optional runtime CloudWatch error string" }
+      {
+        "name": "workflow_name",
+        "required": true,
+        "description": "Name of the workflow being fixed"
+      },
+      {
+        "name": "broken_steps",
+        "required": true,
+        "description": "JSON string of the broken step array"
+      },
+      {
+        "name": "issues",
+        "required": true,
+        "description": "JSON array of StaticAnalysisIssue objects from Level 1"
+      },
+      {
+        "name": "step_type_contracts",
+        "required": false,
+        "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps"
+      },
+      {
+        "name": "routing_value_rules",
+        "required": false,
+        "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps"
+      },
+      {
+        "name": "step_usage_patterns",
+        "required": false,
+        "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps"
+      },
+      {
+        "name": "workflow_constraints",
+        "required": false,
+        "description": "Injected from PGC_SystemContext inject_for=fix_workflow_steps"
+      },
+      {
+        "name": "stack_trace",
+        "required": false,
+        "description": "Optional runtime CloudWatch error string"
+      }
     ],
     "output_schema": {
       "type": "object",
-      "required": ["diagnosis", "changes_applied", "corrected_steps"],
+      "required": [
+        "diagnosis",
+        "changes_applied",
+        "corrected_steps"
+      ],
       "additionalProperties": false,
       "properties": {
-        "diagnosis": { "type": "string", "minLength": 10 },
+        "diagnosis": {
+          "type": "string",
+          "minLength": 10
+        },
         "changes_applied": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["step", "field", "before", "after", "reason"],
+            "required": [
+              "step",
+              "field",
+              "before",
+              "after",
+              "reason"
+            ],
             "additionalProperties": false,
             "properties": {
-              "step":   { "type": "string" },
-              "field":  { "type": "string" },
-              "before": { "type": "string" },
-              "after":  { "type": "string" },
-              "reason": { "type": "string" }
+              "step": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         },
@@ -1683,11 +1738,18 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["step", "type"],
+            "required": [
+              "step",
+              "type"
+            ],
             "additionalProperties": true,
             "properties": {
-              "step": { "type": "string" },
-              "type": { "type": "string" }
+              "step": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
             }
           }
         },
@@ -1695,22 +1757,39 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["key", "updated_content", "reason"],
+            "required": [
+              "key",
+              "updated_content",
+              "reason"
+            ],
             "additionalProperties": false,
             "properties": {
-              "key":             { "type": "string" },
-              "updated_content": { "type": "string" },
-              "reason":          { "type": "string" }
+              "key": {
+                "type": "string"
+              },
+              "updated_content": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         },
         "prompt_text_change": {
           "type": "object",
-          "required": ["intent_category", "recommendation"],
+          "required": [
+            "intent_category",
+            "recommendation"
+          ],
           "additionalProperties": false,
           "properties": {
-            "intent_category": { "type": "string" },
-            "recommendation":  { "type": "string" }
+            "intent_category": {
+              "type": "string"
+            },
+            "recommendation": {
+              "type": "string"
+            }
           }
         }
       }

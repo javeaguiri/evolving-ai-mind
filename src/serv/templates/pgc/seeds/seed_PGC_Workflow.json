@@ -790,7 +790,13 @@
         "description": "Load the current workflow row from PGC_Workflow to get the live steps and version.",
         "input": {
           "tableName": "PGC_Workflow",
-          "filters": [{ "column": "name", "op": "eq", "value": "{{input.workflowName}}" }],
+          "filters": [
+            {
+              "column": "name",
+              "op": "eq",
+              "value": "{{input.workflowName}}"
+            }
+          ],
           "limit": 1
         },
         "output_key": "workflow_row",
@@ -805,18 +811,18 @@
         "output_key": "fix_context",
         "on_success": "next",
         "on_failure": "human_feedback",
-        "expression": "(function() { var inp = local_state.input; var row = (local_state.workflow_row || [])[0] || {}; return { workflowName:    inp.workflowName, issues:          inp.issues, brokenSteps:     inp.brokenSteps || row.steps || [], workflowVersion: inp.workflowVersion != null ? inp.workflowVersion : (row.version != null ? row.version : 1), stackTrace:      inp.stackTrace || '' }; })()"
+        "expression": "(function() { var inp = local_state.input; var row = (local_state.workflow_row || [])[0] || {}; var allSteps = inp.brokenSteps || row.steps || []; var issueKeys = (inp.issues || []).map(function(i) { return String(i.step); }); var brokenSteps = issueKeys.length > 0 ? allSteps.filter(function(s) { return issueKeys.indexOf(String(s.step)) !== -1; }) : allSteps; return { workflowName: inp.workflowName, issues: inp.issues, brokenSteps: brokenSteps, workflowVersion: inp.workflowVersion != null ? inp.workflowVersion : (row.version != null ? row.version : 1), stackTrace: inp.stackTrace || '' }; })()"
       },
       {
         "step": "4",
         "type": "llm_call",
         "description": "Right-brain repair call — diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
         "input": {
-          "prompt":         "fix_workflow_steps",
-          "workflow_name":  "{{fix_context.workflowName}}",
-          "broken_steps":   "{{fix_context.brokenSteps}}",
-          "issues":         "{{fix_context.issues}}",
-          "stack_trace":    "{{fix_context.stackTrace}}"
+          "prompt": "fix_workflow_steps",
+          "workflow_name": "{{fix_context.workflowName}}",
+          "broken_steps": "{{fix_context.brokenSteps}}",
+          "issues": "{{fix_context.issues}}",
+          "stack_trace": "{{fix_context.stackTrace}}"
         },
         "output_key": "fix_result",
         "on_success": "next",
@@ -876,9 +882,15 @@
         "description": "Write the corrected steps and incremented version to PGC_Workflow.",
         "input": {
           "tableName": "PGC_Workflow",
-          "filters": [{ "column": "name", "op": "eq", "value": "{{fix_context.workflowName}}" }],
+          "filters": [
+            {
+              "column": "name",
+              "op": "eq",
+              "value": "{{fix_context.workflowName}}"
+            }
+          ],
           "updates": {
-            "steps":   "{{fix_result.corrected_steps}}",
+            "steps": "{{fix_result.corrected_steps}}",
             "version": "{{new_version}}"
           }
         },
@@ -892,7 +904,7 @@
         "description": "Skip context update iterator if LLM produced no context_updates.",
         "expression": "{{fix_result.context_updates.length}}",
         "on_truthy": "10",
-        "on_falsy":  "11"
+        "on_falsy": "11"
       },
       {
         "step": "10",
@@ -903,8 +915,16 @@
           "type": "serv_update",
           "input": {
             "tableName": "PGC_SystemContext",
-            "filters": [{ "column": "key", "op": "eq", "value": "{{item.key}}" }],
-            "updates": { "content": "{{item.updated_content}}" }
+            "filters": [
+              {
+                "column": "key",
+                "op": "eq",
+                "value": "{{item.key}}"
+              }
+            ],
+            "updates": {
+              "content": "{{item.updated_content}}"
+            }
           },
           "on_failure": "human_feedback"
         },
@@ -920,7 +940,15 @@
         "input": {
           "tableName": "PGC_WorkflowRun",
           "filters": [
-            { "column": "status", "op": "in", "value": ["running", "failed", "awaiting_human_gate"] }
+            {
+              "column": "status",
+              "op": "in",
+              "value": [
+                "running",
+                "failed",
+                "awaiting_human_gate"
+              ]
+            }
           ]
         },
         "output_key": "active_runs",
@@ -933,7 +961,13 @@
         "description": "Load the workflow row to get its id for cross-checking active runs.",
         "input": {
           "tableName": "PGC_Workflow",
-          "filters": [{ "column": "name", "op": "eq", "value": "{{fix_context.workflowName}}" }],
+          "filters": [
+            {
+              "column": "name",
+              "op": "eq",
+              "value": "{{fix_context.workflowName}}"
+            }
+          ],
           "limit": 1
         },
         "output_key": "target_workflow_row",
@@ -956,7 +990,7 @@
         "description": "Skip cancellation iterator if no active runs to cancel.",
         "expression": "{{runs_to_cancel.length}}",
         "on_truthy": "15",
-        "on_falsy":  "16"
+        "on_falsy": "16"
       },
       {
         "step": "15",
@@ -967,8 +1001,16 @@
           "type": "serv_update",
           "input": {
             "tableName": "PGC_WorkflowRun",
-            "filters": [{ "column": "id", "op": "eq", "value": "{{item.id}}" }],
-            "updates": { "status": "cancelled" }
+            "filters": [
+              {
+                "column": "id",
+                "op": "eq",
+                "value": "{{item.id}}"
+              }
+            ],
+            "updates": {
+              "status": "cancelled"
+            }
           },
           "on_failure": "human_feedback"
         },
