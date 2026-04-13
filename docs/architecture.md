@@ -3034,6 +3034,17 @@ hit on a healthy workflow (legitimate SQS redelivery on a new step) resets the c
 | Cycle detector | Circular workflow routing | Graph analysis at workflow registration time |
 | `/shutdown` | Emergency stop any run | Sets status = cancelled; execute_top checks before executing |
 
+When any guard fires and marks a run `failed`, it enqueues `TROUBLESHOOT_WORKFLOW`
+for the failing workflow name before posting `WORKFLOW_ERROR` to Slack. This connects
+the circuit breaker layer to the Tier 1 reactive repair path (Section 6.12) — the
+system attempts self-diagnosis immediately after every detected structural failure,
+whether the failure is a stuck step, a velocity limit, or a caught exception.
+
+Untrapped failures — hangs, silent infinite loops, Lambda timeouts — are surfaced by
+CloudWatch alarms and SQS DLQ notifications. These are not self-healing at runtime;
+they require developer intervention. The `TROUBLESHOOT_WORKFLOW` curl path in
+Section 6.12 is the manual entry point for these cases.
+
 #### Emergency shutdown
 
 `POST /proc/shutdown { workflowRunId }` sets `PGC_WorkflowRun.status = 'cancelled'`.
@@ -3965,6 +3976,201 @@ domain, no schema gaps, obvious implementation), the right brain may find no
 preference questions, the left brain may find no gaps, and step generation runs with
 a single pass — fast and cheap. For complex workflows, the full pipeline runs and the
 user is only interrupted where their specific input is genuinely required.
+
+---
+
+### 6.12 Right-Brain Self-Repair — troubleshoot-workflow and fix-workflow
+
+This section documents the right-brain self-repair loop: the system's ability to
+detect structural errors in registered workflows and correct them autonomously,
+with a human confirmation gate before any change is committed.
+
+---
+
+#### Three tiers of right-brain activity
+
+**Tier 1 — Reactive repair** (implemented — Session 22)
+Triggered by a workflow execution failure. `TROUBLESHOOT_WORKFLOW` fire-and-forget SQS
+message loads the failing workflow from `PGC_Workflow`, runs Level 1 static analysis,
+and if issues are found enqueues `FIX_WORKFLOW`. The fix LLM call produces corrected
+steps, validates them, presents a human confirmation gate ("here's what I'm about to
+change — confirm?"), and on confirmation writes the fix to `PGC_Workflow`, cancels
+active broken runs, and posts a "fixed — try again" reply to Slack.
+
+Both are PROC modules (`troubleshoot-workflow.mjs`, `fix-workflow.mjs`) — no
+`PGC_WorkflowRun` lifecycle. There is one human gate in `fix-workflow` for the
+confirmation step. This is intentional: the LLM produces a diagnosis and a proposed
+change set, but a human approves the write before it goes to the database.
+
+**Tier 2 — Proactive self-improvement** (medium-term)
+After every successful `fix-workflow` repair, the module updates `PGC_SystemContext`
+rows that are injected into the prompts that generated the broken steps. For example,
+a condition routing violation fix updates the `workflow_constraints` or
+`routing_value_rules` context row so that future calls to `generate_workflow_steps`
+receive corrected contracts and do not repeat the same mistake.
+
+`fix-workflow` does not modify `PGC_Prompt.prompt_text` directly. However, the
+`fix_workflow_steps` LLM prompt is not prohibited from recommending a prompt text
+change in its output. If the LLM returns a `prompt_text_change` recommendation,
+the fix-workflow module logs it to `PGC_Prompt.error_log` for human review rather
+than applying it automatically. If this path is reached frequently for the same
+prompt, it signals that the prompt itself needs redesign — a Tier 3 concern.
+
+**Tier 3 — Scheduled maintenance loop** (Backlog)
+Triggered on a schedule or after every N workflow runs (configurable in
+`PGC_SystemContext`). Reads `PGC_WorkflowStats` for soft failure patterns — high
+human gate cancellation rates, high LLM correction attempt rates on specific prompts,
+workflows that are never invoked after registration. This tier addresses usability
+failures and prompt drift, not structural errors. The output is improvement
+recommendations written to a `PGC_ImprovementQueue` table (Backlog) for human review
+or automated application subject to confidence threshold.
+
+---
+
+#### Why troubleshoot and fix are PROC modules, not PGC_Workflow workflows
+
+`create_domain` and `create_workflow` are workflows because they have multiple
+human-in-the-loop gate steps where the user reviews LLM output and makes structural
+decisions. The execution stack suspends between gates — the user is part of the
+execution path.
+
+`troubleshoot-workflow` has no human gates — it is pure diagnosis: load steps, run
+Level 1, format report, post to Slack. One SQS message in, one `WORKFLOW_NOTIFY` out.
+
+`fix-workflow` has exactly one human gate — the confirmation step before committing
+the corrected steps. This gate is structurally simpler than the `create_*` gates:
+it shows the `changesApplied` diff and asks confirm/cancel. No LLM output review
+loop, no iterator, no schema design. Implementing this as a workflow would add
+`PGC_WorkflowRun` overhead (DB row, stack frames, idempotency guard, execute_top
+hops) to what is effectively a two-step operation: LLM call → human confirm → DB
+write. The PROC module pattern with a single `enqueueWorkflow` for the gate is
+the correct fit.
+
+If `fix-workflow` eventually requires multiple gate steps (e.g. separate confirmation
+for steps changes vs. context changes vs. prompt changes), that is the signal to
+promote it to a workflow. The current single-gate design does not meet that bar.
+
+---
+
+#### PROC module contracts
+
+**`troubleshoot-workflow.mjs`**
+
+```
+SQS type:   TROUBLESHOOT_WORKFLOW
+HTTP route: POST /api/v1/proc/troubleshoot-workflow
+
+Input:
+  workflowName  string     — load steps from PGC_Workflow (required unless steps supplied)
+  steps         array?     — raw step array; overrides DB lookup when present
+  autoFix       boolean?   — when true and issues found, enqueue FIX_WORKFLOW (SQS only)
+  callback      Callback
+
+Behaviour:
+  1. Load steps from PGC_Workflow by name, or use supplied steps array
+  2. Run Level 1 static analysis (executeSimulate Level 1 in step-executor.mjs)
+  3. Format TroubleshootWorkflowResponse with summary string
+  4. If autoFix=true and issues found: enqueue TROUBLESHOOT_WORKFLOW → FIX_WORKFLOW
+  5. enqueueCallback WORKFLOW_NOTIFY with summary
+
+HTTP: return TroubleshootWorkflowResponse directly
+SQS: post to Slack thread via callback
+```
+
+**`fix-workflow.mjs`**
+
+```
+SQS type:   FIX_WORKFLOW
+HTTP route: POST /api/v1/proc/fix-workflow
+
+Input (primary path — from TROUBLESHOOT_WORKFLOW output):
+  troubleshootResult  TroubleshootWorkflowResponse  — full output of troubleshoot call
+  stackTrace          string?                       — CloudWatch error string for LLM context
+  callback            Callback
+
+Input (direct path — no prior troubleshoot call):
+  workflowName   string
+  issues         StaticAnalysisIssue[]
+  brokenSteps    array?   — if omitted, loaded from PGC_Workflow by name
+  stackTrace     string?
+  callback       Callback
+
+Behaviour:
+  1. Resolve workflowName, brokenSteps, issues from troubleshootResult or direct fields
+  2. Call LLM fix_workflow_steps prompt:
+       Input: workflowName, brokenSteps, issues, step_type_contracts (PGC_SystemContext),
+              routing_value_rules (PGC_SystemContext), stackTrace (if present)
+       Output: { diagnosis, changesApplied, correctedSteps, context_updates?, prompt_text_change? }
+  3. Run Level 1 static analysis on correctedSteps
+  4. If validation fails: log to PGC_Prompt.error_log, enqueueCallback with failure report, return
+  5. Human confirmation gate:
+       Show changesApplied diff + diagnosis
+       Options: [Apply fix → confirm] [Cancel → cancel]
+  6. On confirm:
+       a. updateRows PGC_Workflow: steps=correctedSteps, version=version+1
+       b. If context_updates present: updateRows PGC_SystemContext for each key
+       c. If prompt_text_change present: log to PGC_Prompt.error_log (do NOT apply)
+       d. Cancel all active/failed WorkflowRun rows for this workflowName
+       e. For each cancelled run: enqueueCallback WORKFLOW_NOTIFY "Workflow repaired — try again"
+       f. enqueueCallback WORKFLOW_NOTIFY with FixWorkflowResponse summary
+
+HTTP: return FixWorkflowResponse directly (skips human gate — for developer testing)
+SQS: post confirmation gate via callback, await resume_gate
+```
+
+---
+
+#### fix_workflow_steps prompt — contract
+
+| Field | Notes |
+|---|---|
+| Input: `workflow_name` | For context only — not in the output |
+| Input: `broken_steps` | Full current step array |
+| Input: `issues` | `StaticAnalysisIssue[]` array from Level 1 |
+| Input: `step_type_contracts` | Injected from `PGC_SystemContext` |
+| Input: `routing_value_rules` | Injected from `PGC_SystemContext` |
+| Input: `stack_trace` | Optional runtime error string |
+| Output: `diagnosis` | Plain-language explanation of root cause |
+| Output: `changes_applied` | `[{ step, field, before, after, reason }]` |
+| Output: `corrected_steps` | Complete fixed step array — not a diff |
+| Output: `context_updates` | Optional `[{ key, updated_content }]` for `PGC_SystemContext` rows |
+| Output: `prompt_text_change` | Optional `{ intent_category, recommendation }` — logged only, never applied |
+
+The prompt instructs the LLM that `prompt_text` changes are out of scope for
+automatic application. If the LLM believes a prompt change is the correct fix, it
+should describe the recommendation in `prompt_text_change` and explain why it could
+not fix the issue through step corrections or context updates alone. This is a
+signal for human review, not an automated write.
+
+---
+
+#### SQS message types added
+
+| Type | Category | Sent by | Handled by |
+|---|---|---|---|
+| `TROUBLESHOOT_WORKFLOW` | 1 — fire-and-forget | Guard 1 / developer curl / autoFix chain | `troubleshoot-workflow.mjs` |
+| `FIX_WORKFLOW` | 1 — fire-and-forget (becomes Category 2 if human gate present) | `troubleshoot-workflow.mjs` (autoFix) / developer curl | `fix-workflow.mjs` |
+
+`FIX_WORKFLOW` is unusual: it begins as a fire-and-forget (no `workflowRunId`) but
+if the human confirmation gate is reached, `fix-workflow.mjs` inserts a
+`PGC_WorkflowRun` row and transitions to a Category 2 `WORKFLOW_STEP execute_top`
+message to drive the gate. This is the same pattern as any other fire-and-forget
+that spawns a workflow run (e.g. `CLASSIFY_INTENT` → `WORKFLOW_STEP`).
+
+---
+
+#### Connection to circuit breakers (Section 6.7)
+
+When Guard 1 (stuck-step detector) marks a run `failed`, `run-workflow.mjs` enqueues
+`TROUBLESHOOT_WORKFLOW` for the failing workflow name before posting `WORKFLOW_ERROR`
+to Slack. The same applies to other guards when they land: velocity detector,
+execution accumulator. This wires the safety layer to the repair layer so that every
+detected structural failure initiates a self-diagnosis attempt automatically.
+
+Untrapped failures (Lambda timeouts, silent hangs, DLQ-delivered messages) are not
+self-healing at runtime. Developer uses `troubleshoot-workflow` curl path for
+manual diagnosis. CloudWatch alarms + SQS DLQ notification are the discovery
+mechanism for these cases.
 
 ---
 
