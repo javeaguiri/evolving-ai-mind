@@ -196,6 +196,15 @@ async function executeTop({ workflowRunId, traceId, source }) {
           traceId,
         });
       }
+      // Tier 1 self-repair — diagnose the workflow that just failed
+      await enqueueWorkflow({
+        type:         'TROUBLESHOOT_WORKFLOW',
+        workflowName: run.workflow_name,
+        stackTrace:   msg,
+        autoFix:      true,
+        traceId,
+        callback:     run.callback,
+      });
       return { skipped: true, reason: 'stuck' };
     }
 
@@ -240,6 +249,15 @@ async function executeTop({ workflowRunId, traceId, source }) {
         traceId,
       });
     }
+    // Tier 1 self-repair — diagnose the workflow that just failed
+    await enqueueWorkflow({
+      type:         'TROUBLESHOOT_WORKFLOW',
+      workflowName: run.workflow_name,
+      stackTrace:   `Step ${frame.current_step} (${step.type}) failed: ${stepError.message}`,
+      autoFix:      true,
+      traceId,
+      callback:     run.callback,
+    });
     throw stepError;
   }
 

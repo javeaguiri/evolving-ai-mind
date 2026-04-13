@@ -155,6 +155,9 @@ entry messages, which carry no run ID and are consumed once.
 | `CREATE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction | proc/create-domain.mjs |
 | `HELP` | — | 1 — fire-and-forget | SlackbotFunction | proc/help.mjs |
 | `CLASSIFY_INTENT` | — | 1 — fire-and-forget | SlackbotFunction (mind.mjs) | proc/classify-intent.mjs |
+| `CREATE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/create-workflow.mjs |
+| `TROUBLESHOOT_WORKFLOW` | — | 1 — fire-and-forget | run-workflow.mjs (on failure) / developer curl | proc/troubleshoot-workflow.mjs |
+| `FIX_WORKFLOW` | — | 1 — fire-and-forget → 2 on gate | troubleshoot-workflow.mjs (autoFix) / developer curl | proc/fix-workflow.mjs |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
@@ -1057,13 +1060,13 @@ step type so `step_type_contracts` is regenerated.
 
 | Key | inject_for | Purpose |
 |---|---|---|
-| `step_type_contracts` | `generate_workflow_steps`, `analyze_and_design_workflow`, `create_workflow` | Full step type catalogue — injected so LLM knows the instruction set |
-| `routing_value_rules` | `generate_workflow_steps`, `analyze_and_design_workflow`, `generate_workflow_paths`, `create_workflow` | Valid routing tokens and Guard 3 backward reference rule |
+| `step_type_contracts` | `generate_workflow_steps`, `analyze_and_design_workflow`, `create_workflow`, `fix_workflow_steps` | Full step type catalogue — injected so LLM knows the instruction set |
+| `routing_value_rules` | `generate_workflow_steps`, `analyze_and_design_workflow`, `generate_workflow_paths`, `create_workflow`, `fix_workflow_steps` | Valid routing tokens and Guard 3 backward reference rule |
 | `create_domain_example` | `generate_workflow_steps`, `analyze_and_design_workflow`, `create_workflow` | Annotated `create_domain` + flat loop quiz example — reference for correct step structure |
-| `step_usage_patterns` | `generate_workflow_steps`, `analyze_and_design_workflow` | Concrete correct step definitions per type with common mistake notes |
+| `step_usage_patterns` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Concrete correct step definitions per type with common mistake notes |
 | `runtime_bindings` | `generate_workflow_steps`, `analyze_and_design_workflow` | What the Step Processor injects automatically: `input.*`, `item`, `output_key` lifecycle per gate type, `local_state` in expressions |
 | `template_syntax` | `generate_workflow_steps`, `analyze_and_design_workflow` | `{{key}}`, `{{key.field}}`, `{{key.0.field}}`, `{{input.field}}` — resolution rules and silent-empty-on-miss behaviour |
-| `workflow_constraints` | `generate_workflow_steps`, `analyze_and_design_workflow` | Structural rules: `end` required, `notify` no on_failure, Guard 3, Guard 1 stuck-step detection |
+| `workflow_constraints` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Structural rules: `end` required, `notify` no on_failure, Guard 3, Guard 1 stuck-step detection |
 
 **Argument:** `key` name — e.g. `upsert-system-context.mjs create_domain_example`.
 Omit to push all rows in the seed file.

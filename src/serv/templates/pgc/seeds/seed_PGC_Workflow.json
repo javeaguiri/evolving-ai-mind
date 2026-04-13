@@ -764,6 +764,233 @@
     ]
   },
   {
+    "name": "fix_workflow",
+    "domain": null,
+    "description": "Tier 1 reactive repair — LLM diagnoses static analysis issues in a registered workflow, proposes corrected steps, validates them, presents a human confirmation gate, writes the fix to PGC_Workflow, updates PGC_SystemContext if needed, and cancels affected runs.",
+    "intent_keywords": [
+      "fix workflow",
+      "repair workflow",
+      "fix broken workflow"
+    ],
+    "state_strategy": "sequential_with_confirmation",
+    "model_used": "anthropic/claude-sonnet-4-5",
+    "version": 1,
+    "steps": [
+      {
+        "step": "1",
+        "type": "condition",
+        "description": "If brokenSteps were supplied in input, skip the DB load. Otherwise load them from PGC_Workflow.",
+        "expression": "{{input.brokenSteps}}",
+        "on_truthy": "3",
+        "on_falsy": "2"
+      },
+      {
+        "step": "2",
+        "type": "serv_query",
+        "description": "Load the current workflow row from PGC_Workflow to get the live steps and version.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "filters": [{ "column": "name", "op": "eq", "value": "{{input.workflowName}}" }],
+          "limit": 1
+        },
+        "output_key": "workflow_row",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "3",
+        "type": "js_transform",
+        "description": "Assemble fix_context from supplied input or loaded workflow_row. Normalises the two entry paths into a single shape for downstream steps.",
+        "input_key": "input",
+        "output_key": "fix_context",
+        "on_success": "next",
+        "on_failure": "human_feedback",
+        "expression": "(function() { var inp = local_state.input; var row = (local_state.workflow_row || [])[0] || {}; return { workflowName:    inp.workflowName, issues:          inp.issues, brokenSteps:     inp.brokenSteps || row.steps || [], workflowVersion: inp.workflowVersion != null ? inp.workflowVersion : (row.version != null ? row.version : 1), stackTrace:      inp.stackTrace || '' }; })()"
+      },
+      {
+        "step": "4",
+        "type": "llm_call",
+        "description": "Right-brain repair call — diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
+        "input": {
+          "prompt":         "fix_workflow_steps",
+          "workflow_name":  "{{fix_context.workflowName}}",
+          "broken_steps":   "{{fix_context.brokenSteps}}",
+          "issues":         "{{fix_context.issues}}",
+          "stack_trace":    "{{fix_context.stackTrace}}"
+        },
+        "output_key": "fix_result",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "5",
+        "type": "simulate",
+        "description": "Level 1 static analysis on corrected steps — validates routing, dead targets, templates, gate structure. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
+        "input": {
+          "steps_key": "fix_result.corrected_steps"
+        },
+        "output_key": "post_fix_validation",
+        "on_success": "next",
+        "on_failure": "step:6"
+      },
+      {
+        "step": "6",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "Show diagnosis, proposed changes, and (on failure path) remaining validation issues. User confirms to apply the fix or requests another LLM attempt.",
+        "message_template": "🔧 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} → v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}}",
+        "context_key": "fix_result.changes_applied",
+        "options": [
+          {
+            "label": "Apply fix",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Try again",
+            "action": "retry",
+            "on_select": "step:4"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "7",
+        "type": "js_transform",
+        "description": "Compute the new version number — workflowVersion + 1.",
+        "input_key": "fix_context",
+        "output_key": "new_version",
+        "on_success": "next",
+        "on_failure": "human_feedback",
+        "expression": "(function() { return (items.workflowVersion || 1) + 1; })()"
+      },
+      {
+        "step": "8",
+        "type": "serv_update",
+        "description": "Write the corrected steps and incremented version to PGC_Workflow.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "filters": [{ "column": "name", "op": "eq", "value": "{{fix_context.workflowName}}" }],
+          "updates": {
+            "steps":   "{{fix_result.corrected_steps}}",
+            "version": "{{new_version}}"
+          }
+        },
+        "output_key": "workflow_updated",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "9",
+        "type": "condition",
+        "description": "Skip context update iterator if LLM produced no context_updates.",
+        "expression": "{{fix_result.context_updates.length}}",
+        "on_truthy": "10",
+        "on_falsy":  "11"
+      },
+      {
+        "step": "10",
+        "type": "iterator",
+        "description": "Apply each PGC_SystemContext update produced by the LLM — Tier 2 improvement, prevents the same error class from recurring in future workflow generation.",
+        "items_key": "fix_result.context_updates",
+        "item_step": {
+          "type": "serv_update",
+          "input": {
+            "tableName": "PGC_SystemContext",
+            "filters": [{ "column": "key", "op": "eq", "value": "{{item.key}}" }],
+            "updates": { "content": "{{item.updated_content}}" }
+          },
+          "on_failure": "human_feedback"
+        },
+        "execution_mode": "sequential",
+        "output_key": "context_update_results",
+        "on_complete": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "11",
+        "type": "serv_query",
+        "description": "Load all runs in active or failed state for cancellation. Filtering by workflow_id done in the next js_transform since status IN is supported but workflow_id cross-check needs the workflow row.",
+        "input": {
+          "tableName": "PGC_WorkflowRun",
+          "filters": [
+            { "column": "status", "op": "in", "value": ["running", "failed", "awaiting_human_gate"] }
+          ]
+        },
+        "output_key": "active_runs",
+        "on_success": "next",
+        "on_failure": "next"
+      },
+      {
+        "step": "12",
+        "type": "serv_query",
+        "description": "Load the workflow row to get its id for cross-checking active runs.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "filters": [{ "column": "name", "op": "eq", "value": "{{fix_context.workflowName}}" }],
+          "limit": 1
+        },
+        "output_key": "target_workflow_row",
+        "on_success": "next",
+        "on_failure": "next"
+      },
+      {
+        "step": "13",
+        "type": "js_transform",
+        "description": "Filter active_runs to only those belonging to the repaired workflow, excluding the current fix run itself.",
+        "input_key": "active_runs",
+        "output_key": "runs_to_cancel",
+        "on_success": "next",
+        "on_failure": "next",
+        "expression": "(function() { var targetId = (local_state.target_workflow_row || [])[0]?.id; var currentRunId = local_state.input?.currentRunId || null; if (!targetId) return []; return (items || []).filter(function(r) { return r.workflow_id === targetId && r.id !== currentRunId; }); })()"
+      },
+      {
+        "step": "14",
+        "type": "condition",
+        "description": "Skip cancellation iterator if no active runs to cancel.",
+        "expression": "{{runs_to_cancel.length}}",
+        "on_truthy": "15",
+        "on_falsy":  "16"
+      },
+      {
+        "step": "15",
+        "type": "iterator",
+        "description": "Cancel each active run for the repaired workflow and notify its callback.",
+        "items_key": "runs_to_cancel",
+        "item_step": {
+          "type": "serv_update",
+          "input": {
+            "tableName": "PGC_WorkflowRun",
+            "filters": [{ "column": "id", "op": "eq", "value": "{{item.id}}" }],
+            "updates": { "status": "cancelled" }
+          },
+          "on_failure": "human_feedback"
+        },
+        "execution_mode": "sequential",
+        "output_key": "cancelled_runs",
+        "on_complete": "next",
+        "on_failure": "next"
+      },
+      {
+        "step": "16",
+        "type": "notify",
+        "description": "Confirm the fix was applied. Report version bump, number of context rows updated, and number of runs cancelled.",
+        "message_template": "✅ *{{fix_context.workflowName}}* repaired (v{{fix_context.workflowVersion}} → v{{new_version}})\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes applied:* {{fix_result.changes_applied.length}}\n*Runs cancelled:* {{runs_to_cancel.length}}\n\nYou can try again now.",
+        "on_success": "end"
+      },
+      {
+        "step": "17",
+        "type": "end"
+      }
+    ]
+  },
+  {
     "name": "get_entity",
     "domain": null,
     "description": "Find and display a domain entity record by id or name search including all child data. Generic — works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",

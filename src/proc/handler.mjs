@@ -30,6 +30,8 @@ import { handle as help }               from './help.mjs';
 import { handle as classifyIntent }     from './classify-intent.mjs';
 import { handle as simulateWorkflow }   from './simulate-workflow.mjs';
 import { handle as createWorkflow }     from './create-workflow.mjs';
+import { handle as troubleshootWorkflow } from './troubleshoot-workflow.mjs';
+import { handle as fixWorkflow }        from './fix-workflow.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -116,6 +118,22 @@ async function processSqsBatch(records) {
         await createWorkflow(req);
         continue;
       }
+      // TROUBLESHOOT_WORKFLOW — Tier 1 reactive repair: Level 1 static analysis.
+      // Enqueued by run-workflow.mjs on step failure or stuck-step guard fire.
+      // Also triggered manually via curl or /m troubleshoot workflow <name>.
+      if (message.type === 'TROUBLESHOOT_WORKFLOW') {
+        const req = buildReqFromSqs(message);
+        await troubleshootWorkflow(req);
+        continue;
+      }
+      // FIX_WORKFLOW — Tier 1 reactive repair: LLM-driven correction + human gate.
+      // Enqueued by troubleshoot-workflow.mjs when autoFix=true and issues found.
+      // Also triggered manually via curl.
+      if (message.type === 'FIX_WORKFLOW') {
+        const req = buildReqFromSqs(message);
+        await fixWorkflow(req);
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -164,6 +182,12 @@ async function dispatch(req) {
 
     case 'create-workflow':
       return createWorkflow(req);
+
+    case 'troubleshoot-workflow':
+      return troubleshootWorkflow(req);
+
+    case 'fix-workflow':
+      return fixWorkflow(req);
 
     case 'simulate-workflow':
       return simulateWorkflow(req);

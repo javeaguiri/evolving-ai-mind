@@ -27,6 +27,8 @@ tests/
   unit/
     classify-intent-tiers.test.mjs   ← classify-intent-tiers.mjs pure functions (no network)
     step-executor.test.mjs           ← step-executor.mjs pure functions: buildDialog, runSandboxedExpression
+    troubleshoot-fix-workflow.test.mjs ← runSimulation Level 1, summary formatting, post-fix validation,
+                                         input resolution, fix_workflow structural validity (no network)
   integration/
     classify-intent.test.mjs         ← HTTP endpoint tests (requires SERV_API_URL)
   fixtures/
@@ -264,3 +266,59 @@ categoría o descripción simplista y generalizada';
 ```
 
 This test should be added to the existing `matchWorkflowByKeywords` describe block.
+
+---
+
+## troubleshoot-fix-workflow.test.mjs — Session 22
+
+Tests for the Tier 1 right-brain self-repair loop. Pure functions only — no mock.module,
+no DB, no SQS, no LLM calls. `mock.module` is not available in Node v22; all handle()
+functions that call I/O are integration concerns tested via curl against live endpoints.
+
+The test file imports `runSimulation` directly from `step-executor.mjs` (pure synchronous)
+and mirrors three helper functions from the source modules as pure testable equivalents.
+
+### Why no I/O mocking
+
+`fix-workflow.mjs` is a thin entry point (identical pattern to `create-domain.mjs`) — it
+validates inputs, creates a PGC_WorkflowRun, and enqueues execute_top. There is no business
+logic to unit-test in `handle()` beyond input validation. All repair logic lives in the
+`fix_workflow` PGC_Workflow definition driven by the Step Processor.
+
+`troubleshoot-workflow.mjs` calls `runSimulation` (pure) and `enqueueCallback` (I/O).
+The diagnostic logic is entirely in `runSimulation` which is directly importable.
+
+### Running
+
+```cmd
+node --test tests/unit/troubleshoot-fix-workflow.test.mjs
+```
+
+### Test suites (35 tests)
+
+| Suite | What it tests |
+|---|---|
+| `Level 1 — condition step routing contract` | Detects on_truthy/on_falsy routing token violations (real create_workflow v4 bugs); passes for correctly fixed bare step keys; each issue has all fields the fix_workflow_steps prompt expects |
+| `Level 1 — other failure classes` | Dead routing targets, unresolved template variables, missing cancel option, Level 1-only mode (no paths), short-circuit on Level 1 failure |
+| `buildTroubleshootSummary` | ✅/❌ prefix, issue count, step/failure_class/detail in bullets, suggestion appended, 10-bullet cap with overflow, singular/plural "issue", null workflowName |
+| `validateCorrectedSteps` | null/empty input, still-broken steps rejected, fixed steps pass, structured issue objects when failed |
+| `resolveFixInputs` | Extracts from troubleshootResult; error when passed=true; error when no workflowName; error when empty issues; brokenSteps override; stackTrace forwarding and override |
+| `fix_workflow workflow definition — structural validity` | Loads seed file directly; Level 1 passes on fix_workflow's own steps; all condition steps use bare keys; ends with type:end; exactly one human_gate; gate has cancel+retry options; simulate step points to fix_result.corrected_steps; serv_update uses name filter; context iterator uses item.key/item.updated_content |
+| `detect → correct → validate cycle` | Full cycle: broken steps produce issues → valid correction passes post-fix validation → bad correction is blocked → summaries show correct symbols and versions; issues have LLM-prompt-compatible schema |
+
+### Key regression guarded
+
+The `fix_workflow` workflow definition validates itself in section 5 of the test suite. This
+means any future seed change that introduces a condition routing bug, dead target, or missing
+cancel option in `fix_workflow` is caught immediately by `node --test` before deployment —
+the repair workflow cannot itself be broken silently.
+
+### Fixtures used
+
+The test file embeds inline fixtures from the real create_workflow v4 production failure:
+
+- `BROKEN_CONDITION_STEPS` — step 4 with `on_truthy: "next"` and `on_falsy: "step:6"` (the exact
+  condition routing bug that crashed the first test run)
+- `FIXED_CONDITION_STEPS` — step 4 corrected to `on_truthy: "5"`, `on_falsy: "6"`
+- `ALL_FOUR_CONDITION_BUGS` — all four condition steps from create_workflow v4 with violations
+- `HEALTHY_STEPS` — passes Level 1, used for positive validation cases
