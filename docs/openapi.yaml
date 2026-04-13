@@ -859,7 +859,345 @@ paths:
       responses:
         '200':
           description: RDS version string delivered to Slack thread
+  /api/v1/ui/slack/shutdown:
+    post:
+      summary: Slack /shutdown command handler
+      description: >
+        Handles the /shutdown Slack slash command. Synchronous — unlike other
+        slash commands, this does NOT enqueue to SQS. SlackbotFunction calls
+        POST /proc/shutdown directly via HTTP fetch and returns the result
+        inline within Slack's 3s response window.
 
+        Slack command syntax:
+          /shutdown            — cancel all active workflow runs
+          /shutdown <runId>    — cancel a specific run by PGC_WorkflowRun.id
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret
+          3. Parses text field — empty = cancel all, integer = cancel specific run
+          4. Calls POST /proc/shutdown synchronously via HTTP fetch to PROC_API_URL
+          5. Formats ShutdownResult as a Slack message and returns inline (response_type: ephemeral)
+          6. No SQS enqueue, no thread — response is immediate and visible only to the caller
+
+        Ephemeral response — only the user who ran /shutdown sees the result.
+        This is intentional: shutdown is an operator action, not a team notification.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /shutdown
+                text:
+                  type: string
+                  description: Empty string (cancel all) or integer runId (cancel specific)
+                  example: "42"
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            Shutdown result returned inline. cancelledCount: 0 when no active runs exist —
+            this is not an error.
+          content:
+            application/json:
+              examples:
+                runs_cancelled:
+                  summary: One or more runs cancelled
+                  value:
+                    response_type: ephemeral
+                    text: "🛑 Shutdown complete — 2 run(s) cancelled: create_domain (run 42), create_domain (run 43)"
+                no_active_runs:
+                  summary: No active workflows
+                  value:
+                    response_type: ephemeral
+                    text: "✅ No active workflows to cancel"
+                specific_run_cancelled:
+                  summary: Specific run cancelled
+                  value:
+                    response_type: ephemeral
+                    text: "🛑 Run 42 cancelled (create_domain, was at step 3)"
+                specific_run_not_found:
+                  summary: Specific run not found or already inactive
+                  value:
+                    response_type: ephemeral
+                    text: "✅ Run 42 is not active (already completed, cancelled, or not found)"
+        '400':
+          description: Invalid Slack signature or text is not a valid integer when provided
+        '500':
+          description: PROC /shutdown call failed or timed out
+
+  /api/v1/ui/slack/create-domain:
+    post:
+      summary: /create-domain slash command handler
+      description: >
+        Handles the /create-domain Slack slash command. Configured in Slack as the
+        Request URL: https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/ui/slack/create-domain
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret (HMAC-SHA256 + replay protection)
+          3. Extracts text field as userInput — required, returns 400 if empty
+          4. Posts ACK message to Slack via chat.postMessage — ackTs becomes the thread root
+             for all subsequent human gate prompts and result replies
+          5. Enqueues CREATE_DOMAIN to SQS WorkflowQueue:
+               { type: CREATE_DOMAIN, userInput, callback: { provider, channel, threadId: ackTs } }
+          6. Returns { statusCode: 200, body: '' } immediately — Slack 3s window
+
+        ProcFunction dispatches the SQS message to proc/create-domain.mjs which creates
+        the PGC_WorkflowRun and enqueues WORKFLOW_STEP execute_top. All subsequent
+        progress (schema design, review gates, DDL execution, registration) is posted
+        as threaded replies under the ACK message via SlackCallbackListenerFunction.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /create-domain
+                text:
+                  type: string
+                  description: >
+                    Free-form natural language description of the domain to create.
+                    The LLM infers a clean snake_case domain name from this.
+                  example: recipes with ingredients and nutritional info
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            ACK posted to Slack and CREATE_DOMAIN enqueued. Returns empty body —
+            all progress and gate prompts arrive as threaded Slack replies.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: >
+            Invalid Slack signature, or text is empty.
+            Usage: /create-domain <description>
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+  # ── UI / Slack — interactive ──────────────────────────────────────────────
+
+  /api/v1/ui/slack/interactive:
+    post:
+      summary: Slack interactive payload handler
+      description: >
+        Receives interactive component payloads from Slack — button clicks,
+        modal submissions, and overflow menu selections. Used exclusively for
+        human_gate responses in the workflow execution stack.
+
+        Flow:
+          1. User clicks button in a Slack Block Kit message (e.g. "✅ Confirm")
+          2. Slack POSTs a URL-encoded payload to this endpoint
+          3. SlackbotFunction validates the Slack signature
+          4. Parses the payload — extracts workflowRunId, action, and user response
+          5. Enqueues { type: WORKFLOW_STEP, action: resume_gate, response } to WorkflowQueue
+          6. Returns 200 immediately — Slack requires response within 3s
+
+        The Step Processor picks up the resume_gate message and pops the
+        human_gate frame from the execution stack, routing based on the user response.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload:
+                  type: string
+                  description: >
+                    URL-encoded JSON string from Slack containing action details.
+                    Parsed fields used internally:
+                    type (block_actions | view_submission),
+                    actions[0].action_id,
+                    actions[0].value (encodes workflowRunId + user response),
+                    user.id, channel.id, message.ts
+      responses:
+        '200':
+          description: >
+            Interactive action acknowledged. Stack will resume asynchronously.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: Invalid Slack signature or malformed payload
+        '404':
+          description: workflowRunId not found or run not in awaiting_human_gate status
+        '500':
+          description: Failed to enqueue resume_gate message to WorkflowQueue
+ 
+  /api/v1/ui/slack/mind:
+    post:
+      summary: /mind slash command — natural language intent entry point
+      description: >
+        Receives the /mind Slack slash command. This is the primary entry point
+        for all natural language interaction with the brain — workflow invocation,
+        domain CRUD, and heavy-lift creation requests all flow through here.
+
+        Validates the Slack signing secret (HMAC-SHA256 + replay protection),
+        then performs a session lookup before enqueuing:
+
+          1. If thread_ts is present (reply in existing thread):
+               → getRows PGC_Session where callback->>'threadId' = thread_ts
+               → found: retrieve session_id, include in CLASSIFY_INTENT message
+               → not found: generate new session_id UUID, PROC creates PGC_Session on receipt
+          2. If thread_ts is absent (fresh /mind, no existing thread):
+               → generate new session_id UUID
+          3. Post ACK message to Slack (chat.postMessage) — ackTs becomes the thread root
+          4. Enqueue CLASSIFY_INTENT to SQS WorkflowQueue:
+               { type: CLASSIFY_INTENT, userInput, sessionId, callback: { provider, channel, threadId: ackTs } }
+          5. Return 200 immediately — Slack 3s window
+
+        The session lookup (step 1) is one getRows call to SERV.
+        The session layer (PGC_Session, PGC_SessionEntry) is Phase 3 — until then,
+        sessionId is generated fresh on every call and PROC ignores it.
+
+        classify-intent.mjs picks up the CLASSIFY_INTENT message and runs the
+        two-pass, domain-workflow-aware classification pipeline (Section 6.3).
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /mind
+                text:
+                  type: string
+                  description: Free-form natural language input
+                  example: show me my pasta recipes
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+                thread_ts:
+                  type: string
+                  description: >
+                    Present when the user typed /mind as a reply in an existing thread.
+                    Used for session lookup. Absent on fresh /mind calls.
+                  example: "1234567890.123456"
+      responses:
+        '200':
+          description: >
+            ACK — intent received. Classification and routing will be posted
+            to the Slack thread asynchronously via SlackCallbackListenerFunction.
+          content:
+            application/json:
+              examples:
+                fresh_thread:
+                  summary: Fresh /mind — new thread started
+                  value:
+                    response_type: in_channel
+                    text: "Got it — thinking..."
+                existing_thread:
+                  summary: /mind in existing thread — session continues
+                  value:
+                    response_type: in_channel
+                    text: "On it..."
+        '400':
+          description: Invalid Slack signature, missing text, or empty input
+        '500':
+          description: Session lookup, ACK post, or SQS enqueue failed
+
+  /api/v1/ui/slack/create-workflow:
+    post:
+      summary: /create-workflow slash command — direct workflow creation entry point
+      description: >
+        Handles the /create-workflow Slack slash command. This is the direct entry
+        point for workflow creation, bypassing the classify-intent pipeline entirely.
+
+        Contrast with the /mind path: when a user types `/m create workflow Spanish
+        vocabulary quiz`, classify-intent.mjs routes it as a heavy-lift CREATE_WORKFLOW
+        with domain resolved via alias lookup. This endpoint handles the explicit
+        `/create-workflow` command where no classification is needed.
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret (HMAC-SHA256 + replay protection)
+          3. Extracts text field as userInput — required, returns 400 if empty
+          4. Posts ACK message to Slack via chat.postMessage — ackTs becomes the thread root
+             for all subsequent human gate prompts and result replies
+          5. Enqueues CREATE_WORKFLOW to SQS WorkflowQueue:
+               { type: CREATE_WORKFLOW, userInput, domain: null, callback: { provider, channel, threadId: ackTs } }
+          6. Returns { statusCode: 200, body: '' } immediately — Slack 3s window
+
+        domain is always null on this path — no alias lookup runs. The
+        analyze_and_design_workflow LLM prompt (create_workflow step 7) extracts
+        domain context from userInput. ProcFunction dispatches the SQS message to
+        proc/create-workflow.mjs which creates the PGC_WorkflowRun with
+        input: { userInput, domain: null } and enqueues WORKFLOW_STEP execute_top.
+
+        All subsequent progress (preference gates, review gates, simulation results,
+        final registration confirmation) is posted as threaded replies under the ACK
+        message via SlackCallbackListenerFunction.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /create-workflow
+                text:
+                  type: string
+                  description: >
+                    Free-form natural language description of the workflow to create.
+                    Passed as userInput to proc/create-workflow.mjs unchanged.
+                    The LLM infers domain, step structure, and workflow name from this.
+                  example: Spanish vocabulary quiz
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            ACK posted to Slack and CREATE_WORKFLOW enqueued. Returns empty body —
+            all progress and gate prompts arrive as threaded Slack replies.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: >
+            Invalid Slack signature, or text is empty.
+            Usage: /create-workflow <description>
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+          
   # ── PROC ───────────────────────────────────────────────────────────────────
 
   /api/v1/proc/ping-llm:
@@ -884,6 +1222,1167 @@ paths:
                 message: "Your Lambda will achieve enlightenment 🍪"
                 correlationId: "abc-123"
 
+  # ── PROC — business logic endpoints ───────────────────────────────────────
+
+  /api/v1/proc/run-workflow:
+    post:
+      summary: Step Processor — advance or resume a workflow run
+      description: >
+        The central workflow execution endpoint. Handles all WORKFLOW_STEP
+        messages from the SQS WorkflowQueue and is directly testable via HTTP.
+
+        Three actions are supported:
+
+        **resume_gate** — A human gate has been responded to.
+        Loads PGC_WorkflowRun, finds the suspended gate frame on the execution
+        stack, matches userResponse to the gate options, and routes accordingly.
+        For remove_table responses: splices the table from state.proposed_scaffold
+        and re-posts the updated review message. For confirm/cancel: advances or
+        terminates the workflow.
+
+        **execute_top** — Execute the step at the top of the execution stack.
+        Loads PGC_WorkflowRun by workflowRunId, inspects the top frame, finds
+        the current step in PGC_Workflow.steps, executes it via the step type
+        handler, writes PGC_WorkflowRunStep audit row, persists updated stack
+        and state to PGC_WorkflowRun, then enqueues the next execute_top message
+        to continue the run. One SQS message per step — one step per invocation.
+        Idempotency: checks PGC_WorkflowRunStep for (run_id, frame_id, step_key)
+        before executing — SQS redeliveries are detected and discarded safely.
+
+        **cancel** — Immediately cancel the workflow run regardless of current
+        state. Sets PGC_WorkflowRun.status = cancelled.
+
+        Transport-agnostic — business logic is identical whether the message
+        arrives via SQS WorkflowQueue or direct HTTP POST.
+
+        On SQS delivery: result is enqueued to SYSSQSCallbackResults.
+        On HTTP delivery: result returned directly for testing.
+
+        This endpoint is workflow-agnostic — it dispatches based on the
+        declarative step definition in PGC_Workflow.steps, not on workflow name.
+        User-defined workflows are handled identically to system workflows.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, workflowRunId]
+              properties:
+                action:
+                  type: string
+                  enum: [resume_gate, execute_top, cancel]
+                  description: Which step processor action to perform
+                workflowRunId:
+                  type: integer
+                  description: PGC_WorkflowRun.id of the run to advance
+                userResponse:
+                  type: string
+                  description: >
+                    Required for resume_gate. Must match one of the action values
+                    in the suspended gate frame's options array.
+                    Built-in values: confirm, cancel, remove_table.
+                    User-defined workflows may define their own action values.
+                  example: confirm
+                responseData:
+                  type: object
+                  description: >
+                    Optional structured data accompanying the user response.
+                    Content is gate-type specific — interpreted by the Step
+                    Processor based on the gate frame definition.
+                  example:
+                    tableName: PGD_Holdings
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            examples:
+              resume_confirm:
+                summary: User confirmed the review gate
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: confirm
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              resume_remove_table:
+                summary: User removed a table from the proposed scaffold
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: remove_table
+                  responseData:
+                    tableName: PGD_Holdings
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              resume_cancel:
+                summary: User cancelled the workflow
+                value:
+                  action: resume_gate
+                  workflowRunId: 42
+                  userResponse: cancel
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              cancel_run:
+                summary: Cancel a specific run (same as shutdown by runId)
+                value:
+                  action: cancel
+                  workflowRunId: 42
+      responses:
+        '200':
+          description: >
+            Action processed. On SQS delivery: empty body, result posted async
+            to callback channel. On HTTP delivery: result returned directly.
+          content:
+            application/json:
+              examples:
+                resume_gate_remove:
+                  summary: Table removed — updated scaffold returned
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: open
+                    domain: stock_portfolio
+                    tableCount: 2
+                resume_gate_confirm:
+                  summary: Gate confirmed — workflow advancing to next step
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: confirmed
+                resume_gate_cancel:
+                  summary: Run cancelled
+                  value:
+                    success: true
+                    action: resume_gate
+                    workflowRunId: 42
+                    gateStatus: cancelled
+        '400':
+          description: Missing action, workflowRunId, or userResponse for resume_gate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: workflowRunId not found in PGC_WorkflowRun
+        '409':
+          description: >
+            Run is not in awaiting_human_gate status — duplicate resume_gate
+            delivery (SQS at-least-once) or stale button click
+        '500':
+          description: DB read, state mutation, or SQS enqueue failed
+
+  /api/v1/proc/classify-intent:
+    post:
+      summary: Intent Preprocessor — two-pass, domain-workflow-aware classification
+      description: >
+        Classifies free-form user input into a routable intent using a cost-ordered
+        pipeline. LLM is only invoked when coded logic cannot classify.
+
+        Pre-loads PGC_IntentMap, PGC_DomainHelp, and PGC_Workflow in parallel
+        before classification begins — all three tables are needed across passes.
+
+        **Pass 1 — PGC_IntentMap regex match (zero LLM cost):**
+
+          All rows loaded. Sorted: workflow > heavy_lift > crud; lower id wins within tier.
+          Input lowercased and tested against each pattern.
+          Match with action_type workflow or heavy_lift → SHORT-CIRCUIT immediately.
+          Match with action_type workflow + structured input (id=N or field=value pairs)
+          present → YIELD to Pass 2 (Guard 1 — retrieval workflows only).
+          Match with action_type workflow → extractSearchTerm() called for get_*/search_*
+          workflows before returning (Guard 2 — populates search_term).
+          Match with action_type crud → extract domain, resolve root table, build ad_hoc_step.
+          confidence: exact
+
+        **Pass 2 — Domain-Workflow Lookup (zero LLM cost):**
+
+          Step 1: tokenise input, scan PGC_DomainHelp.aliases — resolve domain name.
+          Step 2: scan PGC_Workflow.intent_keywords for resolved domain — token presence
+          match (substring includes, handles multi-word keywords). Disambiguation:
+          get_<domain> wins over list_<domain> when extra tokens follow verb+domain
+          (search term present). confidence: keyword_match
+          Step 3 (CRUD fallback): only reached when no keyword matched AND input contains
+          PGC_/PGD_ table prefix with a verb. Builds ad_hoc_step. confidence: crud
+          Phase 3: if no alias token in input, check recent PGC_SessionEntry rows
+          for the most recently active domain. confidence: session_context
+
+        **Tier 2 — Cheap LLM classification (perplexity/sonar):**
+
+          Called when Pass 1 and Pass 2 produce no match.
+          Domain hint from Pass 2 injected if available.
+          Session context block injected if sessionId present (Phase 3).
+          Returns: { intent_category, workflow_name, action_type, referenced_entities }
+          confidence: llm_classified
+
+        **Tier 3 — Heavy lift handoff (no additional LLM call):**
+
+          Routes to existing workflow entry points:
+            create_domain   → enqueue CREATE_DOMAIN
+            create_workflow → enqueue CREATE_WORKFLOW
+            unknown         → WORKFLOW_NOTIFY with guidance
+          confidence: heavy_lift
+
+        Transport-agnostic — identical logic whether request arrives via
+        HTTP (curl test) or SQS (CLASSIFY_INTENT from WorkflowQueue).
+
+        On HTTP delivery: classification result returned directly.
+        On SQS delivery: result handed off to downstream — workflow enqueued
+        or WORKFLOW_NOTIFY posted to Slack thread.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyIntentRequest'
+            examples:
+              pass1_workflow_add:
+                summary: "UC 1.1 — Pass 1 exact match — add_recipes workflow"
+                value:
+                  userInput: add recipe pasta carbonara with ingredients and steps
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass1_workflow_list:
+                summary: "UC 1.2 — Pass 1 exact match — list_recipes workflow"
+                value:
+                  userInput: list recipes
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass1_workflow_get_search:
+                summary: "UC 1.3 — Pass 1 exact match — get_recipes workflow with search term"
+                value:
+                  userInput: get recipes sweet potato chili
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass1_workflow_update:
+                summary: "UC 1.5 — Pass 1 exact match — update_recipes workflow"
+                value:
+                  userInput: update recipes id=42 difficulty=hard
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              pass2_keyword_match:
+                summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb"
+                value:
+                  userInput: show recipes pasta carbonara
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier2_novel:
+                summary: "UC 2.5 — Tier 2 sonar — novel domain creation intent"
+                value:
+                  userInput: I want to track my golf scores
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              tier2_with_session:
+                summary: "Tier 2 — ambiguous input resolved with session context (Phase 3)"
+                value:
+                  userInput: make that a three-course meal plan
+                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+              sqs_delivery:
+                summary: "SQS CLASSIFY_INTENT delivery from /mind (production path)"
+                value:
+                  userInput: get recipes sweet potato chili
+                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+      responses:
+        '200':
+          description: >
+            Classification result on HTTP delivery.
+            On SQS delivery: empty body — result handed off to downstream workflow
+            or posted to Slack thread as WORKFLOW_NOTIFY.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyIntentResponse'
+              examples:
+                pass1_add_workflow:
+                  summary: "UC 1.1 — Pass 1 exact — add_recipes workflow"
+                  value:
+                    intent_category: add_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: add_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_list_workflow:
+                  summary: "UC 1.2 — Pass 1 exact — list_recipes workflow"
+                  value:
+                    intent_category: list_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: list_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_get_with_search:
+                  summary: "UC 1.3 — Pass 1 exact — get_recipes workflow with search_term"
+                  value:
+                    intent_category: get_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: get_recipes
+                    domain: null
+                    search_term: sweet potato chili
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_update_workflow:
+                  summary: "UC 1.5 — Pass 1 exact — update_recipes workflow"
+                  value:
+                    intent_category: update_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: update_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass1_delete_workflow:
+                  summary: "UC 1.6 — Pass 1 exact — delete_recipes workflow"
+                  value:
+                    intent_category: delete_recipes
+                    action_type: workflow
+                    confidence: exact
+                    workflow_name: delete_recipes
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                pass2_keyword_match:
+                  summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb with search_term"
+                  value:
+                    intent_category: get_recipes
+                    action_type: workflow
+                    confidence: keyword_match
+                    workflow_name: get_recipes
+                    domain: null
+                    search_term: pasta carbonara
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                heavy_lift_create_domain:
+                  summary: "UC 2.1 — Pass 1 exact — create_domain heavy lift"
+                  value:
+                    intent_category: create_domain
+                    action_type: heavy_lift
+                    confidence: exact
+                    workflow_name: null
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                crud_ambiguous_no_verb:
+                  summary: "UC 3.6 — crud_ambiguous — PGD table with no verb (Phase B)"
+                  value:
+                    intent_category: unknown_table_intent
+                    action_type: crud_ambiguous
+                    confidence: crud
+                    workflow_name: null
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                tier2_workflow_matched:
+                  summary: "Tier 2 — sonar matched a named workflow"
+                  value:
+                    intent_category: meal_planner
+                    action_type: workflow
+                    confidence: llm_classified
+                    workflow_name: meal_planner
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                tier2_workflow_with_entities:
+                  summary: "Tier 2 — workflow matched with session referenced_entities (Phase 3)"
+                  value:
+                    intent_category: meal_planner
+                    action_type: workflow
+                    confidence: llm_classified
+                    workflow_name: meal_planner
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    referenced_entities:
+                      - { entity: Recipe, id: 42, name: Carbonara }
+                      - { entity: Recipe, id: 43, name: "Cacio e Pepe" }
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+                heavy_lift_unknown:
+                  summary: "UC 2.6 — Tier 3 — unknown heavy lift — WORKFLOW_NOTIFY posted"
+                  value:
+                    intent_category: unknown
+                    action_type: heavy_lift
+                    confidence: heavy_lift
+                    workflow_name: null
+                    domain: null
+                    search_term: null
+                    ad_hoc_step: null
+                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
+        '400':
+          description: userInput is missing or empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: PGC_IntentMap, PGC_DomainHelp, or PGC_Workflow read failed, or Tier 2 LLM call failed
+
+  /api/v1/proc/delete-domain:
+    post:
+      summary: Delete a domain — drops PGD tables, removes all registry entries
+      description: >
+        Permanently deletes a domain by name. Intended primarily for development
+        and testing cleanup. Use with caution — all domain data is destroyed.
+
+        Steps performed:
+          1. Look up all PGC_Schema rows where domain = domainName and target = pgd
+          2. For each table: call SERV deleteTable (DROP TABLE CASCADE + remove
+             PGC_Schema + PGC_TableMap rows)
+          3. Remove PGC_DomainHelp row for the domain
+          4. Return summary of what was deleted
+
+        If the domain has no tables in PGC_Schema and no PGC_DomainHelp row,
+        returns success with deletedTables: [] and a warning — not an error,
+        since the desired end state (domain absent) is already true.
+
+        Transport-agnostic — callable via HTTP (curl) or SQS.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain]
+              properties:
+                domain:
+                  type: string
+                  description: Snake_case domain name as stored in PGC_Schema.domain
+                  example: stock_portfolio
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              domain: stock_portfolio
+      responses:
+        '200':
+          description: Domain deleted (or was already absent)
+          content:
+            application/json:
+              examples:
+                deleted:
+                  summary: Domain fully deleted
+                  value:
+                    success: true
+                    domain: stock_portfolio
+                    deletedTables:
+                      - PGD_Portfolios
+                      - PGD_Holdings
+                      - PGD_StockPrices
+                    domainHelpRemoved: true
+                already_absent:
+                  summary: Domain had no tables or registry entries
+                  value:
+                    success: true
+                    domain: stock_portfolio
+                    deletedTables: []
+                    domainHelpRemoved: false
+                    warning: "No tables or registry entries found for domain \"stock_portfolio\""
+        '400':
+          description: domain is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: SERV deleteTable or PGC_DomainHelp removal failed
+
+  /api/v1/proc/design-domain:
+    post:
+      summary: LLM domain design — no DB writes, returns scaffold for human review
+      description: >
+        Phase 1 of the two-phase domain creation flow.
+        Calls the LLM to design a full relational schema from user input,
+        validates the scaffold via /proc/review-output (Ajv + semantic rules),
+        stores the validated scaffold in PGC_WorkflowRun.state, then posts
+        a Block Kit review message to Slack and pauses — waiting for human approval.
+
+        This endpoint does NOT create any tables or write to PGC_Schema.
+        All DB writes happen in /proc/create-domain after human confirmation.
+
+        Transport-agnostic — called identically via HTTP (curl/test) or SQS
+        (DESIGN_DOMAIN message from WorkflowQueue).
+
+        Flow:
+          1. Read create_domain prompt from PGC_Prompt
+          2. Call LLM → proposed_scaffold { domain, tables, domainHelp }
+          3. Call /proc/review-output — Ajv + semantic validation (2-attempt loop)
+          4. If validation fails both attempts → enqueue error to callback, halt
+          5. Store validated scaffold in PGC_WorkflowRun.state
+          6. Post Block Kit review message to Slack thread:
+               "Here's my plan for domain *<domain>*: <table summary>. Does this look right?"
+               Buttons: [✅ Review fields] [🔀 Merge tables] [➕ Add a table] [🔄 Start over] [❌ Cancel]
+          7. Set PGC_WorkflowRun.status = 'awaiting_human_gate' — halt execution
+
+        The user's button click arrives via /ui/slack/interactive → WorkflowQueue
+        resume_gate → Step Processor routes based on button action.
+
+        On HTTP delivery (curl): returns the scaffold directly without posting to Slack.
+        Used for testing the LLM design step in isolation.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userInput]
+              properties:
+                userInput:
+                  type: string
+                  description: >
+                    Free-form natural language description of the domain.
+                    LLM infers a clean snake_case domain name from this.
+                  example: stock portfolio with price history and alerts
+                workflowRunId:
+                  type: integer
+                  description: >
+                    PGC_WorkflowRun.id for this execution. Required on SQS delivery —
+                    generated by SlackbotFunction when enqueuing DESIGN_DOMAIN.
+                    Omit on HTTP (curl) calls — no WorkflowRun row needed for direct testing.
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            examples:
+              sqs_delivery:
+                summary: SQS delivery from Slack /create-domain command
+                value:
+                  userInput: stock portfolio with price history and alerts
+                  workflowRunId: 12
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              http_test:
+                summary: Direct curl test — no WorkflowRun, no Slack
+                value:
+                  userInput: stock portfolio with price history and alerts
+      responses:
+        '200':
+          description: >
+            Scaffold designed and validated. On SQS delivery: Block Kit message posted
+            to Slack and run paused — response is empty (async). On HTTP delivery:
+            scaffold returned directly for inspection.
+          content:
+            application/json:
+              examples:
+                http_response:
+                  summary: HTTP curl response — scaffold returned directly
+                  value:
+                    success: true
+                    domain: stock_portfolio
+                    tables:
+                      - tableName: PGD_Portfolios
+                        description: Stores user portfolio definitions
+                      - tableName: PGD_Holdings
+                        description: Individual stock positions within a portfolio
+                      - tableName: PGD_StockPrices
+                        description: Historical and current price data per ticker
+                    validatedAt: "2026-03-19T16:00:00.000Z"
+                sqs_response:
+                  summary: SQS delivery — empty body, Slack message posted async
+                  value: {}
+        '400':
+          description: >
+            HTTP path only — userInput is missing or empty.
+            On SQS delivery, missing userInput enqueues an error message to the
+            callback channel (Slack reply) and returns cleanly — the SQS message
+            is not retried since this is a caller error, not an infrastructure failure.
+        '422':
+          description: >
+            LLM scaffold failed Ajv or semantic validation after 2 attempts.
+            Error details written to PGC_Prompt.error_log. WorkflowRun set to failed.
+        '500':
+          description: LLM call, review-output, or WorkflowRun write failed
+
+  /api/v1/proc/create-domain:
+    post:
+      summary: Execute confirmed domain creation — DDL + registry writes
+      description: >
+        Phase 2 of the two-phase domain creation flow. Called after the user
+        confirms the scaffold designed by /proc/design-domain.
+
+        Reads the validated scaffold from PGC_WorkflowRun.state (SQS path) or
+        directly from the request body (HTTP path), creates each PGD table via
+        SERV-Schema createTable, registers the domain in PGC_DomainHelp, and
+        registers entity definitions in PGC_EntitySchema.
+
+        Transport-agnostic — called identically via HTTP (curl/test) or SQS
+        (CREATE_DOMAIN message from WorkflowQueue after human gate confirmation).
+
+        NOTE: The current deployed implementation is the monolithic pre-gate
+        version — it calls the LLM and executes DDL in a single step with no
+        human review. The two-phase flow (design-domain → human gate → create-domain)
+        is the target state once the Step Processor is built (Phase 2 item 5).
+        The monolithic version will be replaced by the declarative create_domain
+        workflow in PGC_Workflow at that point.
+
+        On SQS delivery, result is enqueued to SYSSQSCallbackResults for
+        SlackCallbackListenerFunction to post as a threaded reply.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userInput]
+              properties:
+                userInput:
+                  type: string
+                  description: >
+                    Free-form natural language description of the domain.
+                    LLM infers a clean snake_case domain name from this.
+                  example: recipes with ingredients and nutritional info
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              userInput: recipes with ingredients and nutritional info
+              callback:
+                provider: slack
+                channel: C0AEJ87JSKF
+                threadId: "1234567890.123456"
+      responses:
+        '200':
+          description: Domain created successfully
+          content:
+            application/json:
+              example:
+                success: true
+                domainName: recipes
+                tables:
+                  - { tableName: PGD_Recipes,     status: created }
+                  - { tableName: PGD_Ingredients,  status: created }
+                completedAt: "2026-03-18T10:46:45.870Z"
+        '400':
+          description: userInput is required
+        '500':
+          description: LLM call, validation, or DDL execution failed
+
+  /api/v1/proc/create-workflow:
+    post:
+      summary: Step Processor entry point for the create_workflow workflow
+      description: >
+        Creates a PGC_WorkflowRun row for the `create_workflow` workflow and enqueues
+        WORKFLOW_STEP / execute_top to start the Step Processor. All LLM calls,
+        preference gates, simulation, and registration steps are driven declaratively
+        by run-workflow.mjs from the PGC_Workflow.steps definition.
+
+        Two SQS entry paths converge here:
+
+        **Via classify-intent heavy-lift dispatch**
+          classify-intent.mjs resolves CREATE_WORKFLOW (Pass 1 heavy_lift or Tier 3)
+          and enqueues a CREATE_WORKFLOW SQS message. The domain field is populated
+          by matchDomainAlias() when the user's input contains a recognisable domain
+          alias (e.g. "Spanish vocabulary quiz" → domain: "spanish_flashcards").
+
+        **Via direct /create-workflow Slack command**
+          ui/slackbot/create-workflow.mjs enqueues CREATE_WORKFLOW with domain: null.
+          No alias lookup runs on this path. The analyze_and_design_workflow LLM
+          prompt (step 7) extracts domain context from userInput directly.
+
+        In both cases, domain flows into PGC_WorkflowRun.input so that create_workflow
+        step 1 (serv_query PGC_Schema) can filter by domain, and step 7
+        (analyze_and_design_workflow) receives it as {{input.domain}}.
+
+        **HTTP path — developer testing**
+          Caller supplies userInput and optionally domain. Returns workflowRunId
+          immediately. Workflow executes asynchronously — monitor via PGC_WorkflowRun.
+
+        Transport-agnostic — business logic is identical for both transports.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userInput]
+              properties:
+                userInput:
+                  type: string
+                  description: >
+                    Free-form natural language description of the workflow to create.
+                  example: Spanish vocabulary quiz
+                domain:
+                  type: string
+                  nullable: true
+                  description: >
+                    Snake_case domain name resolved by classify-intent.mjs alias lookup.
+                    Null when triggered via the direct /create-workflow Slack command.
+                    Flows into PGC_WorkflowRun.input.domain — available as {{input.domain}}
+                    to workflow steps.
+                  example: spanish_flashcards
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            examples:
+              sqs_with_domain:
+                summary: SQS delivery — domain resolved by alias lookup
+                value:
+                  userInput: Spanish vocabulary quiz
+                  domain: spanish_flashcards
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              sqs_no_domain:
+                summary: SQS delivery — direct /create-workflow command, domain null
+                value:
+                  userInput: weekly expense report
+                  domain: null
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              http_test:
+                summary: HTTP test — returns workflowRunId immediately
+                value:
+                  userInput: Spanish vocabulary quiz
+                  domain: spanish_flashcards
+      responses:
+        '200':
+          description: >
+            WorkflowRun created and execute_top enqueued. On HTTP delivery: workflowRunId
+            returned immediately — workflow executes asynchronously. On SQS delivery:
+            empty response body — progress posted to Slack thread via callback.
+          content:
+            application/json:
+              examples:
+                http_response:
+                  summary: HTTP — run started
+                  value:
+                    success: true
+                    workflowRunId: 42
+                    status: running
+        '400':
+          description: userInput is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: >
+            create_workflow not found in PGC_Workflow (run: node dev_scripts/upsert-workflow.mjs create_workflow),
+            or PGC_WorkflowRun insert failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/proc/shutdown:
+    post:
+      summary: Emergency stop — cancel active workflow runs
+      description: >
+        Immediately cancels all active workflow runs for this instance, or a
+        specific run by ID.
+
+        Steps performed:
+          1. Calls SERV getRows on PGC_WorkflowRun — filters by status=active
+             and optionally by id=workflowRunId
+          2. Calls SERV updateRows on PGC_WorkflowRun — sets status=cancelled
+             for each matching run (non-empty filters enforced by updateRows gate)
+          3. Enqueues { type: WORKFLOW_STEP, action: cancel, workflowRunId } to
+             WorkflowQueue for each cancelled run — so any in-flight SQS step
+             is discarded when the Step Processor checks status before executing
+          4. Returns ShutdownResult — cancelledCount: 0 when no active runs exist
+
+        Called synchronously by SlackbotFunction on /shutdown command —
+        no SQS hop. Must respond within Slack's 3s window.
+
+        NOTE: Step Processor (Phase 2 item 5) MUST check PGC_WorkflowRun.status
+        as its first action before executing any step. That check is what gives
+        the cancel signal its effect. This is a hard constraint on the Step Processor design.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflowRunId:
+                  type: integer
+                  description: >
+                    Specific run to cancel. Omit to cancel ALL active runs.
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            examples:
+              cancel_all:
+                summary: Cancel all active runs
+                value:
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+              cancel_specific:
+                summary: Cancel a specific run
+                value:
+                  workflowRunId: 42
+                  callback:
+                    provider: slack
+                    channel: C0AEJ87JSKF
+                    threadId: "1234567890.123456"
+      responses:
+        '200':
+          description: Shutdown complete — cancelledCount is 0 when no active runs exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShutdownResult'
+              examples:
+                runs_cancelled:
+                  summary: One or more runs cancelled
+                  value:
+                    success: true
+                    cancelledCount: 2
+                    cancelled:
+                      - { workflowRunId: 42, workflowName: create_domain, stoppedAtStep: 3 }
+                      - { workflowRunId: 43, workflowName: create_domain, stoppedAtStep: 1 }
+                no_active_runs:
+                  summary: No active workflows to cancel
+                  value:
+                    success: true
+                    cancelledCount: 0
+                    cancelled: []
+        '500':
+          description: SERV getRows, updateRows, or SQS enqueue failed
+
+  /api/v1/proc/simulate-workflow:
+    post:
+      summary: Workflow simulation — static analysis and path execution validation
+      description: >
+        Validates a workflow step array before it is registered in PGC_Workflow.
+        Runs three validation levels in order, stopping early if a prior level fails.
+
+        **Level 1 — Static analysis (no mocks required)**
+
+        Structural checks on the step array itself:
+          - All on_success, on_failure, on_select values are valid routing tokens
+          - All step:N routing targets exist in the step array
+          - All {{template}} references resolve to an output_key written by a prior step
+            on that execution path
+          - All items_key values in iterator steps resolve to arrays written prior
+          - All input.prompt values in llm_call steps name a known intent_category
+          - No output_key on review_object or confirm gate types (those do not write output)
+          - Every human_gate has at least one option with action=cancel
+
+        Level 1 failures are returned immediately — no path execution occurs.
+
+        **Level 2 — Path execution (requires mockOutputs and simulationPaths)**
+
+        Executes each named path in simulationPaths independently. At each step,
+        injects the mock output or gate decision instead of calling the real service.
+        Records the local_state transition log. Fails the path if any template
+        variable is unresolvable or if the actual terminal step does not match
+        expected_terminal.
+
+        **Level 3 — Skip-path analysis (advisory, runs after Level 2 passes)**
+
+        For every step with on_failure=human_feedback, runs a micro-path where
+        the user chooses Skip at the recovery gate. Flags any downstream step that
+        reads the null output_key as a latent data flow risk. Advisory only —
+        does not fail the simulation. Results appear in skipPathWarnings.
+
+        This endpoint is called:
+          - Directly by developers testing a workflow definition before registration
+          - By the simulate step type in step-executor.mjs during create_workflow execution
+            (in that context, the request body is assembled from local_state keys)
+
+        The endpoint does not create or modify any PGC_WorkflowRun row. It is
+        stateless — no side effects on success or failure.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulateWorkflowRequest'
+            examples:
+              static_analysis_only:
+                summary: Level 1 only — validate step array structure without mocks
+                value:
+                  steps:
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
+                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "human_feedback" }
+                  simulationPaths:
+                    - path_name: happy_path
+                      decisions:
+                        - { step: "1", outcome: success }
+                      expected_terminal: end
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+              full_simulation:
+                summary: Full simulation — all three levels
+                value:
+                  steps:
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
+                    - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_failure: "cancel" }
+                    - { step: "3", type: "end" }
+                  mockOutputs:
+                    "1": { domain: "recipes", tables: [] }
+                  simulationPaths:
+                    - path_name: happy_path
+                      decisions:
+                        - { step: "1", outcome: success }
+                        - { step: "2", outcome: gate, user_response: confirm, on_select: "next" }
+                      expected_terminal: end
+                    - path_name: user_cancels
+                      decisions:
+                        - { step: "1", outcome: success }
+                        - { step: "2", outcome: gate, user_response: cancel, on_select: cancel }
+                      expected_terminal: cancelled
+                  runInput:
+                    userInput: "recipe collection with ingredients"
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+      responses:
+        '200':
+          description: >
+            Simulation complete. Check passed field — false means one or more
+            validation levels failed. A 200 response does not mean the workflow is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulateWorkflowResponse'
+              examples:
+                all_passed:
+                  summary: All paths passed all validation levels
+                  value:
+                    passed: true
+                    pathsRun: 3
+                    pathsPassed: 3
+                    pathsFailed: 0
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                static_analysis_failed:
+                  summary: Level 1 failed — unresolved template variable detected
+                  value:
+                    passed: false
+                    pathsRun: 0
+                    pathsPassed: 0
+                    pathsFailed: 0
+                    staticAnalysis:
+                      passed: false
+                      issues:
+                        - check: unresolved_template_variable
+                          step: "8"
+                          failure_class: unresolved_template_variable
+                          detail: "Template variable 'confirmed_domain_help' not found in local_state at step 8. Available keys: input, proposed_scaffold, generated"
+                          suggestion: "Did you mean '{{generated.domainHelp}}'?"
+                    pathResults: []
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                path_execution_failed:
+                  summary: Level 2 failed — path reached unexpected terminal
+                  value:
+                    passed: false
+                    pathsRun: 2
+                    pathsPassed: 1
+                    pathsFailed: 1
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                      - path_name: llm_step_fails
+                        passed: false
+                        steps_executed: 1
+                        terminal: failed
+                        expected_terminal: human_feedback
+                        failure_step: "1"
+                        failure_reason: "on_failure routing value 'human_feedback' is not implemented. Run terminated with status=failed."
+                    skipPathWarnings: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                skip_path_warnings:
+                  summary: All paths passed but skip-path warnings present
+                  value:
+                    passed: true
+                    pathsRun: 3
+                    pathsPassed: 3
+                    pathsFailed: 0
+                    staticAnalysis: { passed: true, issues: [] }
+                    pathResults:
+                      - path_name: happy_path
+                        passed: true
+                        steps_executed: 11
+                        terminal: end
+                        expected_terminal: end
+                    skipPathWarnings:
+                      - step: "6"
+                        downstream_step: "8"
+                        missing_key: generated
+                        detail: "Step 8 reads {{generated.domainHelp}} but step 6 has on_failure=human_feedback. If step 6 is skipped, 'generated' will be null at step 8."
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+        '400':
+          description: >
+            Missing required fields, empty steps array, or empty simulationPaths.
+            Also returned when Level 2 or 3 is requested but mockOutputs is absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Simulation infrastructure error — step executor threw unexpectedly
+
+  /api/v1/proc/review-output:
+    post:
+      summary: Right-brain output validation — Ajv JSON Schema + in-situ JS sandbox
+      description: >
+        Validates LLM-generated output before it is passed to any downstream step
+        (DDL, SQS payload, workflow state write). Implements the repeat-until-correct
+        loop defined in architecture Section 6.10.
+
+        For JSON output (outputType: json):
+          - Fetches PGC_Prompt.output_schema for the given intentCategory
+          - Validates the output against the schema using Ajv
+          - If invalid: injects Ajv errors into a correction prompt, calls LLM once more
+          - If attempt 2 also fails: writes to PGC_Prompt.error_log, returns valid: false
+
+        For JS output (outputType: js):
+          - Parses the generated code with acorn (AST gate — syntax validation)
+          - Executes in vm.runInNewContext() sandbox with hard 500ms timeout
+          - Validates output shape against PGC_StepType.output_schema
+          - Same 2-attempt correction loop applies
+
+        Maximum 2 LLM correction attempts. Never an unbounded loop.
+        All failures written to PGC_Prompt.error_log regardless of recovery outcome.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewOutputRequest'
+            examples:
+              json_validation:
+                summary: Validate LLM scaffold JSON
+                value:
+                  intentCategory: create_domain
+                  outputType: json
+                  output:
+                    domain: recipes
+                    tables:
+                      - tableName: PGD_Recipes
+                        target: pgd
+                        columns:
+                          - { name: id, type: serial, primaryKey: true }
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+              js_validation:
+                summary: Validate LLM-generated JS transform
+                value:
+                  intentCategory: js_transform_merge_tables
+                  outputType: js
+                  output: "function transform(input) { return { merged: input.tables }; }"
+                  testInput: { tables: ["PGD_A", "PGD_B"] }
+                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+      responses:
+        '200':
+          description: Validation result — check valid field
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewOutputResponse'
+              examples:
+                valid_first_attempt:
+                  summary: Valid on first attempt
+                  value:
+                    valid: true
+                    intentCategory: create_domain
+                    attempt: 1
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                valid_after_correction:
+                  summary: Invalid attempt 1, corrected on attempt 2
+                  value:
+                    valid: true
+                    intentCategory: create_domain
+                    attempt: 2
+                    correctedOutput:
+                      domain: recipes
+                      tables: []
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+                invalid_both_attempts:
+                  summary: Both attempts failed — run halted
+                  value:
+                    valid: false
+                    intentCategory: create_domain
+                    attempt: 2
+                    errors:
+                      - instancePath: "/tables/2/constraints/0"
+                        keyword: required
+                        message: "must have required property 'expression'"
+                    errorLogged: true
+                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+        '400':
+          description: Missing intentCategory or output, unknown outputType
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No PGC_Prompt row found for intentCategory
+        '500':
+          description: Validation infrastructure error (Ajv compile, vm sandbox, DB write)
   # ── SERV ───────────────────────────────────────────────────────────────────
 
   /api/v1/serv/ping-db:
@@ -1801,1312 +3300,3 @@ paths:
           description: Entity name not registered in PGC_EntitySchema
         '500':
           description: Delete failed
-
-  /api/v1/ui/slack/shutdown:
-    post:
-      summary: Slack /shutdown command handler
-      description: >
-        Handles the /shutdown Slack slash command. Synchronous — unlike other
-        slash commands, this does NOT enqueue to SQS. SlackbotFunction calls
-        POST /proc/shutdown directly via HTTP fetch and returns the result
-        inline within Slack's 3s response window.
-
-        Slack command syntax:
-          /shutdown            — cancel all active workflow runs
-          /shutdown <runId>    — cancel a specific run by PGC_WorkflowRun.id
-
-        Flow:
-          1. Slack POSTs to this endpoint
-          2. SlackbotFunction verifies Slack signing secret
-          3. Parses text field — empty = cancel all, integer = cancel specific run
-          4. Calls POST /proc/shutdown synchronously via HTTP fetch to PROC_API_URL
-          5. Formats ShutdownResult as a Slack message and returns inline (response_type: ephemeral)
-          6. No SQS enqueue, no thread — response is immediate and visible only to the caller
-
-        Ephemeral response — only the user who ran /shutdown sees the result.
-        This is intentional: shutdown is an operator action, not a team notification.
-      tags: [UI-Slack]
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [command, text, user_id, channel_id]
-              properties:
-                command:
-                  type: string
-                  example: /shutdown
-                text:
-                  type: string
-                  description: Empty string (cancel all) or integer runId (cancel specific)
-                  example: "42"
-                user_id:
-                  type: string
-                  example: U012AB3CD
-                channel_id:
-                  type: string
-                  example: C0AEJ87JSKF
-      responses:
-        '200':
-          description: >
-            Shutdown result returned inline. cancelledCount: 0 when no active runs exist —
-            this is not an error.
-          content:
-            application/json:
-              examples:
-                runs_cancelled:
-                  summary: One or more runs cancelled
-                  value:
-                    response_type: ephemeral
-                    text: "🛑 Shutdown complete — 2 run(s) cancelled: create_domain (run 42), create_domain (run 43)"
-                no_active_runs:
-                  summary: No active workflows
-                  value:
-                    response_type: ephemeral
-                    text: "✅ No active workflows to cancel"
-                specific_run_cancelled:
-                  summary: Specific run cancelled
-                  value:
-                    response_type: ephemeral
-                    text: "🛑 Run 42 cancelled (create_domain, was at step 3)"
-                specific_run_not_found:
-                  summary: Specific run not found or already inactive
-                  value:
-                    response_type: ephemeral
-                    text: "✅ Run 42 is not active (already completed, cancelled, or not found)"
-        '400':
-          description: Invalid Slack signature or text is not a valid integer when provided
-        '500':
-          description: PROC /shutdown call failed or timed out
-
-  # ── UI / Slack — command + interactive ────────────────────────────────────
-
-  /api/v1/ui/slack/command:
-    post:
-      summary: Slack slash command receiver
-      description: >
-        Receives all Slack slash commands (/create-domain, /shutdown, /ping-*, etc.).
-        Validates Slack request signature, ACKs immediately with 200, then enqueues
-        a message to SQS WorkflowQueue for async processing by ProcFunction.
-        Slack requires a response within 3 seconds — this endpoint always responds
-        within 1s. The threaded result arrives via SlackCallbackListenerFunction.
-
-        SQS message types enqueued per command:
-          /create-domain <text> → DESIGN_DOMAIN (Phase 2 target) / CREATE_DOMAIN (current monolithic)
-          /help                 → HELP
-          /ping-sqs             → PING_SQS
-          /ping-e2e             → PING_E2E
-      tags: [UI-Slack]
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [command, text, user_id, channel_id]
-              properties:
-                command:
-                  type: string
-                  example: /create-domain
-                text:
-                  type: string
-                  example: recipes
-                user_id:
-                  type: string
-                  example: U012AB3CD
-                channel_id:
-                  type: string
-                  example: C0AEJ87JSKF
-                thread_ts:
-                  type: string
-                  example: "1234567890.123456"
-      responses:
-        '200':
-          description: >
-            ACK — command accepted. Result will be posted to the Slack thread.
-          content:
-            application/json:
-              example:
-                response_type: in_channel
-                text: "🧠 Designing domain for *recipes* — watch this thread for results"
-        '400':
-          description: Invalid Slack signature or missing required fields
-        '500':
-          description: Failed to enqueue to SQS WorkflowQueue
-
-  /api/v1/ui/slack/interactive:
-    post:
-      summary: Slack interactive payload handler
-      description: >
-        Receives interactive component payloads from Slack — button clicks,
-        modal submissions, and overflow menu selections. Used exclusively for
-        human_gate responses in the workflow execution stack.
-
-        Flow:
-          1. User clicks button in a Slack Block Kit message (e.g. "✅ Confirm")
-          2. Slack POSTs a URL-encoded payload to this endpoint
-          3. SlackbotFunction validates the Slack signature
-          4. Parses the payload — extracts workflowRunId, action, and user response
-          5. Enqueues { type: WORKFLOW_STEP, action: resume_gate, response } to WorkflowQueue
-          6. Returns 200 immediately — Slack requires response within 3s
-
-        The Step Processor picks up the resume_gate message and pops the
-        human_gate frame from the execution stack, routing based on the user response.
-      tags: [UI-Slack]
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [payload]
-              properties:
-                payload:
-                  type: string
-                  description: >
-                    URL-encoded JSON string from Slack containing action details.
-                    Parsed fields used internally:
-                    type (block_actions | view_submission),
-                    actions[0].action_id,
-                    actions[0].value (encodes workflowRunId + user response),
-                    user.id, channel.id, message.ts
-      responses:
-        '200':
-          description: >
-            Interactive action acknowledged. Stack will resume asynchronously.
-          content:
-            application/json:
-              example: {}
-        '400':
-          description: Invalid Slack signature or malformed payload
-        '404':
-          description: workflowRunId not found or run not in awaiting_human_gate status
-        '500':
-          description: Failed to enqueue resume_gate message to WorkflowQueue
-
-  /api/v1/ui/slack/mind:
-    post:
-      summary: /mind slash command — natural language intent entry point
-      description: >
-        Receives the /mind Slack slash command. This is the primary entry point
-        for all natural language interaction with the brain — workflow invocation,
-        domain CRUD, and heavy-lift creation requests all flow through here.
-
-        Validates the Slack signing secret (HMAC-SHA256 + replay protection),
-        then performs a session lookup before enqueuing:
-
-          1. If thread_ts is present (reply in existing thread):
-               → getRows PGC_Session where callback->>'threadId' = thread_ts
-               → found: retrieve session_id, include in CLASSIFY_INTENT message
-               → not found: generate new session_id UUID, PROC creates PGC_Session on receipt
-          2. If thread_ts is absent (fresh /mind, no existing thread):
-               → generate new session_id UUID
-          3. Post ACK message to Slack (chat.postMessage) — ackTs becomes the thread root
-          4. Enqueue CLASSIFY_INTENT to SQS WorkflowQueue:
-               { type: CLASSIFY_INTENT, userInput, sessionId, callback: { provider, channel, threadId: ackTs } }
-          5. Return 200 immediately — Slack 3s window
-
-        The session lookup (step 1) is one getRows call to SERV.
-        The session layer (PGC_Session, PGC_SessionEntry) is Phase 3 — until then,
-        sessionId is generated fresh on every call and PROC ignores it.
-
-        classify-intent.mjs picks up the CLASSIFY_INTENT message and runs the
-        two-pass, domain-workflow-aware classification pipeline (Section 6.3).
-      tags: [UI-Slack]
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              type: object
-              required: [command, text, user_id, channel_id]
-              properties:
-                command:
-                  type: string
-                  example: /mind
-                text:
-                  type: string
-                  description: Free-form natural language input
-                  example: show me my pasta recipes
-                user_id:
-                  type: string
-                  example: U012AB3CD
-                channel_id:
-                  type: string
-                  example: C0AEJ87JSKF
-                thread_ts:
-                  type: string
-                  description: >
-                    Present when the user typed /mind as a reply in an existing thread.
-                    Used for session lookup. Absent on fresh /mind calls.
-                  example: "1234567890.123456"
-      responses:
-        '200':
-          description: >
-            ACK — intent received. Classification and routing will be posted
-            to the Slack thread asynchronously via SlackCallbackListenerFunction.
-          content:
-            application/json:
-              examples:
-                fresh_thread:
-                  summary: Fresh /mind — new thread started
-                  value:
-                    response_type: in_channel
-                    text: "Got it — thinking..."
-                existing_thread:
-                  summary: /mind in existing thread — session continues
-                  value:
-                    response_type: in_channel
-                    text: "On it..."
-        '400':
-          description: Invalid Slack signature, missing text, or empty input
-        '500':
-          description: Session lookup, ACK post, or SQS enqueue failed
-
-  # ── PROC — business logic endpoints ───────────────────────────────────────
-
-  /api/v1/proc/run-workflow:
-    post:
-      summary: Step Processor — advance or resume a workflow run
-      description: >
-        The central workflow execution endpoint. Handles all WORKFLOW_STEP
-        messages from the SQS WorkflowQueue and is directly testable via HTTP.
-
-        Three actions are supported:
-
-        **resume_gate** — A human gate has been responded to.
-        Loads PGC_WorkflowRun, finds the suspended gate frame on the execution
-        stack, matches userResponse to the gate options, and routes accordingly.
-        For remove_table responses: splices the table from state.proposed_scaffold
-        and re-posts the updated review message. For confirm/cancel: advances or
-        terminates the workflow.
-
-        **execute_top** — Execute the step at the top of the execution stack.
-        Loads PGC_WorkflowRun by workflowRunId, inspects the top frame, finds
-        the current step in PGC_Workflow.steps, executes it via the step type
-        handler, writes PGC_WorkflowRunStep audit row, persists updated stack
-        and state to PGC_WorkflowRun, then enqueues the next execute_top message
-        to continue the run. One SQS message per step — one step per invocation.
-        Idempotency: checks PGC_WorkflowRunStep for (run_id, frame_id, step_key)
-        before executing — SQS redeliveries are detected and discarded safely.
-
-        **cancel** — Immediately cancel the workflow run regardless of current
-        state. Sets PGC_WorkflowRun.status = cancelled.
-
-        Transport-agnostic — business logic is identical whether the message
-        arrives via SQS WorkflowQueue or direct HTTP POST.
-
-        On SQS delivery: result is enqueued to SYSSQSCallbackResults.
-        On HTTP delivery: result returned directly for testing.
-
-        This endpoint is workflow-agnostic — it dispatches based on the
-        declarative step definition in PGC_Workflow.steps, not on workflow name.
-        User-defined workflows are handled identically to system workflows.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [action, workflowRunId]
-              properties:
-                action:
-                  type: string
-                  enum: [resume_gate, execute_top, cancel]
-                  description: Which step processor action to perform
-                workflowRunId:
-                  type: integer
-                  description: PGC_WorkflowRun.id of the run to advance
-                userResponse:
-                  type: string
-                  description: >
-                    Required for resume_gate. Must match one of the action values
-                    in the suspended gate frame's options array.
-                    Built-in values: confirm, cancel, remove_table.
-                    User-defined workflows may define their own action values.
-                  example: confirm
-                responseData:
-                  type: object
-                  description: >
-                    Optional structured data accompanying the user response.
-                    Content is gate-type specific — interpreted by the Step
-                    Processor based on the gate frame definition.
-                  example:
-                    tableName: PGD_Holdings
-                callback:
-                  $ref: '#/components/schemas/Callback'
-                traceId:
-                  type: string
-                  format: uuid
-            examples:
-              resume_confirm:
-                summary: User confirmed the review gate
-                value:
-                  action: resume_gate
-                  workflowRunId: 42
-                  userResponse: confirm
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-              resume_remove_table:
-                summary: User removed a table from the proposed scaffold
-                value:
-                  action: resume_gate
-                  workflowRunId: 42
-                  userResponse: remove_table
-                  responseData:
-                    tableName: PGD_Holdings
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-              resume_cancel:
-                summary: User cancelled the workflow
-                value:
-                  action: resume_gate
-                  workflowRunId: 42
-                  userResponse: cancel
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-              cancel_run:
-                summary: Cancel a specific run (same as shutdown by runId)
-                value:
-                  action: cancel
-                  workflowRunId: 42
-      responses:
-        '200':
-          description: >
-            Action processed. On SQS delivery: empty body, result posted async
-            to callback channel. On HTTP delivery: result returned directly.
-          content:
-            application/json:
-              examples:
-                resume_gate_remove:
-                  summary: Table removed — updated scaffold returned
-                  value:
-                    success: true
-                    action: resume_gate
-                    workflowRunId: 42
-                    gateStatus: open
-                    domain: stock_portfolio
-                    tableCount: 2
-                resume_gate_confirm:
-                  summary: Gate confirmed — workflow advancing to next step
-                  value:
-                    success: true
-                    action: resume_gate
-                    workflowRunId: 42
-                    gateStatus: confirmed
-                resume_gate_cancel:
-                  summary: Run cancelled
-                  value:
-                    success: true
-                    action: resume_gate
-                    workflowRunId: 42
-                    gateStatus: cancelled
-        '400':
-          description: Missing action, workflowRunId, or userResponse for resume_gate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: workflowRunId not found in PGC_WorkflowRun
-        '409':
-          description: >
-            Run is not in awaiting_human_gate status — duplicate resume_gate
-            delivery (SQS at-least-once) or stale button click
-        '500':
-          description: DB read, state mutation, or SQS enqueue failed
-
-  /api/v1/proc/classify-intent:
-    post:
-      summary: Intent Preprocessor — two-pass, domain-workflow-aware classification
-      description: >
-        Classifies free-form user input into a routable intent using a cost-ordered
-        pipeline. LLM is only invoked when coded logic cannot classify.
-
-        Pre-loads PGC_IntentMap, PGC_DomainHelp, and PGC_Workflow in parallel
-        before classification begins — all three tables are needed across passes.
-
-        **Pass 1 — PGC_IntentMap regex match (zero LLM cost):**
-
-          All rows loaded. Sorted: workflow > heavy_lift > crud; lower id wins within tier.
-          Input lowercased and tested against each pattern.
-          Match with action_type workflow or heavy_lift → SHORT-CIRCUIT immediately.
-          Match with action_type workflow + structured input (id=N or field=value pairs)
-          present → YIELD to Pass 2 (Guard 1 — retrieval workflows only).
-          Match with action_type workflow → extractSearchTerm() called for get_*/search_*
-          workflows before returning (Guard 2 — populates search_term).
-          Match with action_type crud → extract domain, resolve root table, build ad_hoc_step.
-          confidence: exact
-
-        **Pass 2 — Domain-Workflow Lookup (zero LLM cost):**
-
-          Step 1: tokenise input, scan PGC_DomainHelp.aliases — resolve domain name.
-          Step 2: scan PGC_Workflow.intent_keywords for resolved domain — token presence
-          match (substring includes, handles multi-word keywords). Disambiguation:
-          get_<domain> wins over list_<domain> when extra tokens follow verb+domain
-          (search term present). confidence: keyword_match
-          Step 3 (CRUD fallback): only reached when no keyword matched AND input contains
-          PGC_/PGD_ table prefix with a verb. Builds ad_hoc_step. confidence: crud
-          Phase 3: if no alias token in input, check recent PGC_SessionEntry rows
-          for the most recently active domain. confidence: session_context
-
-        **Tier 2 — Cheap LLM classification (perplexity/sonar):**
-
-          Called when Pass 1 and Pass 2 produce no match.
-          Domain hint from Pass 2 injected if available.
-          Session context block injected if sessionId present (Phase 3).
-          Returns: { intent_category, workflow_name, action_type, referenced_entities }
-          confidence: llm_classified
-
-        **Tier 3 — Heavy lift handoff (no additional LLM call):**
-
-          Routes to existing workflow entry points:
-            create_domain   → enqueue CREATE_DOMAIN
-            create_workflow → enqueue CREATE_WORKFLOW
-            unknown         → WORKFLOW_NOTIFY with guidance
-          confidence: heavy_lift
-
-        Transport-agnostic — identical logic whether request arrives via
-        HTTP (curl test) or SQS (CLASSIFY_INTENT from WorkflowQueue).
-
-        On HTTP delivery: classification result returned directly.
-        On SQS delivery: result handed off to downstream — workflow enqueued
-        or WORKFLOW_NOTIFY posted to Slack thread.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ClassifyIntentRequest'
-            examples:
-              pass1_workflow_add:
-                summary: "UC 1.1 — Pass 1 exact match — add_recipes workflow"
-                value:
-                  userInput: add recipe pasta carbonara with ingredients and steps
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              pass1_workflow_list:
-                summary: "UC 1.2 — Pass 1 exact match — list_recipes workflow"
-                value:
-                  userInput: list recipes
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              pass1_workflow_get_search:
-                summary: "UC 1.3 — Pass 1 exact match — get_recipes workflow with search term"
-                value:
-                  userInput: get recipes sweet potato chili
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              pass1_workflow_update:
-                summary: "UC 1.5 — Pass 1 exact match — update_recipes workflow"
-                value:
-                  userInput: update recipes id=42 difficulty=hard
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              pass2_keyword_match:
-                summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb"
-                value:
-                  userInput: show recipes pasta carbonara
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              tier2_novel:
-                summary: "UC 2.5 — Tier 2 sonar — novel domain creation intent"
-                value:
-                  userInput: I want to track my golf scores
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              tier2_with_session:
-                summary: "Tier 2 — ambiguous input resolved with session context (Phase 3)"
-                value:
-                  userInput: make that a three-course meal plan
-                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-              sqs_delivery:
-                summary: "SQS CLASSIFY_INTENT delivery from /mind (production path)"
-                value:
-                  userInput: get recipes sweet potato chili
-                  sessionId: f47ac10b-58cc-4372-a567-0e02b2c3d479
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-                  traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-      responses:
-        '200':
-          description: >
-            Classification result on HTTP delivery.
-            On SQS delivery: empty body — result handed off to downstream workflow
-            or posted to Slack thread as WORKFLOW_NOTIFY.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ClassifyIntentResponse'
-              examples:
-                pass1_add_workflow:
-                  summary: "UC 1.1 — Pass 1 exact — add_recipes workflow"
-                  value:
-                    intent_category: add_recipes
-                    action_type: workflow
-                    confidence: exact
-                    workflow_name: add_recipes
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                pass1_list_workflow:
-                  summary: "UC 1.2 — Pass 1 exact — list_recipes workflow"
-                  value:
-                    intent_category: list_recipes
-                    action_type: workflow
-                    confidence: exact
-                    workflow_name: list_recipes
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                pass1_get_with_search:
-                  summary: "UC 1.3 — Pass 1 exact — get_recipes workflow with search_term"
-                  value:
-                    intent_category: get_recipes
-                    action_type: workflow
-                    confidence: exact
-                    workflow_name: get_recipes
-                    domain: null
-                    search_term: sweet potato chili
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                pass1_update_workflow:
-                  summary: "UC 1.5 — Pass 1 exact — update_recipes workflow"
-                  value:
-                    intent_category: update_recipes
-                    action_type: workflow
-                    confidence: exact
-                    workflow_name: update_recipes
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                pass1_delete_workflow:
-                  summary: "UC 1.6 — Pass 1 exact — delete_recipes workflow"
-                  value:
-                    intent_category: delete_recipes
-                    action_type: workflow
-                    confidence: exact
-                    workflow_name: delete_recipes
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                pass2_keyword_match:
-                  summary: "UC 1.7 — Pass 2 keyword match — get_recipes via show verb with search_term"
-                  value:
-                    intent_category: get_recipes
-                    action_type: workflow
-                    confidence: keyword_match
-                    workflow_name: get_recipes
-                    domain: null
-                    search_term: pasta carbonara
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                heavy_lift_create_domain:
-                  summary: "UC 2.1 — Pass 1 exact — create_domain heavy lift"
-                  value:
-                    intent_category: create_domain
-                    action_type: heavy_lift
-                    confidence: exact
-                    workflow_name: null
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                crud_ambiguous_no_verb:
-                  summary: "UC 3.6 — crud_ambiguous — PGD table with no verb (Phase B)"
-                  value:
-                    intent_category: unknown_table_intent
-                    action_type: crud_ambiguous
-                    confidence: crud
-                    workflow_name: null
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                tier2_workflow_matched:
-                  summary: "Tier 2 — sonar matched a named workflow"
-                  value:
-                    intent_category: meal_planner
-                    action_type: workflow
-                    confidence: llm_classified
-                    workflow_name: meal_planner
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                tier2_workflow_with_entities:
-                  summary: "Tier 2 — workflow matched with session referenced_entities (Phase 3)"
-                  value:
-                    intent_category: meal_planner
-                    action_type: workflow
-                    confidence: llm_classified
-                    workflow_name: meal_planner
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    referenced_entities:
-                      - { entity: Recipe, id: 42, name: Carbonara }
-                      - { entity: Recipe, id: 43, name: "Cacio e Pepe" }
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-                heavy_lift_unknown:
-                  summary: "UC 2.6 — Tier 3 — unknown heavy lift — WORKFLOW_NOTIFY posted"
-                  value:
-                    intent_category: unknown
-                    action_type: heavy_lift
-                    confidence: heavy_lift
-                    workflow_name: null
-                    domain: null
-                    search_term: null
-                    ad_hoc_step: null
-                    traceId: ae9a8899-94a5-4a16-8dc1-803764d373d7
-        '400':
-          description: userInput is missing or empty
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: PGC_IntentMap, PGC_DomainHelp, or PGC_Workflow read failed, or Tier 2 LLM call failed
-
-  /api/v1/proc/delete-domain:
-    post:
-      summary: Delete a domain — drops PGD tables, removes all registry entries
-      description: >
-        Permanently deletes a domain by name. Intended primarily for development
-        and testing cleanup. Use with caution — all domain data is destroyed.
-
-        Steps performed:
-          1. Look up all PGC_Schema rows where domain = domainName and target = pgd
-          2. For each table: call SERV deleteTable (DROP TABLE CASCADE + remove
-             PGC_Schema + PGC_TableMap rows)
-          3. Remove PGC_DomainHelp row for the domain
-          4. Return summary of what was deleted
-
-        If the domain has no tables in PGC_Schema and no PGC_DomainHelp row,
-        returns success with deletedTables: [] and a warning — not an error,
-        since the desired end state (domain absent) is already true.
-
-        Transport-agnostic — callable via HTTP (curl) or SQS.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [domain]
-              properties:
-                domain:
-                  type: string
-                  description: Snake_case domain name as stored in PGC_Schema.domain
-                  example: stock_portfolio
-                callback:
-                  $ref: '#/components/schemas/Callback'
-                traceId:
-                  type: string
-                  format: uuid
-            example:
-              domain: stock_portfolio
-      responses:
-        '200':
-          description: Domain deleted (or was already absent)
-          content:
-            application/json:
-              examples:
-                deleted:
-                  summary: Domain fully deleted
-                  value:
-                    success: true
-                    domain: stock_portfolio
-                    deletedTables:
-                      - PGD_Portfolios
-                      - PGD_Holdings
-                      - PGD_StockPrices
-                    domainHelpRemoved: true
-                already_absent:
-                  summary: Domain had no tables or registry entries
-                  value:
-                    success: true
-                    domain: stock_portfolio
-                    deletedTables: []
-                    domainHelpRemoved: false
-                    warning: "No tables or registry entries found for domain \"stock_portfolio\""
-        '400':
-          description: domain is required
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: SERV deleteTable or PGC_DomainHelp removal failed
-
-  /api/v1/proc/design-domain:
-    post:
-      summary: LLM domain design — no DB writes, returns scaffold for human review
-      description: >
-        Phase 1 of the two-phase domain creation flow.
-        Calls the LLM to design a full relational schema from user input,
-        validates the scaffold via /proc/review-output (Ajv + semantic rules),
-        stores the validated scaffold in PGC_WorkflowRun.state, then posts
-        a Block Kit review message to Slack and pauses — waiting for human approval.
-
-        This endpoint does NOT create any tables or write to PGC_Schema.
-        All DB writes happen in /proc/create-domain after human confirmation.
-
-        Transport-agnostic — called identically via HTTP (curl/test) or SQS
-        (DESIGN_DOMAIN message from WorkflowQueue).
-
-        Flow:
-          1. Read create_domain prompt from PGC_Prompt
-          2. Call LLM → proposed_scaffold { domain, tables, domainHelp }
-          3. Call /proc/review-output — Ajv + semantic validation (2-attempt loop)
-          4. If validation fails both attempts → enqueue error to callback, halt
-          5. Store validated scaffold in PGC_WorkflowRun.state
-          6. Post Block Kit review message to Slack thread:
-               "Here's my plan for domain *<domain>*: <table summary>. Does this look right?"
-               Buttons: [✅ Review fields] [🔀 Merge tables] [➕ Add a table] [🔄 Start over] [❌ Cancel]
-          7. Set PGC_WorkflowRun.status = 'awaiting_human_gate' — halt execution
-
-        The user's button click arrives via /ui/slack/interactive → WorkflowQueue
-        resume_gate → Step Processor routes based on button action.
-
-        On HTTP delivery (curl): returns the scaffold directly without posting to Slack.
-        Used for testing the LLM design step in isolation.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [userInput]
-              properties:
-                userInput:
-                  type: string
-                  description: >
-                    Free-form natural language description of the domain.
-                    LLM infers a clean snake_case domain name from this.
-                  example: stock portfolio with price history and alerts
-                workflowRunId:
-                  type: integer
-                  description: >
-                    PGC_WorkflowRun.id for this execution. Required on SQS delivery —
-                    generated by SlackbotFunction when enqueuing DESIGN_DOMAIN.
-                    Omit on HTTP (curl) calls — no WorkflowRun row needed for direct testing.
-                callback:
-                  $ref: '#/components/schemas/Callback'
-                traceId:
-                  type: string
-                  format: uuid
-            examples:
-              sqs_delivery:
-                summary: SQS delivery from Slack /create-domain command
-                value:
-                  userInput: stock portfolio with price history and alerts
-                  workflowRunId: 12
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-              http_test:
-                summary: Direct curl test — no WorkflowRun, no Slack
-                value:
-                  userInput: stock portfolio with price history and alerts
-      responses:
-        '200':
-          description: >
-            Scaffold designed and validated. On SQS delivery: Block Kit message posted
-            to Slack and run paused — response is empty (async). On HTTP delivery:
-            scaffold returned directly for inspection.
-          content:
-            application/json:
-              examples:
-                http_response:
-                  summary: HTTP curl response — scaffold returned directly
-                  value:
-                    success: true
-                    domain: stock_portfolio
-                    tables:
-                      - tableName: PGD_Portfolios
-                        description: Stores user portfolio definitions
-                      - tableName: PGD_Holdings
-                        description: Individual stock positions within a portfolio
-                      - tableName: PGD_StockPrices
-                        description: Historical and current price data per ticker
-                    validatedAt: "2026-03-19T16:00:00.000Z"
-                sqs_response:
-                  summary: SQS delivery — empty body, Slack message posted async
-                  value: {}
-        '400':
-          description: >
-            HTTP path only — userInput is missing or empty.
-            On SQS delivery, missing userInput enqueues an error message to the
-            callback channel (Slack reply) and returns cleanly — the SQS message
-            is not retried since this is a caller error, not an infrastructure failure.
-        '422':
-          description: >
-            LLM scaffold failed Ajv or semantic validation after 2 attempts.
-            Error details written to PGC_Prompt.error_log. WorkflowRun set to failed.
-        '500':
-          description: LLM call, review-output, or WorkflowRun write failed
-
-  /api/v1/proc/create-domain:
-    post:
-      summary: Execute confirmed domain creation — DDL + registry writes
-      description: >
-        Phase 2 of the two-phase domain creation flow. Called after the user
-        confirms the scaffold designed by /proc/design-domain.
-
-        Reads the validated scaffold from PGC_WorkflowRun.state (SQS path) or
-        directly from the request body (HTTP path), creates each PGD table via
-        SERV-Schema createTable, registers the domain in PGC_DomainHelp, and
-        registers entity definitions in PGC_EntitySchema.
-
-        Transport-agnostic — called identically via HTTP (curl/test) or SQS
-        (CREATE_DOMAIN message from WorkflowQueue after human gate confirmation).
-
-        NOTE: The current deployed implementation is the monolithic pre-gate
-        version — it calls the LLM and executes DDL in a single step with no
-        human review. The two-phase flow (design-domain → human gate → create-domain)
-        is the target state once the Step Processor is built (Phase 2 item 5).
-        The monolithic version will be replaced by the declarative create_domain
-        workflow in PGC_Workflow at that point.
-
-        On SQS delivery, result is enqueued to SYSSQSCallbackResults for
-        SlackCallbackListenerFunction to post as a threaded reply.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [userInput]
-              properties:
-                userInput:
-                  type: string
-                  description: >
-                    Free-form natural language description of the domain.
-                    LLM infers a clean snake_case domain name from this.
-                  example: recipes with ingredients and nutritional info
-                callback:
-                  $ref: '#/components/schemas/Callback'
-                traceId:
-                  type: string
-                  format: uuid
-            example:
-              userInput: recipes with ingredients and nutritional info
-              callback:
-                provider: slack
-                channel: C0AEJ87JSKF
-                threadId: "1234567890.123456"
-      responses:
-        '200':
-          description: Domain created successfully
-          content:
-            application/json:
-              example:
-                success: true
-                domainName: recipes
-                tables:
-                  - { tableName: PGD_Recipes,     status: created }
-                  - { tableName: PGD_Ingredients,  status: created }
-                completedAt: "2026-03-18T10:46:45.870Z"
-        '400':
-          description: userInput is required
-        '500':
-          description: LLM call, validation, or DDL execution failed
-
-  /api/v1/proc/shutdown:
-    post:
-      summary: Emergency stop — cancel active workflow runs
-      description: >
-        Immediately cancels all active workflow runs for this instance, or a
-        specific run by ID.
-
-        Steps performed:
-          1. Calls SERV getRows on PGC_WorkflowRun — filters by status=active
-             and optionally by id=workflowRunId
-          2. Calls SERV updateRows on PGC_WorkflowRun — sets status=cancelled
-             for each matching run (non-empty filters enforced by updateRows gate)
-          3. Enqueues { type: WORKFLOW_STEP, action: cancel, workflowRunId } to
-             WorkflowQueue for each cancelled run — so any in-flight SQS step
-             is discarded when the Step Processor checks status before executing
-          4. Returns ShutdownResult — cancelledCount: 0 when no active runs exist
-
-        Called synchronously by SlackbotFunction on /shutdown command —
-        no SQS hop. Must respond within Slack's 3s window.
-
-        NOTE: Step Processor (Phase 2 item 5) MUST check PGC_WorkflowRun.status
-        as its first action before executing any step. That check is what gives
-        the cancel signal its effect. This is a hard constraint on the Step Processor design.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                workflowRunId:
-                  type: integer
-                  description: >
-                    Specific run to cancel. Omit to cancel ALL active runs.
-                callback:
-                  $ref: '#/components/schemas/Callback'
-                traceId:
-                  type: string
-                  format: uuid
-            examples:
-              cancel_all:
-                summary: Cancel all active runs
-                value:
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-              cancel_specific:
-                summary: Cancel a specific run
-                value:
-                  workflowRunId: 42
-                  callback:
-                    provider: slack
-                    channel: C0AEJ87JSKF
-                    threadId: "1234567890.123456"
-      responses:
-        '200':
-          description: Shutdown complete — cancelledCount is 0 when no active runs exist
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShutdownResult'
-              examples:
-                runs_cancelled:
-                  summary: One or more runs cancelled
-                  value:
-                    success: true
-                    cancelledCount: 2
-                    cancelled:
-                      - { workflowRunId: 42, workflowName: create_domain, stoppedAtStep: 3 }
-                      - { workflowRunId: 43, workflowName: create_domain, stoppedAtStep: 1 }
-                no_active_runs:
-                  summary: No active workflows to cancel
-                  value:
-                    success: true
-                    cancelledCount: 0
-                    cancelled: []
-        '500':
-          description: SERV getRows, updateRows, or SQS enqueue failed
-
-  /api/v1/proc/simulate-workflow:
-    post:
-      summary: Workflow simulation — static analysis and path execution validation
-      description: >
-        Validates a workflow step array before it is registered in PGC_Workflow.
-        Runs three validation levels in order, stopping early if a prior level fails.
-
-        **Level 1 — Static analysis (no mocks required)**
-
-        Structural checks on the step array itself:
-          - All on_success, on_failure, on_select values are valid routing tokens
-          - All step:N routing targets exist in the step array
-          - All {{template}} references resolve to an output_key written by a prior step
-            on that execution path
-          - All items_key values in iterator steps resolve to arrays written prior
-          - All input.prompt values in llm_call steps name a known intent_category
-          - No output_key on review_object or confirm gate types (those do not write output)
-          - Every human_gate has at least one option with action=cancel
-
-        Level 1 failures are returned immediately — no path execution occurs.
-
-        **Level 2 — Path execution (requires mockOutputs and simulationPaths)**
-
-        Executes each named path in simulationPaths independently. At each step,
-        injects the mock output or gate decision instead of calling the real service.
-        Records the local_state transition log. Fails the path if any template
-        variable is unresolvable or if the actual terminal step does not match
-        expected_terminal.
-
-        **Level 3 — Skip-path analysis (advisory, runs after Level 2 passes)**
-
-        For every step with on_failure=human_feedback, runs a micro-path where
-        the user chooses Skip at the recovery gate. Flags any downstream step that
-        reads the null output_key as a latent data flow risk. Advisory only —
-        does not fail the simulation. Results appear in skipPathWarnings.
-
-        This endpoint is called:
-          - Directly by developers testing a workflow definition before registration
-          - By the simulate step type in step-executor.mjs during create_workflow execution
-            (in that context, the request body is assembled from local_state keys)
-
-        The endpoint does not create or modify any PGC_WorkflowRun row. It is
-        stateless — no side effects on success or failure.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SimulateWorkflowRequest'
-            examples:
-              static_analysis_only:
-                summary: Level 1 only — validate step array structure without mocks
-                value:
-                  steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
-                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "human_feedback" }
-                  simulationPaths:
-                    - path_name: happy_path
-                      decisions:
-                        - { step: "1", outcome: success }
-                      expected_terminal: end
-                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-              full_simulation:
-                summary: Full simulation — all three levels
-                value:
-                  steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
-                    - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_failure: "cancel" }
-                    - { step: "3", type: "end" }
-                  mockOutputs:
-                    "1": { domain: "recipes", tables: [] }
-                  simulationPaths:
-                    - path_name: happy_path
-                      decisions:
-                        - { step: "1", outcome: success }
-                        - { step: "2", outcome: gate, user_response: confirm, on_select: "next" }
-                      expected_terminal: end
-                    - path_name: user_cancels
-                      decisions:
-                        - { step: "1", outcome: success }
-                        - { step: "2", outcome: gate, user_response: cancel, on_select: cancel }
-                      expected_terminal: cancelled
-                  runInput:
-                    userInput: "recipe collection with ingredients"
-                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-      responses:
-        '200':
-          description: >
-            Simulation complete. Check passed field — false means one or more
-            validation levels failed. A 200 response does not mean the workflow is valid.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SimulateWorkflowResponse'
-              examples:
-                all_passed:
-                  summary: All paths passed all validation levels
-                  value:
-                    passed: true
-                    pathsRun: 3
-                    pathsPassed: 3
-                    pathsFailed: 0
-                    staticAnalysis: { passed: true, issues: [] }
-                    pathResults:
-                      - path_name: happy_path
-                        passed: true
-                        steps_executed: 11
-                        terminal: end
-                        expected_terminal: end
-                    skipPathWarnings: []
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                static_analysis_failed:
-                  summary: Level 1 failed — unresolved template variable detected
-                  value:
-                    passed: false
-                    pathsRun: 0
-                    pathsPassed: 0
-                    pathsFailed: 0
-                    staticAnalysis:
-                      passed: false
-                      issues:
-                        - check: unresolved_template_variable
-                          step: "8"
-                          failure_class: unresolved_template_variable
-                          detail: "Template variable 'confirmed_domain_help' not found in local_state at step 8. Available keys: input, proposed_scaffold, generated"
-                          suggestion: "Did you mean '{{generated.domainHelp}}'?"
-                    pathResults: []
-                    skipPathWarnings: []
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                path_execution_failed:
-                  summary: Level 2 failed — path reached unexpected terminal
-                  value:
-                    passed: false
-                    pathsRun: 2
-                    pathsPassed: 1
-                    pathsFailed: 1
-                    staticAnalysis: { passed: true, issues: [] }
-                    pathResults:
-                      - path_name: happy_path
-                        passed: true
-                        steps_executed: 11
-                        terminal: end
-                        expected_terminal: end
-                      - path_name: llm_step_fails
-                        passed: false
-                        steps_executed: 1
-                        terminal: failed
-                        expected_terminal: human_feedback
-                        failure_step: "1"
-                        failure_reason: "on_failure routing value 'human_feedback' is not implemented. Run terminated with status=failed."
-                    skipPathWarnings: []
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                skip_path_warnings:
-                  summary: All paths passed but skip-path warnings present
-                  value:
-                    passed: true
-                    pathsRun: 3
-                    pathsPassed: 3
-                    pathsFailed: 0
-                    staticAnalysis: { passed: true, issues: [] }
-                    pathResults:
-                      - path_name: happy_path
-                        passed: true
-                        steps_executed: 11
-                        terminal: end
-                        expected_terminal: end
-                    skipPathWarnings:
-                      - step: "6"
-                        downstream_step: "8"
-                        missing_key: generated
-                        detail: "Step 8 reads {{generated.domainHelp}} but step 6 has on_failure=human_feedback. If step 6 is skipped, 'generated' will be null at step 8."
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-        '400':
-          description: >
-            Missing required fields, empty steps array, or empty simulationPaths.
-            Also returned when Level 2 or 3 is requested but mockOutputs is absent.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Simulation infrastructure error — step executor threw unexpectedly
-
-  /api/v1/proc/review-output:
-    post:
-      summary: Right-brain output validation — Ajv JSON Schema + in-situ JS sandbox
-      description: >
-        Validates LLM-generated output before it is passed to any downstream step
-        (DDL, SQS payload, workflow state write). Implements the repeat-until-correct
-        loop defined in architecture Section 6.10.
-
-        For JSON output (outputType: json):
-          - Fetches PGC_Prompt.output_schema for the given intentCategory
-          - Validates the output against the schema using Ajv
-          - If invalid: injects Ajv errors into a correction prompt, calls LLM once more
-          - If attempt 2 also fails: writes to PGC_Prompt.error_log, returns valid: false
-
-        For JS output (outputType: js):
-          - Parses the generated code with acorn (AST gate — syntax validation)
-          - Executes in vm.runInNewContext() sandbox with hard 500ms timeout
-          - Validates output shape against PGC_StepType.output_schema
-          - Same 2-attempt correction loop applies
-
-        Maximum 2 LLM correction attempts. Never an unbounded loop.
-        All failures written to PGC_Prompt.error_log regardless of recovery outcome.
-      tags: [PROC]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReviewOutputRequest'
-            examples:
-              json_validation:
-                summary: Validate LLM scaffold JSON
-                value:
-                  intentCategory: create_domain
-                  outputType: json
-                  output:
-                    domain: recipes
-                    tables:
-                      - tableName: PGD_Recipes
-                        target: pgd
-                        columns:
-                          - { name: id, type: serial, primaryKey: true }
-                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-              js_validation:
-                summary: Validate LLM-generated JS transform
-                value:
-                  intentCategory: js_transform_merge_tables
-                  outputType: js
-                  output: "function transform(input) { return { merged: input.tables }; }"
-                  testInput: { tables: ["PGD_A", "PGD_B"] }
-                  traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-      responses:
-        '200':
-          description: Validation result — check valid field
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReviewOutputResponse'
-              examples:
-                valid_first_attempt:
-                  summary: Valid on first attempt
-                  value:
-                    valid: true
-                    intentCategory: create_domain
-                    attempt: 1
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                valid_after_correction:
-                  summary: Invalid attempt 1, corrected on attempt 2
-                  value:
-                    valid: true
-                    intentCategory: create_domain
-                    attempt: 2
-                    correctedOutput:
-                      domain: recipes
-                      tables: []
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                invalid_both_attempts:
-                  summary: Both attempts failed — run halted
-                  value:
-                    valid: false
-                    intentCategory: create_domain
-                    attempt: 2
-                    errors:
-                      - instancePath: "/tables/2/constraints/0"
-                        keyword: required
-                        message: "must have required property 'expression'"
-                    errorLogged: true
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-        '400':
-          description: Missing intentCategory or output, unknown outputType
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: No PGC_Prompt row found for intentCategory
-        '500':
-          description: Validation infrastructure error (Ajv compile, vm sandbox, DB write)

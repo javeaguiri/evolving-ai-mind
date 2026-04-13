@@ -29,6 +29,7 @@ import { handle as deleteDomain }       from './delete-domain.mjs';
 import { handle as help }               from './help.mjs';
 import { handle as classifyIntent }     from './classify-intent.mjs';
 import { handle as simulateWorkflow }   from './simulate-workflow.mjs';
+import { handle as createWorkflow }     from './create-workflow.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -107,6 +108,14 @@ async function processSqsBatch(records) {
         await classifyIntent(req);
         continue;
       }
+      // CREATE_WORKFLOW — heavy-lift dispatch from classify-intent.mjs or direct
+      // /create-workflow Slack command. domain field may be null (direct command path)
+      // or a resolved alias (classify-intent heavy-lift path).
+      if (message.type === 'CREATE_WORKFLOW') {
+        const req = buildReqFromSqs(message);
+        await createWorkflow(req);
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -152,6 +161,9 @@ async function dispatch(req) {
 
     case 'classify-intent':
       return classifyIntent(req);
+
+    case 'create-workflow':
+      return createWorkflow(req);
 
     case 'simulate-workflow':
       return simulateWorkflow(req);
