@@ -164,7 +164,31 @@ async function executeTop({ workflowRunId, traceId, source }) {
   const step  = findStep(steps, frame.current_step);
 
   if (!step) {
-    throw new Error(`step "${frame.current_step}" not found in workflow "${run.workflow_name}"`);
+    const msg = `step "${frame.current_step}" not found in workflow "${run.workflow_name}"`;
+    console.error('run-workflow: step not found — failing run', {
+      workflowRunId: run.id, step: frame.current_step, traceId,
+    });
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { status: 'failed', error: { step: frame.current_step, message: msg } }
+    );
+    if (source === 'sqs' && run.callback) {
+      await enqueueCallback(run.callback, {
+        type: 'WORKFLOW_ERROR', workflowRunId: run.id,
+        step: frame.current_step, message: msg,
+        traceId,
+      });
+    }
+    // Tier 1 self-repair — broken routing target produced an invalid step key
+    await enqueueWorkflow({
+      type:         'TROUBLESHOOT_WORKFLOW',
+      workflowName: run.workflow_name,
+      stackTrace:   msg,
+      autoFix:      true,
+      traceId,
+      callback:     run.callback,
+    });
+    return { skipped: true, reason: 'step_not_found' };
   }
 
   // Idempotency check

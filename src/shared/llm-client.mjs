@@ -13,7 +13,7 @@
 // Hard abort ceiling — must be safely below ProcFunction Lambda timeout (60s).
 // Gives a clean descriptive error instead of a silent Lambda kill on large outputs
 // like generate_crud_workflows which can take ~28s.
-const LLM_TIMEOUT_MS = 55_000;
+const LLM_TIMEOUT_MS = 115_000;
 
 /**
  * Call Perplexity Agent API and return parsed JSON.
