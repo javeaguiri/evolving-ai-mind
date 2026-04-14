@@ -526,9 +526,26 @@ function dialogToBlocks(dialog, workflowRunId) {
 
 async function postWorkflowError(message) {
   const { callback, step, message: errMessage, traceId, workflowRunId } = message;
-  const text = `⚠️ Workflow step ${step} failed: ${errMessage}`;
-  await routeCallback(callback, text, [
-    { type: 'section', text: { type: 'mrkdwn', text } },
+  // errMessage may be a full AJV validation error JSON string — thousands of chars.
+  // Slack section blocks have a 3000-char hard limit. Show a human-readable summary
+  // only; full details are in CloudWatch and PGC_Prompt.error_log.
+  const isValidationError = typeof errMessage === 'string' && errMessage.includes('llm_call validation failed');
+  const isLlmError        = typeof errMessage === 'string' && /LLM (returned|call timed)/.test(errMessage);
+  let summary;
+  if (isValidationError) {
+    const match = errMessage.match(/after 2 attempt\(s\): (\d+|\[)/);
+    const errCount = errMessage.match(/"keyword"/g)?.length ?? '?';
+    summary = `LLM output validation failed after 2 attempts (${errCount} schema errors). The prompt has been logged for improvement.`;
+  } else if (isLlmError) {
+    summary = `LLM call failed: ${errMessage.slice(0, 200)}`;
+  } else {
+    summary = typeof errMessage === 'string' ? errMessage.slice(0, 500) : 'An unexpected error occurred.';
+  }
+  const displayText = `⚠️ *Workflow failed*${step ? ` at step ${step}` : ''}
+
+${summary}`;
+  await routeCallback(callback, displayText, [
+    { type: 'section', text: { type: 'mrkdwn', text: displayText } },
     { type: 'context', elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }] },
   ]);
   console.info('callback: WORKFLOW_ERROR posted', { channel: callback.channel, traceId });
