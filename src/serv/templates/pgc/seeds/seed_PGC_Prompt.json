@@ -1185,10 +1185,12 @@
             "additionalProperties": false,
             "properties": {
               "topic": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 60
               },
               "what_is_known": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 300
               },
               "options": {
                 "type": "array",
@@ -1204,22 +1206,27 @@
                       "type": "string"
                     },
                     "description": {
-                      "type": "string"
+                      "type": "string",
+                      "maxLength": 150
                     },
                     "tradeoffs": {
                       "type": "string"
                     }
                   }
-                }
+                },
+                "maxItems": 3
               },
               "recommendation": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 100
               },
               "rationale": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 200
               }
             }
-          }
+          },
+          "maxItems": 3
         },
         "preference_questions": {
           "type": "array",
@@ -1239,7 +1246,8 @@
                 "pattern": "^[a-z][a-z0-9_]*$"
               },
               "question": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 150
               },
               "options": {
                 "type": "array",
@@ -1263,16 +1271,19 @@
                       "type": "string"
                     }
                   }
-                }
+                },
+                "maxItems": 3
               },
               "affects": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 100
               },
               "default": {
                 "type": "string"
               }
             }
-          }
+          },
+          "maxItems": 3
         },
         "out_of_scope": {
           "type": "array",
@@ -1294,7 +1305,8 @@
         }
       }
     },
-    "prompt_text": "You are the research intelligence layer of evolving-mind-ai, a personal automation system. Your role is to retrieve and structure domain knowledge that will guide workflow design.\n\nThe user wants to build: \"{{workflow_description}}\"\nDomain context: {{domain}}\n\nYour task has two parts:\n\nPART 1 — Domain research\nResearch what is known about doing this well. Focus on:\n- Best practices and evidence-based approaches for this type of process\n- Design options that exist in this space and their tradeoffs\n- Common failure modes or pitfalls to avoid\n- What makes a good user experience for this type of workflow\n\nPART 2 — Preference questions\nIdentify design choices that:\n1. Genuinely affect the structure of the workflow (different answers produce structurally different step arrays)\n2. Cannot be resolved by best practice alone — they depend on what the user personally wants\n3. Are NOT schema or technical questions — those are handled later\n\nOnly surface questions where the answer materially changes what gets built. If best practice clearly recommends one approach and the alternatives are clearly inferior for the stated goal, resolve it yourself in findings.recommendation and do NOT add a preference question for it.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks:\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<aspect of the domain>\",\n      \"what_is_known\": \"<evidence-based summary>\",\n      \"options\": [\n        { \"label\": \"<option name>\", \"description\": \"<what this means>\", \"tradeoffs\": \"<pros and cons>\" }\n      ],\n      \"recommendation\": \"<which option is best for most cases>\",\n      \"rationale\": \"<why>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_id>\",\n      \"question\": \"<question to ask the user>\",\n      \"options\": [\n        { \"value\": \"<option_value>\", \"label\": \"<button label>\", \"description\": \"<what this means>\" }\n      ],\n      \"affects\": \"<what changes structurally based on this answer>\",\n      \"default\": \"<value of the recommended default option>\"\n    }\n  ],\n  \"out_of_scope\": [\n    { \"topic\": \"<topic>\", \"why\": \"<why not relevant here>\" }\n  ]\n}\n\nRules:\n- findings must cover all design-relevant aspects of the domain\n- preference_questions must be empty [] if all decisions can be resolved from research\n- Never ask about schema, tables, or database structure — that is handled by a separate analytical step\n- Never ask about implementation details the user would not understand\n- preference_questions.id must be snake_case, unique, and descriptive (e.g. eval_method, loop_behaviour)\n- Return ONLY the JSON object, nothing else"
+    "prompt_text": "You are a workflow design advisor for evolving-mind-ai, a personal automation system.\n\nThe user wants to build: \"{{workflow_description}}\"\nDomain context: {{domain}}\n\nYour task has two tightly scoped parts. Be concise — every field has a token budget.\n\nPART 1 — Domain findings (max 3 findings)\nFor each finding: identify ONE design decision that materially affects workflow structure. Skip anything resolved by obvious best practice.\n- topic: 5 words max\n- what_is_known: 1–2 sentences max\n- options: 2–3 options max, each description 1 sentence max\n- recommendation: the best option label only (no explanation)\n- rationale: 1 sentence max\n\nPART 2 — Preference questions (max 3 questions)\nOnly include a question if: (a) the answer structurally changes the step array, AND (b) best practice cannot resolve it alone.\nIf all decisions are resolved by findings, return preference_questions: [].\n- question: one sentence\n- options: 2–3 choices, each description 1 sentence max\n- affects: 10 words max describing what structurally changes\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<5 words max>\",\n      \"what_is_known\": \"<1-2 sentences>\",\n      \"options\": [\n        { \"label\": \"<option name>\", \"description\": \"<1 sentence>\", \"tradeoffs\": \"<1 sentence>\" }\n      ],\n      \"recommendation\": \"<option label>\",\n      \"rationale\": \"<1 sentence>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_id>\",\n      \"question\": \"<1 sentence>\",\n      \"options\": [\n        { \"value\": \"<option_value>\", \"label\": \"<button label>\", \"description\": \"<1 sentence>\" }\n      ],\n      \"affects\": \"<10 words max>\",\n      \"default\": \"<value>\"\n    }\n  ],\n  \"out_of_scope\": [\n    { \"topic\": \"<topic>\", \"why\": \"<1 sentence>\" }\n  ]\n}\n\nRules:\n- Never ask about schema, tables, or database structure\n- Never ask about implementation details the user would not understand\n- preference_questions.id must be snake_case, unique, and descriptive\n- Return ONLY the JSON object, nothing else",
+    "max_output_tokens": 2000
   },
   {
     "intent_category": "analyze_and_design_workflow",

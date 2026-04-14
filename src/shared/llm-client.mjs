@@ -26,7 +26,7 @@ const LLM_TIMEOUT_MS = 115_000;
  * @param {string} traceId       For logging
  * @returns {Promise<object>}    Parsed JSON response
  */
-export async function callLlm(model, instructions, userMessage, outputSchema, traceId) {
+export async function callLlm(model, instructions, userMessage, outputSchema, traceId, maxOutputTokens) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
 
@@ -35,6 +35,7 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     input:        userMessage,
     instructions,
     temperature:  0.2,
+    ...(maxOutputTokens ? { max_output_tokens: maxOutputTokens } : {}),
   };
 
   // Note: response_format json_schema is not supported by the Perplexity Agent API (/v1/agent).
@@ -108,7 +109,7 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
  * @param {string} traceId
  * @returns {Promise<object>}    Parsed JSON response
  */
-export async function callLlmWithCorrection(model, instructions, userMessage, outputSchema, errors, attempt1Output, traceId) {
+export async function callLlmWithCorrection(model, instructions, userMessage, outputSchema, errors, attempt1Output, traceId, maxOutputTokens) {
   const errorText  = JSON.stringify(errors, null, 2);
   const outputText = JSON.stringify(attempt1Output, null, 2);
 
@@ -122,5 +123,5 @@ Return the corrected JSON only. Do not change any fields that were not flagged.`
 
   console.info('llm-client: sending correction prompt', { errorCount: errors.length, traceId });
 
-  return callLlm(model, instructions, correctionMessage, outputSchema, traceId);
+  return callLlm(model, instructions, correctionMessage, outputSchema, traceId, maxOutputTokens);
 }

@@ -97,7 +97,8 @@ export async function validate({ intentCategory, output, traceId }) {
       outputSchema,
       attempt1Errors,
       output,
-      traceId
+      traceId,
+      promptRow.max_output_tokens ?? undefined,
     );
   } catch (error) {
     // LLM call itself failed — log and return invalid
