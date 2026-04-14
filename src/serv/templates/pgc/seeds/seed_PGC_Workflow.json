@@ -391,161 +391,158 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 4,
+    "version": 11,
     "steps": [
       {
         "step": "1",
         "type": "serv_query",
-        "description": "Load domain schema rows for the target domain so the left brain has live column definitions.",
         "input": {
-          "tableName": "PGC_Schema",
           "filters": [
             {
-              "column": "domain",
               "op": "eq",
-              "value": "{{input.domain}}"
+              "value": "{{input.domain}}",
+              "column": "domain"
             }
-          ]
+          ],
+          "tableName": "PGC_Schema"
         },
-        "output_key": "domain_schema",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "domain_schema",
+        "description": "Load domain schema rows for the target domain so the left brain has live column definitions."
       },
       {
         "step": "2",
         "type": "llm_call",
-        "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure.",
         "input": {
+          "domain": "{{input.domain}}",
           "prompt": "research_workflow_domain",
-          "workflow_description": "{{input.userInput}}",
-          "domain": "{{input.domain}}"
+          "workflow_description": "{{input.userInput}}"
         },
-        "output_key": "right_brain_research",
+        "on_failure": "next",
         "on_success": "next",
-        "on_failure": "next"
+        "output_key": "right_brain_research",
+        "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure."
       },
       {
         "step": "3",
         "type": "js_transform",
-        "description": "Build Tier 1 preference gate descriptors from right_brain_research.preference_questions. Each question becomes one gate descriptor.",
         "input_key": "right_brain_research",
-        "output_key": "preference_gates",
-        "on_success": "next",
+        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var options = (q.options || []).map(function(o) { return { label: o.label + (o.description ? ' — ' + o.description : ''), action: o.value, on_select: 'next' }; }); options.push({ label: 'Cancel', action: 'cancel', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
         "on_failure": "next",
-        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var options = (q.options || []).map(function(o) { return { label: o.label + (o.description ? ' — ' + o.description : ''), action: o.value, on_select: 'next' }; }); options.push({ label: 'Cancel', action: 'cancel', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()"
+        "on_success": "next",
+        "output_key": "preference_gates",
+        "description": "Build Tier 1 preference gate descriptors from right_brain_research.preference_questions."
       },
       {
         "step": "4",
         "type": "condition",
-        "description": "Skip Tier 1 preference gates if right brain found no preference questions.",
+        "on_falsy": "6",
+        "on_truthy": "5",
         "expression": "{{preference_gates.length}}",
-        "on_truthy": "next",
-        "on_falsy": "step:6"
+        "description": "Skip Tier 1 preference gates if right brain found no preference questions."
       },
       {
         "step": "5",
         "type": "iterator",
-        "description": "Tier 1 user preference gates — one sequential gate per preference question. Each gate writes to user_preferences array.",
-        "items_key": "preference_gates",
         "item_step": {
           "type": "human_gate",
-          "gate_type": "confirm",
-          "message_template": "{{item.question}}",
-          "context_key": "item.options",
-          "output_key": "user_preferences",
           "options": "{{item.options}}",
+          "gate_type": "confirm",
+          "on_failure": "cancel",
           "on_success": "next",
-          "on_failure": "cancel"
+          "output_key": "user_preferences",
+          "context_key": "item.options",
+          "message_template": "{{item.question}}"
         },
-        "execution_mode": "sequential",
+        "items_key": "preference_gates",
+        "on_failure": "cancel",
         "output_key": "user_preferences",
+        "description": "Tier 1 user preference gates.",
         "on_complete": "next",
-        "on_failure": "cancel"
+        "execution_mode": "sequential"
       },
       {
         "step": "6",
         "type": "serv_query",
-        "description": "Load live PGC_StepType contracts for injection into the left brain prompt.",
         "input": {
-          "tableName": "PGC_StepType",
           "filters": [
             {
-              "column": "status",
               "op": "eq",
-              "value": "live"
+              "value": "live",
+              "column": "status"
             }
-          ]
+          ],
+          "tableName": "PGC_StepType"
         },
-        "output_key": "step_type_contracts",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "step_type_contracts",
+        "description": "Load live PGC_StepType contracts for injection into the left brain prompt."
       },
       {
         "step": "7",
         "type": "llm_call",
-        "description": "Left brain: analytically design the complete workflow. Applies research, user preferences, and schema inspection to produce a gap-free design_spec. Writes full prompt_text for any missing prompts.",
         "input": {
+          "domain": "{{input.domain}}",
           "prompt": "analyze_and_design_workflow",
           "userInput": "{{input.userInput}}",
-          "domain": "{{input.domain}}",
           "domain_schema": "{{domain_schema}}",
-          "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
-          "step_type_contracts": "{{step_type_contracts}}"
+          "step_type_contracts": "{{step_type_contracts}}",
+          "right_brain_research": "{{right_brain_research}}"
         },
-        "output_key": "design_spec",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "design_spec",
+        "description": "Left brain: analytically design the complete workflow."
       },
       {
         "step": "8",
         "type": "js_transform",
-        "description": "Evaluate design_spec.confidence and schema_changes to set routing flags: skip_all_gates, needs_schema, is_blocked.",
         "input_key": "design_spec",
-        "output_key": "routing_flags",
-        "on_success": "next",
+        "expression": "(function() { var spec = items; var hasBlockingSchema = (spec.schema_changes || []).some(function(s) { return s.blocking; }); var isBlocked = spec.confidence === 'blocked'; var hasNonBlockingSchema = (spec.schema_changes || []).some(function(s) { return !s.blocking; }); return { skip_all_gates: !hasBlockingSchema && !isBlocked && !hasNonBlockingSchema, needs_schema: hasBlockingSchema || isBlocked, is_blocked: isBlocked, has_nonblocking: hasNonBlockingSchema && !hasBlockingSchema && !isBlocked }; })()",
         "on_failure": "human_feedback",
-        "expression": "(function() { var spec = items; var hasBlockingSchema = (spec.schema_changes || []).some(function(s) { return s.blocking; }); var isBlocked = spec.confidence === 'blocked'; var hasNonBlockingSchema = (spec.schema_changes || []).some(function(s) { return !s.blocking; }); return { skip_all_gates: !hasBlockingSchema && !isBlocked && !hasNonBlockingSchema, needs_schema:    hasBlockingSchema || isBlocked, is_blocked:      isBlocked, has_nonblocking: hasNonBlockingSchema && !hasBlockingSchema && !isBlocked }; })()"
+        "on_success": "next",
+        "output_key": "routing_flags",
+        "description": "Evaluate design_spec routing flags."
       },
       {
         "step": "9",
         "type": "condition",
-        "description": "Hard stop if left brain detected a missing step type capability (confidence=blocked).",
+        "on_falsy": "10",
+        "on_truthy": "9a",
         "expression": "{{routing_flags.is_blocked}}",
-        "on_truthy": "step:9a",
-        "on_falsy": "next"
+        "description": "Hard stop if left brain detected a missing step type capability."
       },
       {
         "step": "9a",
         "type": "notify",
+        "on_success": "end",
         "description": "Inform user the workflow requires a capability that does not yet exist.",
-        "message_template": "I cannot build this workflow yet.\n\n*Reason:* {{design_spec.blocked_reason}}\n\nThis requires a capability that is not currently available in evolving-mind. It has been noted for future implementation.",
-        "on_success": "end"
+        "message_template": "I cannot build this workflow yet.\n\n*Reason:* {{design_spec.blocked_reason}}\n\nThis requires a capability that is not currently available in evolving-mind. It has been noted for future implementation."
       },
       {
         "step": "10",
         "type": "condition",
-        "description": "Check for schema gaps — blocking or non-blocking both route to schema gate.",
+        "on_falsy": "11a",
+        "on_truthy": "10a",
         "expression": "{{routing_flags.needs_schema}}",
-        "on_truthy": "step:10a",
-        "on_falsy": "next"
+        "description": "Check for schema gaps."
       },
       {
         "step": "10a",
         "type": "js_transform",
-        "description": "Build schema gap gate message from design_spec.schema_changes.",
         "input_key": "design_spec",
-        "output_key": "schema_gap_message",
-        "on_success": "next",
+        "expression": "(function() { var changes = (items.schema_changes || []).filter(function(s) { return s.blocking; }); if (changes.length === 0) changes = items.schema_changes || []; var lines = ['To build the best version of this workflow I need tables that don\\'t exist yet:', '']; changes.forEach(function(c) { lines.push('*Table:* ' + c.table); lines.push('*Why:* ' + c.recommendation); lines.push('*If skipped:* ' + c.impact_if_skipped); if (c.domain_suggestion) lines.push('*Create first:* `/m create domain ' + c.domain_suggestion + '`'); lines.push(''); }); return lines.join('\\n'); })()",
         "on_failure": "human_feedback",
-        "expression": "(function() { var changes = (items.schema_changes || []).filter(function(s) { return s.blocking; }); if (changes.length === 0) changes = items.schema_changes || []; var lines = ['To build the best version of this workflow I need tables that don\\'t exist yet:', '']; changes.forEach(function(c) { lines.push('*Table:* ' + c.table); lines.push('*Why:* ' + c.recommendation); lines.push('*If skipped:* ' + c.impact_if_skipped); if (c.domain_suggestion) lines.push('*Create first:* `/m create domain ' + c.domain_suggestion + '`'); lines.push(''); }); return lines.join('\\n'); })()"
+        "on_success": "next",
+        "output_key": "schema_gap_message",
+        "description": "Build schema gap gate message."
       },
       {
         "step": "10b",
         "type": "human_gate",
-        "gate_type": "confirm",
-        "description": "Schema gap decision — create the missing table first or build a simpler version without it.",
-        "message_template": "{{schema_gap_message}}",
         "options": [
           {
             "label": "Create the table first",
@@ -563,67 +560,66 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "confirm",
+        "on_failure": "cancel",
         "on_success": "next",
-        "on_failure": "cancel"
+        "description": "Schema gap decision.",
+        "message_template": "{{schema_gap_message}}"
       },
       {
         "step": "11a",
         "type": "js_transform",
-        "description": "Filter design_spec.prompts_needed to those with exists=false — these must be seeded before step generation.",
         "input_key": "design_spec",
-        "output_key": "missing_prompts",
-        "on_success": "next",
+        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
         "on_failure": "human_feedback",
-        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()"
+        "on_success": "next",
+        "output_key": "missing_prompts",
+        "description": "Filter design_spec.prompts_needed to those needing seeding."
       },
       {
         "step": "11b",
         "type": "condition",
-        "description": "Skip prompt seeding if there are no missing prompts.",
+        "on_falsy": "12",
+        "on_truthy": "11c",
         "expression": "{{missing_prompts.length}}",
-        "on_truthy": "step:11c",
-        "on_falsy": "step:12"
+        "description": "Skip prompt seeding if there are no missing prompts."
       },
       {
         "step": "11c",
         "type": "iterator",
-        "description": "Seed each missing prompt into PGC_Prompt before step generation runs.",
-        "items_key": "missing_prompts",
         "item_step": {
           "type": "serv_insert",
           "input": {
-            "tableName": "PGC_Prompt",
-            "row": "{{item}}"
+            "row": "{{item}}",
+            "tableName": "PGC_Prompt"
           },
           "on_failure": "human_feedback"
         },
-        "execution_mode": "sequential",
+        "items_key": "missing_prompts",
+        "on_failure": "human_feedback",
         "output_key": "seeded_prompts",
+        "description": "Seed each missing prompt into PGC_Prompt.",
         "on_complete": "next",
-        "on_failure": "human_feedback"
+        "execution_mode": "sequential"
       },
       {
         "step": "12",
         "type": "llm_call",
-        "description": "Translate design_spec into a step array. The LLM implements the spec — all design decisions are already made.",
         "input": {
           "prompt": "generate_workflow_steps",
           "design_spec": "{{design_spec}}",
-          "user_preferences": "{{user_preferences}}",
           "domain_schema": "{{domain_schema}}",
+          "user_preferences": "{{user_preferences}}",
           "step_type_contracts": "{{step_type_contracts}}"
         },
-        "output_key": "draft_workflow",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "draft_workflow",
+        "description": "Translate design_spec into a step array."
       },
       {
         "step": "13",
         "type": "human_gate",
-        "gate_type": "review_object",
-        "description": "User reviews the proposed step array before simulation.",
-        "message_template": "Review the proposed steps for {{draft_workflow.name}}. Approve to simulate, or request changes to regenerate.",
-        "context_key": "draft_workflow.steps",
         "options": [
           {
             "label": "Looks good",
@@ -641,64 +637,65 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "review_object",
+        "on_failure": "cancel",
         "on_success": "next",
-        "on_failure": "cancel"
+        "context_key": "draft_workflow.steps",
+        "description": "User reviews the proposed step array before simulation.",
+        "message_template": "Review the proposed steps for {{draft_workflow.name}}."
       },
       {
         "step": "14",
         "type": "simulate",
-        "description": "Level 1 static analysis — validates routing values, dead targets, missing templates, and gate structure.",
         "input": {
           "steps_key": "draft_workflow.steps"
         },
-        "output_key": "static_analysis_result",
+        "on_failure": "step:13",
         "on_success": "next",
-        "on_failure": "step:13"
+        "output_key": "static_analysis_result",
+        "description": "Level 1 static analysis."
       },
       {
         "step": "15",
         "type": "llm_call",
-        "description": "Generate representative mock outputs for each step that produces data.",
         "input": {
-          "prompt": "generate_workflow_mocks",
-          "steps": "{{draft_workflow.steps}}"
+          "steps": "{{draft_workflow.steps}}",
+          "prompt": "generate_workflow_mocks"
         },
-        "output_key": "mock_outputs",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "mock_outputs",
+        "description": "Generate representative mock outputs."
       },
       {
         "step": "16",
         "type": "llm_call",
-        "description": "Generate named simulation paths — happy path, cancel paths, failure paths.",
         "input": {
-          "prompt": "generate_workflow_paths",
           "steps": "{{draft_workflow.steps}}",
+          "prompt": "generate_workflow_paths",
           "mock_outputs": "{{mock_outputs}}"
         },
-        "output_key": "simulation_paths",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "simulation_paths",
+        "description": "Generate named simulation paths."
       },
       {
         "step": "17",
         "type": "simulate",
-        "description": "Level 2 + Level 3 — full path execution using mock outputs and decision scripts.",
         "input": {
+          "paths_key": "simulation_paths",
           "steps_key": "draft_workflow.steps",
-          "mock_outputs_key": "mock_outputs",
-          "paths_key": "simulation_paths"
+          "mock_outputs_key": "mock_outputs"
         },
-        "output_key": "simulation_result",
+        "on_failure": "step:13",
         "on_success": "next",
-        "on_failure": "step:13"
+        "output_key": "simulation_result",
+        "description": "Level 2 + Level 3 full path simulation."
       },
       {
         "step": "18",
         "type": "human_gate",
-        "gate_type": "confirm",
-        "description": "Show simulation results and ask user to confirm registration.",
-        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
         "options": [
           {
             "label": "Register",
@@ -711,51 +708,54 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "confirm",
+        "on_failure": "cancel",
         "on_success": "next",
-        "on_failure": "cancel"
+        "description": "Show simulation results and ask user to confirm registration.",
+        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?"
       },
       {
         "step": "19",
         "type": "serv_insert",
-        "description": "Write the new workflow to PGC_Workflow.",
         "input": {
-          "tableName": "PGC_Workflow",
           "row": {
             "name": "{{draft_workflow.name}}",
-            "domain": "{{input.domain}}",
-            "description": "{{draft_workflow.description}}",
-            "intent_keywords": "{{draft_workflow.intent_keywords}}",
             "steps": "{{draft_workflow.steps}}",
+            "domain": "{{input.domain}}",
+            "version": 1,
+            "description": "{{draft_workflow.description}}",
             "state_strategy": "sequential_with_confirmation",
-            "version": 1
-          }
+            "intent_keywords": "{{draft_workflow.intent_keywords}}"
+          },
+          "tableName": "PGC_Workflow"
         },
-        "output_key": "registered_workflow",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "registered_workflow",
+        "description": "Write the new workflow to PGC_Workflow."
       },
       {
         "step": "20",
         "type": "serv_insert",
-        "description": "Write the PGC_IntentMap row so the new workflow is immediately matchable by the Intent Preprocessor.",
         "input": {
-          "tableName": "PGC_IntentMap",
           "row": {
             "pattern": "{{draft_workflow.name}}",
-            "intent_category": "{{draft_workflow.name}}",
-            "action_type": "workflow"
-          }
+            "action_type": "workflow",
+            "intent_category": "{{draft_workflow.name}}"
+          },
+          "tableName": "PGC_IntentMap"
         },
-        "output_key": "registered_intent_row",
+        "on_failure": "human_feedback",
         "on_success": "next",
-        "on_failure": "human_feedback"
+        "output_key": "registered_intent_row",
+        "description": "Write the PGC_IntentMap row."
       },
       {
         "step": "21",
         "type": "notify",
+        "on_success": "end",
         "description": "Confirm the workflow is registered and ready.",
-        "message_template": "Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:*\n{{design_spec.deferred.length}} items noted for future improvement.",
-        "on_success": "end"
+        "message_template": "Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:*\n{{design_spec.deferred.length}} items noted for future improvement."
       },
       {
         "step": "22",
