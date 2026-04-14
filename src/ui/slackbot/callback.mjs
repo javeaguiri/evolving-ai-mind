@@ -383,6 +383,22 @@ function dialogToBlocks(dialog, workflowRunId) {
         });
         break;
 
+      case 'description_list': {
+        // Renders choice gate options as a formatted list above the action buttons.
+        // One line per option: *A* — label: description
+        // Mirrors HTML radio button helper text — keeps button labels short.
+        const lines = (field.items ?? []).map(item =>
+          `*${item.label}* — ${item.description || item.label}`
+        );
+        if (lines.length > 0) {
+          blocks.push({
+            type: 'section',
+            text: { type: 'mrkdwn', text: lines.join('\n') },
+          });
+        }
+        break;
+      }
+
       case 'list': {
         // Header showing item count (from label)
         if (field.label) {

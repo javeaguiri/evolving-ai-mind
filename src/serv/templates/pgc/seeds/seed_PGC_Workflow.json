@@ -391,7 +391,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 12,
+    "version": 13,
     "steps": [
       {
         "step": "1",
@@ -428,11 +428,11 @@
         "step": "3",
         "type": "js_transform",
         "input_key": "right_brain_research",
-        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var options = (q.options || []).map(function(o) { return { label: o.label + (o.description ? ' — ' + o.description : ''), action: o.value, on_select: 'next' }; }); options.push({ label: 'Cancel', action: 'cancel', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
+        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
         "on_failure": "next",
         "on_success": "next",
         "output_key": "preference_gates",
-        "description": "Build Tier 1 preference gate descriptors from right_brain_research.preference_questions."
+        "description": "Build Tier 1 choice gate descriptors from right_brain_research.preference_questions. Options carry value/label/description for the choice gate type."
       },
       {
         "step": "3a",
@@ -478,18 +478,17 @@
         "type": "iterator",
         "item_step": {
           "type": "human_gate",
+          "gate_type": "choice",
+          "message_template": "{{item.question}}",
           "options": "{{item.options}}",
-          "gate_type": "confirm",
-          "on_failure": "cancel",
-          "on_success": "next",
           "output_key": "user_preferences",
-          "context_key": "item.options",
-          "message_template": "{{item.question}}"
+          "on_success": "next",
+          "on_failure": "cancel"
         },
         "items_key": "preference_gates",
         "on_failure": "cancel",
         "output_key": "user_preferences",
-        "description": "Tier 1 user preference gates.",
+        "description": "Tier 1 user preference gates — choice type with lettered buttons and descriptions.",
         "on_complete": "next",
         "execution_mode": "sequential"
       },
