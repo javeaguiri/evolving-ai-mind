@@ -38,10 +38,13 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     ...(maxOutputTokens ? { max_output_tokens: maxOutputTokens } : {}),
   };
 
-  // Note: response_format json_schema is not supported by the Perplexity Agent API (/v1/agent).
-  // Structural validation is handled by the Ajv correction loop in review-output.mjs.
-  // The prompt instructs the model to return JSON only; the markdown-fence strip below
-  // handles any residual wrapping defensively.
+  // response_format enforces the schema at the model level — reduces field-name
+  // hallucination without relying solely on the Ajv correction loop for structure.
+  // markdown-fence stripping is kept as a defensive fallback.
+  const responseFormat = outputSchema
+    ? { type: 'json_schema', json_schema: { name: 'output', schema: outputSchema, strict: false } }
+    : undefined;
+  if (responseFormat) body.response_format = responseFormat;
 
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);

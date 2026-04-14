@@ -391,7 +391,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 11,
+    "version": 12,
     "steps": [
       {
         "step": "1",
@@ -433,6 +433,37 @@
         "on_success": "next",
         "output_key": "preference_gates",
         "description": "Build Tier 1 preference gate descriptors from right_brain_research.preference_questions."
+      },
+      {
+        "step": "3a",
+        "type": "js_transform",
+        "input_key": "right_brain_research",
+        "output_key": "research_summary",
+        "on_success": "next",
+        "on_failure": "next",
+        "description": "Format right brain findings and autonomous decisions into a readable summary for the user gate.",
+        "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions — proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()"
+      },
+      {
+        "step": "3b",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Show user what the right brain researched and decided before left brain design begins. User can continue or cancel.",
+        "message_template": "🧠 *Right brain research complete for:* {{input.userInput}}\n\n{{research_summary.summary}}\n\n_{{research_summary.decision_note}}. {{research_summary.question_note}}._",
+        "options": [
+          {
+            "label": "Continue",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
       },
       {
         "step": "4",

@@ -652,6 +652,38 @@ async function executeIteratorInline({ run, frame, traceId }) {
       throw itemError;
     }
 
+    // Human gate suspension — item_step is a human_gate that needs user input.
+    // Persist current index, push gate frame, suspend run — resume_gate will
+    // re-enter the iterator at the same index after the user responds.
+    if (result.nextAction === 'suspend' && result.gatePayload) {
+      const gateFrame = {
+        frame_id:      randomUUID(),
+        type:          'human_gate',
+        status:        'awaiting',
+        gate_type:     itemStep.gate_type,
+        step_ref:      itemStep,
+        step_number:   frame.parent_step,
+        workflow_name: run.workflow_name,
+        local_state:   itemLocalState,
+        pushed_at:     new Date().toISOString(),
+      };
+      run.stack.push(gateFrame);
+      await updateRows('PGC_WorkflowRun',
+        [{ column: 'id', op: 'eq', value: run.id }],
+        {
+          status:     'awaiting_human_gate',
+          stack:      run.stack,
+          state:      { local_state: frame.local_state },
+          step_count: (run.step_count ?? 0) + 1,
+        }
+      );
+      await enqueueCallback(run.callback, result.gatePayload);
+      console.info('run-workflow: iterator item human_gate suspended', {
+        workflowRunId: run.id, index: frame.current_index, traceId,
+      });
+      return { action: 'suspended', gateType: itemStep.gate_type };
+    }
+
     await recordStepAudit(
       run.id, frame.frame_id, frame.current_index,
       itemStep.type, 'completed',
