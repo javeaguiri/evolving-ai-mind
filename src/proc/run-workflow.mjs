@@ -481,7 +481,11 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   }
 
   // ── confirm (or any option that advances) ─────────────────────────────
-  const matchedOption = (stepRef.options ?? []).find(o => o.action === userResponse);
+  // choice gate uses option.value (HTML radio semantics); all others use option.action.
+  const isChoice      = gateType === 'choice';
+  const matchedOption = (stepRef.options ?? []).find(o =>
+    isChoice ? o.value === userResponse : o.action === userResponse
+  );
   const onSelect      = matchedOption?.on_select ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
@@ -493,6 +497,18 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     console.info('run-workflow: text_input value written to local_state', {
       output_key: stepRef.output_key,
       valueLength: responseData.inputValue.length,
+      traceId,
+    });
+  }
+
+  // choice gate: write selected value to output_key (parallel to text_input).
+  // confirm gate with context_key: write userResponse to output_key (dynamic domain selection).
+  if (isChoice && stepRef.output_key) {
+    setPath(localState, stepRef.output_key, userResponse);
+    frame.local_state = localState;
+    console.info('run-workflow: choice gate — selection written to local_state', {
+      output_key: stepRef.output_key,
+      selection:  userResponse,
       traceId,
     });
   }

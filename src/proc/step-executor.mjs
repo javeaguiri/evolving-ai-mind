@@ -540,6 +540,24 @@ export function buildDialog(step, localState) {
       break;
     }
 
+    case 'choice': {
+      // Single-select with question heading, per-option descriptions, and lettered buttons.
+      // Mirrors HTML radio button semantics: label displays, value is submitted.
+      // Resolved options carry { value, label, description, on_select }.
+      // description_list renders the explanation text above the buttons in the UI.
+      const rawChoiceOptions = typeof step.options === 'string'
+        ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
+        : (step.options ?? []);
+      const choiceItems = rawChoiceOptions
+        .filter(o => o.value !== 'cancel')
+        .map(o => ({ value: o.value, label: o.label, description: o.description ?? '' }));
+      if (choiceItems.length > 0) {
+        fields.push({ type: 'description_list', items: choiceItems });
+      }
+      // buttons for choice are built below — value used instead of action
+      break;
+    }
+
     default:
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
@@ -550,14 +568,18 @@ export function buildDialog(step, localState) {
   const resolvedOptions = typeof step.options === 'string'
     ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
     : (step.options ?? []);
+
+  // choice gate uses value as the identifier (HTML radio semantics); all other
+  // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
+  const isChoice = step.gate_type === 'choice';
   fields.push({
     type:    'actions',
     // o.modal is forwarded when present so callback.mjs can encode it into the
     // button value, enabling interactive.mjs to open a modal generically.
     buttons: resolvedOptions.map(o => ({
-      action: o.action,
+      action: isChoice ? o.value : o.action,
       label:  o.label,
-      style:  o.action === 'confirm' ? 'primary' : 'default',
+      style:  (o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default',
       ...(o.modal ? { modal: o.modal } : {}),
     })),
   });

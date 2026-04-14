@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 20 complete  
-Last updated: 2026-04-12 (session 20 — js_transform local_state sandbox, built-ins removed, add_table modal generic, existing_table_modifications, topological table sort, word-boundary keyword matching, PGC_Schema migration discipline)
+Status: Active development — Session 23 complete  
+Last updated: 2026-04-14 (session 23 — Tier 1 repair loop end-to-end, choice gate type, iterator human_gate suspension, LLM response_format, prompt issue tracking, Slack error hardening)
 
 ---
 
@@ -2080,6 +2080,14 @@ template reference has a corresponding `output_key` written by a prior step.
 once per item — the current item is available as `{{item}}` and `{{item.field}}`
 inside `item_step.input`. Results are collected into an array at `output_key`.
 
+**Human gate suspension inside iterators (Session 23).** When `item_step` is a
+`human_gate`, the inline sequential iterator detects `nextAction === 'suspend'` after
+the gate is built and breaks the loop. A gate frame is pushed onto the stack with
+`step_ref.options` resolved to the live array (not the template string) — required
+because `resume_gate` calls `options.find()` to match the user response. The
+iterator frame remains on the stack at the current `current_index`. On `resume_gate`,
+execution returns to the iterator at that index and advances to the next item.
+
 ##### `serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
 ```json
 {
@@ -2512,7 +2520,8 @@ Step Processor receives resume_gate
 | `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
 | `text_input` | Type free text, click Submit | Value written to `local_state[output_key]` on resolve |
 | `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs |
-| `select_one` | Pick one item from a list | Backlog |
+| `choice` | Read a question, view labelled options with descriptions, click A/B/C | Options carry `{ value, label, description, on_select }`. `value` written to `local_state[output_key]` on resolve. Mirrors HTML radio button semantics — `value` is submitted, `label` is the button text, `description` is the explanatory sentence shown above buttons |
+| `select_one` | Pick one item from a list | Backlog — `buildDialog` stub exists but `context_key` only accepts flat entity lists. Use `choice` for options with descriptions |
 | `select_many` | Pick zero or more items | Backlog |
 
 #### Human gate-step schema reference
@@ -2525,7 +2534,7 @@ workflow definitions containing gate steps.
 {
   "step":             "3",
   "type":             "human_gate",
-  "gate_type":        "confirm | edit_list | text_input | review_object | select_one | select_many",
+  "gate_type":        "confirm | edit_list | text_input | review_object | choice | select_one | select_many",
   "description":      "Human-readable — for workflow authors and right-brain only",
 
   "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
@@ -2573,10 +2582,19 @@ button. Only `remove_item` is currently implemented; others are Backlog.
 
 **`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
 routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
-cancels the run. Must include at least one option with `action: "cancel"`.
+cancels the run. Must include at least one option with `action: "cancel"` (confirm/edit_list)
+or `value: "cancel"` (choice).
 
-**`output_key`** — `text_input` only. The typed value is written to
-`local_state[output_key]` when the gate resolves. Not used by other gate types.
+Two option shapes — determined by `gate_type`:
+- `confirm`, `edit_list`, `review_object` use `{ label, action, on_select }`
+- `choice` uses `{ value, label, description, on_select }` — HTML radio button semantics:
+  `value` is the machine identifier written to `output_key` and matched by `resume_gate`;
+  `label` is the short button text (e.g. `"A"`, `"B"`);
+  `description` is the explanatory sentence rendered above the buttons as a list.
+
+**`output_key`** — written on gate resolution for two gate types:
+- `text_input`: the typed value is written to `local_state[output_key]`
+- `choice`: the selected `option.value` is written to `local_state[output_key]`
 
 **`on_timeout` / `timeout_seconds`** — reserved fields, not yet implemented.
 When implemented, a gate that receives no user response within `timeout_seconds`
@@ -2631,6 +2649,20 @@ to use `chat.update` (in-place edit) instead of posting a new message.
 Posted to Slack when: Guard 1 fires, a step throws after exhausting retries, or
 an iterator item fails. Always includes `workflowRunId` so the user can reference
 it with `/shutdown` or for debugging.
+
+**Slack rendering — human-readable summary only.** `callback.mjs` never posts the
+raw `message` string into a Slack block — it may be thousands of characters (e.g.
+a full AJV validation error array). Three summary cases are handled:
+- LLM validation failure: `"LLM output validation failed after 2 attempts (N schema errors). The prompt has been logged for improvement."`
+- LLM response failure (timeout, empty, invalid JSON): first 200 chars of the error message
+- Structural step failure: first 500 chars of the error message
+Full error detail is always in CloudWatch and, for prompt validation failures, in `PGC_Prompt.error_log`.
+
+**TROUBLESHOOT_WORKFLOW discriminator.** `run-workflow.mjs` only enqueues
+`TROUBLESHOOT_WORKFLOW` for structural errors — errors that indicate a problem
+in the workflow definition itself. LLM response failures and schema validation
+failures (`llm_call validation failed`) are prompt quality issues that
+`TROUBLESHOOT_WORKFLOW` cannot fix — they are excluded from the repair chain.
 
 #### Mutation during gate suspension
 
@@ -3610,11 +3642,16 @@ Step 22  end
 
 #### Preference gate iterator contract
 
-Tier 1 preference gates use the standard `human_gate confirm` type with an iterator
+Tier 1 preference gates use the `human_gate choice` type with an iterator
 driving sequential gates — one gate per `preference_questions` entry from
 `right_brain_research`. The user cannot get more than one gate at a time. The
 iterator collects all selections into `user_preferences` as an array of
 `{ id, selected_value }` objects before the left brain runs.
+
+Each gate shows: the question as a typography heading; a description list showing
+`*A* — label: description` for each option; and lettered action buttons (`A`, `B`, `C`, `Cancel`).
+This mirrors HTML radio button semantics — the button submits the `value` field,
+not the display label. The selected `value` is written to `user_preferences` via `output_key`.
 
 The right brain is instructed to surface preference questions **only when the answer
 materially changes the step structure** of the generated workflow. If best practice
@@ -4178,6 +4215,48 @@ mechanism for these cases.
 ---
 
 
+
+---
+
+### 6.14 Prompt Performance Monitoring (Backlog)
+
+#### Prompt Issues Log
+
+A separate document `docs/prompt-issues.md` tracks observed LLM prompt quality problems
+across sessions. Each issue records the failure pattern, root cause, actions taken, and
+monitor thresholds. This doc feeds the Prompt Performance Monitor (Backlog item 8).
+
+**Active issues as of Session 23:**
+
+| Issue | Prompt | Pattern | Status |
+|---|---|---|---|
+| 1 | `research_workflow_domain` | Oversized output, occasional validation failures on sonar web search interruption | Mitigated — scope constraints + max_output_tokens added |
+| 2 | `analyze_and_design_workflow` | Persistent schema mismatch — LLM produces wrong field names on every attempt | Active — prompt rewritten with explicit DO NOT use field list and concrete examples |
+| 3 | `fix_workflow_steps` | Produces full 27-step array when only 4 steps needed | Mitigated — step 3 filter + step 4b merge added to fix_workflow |
+| 4 | `research_workflow_domain` | Occasional invalid JSON from sonar web-search mid-response interruption | Open — investigate disabling web search via `tools: []` |
+
+#### LLM API capabilities in use
+
+All LLM calls route through the Perplexity Agent API (`/v1/agent`).
+
+| Capability | Status | Notes |
+|---|---|---|
+| `response_format: { type: "json_schema" }` | ✅ Live (Session 23) | Enforces output schema at model level. Applied when `PGC_Prompt.output_schema` is present. `strict: false` — schema `additionalProperties: false` handles strictness at Ajv validation time |
+| `max_output_tokens` | ✅ Live (Session 23) | Per-prompt ceiling from `PGC_Prompt.max_output_tokens`. Forwarded through `callLlm` and `callLlmWithCorrection` |
+| `reasoning` (`effort: low|medium|high`) | ⬜ Backlog | For complex analytical prompts like `analyze_and_design_workflow`. Not yet configured per-prompt |
+
+[DECISION] **`response_format` reduces field-name hallucination.** Before Session 23,
+`analyze_and_design_workflow` consistently produced wrong field names (`step_id`,
+`reads_from_state`, etc.) because the model had no structural constraint at generation
+time. Adding `response_format: json_schema` enforces the schema at the model level,
+eliminating the class of errors where the model invents its own output shape.
+
+[DECISION] **Correction loop is not the primary validation path.** The two-attempt
+correction loop in `review-output.mjs` exists as a fallback for transient issues.
+When errors are systematic (same wrong field names on every attempt, correction errors
+increase not decrease), the correct fix is the prompt + `response_format`, not more
+correction attempts.
+
 ## 7. Tech Debt Register
 
 | Item | Priority | Notes |
@@ -4193,6 +4272,11 @@ mechanism for these cases.
 | `PGC_WorkflowRunStep` idempotency uses `parseInt(stepNumber)` | ~~Medium~~ | ✅ Resolved — `step_key text` column added to `PGC_WorkflowRunStep`. `checkIdempotency` queries on `(run_id, frame_id, step_key)` string comparison. `parseInt` never used in idempotency paths. `migrate-step-key.mjs` backfilled existing rows |
 | `created_tables_summary` hardcoded in iterator | ~~Low~~ | ✅ Resolved — `notify` step message_template now uses `proposed_scaffold.domain` and explicit command examples instead of the hardcoded iterator summary |
 | `domain: null` on DDL-created tables | ~~Medium~~ | ✅ Resolved in Phase 2 item 4a — `js_transform` at step 2 enriches each table object with `domain: proposed_scaffold.domain` before the DDL iterator runs. `serv_schema createTable` writes domain to both `PGC_Schema` and `PGC_TableMap` |
+| Tier 1 post-write validation — dead routing targets | High | After any `PGC_Workflow` write (fix_workflow step 8, create_workflow step 19), run Level 1 simulation on the written step array and fail immediately if dead routing targets are found. Currently the user discovers dead targets only when execution hits that branch. NOT Tier 3 — blocking defects must be caught before the user retries. |
+| `analyze_and_design_workflow` persistent schema mismatch | High | Prompt id 25. LLM produces wrong field names on every attempt (4 failed runs). `response_format` + prompt rewrite deployed Session 23 — not yet validated. See `docs/prompt-issues.md` Issue 2 |
+| `domain: null` on `create_workflow` runs | Medium | `input.domain` is null throughout `create_workflow` runs because the intent preprocessor passes only `userInput`, not a resolved domain. `research_workflow_domain` and `analyze_and_design_workflow` receive no schema context. Fix: resolve domain before CREATE_WORKFLOW SQS dispatch and inject `domain_schema` into `research_workflow_domain` input |
+| `research_workflow_domain` receives no domain schema | Medium | Prompt only receives `workflow_description` and `domain` (the latter is null). Without schema context the right brain cannot surface domain-specific preference questions (e.g. "Evaluate quiz answers by LLM or user self-report?"). Fix: add `domain_schema` as an input variable. Schema metadata (column names/types) is safe to send — never send actual row data |
+| `fix_workflow_steps` prompt text says "complete array" | Low | Prompt still instructs LLM to return the full corrected step array. Now that step 4b handles the merge, the prompt should say "return only the steps you changed". Reduces output tokens and eliminates risk of the LLM returning unrequested steps. Update in seed and re-upsert |
 | `design-domain.mjs` dead code | Low | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
 | `createTable` DDL + PGC_Schema insert not in a transaction | Medium | Physical table can exist without registry row on partial failure |
 | Orphan table cleanup tooling | Low | Failed partial runs leave orphan tables in PGC_Schema — `delete-domain` covers full domains; per-table orphan cleanup is manual |
@@ -4466,7 +4550,8 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `edit_list` | ✅ live — per-row Remove button, in-place `chat.update` re-render, Add table branch (Phase 2 item 4a) |
 | `text_input` | ✅ live — add-table branch step 3a, value written to local_state[output_key] |
 | `review_object` | ✅ live — domain help confirmation step 7, column detail review step 3d |
-| `select_one` | ⬜ Backlog — `buildDialog()` stub exists |
+| `choice` | ✅ live — Session 23. Preference gate iterator in `create_workflow` step 5. Typography heading + description list + lettered buttons. HTML radio semantics: `value` submitted and written to `output_key` |
+| `select_one` | ⬜ Backlog — `buildDialog()` stub exists; limited to flat entity lists via `context_key`. Use `choice` for options with descriptions |
 | `select_many` | ⬜ Backlog — `buildDialog()` stub exists |
 
 ### Backlog — Deferred
