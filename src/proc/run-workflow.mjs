@@ -274,9 +274,10 @@ async function executeTop({ workflowRunId, traceId, source }) {
       });
     }
     // Tier 1 self-repair — only for structural errors, not transient LLM response failures.
-    // LLM errors (invalid JSON, timeout, empty response) indicate a prompt or service issue —
-    // TROUBLESHOOT_WORKFLOW analyses workflow definition structure and cannot fix those.
-    const isLlmError = /LLM (returned|call timed)/i.test(stepError.message);
+    // LLM errors (invalid JSON, timeout, empty response) and validation failures indicate
+    // a prompt or service quality issue — TROUBLESHOOT_WORKFLOW analyses workflow definition
+    // structure and cannot fix those.
+    const isLlmError = /LLM (returned|call timed)|llm_call validation failed/i.test(stepError.message);
     if (!isLlmError) {
       await enqueueWorkflow({
         type:         'TROUBLESHOOT_WORKFLOW',
