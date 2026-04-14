@@ -480,10 +480,32 @@ describe('fix_workflow workflow definition — structural validity', () => {
     assert.match(retry.on_select, /^step:4$/, 'retry should route to step:4 (llm_call)');
   });
 
-  test('simulate step uses steps_key pointing to fix_result.corrected_steps', () => {
+  test('step 4b js_transform merges corrected steps into full array — output_key is merged_steps', () => {
+    const merge = fixWorkflowSteps.find(s => s.step === '4b');
+    assert.ok(merge, 'Expected a step 4b merge transform');
+    assert.equal(merge.type, 'js_transform');
+    assert.equal(merge.output_key, 'merged_steps');
+    assert.match(merge.expression, /corrected/, 'expression should reference corrected steps');
+    assert.match(merge.expression, /fullSteps|workflow_row/, 'expression should reference full step array');
+  });
+
+  test('simulate step uses steps_key pointing to merged_steps (full merged array)', () => {
     const simulate = fixWorkflowSteps.find(s => s.type === 'simulate');
     assert.ok(simulate, 'Expected a simulate step');
-    assert.equal(simulate.input?.steps_key, 'fix_result.corrected_steps');
+    assert.equal(simulate.input?.steps_key, 'merged_steps');
+  });
+
+  test('serv_update for PGC_Workflow writes merged_steps (not fix_result.corrected_steps)', () => {
+    const wfUpdate = fixWorkflowSteps.find(s =>
+      s.type === 'serv_update' &&
+      String(s.input?.tableName ?? '').includes('PGC_Workflow')
+    );
+    assert.ok(wfUpdate, 'Expected a serv_update step targeting PGC_Workflow');
+    assert.match(
+      JSON.stringify(wfUpdate.input?.updates ?? {}),
+      /merged_steps/,
+      'serv_update must write merged_steps, not fix_result.corrected_steps'
+    );
   });
 
   test('serv_update for PGC_Workflow uses name filter (not id)', () => {

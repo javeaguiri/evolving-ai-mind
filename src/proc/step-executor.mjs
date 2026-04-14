@@ -162,6 +162,7 @@ async function executeLlmCall({ step, localState, run, traceId }) {
     userInput || JSON.stringify(resolvedInput),
     promptRow.output_schema,
     traceId,
+    promptRow.max_output_tokens ?? undefined,
   );
   const llmMs = Date.now() - t0;
 
@@ -496,11 +497,18 @@ export function buildDialog(step, localState) {
 
       let items;
       if (Array.isArray(ctx)) {
-        // Array of objects — render each as primaryKey → column name list
-        const primaryKey   = step.item_primary_key   ?? 'tableName';
-        const secondaryKey = step.item_secondary_key ?? 'columns';
+        // Array of objects — render each as label → value.
+        // item_label_template: optional "step {{step}} — {{field}}" pattern;
+        //   resolves {{key}} placeholders against each item's own properties.
+        // item_primary_key: fallback single-field label (default: 'tableName').
+        // item_secondary_key: value field (default: 'columns').
+        const labelTemplate = step.item_label_template ?? null;
+        const primaryKey    = step.item_primary_key    ?? 'tableName';
+        const secondaryKey  = step.item_secondary_key  ?? 'columns';
         items = ctx.map(item => {
-          const label = item[primaryKey] ?? String(item);
+          const label = labelTemplate
+            ? labelTemplate.replace(/\{\{(\w+)\}\}/g, (_, k) => item[k] ?? '')
+            : (item[primaryKey] ?? String(item));
           const raw   = item[secondaryKey];
           let value;
           if (Array.isArray(raw)) {

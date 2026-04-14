@@ -829,11 +829,21 @@
         "on_failure": "human_feedback"
       },
       {
+        "step": "4b",
+        "type": "js_transform",
+        "description": "Merge corrected steps back into the full workflow step array. LLM only returns the fixed steps — this patches them into the complete array so downstream steps and the DB write always work with the full workflow.",
+        "input_key": "workflow_row",
+        "output_key": "merged_steps",
+        "on_success": "next",
+        "on_failure": "human_feedback",
+        "expression": "(function() { var fullSteps = (local_state.workflow_row || [])[0] ? (local_state.workflow_row[0].steps || []) : []; var corrected = local_state.fix_result ? (local_state.fix_result.corrected_steps || []) : []; var correctedMap = {}; corrected.forEach(function(s) { correctedMap[String(s.step)] = s; }); return fullSteps.map(function(s) { return correctedMap[String(s.step)] || s; }); })()"
+      },
+      {
         "step": "5",
         "type": "simulate",
-        "description": "Level 1 static analysis on corrected steps — validates routing, dead targets, templates, gate structure. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
+        "description": "Level 1 static analysis on the full merged step array — validates routing, dead targets, templates, gate structure across all steps. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
         "input": {
-          "steps_key": "fix_result.corrected_steps"
+          "steps_key": "merged_steps"
         },
         "output_key": "post_fix_validation",
         "on_success": "next",
@@ -844,7 +854,7 @@
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "Show diagnosis, proposed changes, and (on failure path) remaining validation issues. User confirms to apply the fix or requests another LLM attempt.",
-        "message_template": "🔧 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} → v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}}",
+        "message_template": "🔧 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} → v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}} | *Validation issues remaining:* {{post_fix_validation.static_analysis.issues.length}}",
         "context_key": "fix_result.changes_applied",
         "options": [
           {
@@ -864,7 +874,9 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "item_secondary_key": "after",
+        "item_label_template": "step {{step}} — {{field}}"
       },
       {
         "step": "7",
@@ -879,7 +891,7 @@
       {
         "step": "8",
         "type": "serv_update",
-        "description": "Write the corrected steps and incremented version to PGC_Workflow.",
+        "description": "Write the fully merged corrected step array and incremented version to PGC_Workflow.",
         "input": {
           "tableName": "PGC_Workflow",
           "filters": [
@@ -890,7 +902,7 @@
             }
           ],
           "updates": {
-            "steps": "{{fix_result.corrected_steps}}",
+            "steps": "{{merged_steps}}",
             "version": "{{new_version}}"
           }
         },
