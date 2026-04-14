@@ -656,12 +656,20 @@ async function executeIteratorInline({ run, frame, traceId }) {
     // Persist current index, push gate frame, suspend run — resume_gate will
     // re-enter the iterator at the same index after the user responds.
     if (result.nextAction === 'suspend' && result.gatePayload) {
+      // step_ref.options may be a template string ("{{item.options}}") in the workflow
+      // definition. resume_gate calls stepRef.options.find() so it needs the live array.
+      // Resolve it from itemLocalState before persisting the frame.
+      const rawOptions = itemStep.options;
+      const resolvedOptions = (typeof rawOptions === 'string' && rawOptions.startsWith('{{'))
+        ? (resolvePath(itemLocalState, rawOptions.replace(/^\{\{|\}\}$/g, '')) ?? [])
+        : (rawOptions ?? []);
+      const resolvedStepRef = { ...itemStep, options: resolvedOptions };
       const gateFrame = {
         frame_id:      randomUUID(),
         type:          'human_gate',
         status:        'awaiting',
         gate_type:     itemStep.gate_type,
-        step_ref:      itemStep,
+        step_ref:      resolvedStepRef,
         step_number:   frame.parent_step,
         workflow_name: run.workflow_name,
         local_state:   itemLocalState,
