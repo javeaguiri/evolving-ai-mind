@@ -345,7 +345,7 @@ Resources:
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
       Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
-      Timeout: 60                    # Override Global 29s — LLM steps (e.g. generate_crud_workflows) can take ~28s
+      Timeout: 120                    # Override Global 29s — LLM steps can run long
       Environment:
         Variables:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
