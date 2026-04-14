@@ -545,11 +545,16 @@ export function buildDialog(step, localState) {
   }
 
   // actions — from step.options
+  // step.options may be a template string (e.g. "{{item.options}}") when the gate
+  // lives inside an iterator item_step — resolve it before mapping.
+  const resolvedOptions = typeof step.options === 'string'
+    ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
+    : (step.options ?? []);
   fields.push({
     type:    'actions',
     // o.modal is forwarded when present so callback.mjs can encode it into the
     // button value, enabling interactive.mjs to open a modal generically.
-    buttons: (step.options ?? []).map(o => ({
+    buttons: resolvedOptions.map(o => ({
       action: o.action,
       label:  o.label,
       style:  o.action === 'confirm' ? 'primary' : 'default',
