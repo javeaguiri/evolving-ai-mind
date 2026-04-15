@@ -532,19 +532,36 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   run.stack.pop();
   const parentFrame = topFrame(run);
 
-  if (parentFrame) {
+  if (parentFrame?.type === 'iterator') {
+    // Gate was suspended inside an iterator item_step.
+    // Advance the index — do not set current_step (iterator frames use current_index).
+    // Strip the item binding injected by executeIteratorInline before merging state back
+    // to avoid polluting the iterator frame with the item from the completed gate.
+    const { item: _item, ...parentScopedState } = localState;
+    parentFrame.local_state = parentScopedState;
+    parentFrame.current_index++;
+    console.info('run-workflow: iterator item gate confirmed — index advanced', {
+      workflowRunId: run.id, newIndex: parentFrame.current_index, traceId,
+    });
+  } else if (parentFrame) {
     parentFrame.local_state = localState;
     const steps    = await loadSteps(run.workflow_name, traceId);
     const nextStep = resolveOnSelect(steps, frame.step_number, onSelect);
     parentFrame.current_step = nextStep;
   }
 
+  // Determine the state snapshot to persist — when the parent is an iterator,
+  // use the stripped parent-scoped state (item binding already removed above).
+  const persistedState = parentFrame?.type === 'iterator'
+    ? (() => { const { item: _i, ...s } = localState; return s; })()
+    : localState;
+
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
     {
       status:     'running',
       stack:      run.stack,
-      state:      { local_state: localState },
+      state:      { local_state: persistedState },
       step_count: (run.step_count ?? 0) + 1,
     }
   );
@@ -590,6 +607,7 @@ async function startIterator({ step, frame, run, traceId }) {
     results:       [],
     local_state:   frame.local_state,
     pushed_at:     new Date().toISOString(),
+    execution_mode: step.execution_mode ?? null,
   };
   run.stack.push(iterFrame);
 

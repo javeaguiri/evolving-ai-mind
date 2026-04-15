@@ -2070,23 +2070,55 @@ template reference has a corresponding `output_key` written by a prior step.
 ```json
 {
   "step": "5", "type": "iterator",
-  "items_key":   "proposed_scaffold.tables",
-  "item_step":   { "type": "serv_schema", "input": { "table": "{{item}}" } },
-  "output_key":  "created_tables",
-  "on_complete": "next"
+  "items_key":      "proposed_scaffold.tables",
+  "item_step":      { "type": "serv_schema", "input": { "table": "{{item}}" } },
+  "output_key":     "created_tables",
+  "execution_mode": "sequential",
+  "on_complete":    "next"
 }
 ```
 `items_key` is a dot-path to an array in `local_state`. `item_step` is executed
 once per item — the current item is available as `{{item}}` and `{{item.field}}`
 inside `item_step.input`. Results are collected into an array at `output_key`.
+`execution_mode: "sequential"` is **always required** — omitting it is a workflow defect.
 
-**Human gate suspension inside iterators (Session 23).** When `item_step` is a
-`human_gate`, the inline sequential iterator detects `nextAction === 'suspend'` after
-the gate is built and breaks the loop. A gate frame is pushed onto the stack with
-`step_ref.options` resolved to the live array (not the template string) — required
-because `resume_gate` calls `options.find()` to match the user response. The
-iterator frame remains on the stack at the current `current_index`. On `resume_gate`,
-execution returns to the iterator at that index and advances to the next item.
+#### Iterator taxonomy — non-suspending vs suspending
+
+Two categories of iterator exist based on whether the `item_step` suspends execution.
+
+**Non-suspending iterator** — `item_step` is a service step (`serv_schema`, `serv_insert`,
+`serv_update`, `serv_delete`, `serv_query`, `llm_call`, `js_transform`). All items execute
+inline within a single Lambda invocation in `executeIteratorInline`. No SQS hop per item.
+This is the common case — `create_domain` step 5 (DDL), step 9, step 10b are all
+non-suspending iterators.
+
+**Suspending iterator** — `item_step` is `human_gate`. Each item requires one full
+suspend/resume cycle: the iterator breaks after building the gate, a gate frame is pushed,
+the run suspends. When the user responds, `resume_gate` pops the gate frame and the iterator
+frame becomes the top frame. `resumeGate` detects `parentFrame.type === 'iterator'` and:
+1. Strips the `item` binding from `localState` before merging state back onto the iterator frame
+   (prevents `item` from leaking into the frame-level state).
+2. Increments `parentFrame.current_index` — advancing to the next item.
+3. Does **not** set `current_step` — iterator frames use `current_index`, not `current_step`.
+
+The next `execute_top` re-enters `executeIteratorInline` at the incremented index.
+
+`step_ref.options` is resolved from the template string (e.g. `"{{item.options}}"`) to a live
+array before the gate frame is persisted — required because `resume_gate` calls
+`options.find()` to match the user's response value.
+
+**When to use a suspending iterator vs the flat loop pattern:**
+
+| | Suspending iterator | Flat loop (backward step reference) |
+|---|---|---|
+| Use when | Fixed list of independent questions, each needing one answer | Loop with inter-item state (score, accumulated data, conditional branching per item) |
+| Output | Results array at `output_key` | State accumulated in `local_state` via `js_transform` |
+| Loop control | Iterator exhausts automatically | Explicit index + condition step |
+| Guard 3 safety | N/A — no backward reference | Requires `human_gate` on every loop path |
+
+Prefer the flat loop pattern when each iteration needs to read results from previous
+iterations, or when loop termination depends on accumulated state. See `create_domain_example`
+in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz).
 
 ##### `serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
 ```json
@@ -2369,9 +2401,22 @@ stack: [
 ```json
 stack: [
   { "frame_id": "A", "type": "workflow",  "current_step": "5",  "local_state": { ... } },
-  { "frame_id": "C", "type": "iterator",  "current_index": 1, "items": [...], "results": [...] }
+  { "frame_id": "C", "type": "iterator",  "current_index": 1, "execution_mode": "sequential", "items": [...], "results": [...] }
 ]
 ```
+
+**Suspending iterator — human_gate frame on top of iterator frame (mid-item):**
+```json
+stack: [
+  { "frame_id": "A", "type": "workflow",  "current_step": "5",  "local_state": { ... } },
+  { "frame_id": "C", "type": "iterator",  "current_index": 1, "execution_mode": "sequential", "items": [...], "results": [ result_0 ] },
+  { "frame_id": "D", "type": "human_gate", "status": "awaiting", "gate_type": "choice", "step_number": "5" }
+]
+```
+When the user responds, `resume_gate` pops frame D, detects `parentFrame.type === 'iterator'`,
+increments `C.current_index` to 2, strips the `item` binding from `localState`, and
+does **not** set `current_step` on frame C. `execute_top` re-enters `executeIteratorInline`
+at index 2.
 
 #### Sequential iterator rule
 
