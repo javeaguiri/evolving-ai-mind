@@ -35,7 +35,7 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     input:        userMessage,
     instructions,
     temperature:  0.2,
-    ...(maxOutputTokens ? { max_output_tokens: maxOutputTokens } : {}),
+    ...(maxOutputTokens ? { max_output_tokens: parseInt(maxOutputTokens, 10) } : {}),
   };
 
   // response_format enforces the schema at the model level — reduces field-name
