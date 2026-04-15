@@ -277,8 +277,23 @@ async function executeTop({ workflowRunId, traceId, source }) {
     // LLM errors (invalid JSON, timeout, empty response) and validation failures indicate
     // a prompt or service quality issue — TROUBLESHOOT_WORKFLOW analyses workflow definition
     // structure and cannot fix those.
-    const isLlmError = /LLM (returned|call timed)|llm_call validation failed/i.test(stepError.message);
-    if (!isLlmError) {
+    //
+    // Tier 1b — Agent API 400 on an llm_call step means output_schema is incompatible
+    // with the structured output spec. DIAGNOSE_PROMPT_SCHEMA runs a deterministic repair
+    // and presents a human confirmation gate before writing the fix.
+    const isApiSchemaError = step.type === 'llm_call' && /Agent API error 400/i.test(stepError.message);
+    const isLlmError = isApiSchemaError
+      || /LLM (returned|call timed)|llm_call validation failed/i.test(stepError.message);
+
+    if (isApiSchemaError && step.input?.prompt) {
+      await enqueueWorkflow({
+        type:           'DIAGNOSE_PROMPT_SCHEMA',
+        intentCategory: step.input.prompt,
+        workflowRunId:  run.id,
+        traceId,
+        callback:       run.callback,
+      });
+    } else if (!isLlmError) {
       await enqueueWorkflow({
         type:         'TROUBLESHOOT_WORKFLOW',
         workflowName: run.workflow_name,
@@ -593,21 +608,21 @@ async function startIterator({ step, frame, run, traceId }) {
   }
 
   const iterFrame = {
-    frame_id:      randomUUID(),
-    type:          'iterator',
-    status:        'running',
-    workflow_name: run.workflow_name,
-    item_step:     step.item_step,
-    items_key:     step.items_key,
-    output_key:    step.output_key,
-    on_complete:   step.on_complete ?? 'next',
-    parent_step:   frame.current_step,
-    items:         items,
-    current_index: 0,
-    results:       [],
-    local_state:   frame.local_state,
-    pushed_at:     new Date().toISOString(),
+    frame_id:       randomUUID(),
+    type:           'iterator',
+    status:         'running',
+    workflow_name:  run.workflow_name,
+    item_step:      step.item_step,
+    items_key:      step.items_key,
+    output_key:     step.output_key,
+    on_complete:    step.on_complete ?? 'next',
     execution_mode: step.execution_mode ?? null,
+    parent_step:    frame.current_step,
+    items:          items,
+    current_index:  0,
+    results:        [],
+    local_state:    frame.local_state,
+    pushed_at:      new Date().toISOString(),
   };
   run.stack.push(iterFrame);
 

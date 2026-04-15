@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 23 complete  
-Last updated: 2026-04-14 (session 23 — Tier 1 repair loop end-to-end, choice gate type, iterator human_gate suspension, LLM response_format, prompt issue tracking, Slack error hardening)
+Status: Active development — Session 24 complete  
+Last updated: 2026-04-15 (session 24 — iterator suspending-gate resume fix, diagnose-prompt-schema Tier 1b self-repair, output_schema API compatibility rules R1–R6, llm-client max_output_tokens parseInt fix, analyze_and_design_workflow schema v6)
 
 ---
 
@@ -4087,6 +4087,39 @@ Both are PROC modules (`troubleshoot-workflow.mjs`, `fix-workflow.mjs`) — no
 confirmation step. This is intentional: the LLM produces a diagnosis and a proposed
 change set, but a human approves the write before it goes to the database.
 
+**Tier 1b — Reactive prompt schema repair** (implemented — Session 24)
+Triggered when an `llm_call` step receives `Agent API error 400` from the structured
+output endpoint. This error class means `PGC_Prompt.output_schema` contains constructs
+incompatible with the Perplexity/OpenAI structured output spec — not a workflow routing
+defect. `TROUBLESHOOT_WORKFLOW` is not appropriate (it analyses `PGC_Workflow.steps`).
+
+`diagnose-prompt-schema.mjs` is a PROC module that:
+1. Loads the `PGC_Prompt` row for the failing `intent_category`
+2. Runs a deterministic compatibility check against 6 known rules (R1–R6)
+3. Produces a repaired schema — no LLM call required; all rules produce unambiguous fixes
+4. Creates an ephemeral `PGC_WorkflowRun` (using the `diagnose_prompt_schema` system
+   workflow) to host a single human confirmation gate
+5. On confirm: writes the repaired schema to `PGC_Prompt.output_schema`, bumps version,
+   clears `error_log`, cancels the failed `WorkflowRun`, notifies user to retry
+6. On cancel: notifies user, leaves schema unchanged
+
+The repair is deterministic because the API compatibility rules are fully enumerated.
+Using an LLM for this repair would be unnecessary and slower.
+
+`run-workflow.mjs` discriminates the 400 error from other LLM errors — `Agent API error 400`
+on an `llm_call` step enqueues `DIAGNOSE_PROMPT_SCHEMA` instead of `TROUBLESHOOT_WORKFLOW`.
+
+**API structured output compatibility rules (R1–R6):**
+
+| Rule | Violation | Required form |
+|---|---|---|
+| R1 | `type: ["object","null"]` — array union | `anyOf: [{type:"object",...},{type:"null"}]` |
+| R2 | `additionalProperties: {type:...}` or `true` | `additionalProperties: false` only |
+| R3 | Object type missing `additionalProperties` key | Add `additionalProperties: false` |
+| R4 | Object type missing `properties` key | Add `properties: {}` |
+| R5 | Properties defined but absent from `required` when parent has `additionalProperties:false` | All defined properties must be in `required` |
+| R6 | `anyOf` member objects violating R3/R4 | Apply R3+R4 to each `anyOf` member |
+
 **Tier 2 — Proactive self-improvement** (medium-term)
 After every successful `fix-workflow` repair, the module updates `PGC_SystemContext`
 rows that are injected into the prompts that generated the broken steps. For example,
@@ -4235,6 +4268,7 @@ signal for human review, not an automated write.
 |---|---|---|---|
 | `TROUBLESHOOT_WORKFLOW` | 1 — fire-and-forget | Guard 1 / developer curl / autoFix chain | `troubleshoot-workflow.mjs` |
 | `FIX_WORKFLOW` | 1 — fire-and-forget (becomes Category 2 if human gate present) | `troubleshoot-workflow.mjs` (autoFix) / developer curl | `fix-workflow.mjs` |
+| `DIAGNOSE_PROMPT_SCHEMA` | 1 — fire-and-forget (becomes Category 2 at human gate) | `run-workflow.mjs` on `Agent API error 400` from `llm_call` step | `diagnose-prompt-schema.mjs` |
 
 `FIX_WORKFLOW` is unusual: it begins as a fire-and-forget (no `workflowRunId`) but
 if the human confirmation gate is reached, `fix-workflow.mjs` inserts a
@@ -4271,14 +4305,15 @@ A separate document `docs/prompt-issues.md` tracks observed LLM prompt quality p
 across sessions. Each issue records the failure pattern, root cause, actions taken, and
 monitor thresholds. This doc feeds the Prompt Performance Monitor (Backlog item 8).
 
-**Active issues as of Session 23:**
+**Active issues as of Session 24:**
 
 | Issue | Prompt | Pattern | Status |
 |---|---|---|---|
 | 1 | `research_workflow_domain` | Oversized output, occasional validation failures on sonar web search interruption | Mitigated — scope constraints + max_output_tokens added |
-| 2 | `analyze_and_design_workflow` | Persistent schema mismatch — LLM produces wrong field names on every attempt | Active — prompt rewritten with explicit DO NOT use field list and concrete examples |
+| 2 | `analyze_and_design_workflow` | Persistent schema mismatch — LLM produces wrong field names on every attempt | Partially superseded by Issue 5. Re-evaluate after Issue 5 resolved |
 | 3 | `fix_workflow_steps` | Produces full 27-step array when only 4 steps needed | Mitigated — step 3 filter + step 4b merge added to fix_workflow |
 | 4 | `research_workflow_domain` | Occasional invalid JSON from sonar web-search mid-response interruption | Open — investigate disabling web search via `tools: []` |
+| 5 | `analyze_and_design_workflow` (any prompt) | `output_schema` API incompatibility — 400 on every llm_call attempt | Resolved — `diagnose-prompt-schema.mjs` deployed; R1–R6 compatibility rules documented |
 
 #### LLM API capabilities in use
 

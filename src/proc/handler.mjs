@@ -32,6 +32,7 @@ import { handle as simulateWorkflow }   from './simulate-workflow.mjs';
 import { handle as createWorkflow }     from './create-workflow.mjs';
 import { handle as troubleshootWorkflow } from './troubleshoot-workflow.mjs';
 import { handle as fixWorkflow }        from './fix-workflow.mjs';
+import { handle as diagnosePromptSchema } from './diagnose-prompt-schema.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -134,6 +135,14 @@ async function processSqsBatch(records) {
         await fixWorkflow(req);
         continue;
       }
+      // DIAGNOSE_PROMPT_SCHEMA — Tier 1b reactive repair: deterministic output_schema
+      // compatibility fix. Enqueued by run-workflow.mjs when an llm_call step
+      // receives Agent API error 400 (structured output spec violation).
+      if (message.type === 'DIAGNOSE_PROMPT_SCHEMA') {
+        const req = buildReqFromSqs(message);
+        await diagnosePromptSchema(req);
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -188,6 +197,9 @@ async function dispatch(req) {
 
     case 'fix-workflow':
       return fixWorkflow(req);
+
+    case 'diagnose-prompt-schema':
+      return diagnosePromptSchema(req);
 
     case 'simulate-workflow':
       return simulateWorkflow(req);

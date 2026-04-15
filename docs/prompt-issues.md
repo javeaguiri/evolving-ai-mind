@@ -58,6 +58,10 @@ At this size the model may be ignoring schema details in the correction prompt.
 4. The correction loop receiving 37→115 error growth suggests the correction message format
    is not effective for this prompt. May need a different correction strategy (e.g. provide
    the schema inline in the correction rather than just listing errors).
+**Status (Session 24):** Superseded in part by Issue 5. The 400 errors blocking execution
+were caused by output_schema API incompatibility (Issue 5), not prompt text quality. Once
+Issue 5 is resolved the schema mismatch pattern (wrong field names) may still occur and should
+be re-evaluated independently.
 **Monitor threshold:** `validation_fail_rate > 0.5`, `avg_duration_ms > 60000`
 
 ---
@@ -119,3 +123,63 @@ When implemented, this monitor should:
 
 Priority order for first monitor pass: Issue 2 (analyze_and_design_workflow) → Issue 3
 (fix_workflow_steps prompt text update) → Issue 4 (sonar web search)
+
+---
+
+## Issue 5 — `analyze_and_design_workflow` (and any prompt) — output_schema API incompatibility
+
+**Prompt id:** 25 (model: `anthropic/claude-sonnet-4-5`)
+**Observed:** Session 24
+**Failure pattern:** `Agent API error 400: {"error":{"message":"invalid request",...}}` returned
+immediately (~1300ms) on every llm_call attempt. No LLM invocation occurs — the Perplexity
+Agent API rejects the request before processing.
+**Root cause:** `PGC_Prompt.output_schema` contained constructs incompatible with the
+Perplexity/OpenAI structured output spec enforced when `response_format: json_schema` is sent:
+
+| Rule | Violation | Fix |
+|---|---|---|
+| R1 | `type: ["object","null"]` — array union types rejected | Replace with `anyOf: [{type:"object",...},{type:"null"}]` |
+| R2 | `additionalProperties: {type:"object"}` — typed additionalProperties rejected | Replace with `additionalProperties: false` |
+| R2 | `additionalProperties: true` — rejected | Replace with `additionalProperties: false` |
+| R3 | Object type missing `additionalProperties: false` | Add `additionalProperties: false` |
+| R4 | Object type missing `properties` key | Add `properties: {}` |
+| R5 | Properties defined but not listed in `required` when parent has `additionalProperties: false` | Add all defined properties to `required` |
+| R6 | `anyOf` member objects missing R3/R4 | Apply R3+R4 to each anyOf member object |
+
+**Specific violations in `analyze_and_design_workflow` v1 output_schema:**
+- `process_design.items.properties.dialog`: `type: ["object","null"]` → R1
+- `state_map`: `additionalProperties: {type:"object"}` → R2
+- `process_design.items.properties.inputs/outputs`: missing `additionalProperties: false` → R3
+- `process_design.items.properties.dialog.anyOf[0]`: missing `additionalProperties: false` → R6
+- `prompts_needed.items.properties.output_shape`: missing `additionalProperties: false` → R3
+- Multiple objects missing `required` entries for all defined properties → R5
+- `deferred.items`: had `required` but missing `additionalProperties: false` → R3
+
+**Diagnosis method:** Bisected by isolating each top-level schema property into individual
+API calls. Failed properties identified, then drilled into atomic constructs to find exact
+rule violations. Seven rounds of isolation tests across 15 curl calls.
+
+**Action taken (Session 24):**
+- `analyze_and_design_workflow` output_schema fixed in `seed_PGC_Prompt.json` (v1→v6)
+- `llm-client.mjs`: `max_output_tokens` coerced to `parseInt` — pg driver returns integer
+  columns as strings; API spec requires int32 (separate 400 root cause, also fixed)
+- `run-workflow.mjs`: `Agent API error 400` on `llm_call` steps now triggers
+  `DIAGNOSE_PROMPT_SCHEMA` instead of `TROUBLESHOOT_WORKFLOW` (which analyses workflow
+  structure and cannot fix prompt schema issues)
+- `diagnose-prompt-schema.mjs`: new PROC module implements deterministic R1–R6 repair,
+  presents human confirmation gate via ephemeral `PGC_WorkflowRun`, writes repaired schema
+  to `PGC_Prompt.output_schema` on confirm, cancels the failed run, notifies user to retry
+- `diagnose_prompt_schema` workflow added to `seed_PGC_Workflow.json`
+
+**Remaining risk:** Any prompt whose `output_schema` was written before Session 24 may
+contain these violations. The `DIAGNOSE_PROMPT_SCHEMA` auto-detection will surface them
+when first encountered at runtime. All 6 rules are fully deterministic — no manual repair
+needed once the module is deployed.
+
+**Self-healing:** From Session 24 forward, a 400 on any `llm_call` step automatically
+enqueues `DIAGNOSE_PROMPT_SCHEMA`. If violations are found the user sees a Slack confirmation
+gate. On confirm the schema is repaired in-place and the user is asked to retry.
+
+**Monitor threshold:** Track `error_type: agent_api_400` in `PGC_Prompt.error_log`.
+If `diagnose-prompt-schema` fires for the same prompt twice, the schema was re-broken by
+a manual edit or seed revert — investigate.
