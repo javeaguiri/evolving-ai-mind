@@ -1310,7 +1310,7 @@
   },
   {
     "intent_category": "analyze_and_design_workflow",
-    "version": 7,
+    "version": 9,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1354,7 +1354,8 @@
         "prompts_needed",
         "schema_changes",
         "deferred",
-        "confidence"
+        "confidence",
+        "blocked_reason"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1419,7 +1420,9 @@
               "step_label",
               "gate_type",
               "message_template",
-              "options"
+              "options",
+              "context_key",
+              "output_key"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1446,7 +1449,35 @@
                 "type": "string"
               },
               "options": {
-                "type": "array"
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "on_select": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "value",
+                    "action",
+                    "description",
+                    "on_select"
+                  ]
+                }
               }
             }
           }
@@ -1499,7 +1530,9 @@
               "table",
               "blocking",
               "recommendation",
-              "impact_if_skipped"
+              "impact_if_skipped",
+              "columns",
+              "domain_suggestion"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1567,7 +1600,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 2,
+    "version": 4,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1629,9 +1662,12 @@
             "type": "object",
             "required": [
               "step",
-              "type"
+              "type",
+              "on_failure",
+              "on_success",
+              "on_complete"
             ],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
               "step": {
                 "type": "string",
@@ -1676,7 +1712,7 @@
   },
   {
     "intent_category": "fix_workflow_steps",
-    "version": 1,
+    "version": 2,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1726,7 +1762,9 @@
       "required": [
         "diagnosis",
         "changes_applied",
-        "corrected_steps"
+        "corrected_steps",
+        "context_updates",
+        "prompt_text_change"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1774,7 +1812,7 @@
               "step",
               "type"
             ],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
               "step": {
                 "type": "string"

@@ -1,216 +1,207 @@
-# evolving-mind-ai — Session 23 Handoff
+# evolving-mind-ai — Session 25 Handoff
 
-**Git tag at session start:** `v3.2-local-state-sandbox-builtins-removed`  
-**Suggested tag at session end:** `v3.2-session23-choice-gate-repair-loop`  
-**API base:** `https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod`
-
----
-
-## What was completed this session
-
-### 1. Tier 1 repair loop — end-to-end confirmed working
-- `fix_workflow` ran end-to-end: detected 1 dead routing target in `create_workflow`, LLM fixed it, merged back via step 4b, wrote v12 to DB
-- `isLlmError` discriminator in `run-workflow.mjs` extended to cover `llm_call validation failed` — validation failures no longer trigger TROUBLESHOOT_WORKFLOW (prompt quality ≠ workflow structure defect)
-
-### 2. create_workflow v13 — right brain gate flow
-- Step 3 `js_transform`: produces `{ value, label, description, on_select }` options — no label concatenation
-- Step 3a `js_transform`: formats `right_brain_research.findings` into `research_summary` for display
-- Step 3b `human_gate confirm`: always fires after right brain — shows findings, decisions made, question count. User can Cancel before the expensive left brain LLM call
-- Step 4 condition → step 5 iterator → each gate now uses `gate_type: "choice"` with lettered buttons
-
-### 3. Iterator human_gate suspension — system fix
-- `executeIteratorInline` in `run-workflow.mjs` now detects `result.nextAction === 'suspend'`
-- Pushes gate frame with `step_ref.options` resolved to live array (not template string)
-- Iterator frame stays on stack at `current_index` — resume_gate re-enters correctly
-
-### 4. resume_gate — stepRef.options.find fix
-- When gate frame is pushed from iterator, `resolvedStepRef` stores the live options array
-- Fixes `(stepRef.options ?? []).find is not a function` crash on user response
-
-### 5. choice gate type — new first-class gate type
-- `step-executor.mjs` `buildDialog`: new `case 'choice'` emits `description_list` field + lettered action buttons
-- `callback.mjs` `dialogToBlocks`: new `case 'description_list'` renders `*A* — label: description` lines above buttons
-- `run-workflow.mjs` `resume_gate`: `choice` matches on `option.value` (HTML radio semantics), writes selected value to `output_key`
-- `PGC_StepType` `human_gate` row needs manual update — see deploy checklist below
-
-### 6. LLM API — response_format + maxOutputTokens
-- `llm-client.mjs`: `response_format: { type: "json_schema", json_schema: { name: "output", schema: outputSchema, strict: false } }` added when `outputSchema` is present
-- `max_output_tokens` wired end-to-end: `PGC_Prompt.max_output_tokens` → `callLlm` → `callLlmWithCorrection`
-- Reduces field-name hallucination at model level, not just at Ajv correction time
-
-### 7. analyze_and_design_workflow prompt rewrite
-- Prompt id 25 rewritten with explicit `DO NOT use` field list, concrete examples for `process_design` and `dialog_designs` items
-- `max_output_tokens: 4000` set
-- Not yet validated — 4 failed runs in `PGC_Prompt.error_log` pre-rewrite
-
-### 8. WORKFLOW_ERROR Slack overflow fix
-- `callback.mjs` `postWorkflowError`: raw AJV error JSON no longer posted to Slack block
-- Three summary cases: validation failure → error count + "logged for improvement"; LLM error → first 200 chars; structural → first 500 chars
-- Full error remains in CloudWatch and `PGC_Prompt.error_log`
-
-### 9. create_workflow routing — step 10 on_falsy dead target
-- `create_workflow` v11 → v13: step 10 `on_falsy` corrected from dead target `"11"` to `"11a"`
-- Seed synced from live DB v10 as authoritative source
+**Git tag:** `v3.2-session24-complete`
+**Session 24 final state:** create_workflow routing fixed, Tier 1b self-repair deployed, R1–R6 schema compatibility enforced, repair loop guard in place.
 
 ---
 
-## Files changed this session
+## What session 25 must accomplish
 
-| File | Change |
-|---|---|
-| `run-workflow.mjs` | `isLlmError` extended; iterator human_gate suspension; `resolvedStepRef` options fix; `choice` gate `value`-based matching and `output_key` write |
-| `step-executor.mjs` | `case 'choice'` in `buildDialog`; `description_list` field type; `isChoice` flag on actions builder |
-| `callback.mjs` | `postWorkflowError` human-readable summary; `case 'description_list'` in `dialogToBlocks` |
-| `llm-client.mjs` | `response_format` json_schema; `max_output_tokens` param on both functions |
-| `review-output.mjs` | `max_output_tokens` forwarded to `callLlmWithCorrection` |
-| `seed_PGC_Workflow.json` | `create_workflow` v13: step 3 expression (value/label/description options), step 5 item_step `gate_type: choice`; step 10 on_falsy fix |
-| `seed_PGC_Prompt.json` | `analyze_and_design_workflow` rewritten; `max_output_tokens: 4000` |
+Two tracks, in dependency order:
+
+1. **Fix domain resolution for `create_workflow`** — immediate unblock
+2. **Implement pgvector** — permanent fix replacing alias matching
+
+Both are required. Track 1 is a short-term data fix that unblocks testing. Track 2 is the architectural fix that makes Track 1 unnecessary going forward.
 
 ---
 
-## Deploy checklist for next session
+## Track 1 — domain_schema fix for create_workflow (immediate)
+
+### Root cause (confirmed across runs 228, 233)
+
+`create_workflow` receives `input.domain = null` on every run. This is because `matchDomainAlias("Spanish flashcard quiz", domainRows)` returns null — the alias list for `spanish_flashcards` contains `"flashcards"` (plural) but not `"flashcard"` (singular) or `"quiz"`.
+
+When `domain = null`, step 1 (`serv_query PGC_Schema WHERE domain = null`) returns `[]`. The `analyze_and_design_workflow` LLM call receives `domain_schema: []` and invents tables that already exist (`PGD_Flashcards`, `PGD_FlashcardSets`, etc.). This sets `schema_changes[0].blocking = true` → `routing_flags.needs_schema = 1` → step 10b gate fires → user sees "tables don't exist" message that is incorrect.
+
+**Confirm:** `generate_workflow_steps` was never reached in these runs. The issue is entirely in `analyze_and_design_workflow` receiving empty schema, not in step generation.
+
+### Data fix (apply immediately to unblock)
+
+Add `"flashcard"` and `"quiz"` to `PGC_DomainHelp.aliases` for `spanish_flashcards`:
+
+```cmd
+curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/table/updateRows -H "Content-Type: application/json" -d "{\"tableName\":\"PGC_DomainHelp\",\"filters\":[{\"column\":\"domain\",\"op\":\"eq\",\"value\":\"spanish_flashcards\"}],\"updates\":{\"aliases\":[\"spanish_flashcards\",\"spanish flashcards\",\"spanishflashcard\",\"flashcards\",\"flashcard\",\"quiz\",\"flashcard quiz\",\"spanish quiz\"]}}"
+```
+
+### Why this is still wrong long-term
+
+See Track 2. The alias list will keep failing for any phrasing not anticipated at domain-creation time. This is a structural problem with token matching, not a data maintenance problem.
+
+---
+
+## Track 2 — pgvector implementation (permanent fix)
+
+Full spec is in `architecture.md` Section 10. Here is the implementation sequence.
+
+### Step 1 — Enable pgvector on RDS
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Run this directly on the RDS instance. No Lambda deploy needed.
+
+### Step 2 — Add embedding column to PGC_DomainHelp
+
+```sql
+ALTER TABLE "PGC_DomainHelp" ADD COLUMN embedding vector(1536);
+```
+
+Also update `PGC_Schema` jsonb for the `PGC_DomainHelp` table to include the new column — otherwise `serv_update` validation will reject writes to it.
+
+```sql
+UPDATE "PGC_Schema"
+SET columns = columns || '[{"name":"embedding","type":"vector","nullable":true}]'::jsonb
+WHERE table_name = 'PGC_DomainHelp';
+```
+
+### Step 3 — Add `vector` to ALLOWED_TYPES in schema.mjs
+
+Request current `schema.mjs` from the repo. Add `'vector'` to the `ALLOWED_TYPES` set.
+
+### Step 4 — Write embed-client.mjs
+
+New file: `src/shared/embed-client.mjs`
+
+```js
+// src/shared/embed-client.mjs
+// OpenAI text-embedding-3-small wrapper
+// Credentials: SSM SecureString at OPENAI_API_KEY_PARAM env var
+// Returns: float[] of 1536 dimensions
+
+export async function embedText(text, traceId) {
+  const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-east-2' });
+  const { Parameter } = await ssm.send(new GetParameterCommand({
+    Name: process.env.OPENAI_API_KEY_PARAM,
+    WithDecryption: true,
+  }));
+  const apiKey = Parameter.Value;
+
+  const resp = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
+  });
+  if (!resp.ok) throw new Error(`OpenAI embeddings API error ${resp.status}`);
+  const data = await resp.json();
+  return data.data[0].embedding; // float[]
+}
+```
+
+Add `OPENAI_API_KEY_PARAM` environment variable to the PROC Lambda in `template.yaml`. Store the actual key in SSM as a SecureString at the agreed parameter name.
+
+### Step 5 — Write backfill-embeddings.mjs
+
+New file: `dev_scripts/backfill-embeddings.mjs`
+
+Reads all `PGC_DomainHelp` rows where `embedding IS NULL`, embeds `domain + " " + description + " " + aliases.join(" ")` for each, writes vector via SERV updateRows. Run once after Steps 1–4 are deployed.
+
+### Step 6 — Update classify-intent-tiers.mjs
+
+Replace `matchDomainAlias()` with a two-pass approach:
+
+```js
+// Pass A — zero-cost exact alias check (unchanged)
+export function matchDomainAlias(userInput, domainRows) { ... }
+
+// Pass B — semantic similarity (new)
+export async function semanticDomainMatch(userInput, domainRows) {
+  // Only called when matchDomainAlias returns null
+  // domainRows already loaded — no extra DB query
+  const populated = domainRows.filter(r => r.embedding);
+  if (!populated.length) return null;
+
+  const queryVec = await embedText(userInput);
+  let best = null, bestSim = 0;
+  for (const row of populated) {
+    const sim = cosineSimilarity(queryVec, row.embedding);
+    if (sim > bestSim) { bestSim = sim; best = row; }
+  }
+  const threshold = 0.75; // TODO: read from PGC_SystemContext.pgvector_config
+  return bestSim >= threshold ? { domain: best.domain, confidence: 'semantic_match' } : null;
+}
+
+function cosineSimilarity(a, b) {
+  let dot = 0, magA = 0, magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i]; magA += a[i]*a[i]; magB += b[i]*b[i];
+  }
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+```
+
+In `classify-intent.mjs`, update the `CREATE_WORKFLOW` domain resolution block (lines 483–491) and Pass 2 domain match (line 227) to call `semanticDomainMatch()` when `matchDomainAlias()` returns null.
+
+### Step 7 — Update create_domain workflow
+
+After the step that inserts the `PGC_DomainHelp` row, add an embedding step. The simplest approach given the current step types: add a new SERV endpoint `POST /serv/embed/domain-help` that takes `{ id }`, reads the row, embeds `domain + description + aliases.join(" ")`, and writes the vector back. Invoke via a `serv_query`-style step in the workflow.
+
+Alternatively, if a `capability_call` step type exists by then, register the embed operation as a capability.
+
+---
+
+## Files needed at session start
+
+Request these from the repo before writing any code:
+
+- `architecture.md` (already updated this session — use session 25's version)
+- `src/proc/classify-intent.mjs`
+- `src/proc/classify-intent-tiers.mjs`
+- `src/shared/embed-client.mjs` (will not exist — create new)
+- `template.yaml` (to add OPENAI_API_KEY_PARAM env var)
+- `src/serv/schema.mjs` (to add vector to ALLOWED_TYPES)
+- `seed_PGC_Workflow.json` (current deployed version — for create_domain update)
+
+---
+
+## Session 24 completed items (do not redo)
+
+- `run-workflow.mjs` — iterator suspending-gate resume fix, DIAGNOSE_PROMPT_SCHEMA dispatch, `SYSTEM_REPAIR_WORKFLOWS` guard
+- `llm-client.mjs` — `parseInt(max_output_tokens)` fix
+- `diagnose-prompt-schema.mjs` — new Tier 1b PROC module (thin launcher)
+- `diagnose_prompt_schema` workflow — 16 steps with R1–R6 as independent `js_transform` rules; step 1 `input_key: "input.repair_state"` (critical — NOT `"repair_state"`)
+- `handler.mjs` — DIAGNOSE_PROMPT_SCHEMA SQS case + HTTP route
+- `seed_PGC_Prompt.json` — `analyze_and_design_workflow` v9 (R1–R6 clean, options items schema), `generate_workflow_steps` v4 (R1–R6 clean), `fix_workflow_steps` v2 (R1–R6 clean)
+- `seed_PGC_Workflow.json` — `create_workflow` step 8 flags as `1/0`, step 9a message fixed; `diagnose_prompt_schema` workflow added
+- `seed_PGC_SystemContext.json` — `output_schema_constraints` row added (R1–R6 docs injected into LLM prompts)
+- `architecture.md` — Session 24 updates, Section 10 pgvector promoted to active
+
+## Pending deploys (from session 24)
 
 ```cmd
 sam build && sam deploy
 
-rem Workflows
+node dev_scripts/upsert-workflow.mjs diagnose_prompt_schema
 node dev_scripts/upsert-workflow.mjs create_workflow
-node dev_scripts/upsert-workflow.mjs fix_workflow
-
-rem Prompts
 node dev_scripts/upsert-prompt.mjs analyze_and_design_workflow
-node dev_scripts/upsert-prompt.mjs research_workflow_domain
-node dev_scripts/upsert-prompt.mjs classify_intent_tier2
+node dev_scripts/upsert-prompt.mjs generate_workflow_steps
 node dev_scripts/upsert-prompt.mjs fix_workflow_steps
-
-rem Step types — manual edit required first (see below)
-node dev_scripts/upsert-step-type.mjs human_gate
+node dev_scripts/upsert-system-context.mjs output_schema_constraints
 ```
 
-### Manual edit required — seed_PGC_StepType.json human_gate row
+## Known open issues carried forward
 
-Apply before running `upsert-step-type.mjs`:
-
-**`input_contract[gate_type].description`:**
-```
-confirm | edit_list | text_input | review_object | choice
-```
-
-**`input_contract[options].description`:**
-```
-Array of option objects — must include at least one with action/value: "cancel". Shape by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. "A", "B"), and description is the explanatory sentence displayed above the buttons.
-```
-
-**`description` (top-level)** — append to existing gate types list:
-```
-, choice (single-select with question heading, lettered buttons A/B/C, and per-option description lines — output_key written with selected value)
-```
-
----
-
-## DB state at session end
-
-| Item | State |
+| Issue | Status |
 |---|---|
-| `create_workflow` | v10 in DB (step 10 dead target). Seed is v13. Needs `upsert-workflow.mjs create_workflow` |
-| `fix_workflow` | v1 in DB (missing step 4b). Seed is 18-step. Needs `upsert-workflow.mjs fix_workflow` |
-| `analyze_and_design_workflow` (prompt id 25) | Rewritten in seed, not yet upserted. 4 failed runs in `error_log` |
-| `PGC_WorkflowRun 219` | `awaiting_human_gate` at step 5 iterator index 0. Will error on resume with old code. Cancel or let expire |
+| `generate_workflow_steps` — not yet validated end-to-end (blocked by domain null) | Unblock via Track 1 alias patch, then re-run |
+| `create_domain` step 6–12 — limited end-to-end run history | Still open |
+| Session layer `PGC_Session` / `PGC_SessionEntry` | Backlog |
+| `sub_workflow` and `capability_call` step types | Backlog |
+| Guard 3 cycle detector backward reference handling | Medium priority |
+| `serv_update` and `serv_delete` step types | Deferred |
 
-Cancel run 219 before testing:
-```cmd
-curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/shutdown -H "Content-Type: application/json" -d "{\"workflowRunId\":219}"
-```
+## Git tag suggestion
 
----
-
-## First test after deploy
-
-```
-/m create workflow Spanish flashcard quiz
-```
-
-Expected flow:
-1. Step 1: `serv_query PGC_Schema` → `domain_schema: []` (domain still null — see open issue)
-2. Step 2: `research_workflow_domain` → valid on attempt 1 (response_format now applied)
-3. Step 3: `js_transform` → `preference_gates` with `value/label/description` options
-4. Step 3a: `js_transform` → `research_summary`
-5. Step 3b: `human_gate confirm` → shows right brain findings → **you must click Continue**
-6. Step 4: condition on `preference_gates.length` → routes to step 5 (if questions) or step 6
-7. Step 5: iterator → **each gate should now suspend properly and show A/B/C buttons**
-8. Step 6: `serv_query PGC_StepType`
-9. Step 7: `analyze_and_design_workflow` → **first test of rewritten prompt + response_format**
-
-Watch for: step 7 validation result (valid on attempt 1 would confirm response_format working)
-
----
-
-## Open issues — priority order
-
-### Blocking (must fix before end-to-end works)
-
-**1. `analyze_and_design_workflow` prompt (id 25)** — 100% validation failure rate across 4 runs.
-Prompt rewritten + `response_format` added this session. Not yet tested.
-See `docs/prompt-issues.md` Issue 2.
-If still failing after deploy: share CloudWatch error output and the exact AJV errors.
-
-**2. `domain: null` on `create_workflow` runs** — `input.domain` is never resolved before
-CREATE_WORKFLOW SQS dispatch. `research_workflow_domain` and `analyze_and_design_workflow`
-receive no schema context. The right brain cannot surface domain-specific preference questions
-(e.g. "Evaluate answers by LLM or self-report?") without knowing what tables exist.
-Fix: resolve domain in `classify-intent.mjs` `resolveTier3Route()` before enqueuing,
-and add `domain_schema` as an input to `research_workflow_domain`.
-
-### High (next session)
-
-**3. Tier 1 post-write validation** — after `fix_workflow` step 8 and `create_workflow` step 19
-write to `PGC_Workflow`, run Level 1 simulation on the written step array immediately.
-If dead routing targets are found, fail and notify rather than letting the user discover
-at runtime. This is NOT Tier 3 maintenance — blocking defects must be caught pre-execution.
-
-### Medium
-
-**4. `fix_workflow_steps` prompt text** — still says "complete array — not a diff".
-Update to "return only the steps you changed" now that step 4b handles the merge.
-`max_output_tokens` can also be lowered (was 5000 tokens for 27 steps; now ~800 for 4 steps).
-
-**5. `research_workflow_domain` invalid JSON** — occasional sonar web-search mid-response
-interruption. Investigate `tools: []` to disable web search.
-
----
-
-## Architecture decisions made this session
-
-**[DECISION] `choice` gate type is the correct gate for preference questions.**
-`confirm` was being repurposed for multi-option choices by hand-crafting button labels.
-`select_one` was limited to flat entity lists via `context_key` only.
-`choice` is the first-class gate type for single-select with question, labelled options,
-and descriptions — modelled on HTML radio button semantics.
-`confirm` and `select_one` are unchanged; no existing workflow breaks.
-
-**[DECISION] TROUBLESHOOT_WORKFLOW does not fire on LLM errors.**
-Validation failures and LLM response failures are prompt/service quality issues.
-Workflow structure analysis cannot fix them. The discriminator covers:
-`/LLM (returned|call timed)|llm_call validation failed/i`
-
-**[DECISION] Tier 1 post-write validation is NOT Tier 3.**
-Dead routing targets in a newly written workflow are blocking defects — the user
-cannot retry until fixed. They must be caught immediately after every `PGC_Workflow`
-write, not on a scheduled maintenance pass. Classified as Tier 1 reactive.
-
-**[DECISION] `response_format: json_schema` is now applied to all Agent API calls
-when `output_schema` is present.** This enforces schema at the model level and is
-the primary defence against field-name hallucination, not the Ajv correction loop.
-`strict: false` — our schemas use `additionalProperties: false` which handles
-strictness at Ajv validation time.
-
-**[DECISION] WORKFLOW_ERROR Slack messages show human-readable summaries only.**
-Raw AJV error JSON (5000+ chars) cannot be posted to a single Slack block (3000-char
-limit). Full error detail belongs in CloudWatch and `PGC_Prompt.error_log`.
-
----
-
-## Prompt issues log
-
-See `docs/prompt-issues.md` for full details on all 4 active prompt quality issues.
-This document should be committed to the repo and updated each session.
+`v3.2-session24-complete`
