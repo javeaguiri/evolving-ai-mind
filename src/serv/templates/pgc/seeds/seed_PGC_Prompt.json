@@ -1310,7 +1310,7 @@
   },
   {
     "intent_category": "analyze_and_design_workflow",
-    "version": 2,
+    "version": 7,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1365,7 +1365,10 @@
             "required": [
               "step_label",
               "step_type",
-              "description"
+              "description",
+              "inputs",
+              "outputs",
+              "dialog"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1379,15 +1382,25 @@
                 "type": "string"
               },
               "inputs": {
-                "type": "object"
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
               },
               "outputs": {
-                "type": "object"
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
               },
               "dialog": {
-                "type": [
-                  "object",
-                  "null"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               }
             }
@@ -1395,9 +1408,8 @@
         },
         "state_map": {
           "type": "object",
-          "additionalProperties": {
-            "type": "object"
-          }
+          "properties": {},
+          "additionalProperties": false
         },
         "dialog_designs": {
           "type": "array",
@@ -1447,7 +1459,9 @@
               "intent_category",
               "inputs",
               "output_shape",
-              "exists"
+              "exists",
+              "prompt_text",
+              "model"
             ],
             "additionalProperties": false,
             "properties": {
@@ -1461,7 +1475,9 @@
                 }
               },
               "output_shape": {
-                "type": "object"
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
               },
               "exists": {
                 "type": "boolean"
@@ -1527,7 +1543,8 @@
               "how_to_add": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "confidence": {
