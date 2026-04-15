@@ -531,7 +531,7 @@
         "step": "8",
         "type": "js_transform",
         "input_key": "design_spec",
-        "expression": "(function() { var spec = items; var hasBlockingSchema = (spec.schema_changes || []).some(function(s) { return s.blocking; }); var isBlocked = spec.confidence === 'blocked'; var hasNonBlockingSchema = (spec.schema_changes || []).some(function(s) { return !s.blocking; }); return { skip_all_gates: !hasBlockingSchema && !isBlocked && !hasNonBlockingSchema, needs_schema: hasBlockingSchema || isBlocked, is_blocked: isBlocked, has_nonblocking: hasNonBlockingSchema && !hasBlockingSchema && !isBlocked }; })()",
+        "expression": "(function() {\n  var spec = items;\n  var hasBlockingSchema  = (spec.schema_changes || []).some(function(s) { return s.blocking; });\n  var isBlocked          = spec.confidence === 'blocked';\n  var hasNonBlocking     = (spec.schema_changes || []).some(function(s) { return !s.blocking; });\n  return {\n    skip_all_gates:  (!hasBlockingSchema && !isBlocked && !hasNonBlocking) ? 1 : 0,\n    needs_schema:    (hasBlockingSchema || isBlocked) ? 1 : 0,\n    is_blocked:      isBlocked ? 1 : 0,\n    has_nonblocking: (hasNonBlocking && !hasBlockingSchema && !isBlocked) ? 1 : 0\n  };\n})()",
         "on_failure": "human_feedback",
         "on_success": "next",
         "output_key": "routing_flags",
@@ -550,7 +550,7 @@
         "type": "notify",
         "on_success": "end",
         "description": "Inform user the workflow requires a capability that does not yet exist.",
-        "message_template": "I cannot build this workflow yet.\n\n*Reason:* {{design_spec.blocked_reason}}\n\nThis requires a capability that is not currently available in evolving-mind. It has been noted for future implementation."
+        "message_template": "🚫 *Cannot build this workflow yet*\n\n{{design_spec.blocked_reason}}\n\nThis capability has been noted for future implementation."
       },
       {
         "step": "10",
@@ -1481,15 +1481,15 @@
   },
   {
     "name": "diagnose_prompt_schema",
-    "version": 1,
+    "version": 2,
     "domain": null,
-    "description": "Tier 1b reactive repair — deterministic repair of PGC_Prompt.output_schema API incompatibilities. Six js_transform steps apply rules R1–R6 against the schema. Each rule is independently evolvable. Triggered when an llm_call step receives Agent API error 400.",
+    "description": "Tier 1b reactive repair — deterministic R1–R6 output_schema compatibility fix. Each rule is an independent js_transform step.",
     "steps": [
       {
         "step": "1",
         "type": "js_transform",
-        "description": "R1 — Replace array union types with anyOf. e.g. type:[\"object\",\"null\"] → anyOf:[{type:\"object\"},{type:\"null\"}]",
-        "input_key": "repair_state",
+        "description": "R1 — array union types → anyOf",
+        "input_key": "input.repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(Array.isArray(node.type)){var nonNull=node.type.filter(function(t){return t!=='null';});var hasNull=node.type.indexOf('null')!==-1;var anyOf=nonNull.map(function(t){return{type:t};});if(hasNull)anyOf.push({type:'null'});rs.violations.push({path:path,rule:'R1',description:'array union type ['+node.type.join(',')+'] replaced with anyOf'});delete node.type;node.anyOf=anyOf;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
         "on_success": "next"
@@ -1497,7 +1497,7 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "R2 — Fix non-false additionalProperties. Typed schemas ({type:\"string\"}) and true are rejected; only false is valid.",
+        "description": "R2 — non-false additionalProperties → false",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&node.additionalProperties!==false){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is '+JSON.stringify(node.additionalProperties)+' — set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1506,7 +1506,7 @@
       {
         "step": "3",
         "type": "js_transform",
-        "description": "R3 — Add missing additionalProperties:false to object types. Every object must explicitly set this field.",
+        "description": "R3 — add missing additionalProperties:false to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('additionalProperties'in node)){rs.violations.push({path:path,rule:'R3',description:'object missing additionalProperties: false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1515,7 +1515,7 @@
       {
         "step": "4",
         "type": "js_transform",
-        "description": "R4 — Add missing properties:{} to object types. Even empty objects require the properties key.",
+        "description": "R4 — add missing properties:{} to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('properties'in node)){rs.violations.push({path:path,rule:'R4',description:'object missing properties key'});node.properties={};}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1524,7 +1524,7 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "R5 — Add missing properties to required array. When additionalProperties:false, all defined properties must be in required.",
+        "description": "R5 — add missing required entries",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&node.additionalProperties===false&&node.properties){var defined=Object.keys(node.properties);var existing=Array.isArray(node.required)?node.required:[];var missing=defined.filter(function(k){return existing.indexOf(k)===-1;});if(missing.length>0){rs.violations.push({path:path,rule:'R5',description:'properties not in required: ['+missing.join(', ')+']'});node.required=existing.concat(missing);}}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1533,7 +1533,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "R6 — Apply R3+R4 to anyOf/oneOf/allOf object members. Compound schema members must also satisfy object rules.",
+        "description": "R6 — apply R3+R4 to anyOf/oneOf/allOf object members",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;['anyOf','oneOf','allOf'].forEach(function(kw){if(!Array.isArray(node[kw]))return;node[kw].forEach(function(m,i){if(typeof m!=='object'||m===null||m.type==='null')return;if(m.type==='object'&&!('additionalProperties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing additionalProperties: false'});m.additionalProperties=false;}if(m.type==='object'&&!('properties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing properties key'});m.properties={};}});});var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1542,16 +1542,16 @@
       {
         "step": "7",
         "type": "js_transform",
-        "description": "Build gate message from accumulated violations. Output: { hasViolations, gateMessage, repairedSchema, violationCount }",
+        "description": "Aggregate violations, build gate message. Reads repair_state; writes gate_payload.",
         "input_key": "repair_state",
         "output_key": "gate_payload",
-        "expression": "(function(){\n  var rs = items;\n  var v = rs.violations;\n  if (v.length === 0) return { hasViolations: false, gateMessage: '', repairedSchema: rs.schema, violationCount: 0 };\n  var lines = v.slice(0, 10).map(function(x){ return '• `' + x.path + '` [' + x.rule + ']: ' + x.description; });\n  if (v.length > 10) lines.push('• …and ' + (v.length - 10) + ' more');\n  var msg = [\n    '🔧 *Schema compatibility repair — `' + local_state.input.intentCategory + '`*',\n    '',\n    'Found *' + v.length + '* violation' + (v.length !== 1 ? 's' : '') + ':',\n    lines.join('\\n'),\n    '',\n    'Repair is deterministic. Confirm to apply and retry your workflow.'\n  ].join('\\n');\n  return { hasViolations: true, gateMessage: msg, repairedSchema: rs.schema, violationCount: v.length };\n})()",
+        "expression": "(function(){var rs=items;var v=rs.violations;if(v.length===0)return{hasViolations:false,gateMessage:'',repairedSchema:rs.schema,violationCount:0};var lines=v.slice(0,10).map(function(x){return '• `'+x.path+'` ['+x.rule+']: '+x.description;});if(v.length>10)lines.push('• …and '+(v.length-10)+' more');var msg=['🔧 *Schema compatibility repair — `'+local_state.input.intentCategory+'`*','','Found *'+v.length+'* violation'+(v.length!==1?'s':'')+':',lines.join('\\n'),'','Repair is deterministic. Confirm to apply and retry your workflow.'].join('\\n');return{hasViolations:true,gateMessage:msg,repairedSchema:rs.schema,violationCount:v.length};})()",
         "on_success": "next"
       },
       {
         "step": "8",
         "type": "condition",
-        "description": "Route on whether any violations were found",
+        "description": "Any violations found?",
         "expression": "{{gate_payload.hasViolations}}",
         "on_truthy": "9",
         "on_falsy": "12"
@@ -1602,7 +1602,7 @@
       {
         "step": "11",
         "type": "condition",
-        "description": "Cancel the failed WorkflowRun if one was supplied",
+        "description": "Cancel the failed WorkflowRun if supplied",
         "expression": "{{input.failedRunId}}",
         "on_truthy": "11a",
         "on_falsy": "11b"

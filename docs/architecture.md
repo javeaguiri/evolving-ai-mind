@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Session 24 complete  
-Last updated: 2026-04-15 (session 24 — iterator suspending-gate resume fix, diagnose-prompt-schema Tier 1b self-repair, output_schema API compatibility rules R1–R6, llm-client max_output_tokens parseInt fix, analyze_and_design_workflow schema v6)
+Last updated: 2026-04-15 (session 24 — iterator gate resume fix, Tier 1b diagnose-prompt-schema, R1–R6 schema rules, repair loop guard, create_workflow routing fixes, pgvector promoted to active implementation)
 
 ---
 
@@ -4668,50 +4668,145 @@ Enable: `CREATE EXTENSION IF NOT EXISTS vector;`
 Embedding model: `text-embedding-3-small` (OpenAI), 1536 dimensions
 Used in: `PGC_Workflow`, `PGC_DomainHelp`, `PGC_Prompt`, `PGC_IntentMap`
 
-**Backlog — no MVP feature is blocked by its absence.**
+**Active — promoted from Backlog in Session 24.**
+
+The alias-based domain resolution in `matchDomainAlias` is a structural weakness confirmed
+across multiple sessions. "Spanish flashcard quiz", "flashcard quiz", "quiz my Spanish" all
+fail to resolve `spanish_flashcards` because the alias list cannot anticipate every user
+phrasing. Every new domain will have the same problem. This is not a data maintenance problem
+— it is a wrong architectural primitive. pgvector replaces it.
+
+### Two problems pgvector solves
+
+**Problem 1 — domain resolution (CREATE_WORKFLOW, Tier 2 routing)**
+`matchDomainAlias` in `classify-intent-tiers.mjs` does substring token matching against
+`PGC_DomainHelp.aliases`. "flashcard quiz" fails because "flashcard" (singular) is not
+in the aliases list even though "flashcards" (plural) is. Any paraphrase not anticipated
+at domain-creation time silently returns `domain: null`, causing `domain_schema: []` to
+be sent to the LLM which then invents tables that already exist.
+
+Fix: replace `matchDomainAlias` with `semanticDomainMatch()` — embed user input,
+cosine similarity against `PGC_DomainHelp.embedding`, threshold 0.75. Aliases still
+feed the embedding text at creation time but are no longer the query mechanism.
+
+**Problem 2 — workflow routing (Pass 2 keyword scan)**
+Pass 2 uses `intent_keywords` on `PGC_Workflow` for token presence. Novel phrasings
+fall through to Tier 2 sonar. After domain is resolved via semantic match, workflow
+routing also uses vector similarity against `PGC_Workflow.intent_embedding`.
+
+### Schema changes required
+
+```sql
+-- Enable extension (run once on RDS)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- PGC_DomainHelp — domain resolution
+ALTER TABLE "PGC_DomainHelp" ADD COLUMN embedding vector(1536);
+
+-- PGC_Workflow — already has intent_embedding column (no change needed)
+```
+
+Add `vector` to `ALLOWED_TYPES` in `schema.mjs` once extension is enabled.
+
+### New module: embed-client.mjs
+
+`src/shared/embed-client.mjs` — thin wrapper for OpenAI embeddings API:
+
+```
+embedText(text) → vector(1536)
+  POST https://api.openai.com/v1/embeddings
+  model: text-embedding-3-small
+  input: text
+  Returns: float[] of 1536 dimensions
+  Cost: /bin/sh.02/million tokens ≈ /bin/sh.000001 per 50-token domain description
+```
+
+Credentials: OpenAI API key stored in SSM as `SecureString`, referenced by name only.
+`embed-client.mjs` reads key name from `process.env.OPENAI_API_KEY_PARAM`, retrieves
+at call time via SSM SDK.
+
+### classify-intent-tiers.mjs changes
+
+Replace `matchDomainAlias()` with `semanticDomainMatch()`:
+
+```
+semanticDomainMatch(userInput, domainRows):
+  1. Embed userInput via embedText()
+  2. For each row in domainRows that has embedding populated:
+       similarity = cosineSimilarity(queryEmbedding, row.embedding)
+  3. If max similarity > 0.75 → return { domain: row.domain, confidence: 'semantic_match' }
+  4. Else → return null (fall through to Tier 2 / heavy-lift)
+
+cosineSimilarity(a, b) = dot(a,b) / (|a| * |b|) — pure JS, no DB round-trip
+```
+
+Cosine similarity is computed in-process because `domainRows` are already loaded in
+`classify()'s` parallel prefetch. No additional DB query needed.
+
+Keep `matchDomainAlias` as a fast pre-check (zero cost): if any alias is an exact
+substring match, skip the embed call entirely. Embed only when alias lookup returns null.
+
+### create_domain workflow changes
+
+After the `serv_insert PGC_DomainHelp` step (currently step 8), add:
+
+```
+Step 8b — serv_update PGC_DomainHelp (populate embedding)
+  Call embedText(domain + " " + description + " " + aliases.join(" "))
+  Write vector to PGC_DomainHelp.embedding for the just-inserted row
+```
+
+This requires a new `serv_embed` step type (or embedding via a `capability_call` step
+once the capability registry is built). The simpler interim approach: add a new SERV
+endpoint `POST /serv/embed/domain` that embeds and updates the row in one call, invoked
+via a `serv_query`-style step.
+
+### Backfill script
+
+`dev_scripts/backfill-embeddings.mjs`:
+- Read all `PGC_DomainHelp` rows where `embedding IS NULL`
+- For each: embed `domain + description + aliases.join(" ")`
+- Write vector via SERV updateRows
+- Run once after extension is enabled
+
+### Similarity threshold
+
+Default: 0.75 for domain resolution, 0.82 for workflow routing.
+Store in `PGC_SystemContext.pgvector_config` as JSON so thresholds are evolvable
+without code deploys.
 
 ### Role in the Intent Preprocessor
 
-pgvector is the Backlog evolution of Pass 2's token-based `intent_keywords` scan (Section 6.3).
+```
+PASS 2 — updated flow (with pgvector):
+  1. matchDomainAlias() — zero-cost exact substring check
+  2. If no alias match: semanticDomainMatch() — embed + cosine similarity
+  3. If domain resolved: matchWorkflowByKeywords() then pgvector_workflow_match()
+  4. If no match: fall to Tier 2
 
-**Phase 2 (current):** Pass 2 resolves a domain via `PGC_DomainHelp.aliases`, then scans
-`PGC_Workflow.intent_keywords` for token presence. This handles common phrasings at zero
-LLM cost. Tier 2 (sonar) covers novel phrasings that miss the keyword scan.
+PASS 2 Backlog — after keyword-scan miss:
+  Embed user input
+  Query PGC_Workflow WHERE domain = resolved_domain
+    ORDER BY intent_embedding <-> query_embedding LIMIT 1
+  If similarity > 0.82 → confidence: 'semantic_match'
+  Else → Tier 2
+```
 
-**Backlog (pgvector):** After a keyword-scan miss but before Tier 2, Pass 2 embeds the
-user input and runs a cosine similarity query against `PGC_Workflow.intent_embedding` filtered
-by the resolved domain. If similarity exceeds a configurable threshold (e.g. 0.82), the
-workflow is matched with `confidence: 'semantic_match'` — no LLM invocation. This eliminates
-almost all Tier 2 sonar calls for domain workflows.
+### Implementation order
 
-The `intent_embedding` column already exists on `PGC_Workflow` (no schema change needed).
-Embeddings are generated and stored when a domain is created or a workflow is updated.
+1. Enable pgvector extension on RDS
+2. Add `embedding vector(1536)` to `PGC_DomainHelp`
+3. Add `vector` to `ALLOWED_TYPES` in `schema.mjs`
+4. Write `embed-client.mjs`
+5. Write `backfill-embeddings.mjs` and run it
+6. Update `classify-intent-tiers.mjs` — `semanticDomainMatch()` replacing `matchDomainAlias`
+7. Update `create_domain` workflow — add embedding step after DomainHelp insert
+8. Workflow routing: populate and query `PGC_Workflow.intent_embedding` (Phase 2 followup)
 
-### Primary use cases
+Steps 1–6 fix the immediate domain resolution problem.
+Steps 7–8 extend to new domain registrations and workflow routing.
 
-- **Intent preprocessor** — semantic similarity match in Pass 2, superseding `intent_keywords` scan for novel phrasings
-- **`/help` search** — find domain by natural language description via `PGC_DomainHelp` embeddings
-- **Prompt deduplication** — avoid generating duplicate prompts via `PGC_Prompt` embeddings
-
-### Activation checklist (Backlog)
-
-1. Run `CREATE EXTENSION IF NOT EXISTS vector;` on RDS
-2. Add `vector` to `ALLOWED_TYPES` in `schema.mjs`
-3. Add embedding generation step to `create_domain` workflow — populate `PGC_Workflow.intent_embedding` for each CRUD workflow generated
-4. Add `pgvector_match()` function to `classify-intent-tiers.mjs` — called by Pass 2 after keyword-scan miss
-5. Set similarity threshold in `PGC_SystemContext.guardrail_defaults`
-6. Embed existing `PGC_DomainHelp.description` rows for `/help` semantic search
-
-### Why not sooner
-
-The system works correctly without pgvector. Pass 1 regex covers all registered intents.
-Pass 2 `intent_keywords` scan covers common domain phrasings at zero cost. Tier 2 sonar
-handles the residual for a few cents per call. pgvector reduces that residual further but
-is not the correct investment before the session layer (Backlog) and right-brain improvement
-loop are stable — those produce the training signal that validates whether semantic matching
-thresholds are set correctly.
-
-Status: Designed, not yet implemented. `intent_embedding` column schema already in place.
+Status: **Active — Session 25 implementation target.**
 
 ---
 

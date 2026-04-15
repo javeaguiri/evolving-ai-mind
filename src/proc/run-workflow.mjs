@@ -281,7 +281,16 @@ async function executeTop({ workflowRunId, traceId, source }) {
     // Tier 1b — Agent API 400 on an llm_call step means output_schema is incompatible
     // with the structured output spec. DIAGNOSE_PROMPT_SCHEMA runs a deterministic repair
     // and presents a human confirmation gate before writing the fix.
-    const isApiSchemaError = step.type === 'llm_call' && /Agent API error 400/i.test(stepError.message);
+    //
+    // System workflow guard: self-repair workflows (fix_workflow, diagnose_prompt_schema)
+    // must not re-enter the repair loop when they themselves fail. They are the repair
+    // layer — recursing into TROUBLESHOOT_WORKFLOW or DIAGNOSE_PROMPT_SCHEMA from inside
+    // them causes an infinite loop. Log the failure only.
+    const SYSTEM_REPAIR_WORKFLOWS = new Set(['fix_workflow', 'diagnose_prompt_schema']);
+    const isSystemRepairWorkflow  = SYSTEM_REPAIR_WORKFLOWS.has(run.workflow_name);
+
+    const isApiSchemaError = !isSystemRepairWorkflow
+      && step.type === 'llm_call' && /Agent API error 400/i.test(stepError.message);
     const isLlmError = isApiSchemaError
       || /LLM (returned|call timed)|llm_call validation failed/i.test(stepError.message);
 
@@ -293,7 +302,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
         traceId,
         callback:       run.callback,
       });
-    } else if (!isLlmError) {
+    } else if (!isLlmError && !isSystemRepairWorkflow) {
       await enqueueWorkflow({
         type:         'TROUBLESHOOT_WORKFLOW',
         workflowName: run.workflow_name,
@@ -301,6 +310,11 @@ async function executeTop({ workflowRunId, traceId, source }) {
         autoFix:      true,
         traceId,
         callback:     run.callback,
+      });
+    } else if (isSystemRepairWorkflow) {
+      console.error('run-workflow: system repair workflow failed — suppressing recursive repair', {
+        workflowName: run.workflow_name, step: frame.current_step,
+        error: stepError.message, traceId,
       });
     }
     throw stepError;
