@@ -31,6 +31,7 @@ tests/
                                          input resolution, fix_workflow structural validity (no network)
   integration/
     classify-intent.test.mjs         ← HTTP endpoint tests (requires SERV_API_URL)
+    llm-prompt-schema.test.mjs       ← Perplexity API schema probe (requires TEST_ALL or TEST_PROMPTS + LLM_API_KEY + SERV_API_URL)
   fixtures/
     intent-map-rows.js               ← mock PGC_IntentMap rows
     domain-help-rows.js              ← mock PGC_DomainHelp rows
@@ -57,6 +58,11 @@ SERV_API_URL=https://<api-id>.execute-api.us-east-2.amazonaws.com/Prod
 # Set to the full proc API base URL
 PROC_API_URL=https://<api-id>.execute-api.us-east-2.amazonaws.com/Prod
 
+# Required for llm-prompt-schema.test.mjs — real Perplexity API calls
+# Use TEST_ALL=1 or TEST_PROMPTS=name1,name2 to activate (no env var = skipped)
+LLM_API_KEY=pplx-...
+LLM_AGENT_URL=https://api.perplexity.ai/v1/agent
+
 # Optional — set to skip integration tests when running without network access
 # SKIP_INTEGRATION=true
 ```
@@ -66,6 +72,8 @@ PROC_API_URL=https://<api-id>.execute-api.us-east-2.amazonaws.com/Prod
 ```properties
 SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod
 PROC_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod
+LLM_API_KEY=pplx-<your-key>
+LLM_AGENT_URL=https://api.perplexity.ai/v1/agent
 ```
 
 ### Loading env vars in tests (cmd.exe — avoids CRLF issues)
@@ -89,6 +97,39 @@ node --test tests/unit/classify-intent-tiers.test.mjs
 ```cmd
 set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test tests/integration/classify-intent.test.mjs
 ```
+
+### LLM prompt schema regression tests (requires TEST_ALL or TEST_PROMPTS + LLM_API_KEY + SERV_API_URL)
+
+**Note:** `node --test` strips custom CLI args from `process.argv`. This test uses environment
+variables instead of `--all` / `--prompt` flags.
+
+Test all prompts in PGC_Prompt (latest version per intent_category):
+
+```cmd
+set TEST_ALL=1 && set LLM_API_KEY=pplx-... && set LLM_AGENT_URL=https://api.perplexity.ai/v1/agent && set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test tests/integration/llm-prompt-schema.test.mjs
+```
+
+Test specific prompts only (comma-separated intent_category values):
+
+```cmd
+set TEST_PROMPTS=generate_workflow_steps,analyze_and_design_workflow && set LLM_API_KEY=pplx-... && set LLM_AGENT_URL=https://api.perplexity.ai/v1/agent && set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test tests/integration/llm-prompt-schema.test.mjs
+```
+
+No env vars set — single skipped test, 0 failures, safe in CI pipelines:
+
+```cmd
+node --test tests/integration/llm-prompt-schema.test.mjs
+```
+
+With verbose output (shows per-prompt ✅/❌ lines):
+
+```cmd
+set TEST_ALL=1 && set LLM_API_KEY=pplx-... && set LLM_AGENT_URL=https://api.perplexity.ai/v1/agent && set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test --test-reporter=spec tests/integration/llm-prompt-schema.test.mjs
+```
+
+**When to run:** After any change to `seed_PGC_Prompt.json` output_schema fields, or after
+`DIAGNOSE_PROMPT_SCHEMA` repairs a schema in production (to confirm the fix is also reflected
+in the seed file). Each probe costs ~$0.001 — running all prompts costs under $0.02 total.
 
 ### All unit tests
 
@@ -313,9 +354,67 @@ means any future seed change that introduces a condition routing bug, dead targe
 cancel option in `fix_workflow` is caught immediately by `node --test` before deployment —
 the repair workflow cannot itself be broken silently.
 
-### Fixtures used
+---
 
-The test file embeds inline fixtures from the real create_workflow v4 production failure:
+## executeCondition — `"false"` falsy regression test (Session 25)
+
+Added to `step-executor.test.mjs`. Tests that the condition step treats the string `"false"`
+(the natural JSON serialization of a boolean `false` from a `js_transform` expression) as
+falsy, consistent with `"0"`, `"null"`, and `"undefined"`.
+
+**Root cause:** `diagnose_prompt_schema` step 8 checks `{{gate_payload.hasViolations}}`. When
+the R1–R6 rules find no violations, `hasViolations` is written as boolean `false` by a
+`js_transform` expression. `resolveTemplate` serializes this as the string `"false"`.
+`executeCondition` did not include `"false"` in its falsy set, so the condition always routed
+truthy — the repair gate fired even when no schema violations existed, and the schema was
+written back unchanged while the original run was cancelled.
+
+**Fix:** Add `resolved !== 'false'` to the `isTruthy` condition in `executeCondition`
+(one line, `src/proc/step-executor.mjs`).
+
+**Regression test to add in `step-executor.test.mjs`:**
+
+```js
+describe('executeCondition — falsy set', () => {
+  it('treats string "false" as falsy', () => {
+    // Simulates js_transform writing boolean false → resolveTemplate → "false"
+    const step = {
+      type: 'condition',
+      expression: '{{hasViolations}}',
+      on_truthy: '9',
+      on_falsy:  '12',
+    };
+    const localState = { hasViolations: false };
+    const result = executeCondition({ step, localState, traceId: 'test' });
+    assert.equal(result.nextAction, 'step:12');
+  });
+
+  it('treats string "0" as falsy', () => {
+    const step = { type: 'condition', expression: '{{count}}', on_truthy: '2', on_falsy: '5' };
+    const localState = { count: 0 };
+    const result = executeCondition({ step, localState, traceId: 'test' });
+    assert.equal(result.nextAction, 'step:5');
+  });
+
+  it('treats non-zero number as truthy', () => {
+    const step = { type: 'condition', expression: '{{count}}', on_truthy: '2', on_falsy: '5' };
+    const localState = { count: 3 };
+    const result = executeCondition({ step, localState, traceId: 'test' });
+    assert.equal(result.nextAction, 'step:2');
+  });
+
+  it('treats boolean true as truthy', () => {
+    const step = { type: 'condition', expression: '{{active}}', on_truthy: '2', on_falsy: '5' };
+    const localState = { active: true };
+    const result = executeCondition({ step, localState, traceId: 'test' });
+    assert.equal(result.nextAction, 'step:2');
+  });
+});
+```
+
+Note: `executeCondition` must be exported from `step-executor.mjs` for direct unit testing.
+If not already exported, add `export` to the function declaration — it is a pure function
+with no I/O.
 
 - `BROKEN_CONDITION_STEPS` — step 4 with `on_truthy: "next"` and `on_falsy: "step:6"` (the exact
   condition routing bug that crashed the first test run)

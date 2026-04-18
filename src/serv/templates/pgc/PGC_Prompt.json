@@ -15,6 +15,7 @@
     { "name": "was_successful",    "type": "boolean",     "nullable": true },
     { "name": "quality_score",     "type": "numeric",     "nullable": true },
     { "name": "error_log",         "type": "jsonb",       "nullable": true },
+    { "name": "probe_input",       "type": "jsonb",       "nullable": true },
     { "name": "created_at",        "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",        "type": "timestamptz", "nullable": false, "default": "now()" }
   ],

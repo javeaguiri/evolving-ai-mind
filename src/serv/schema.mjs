@@ -52,6 +52,7 @@ const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 export async function handle(req) {
   switch (req.subRoute) {
     case 'createTable': return createTable(req);
+    case 'addColumn':   return addColumn(req);
     case 'listTables':  return listTables(req);
     case 'getTable':    return getTable(req);
     case 'updateTable': return updateTable(req);
@@ -147,6 +148,82 @@ async function createTable(req) {
   } finally {
     await pgcClient.end();
     if (pgdClient) await pgdClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/addColumn
+// ---------------------------------------------------------------------------
+
+async function addColumn(req) {
+  const { tableName, column } = req.body;
+
+  if (!tableName) return err(400, 'tableName is required', req.correlationId);
+  if (!column)    return err(400, 'column is required', req.correlationId);
+
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const { name: colName, type: colType, nullable = true } = column;
+
+  if (!colName || !/^[a-z][a-z0-9_]*$/.test(colName)) {
+    return err(400, `Invalid column name "${colName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
+  }
+  if (!colType || !ALLOWED_TYPES.has(colType.toLowerCase())) {
+    return err(400, `Column type "${colType}" is not allowed`, req.correlationId);
+  }
+
+  const client = getClient(process.env.PGC_DATABASE_URL);
+
+  try {
+    await client.connect();
+
+    // Look up PGC_Schema row to get target and existing columns
+    const lookup = await client.query(
+      `SELECT id, target, columns FROM "PGC_Schema" WHERE table_name = $1`,
+      [tableName]
+    );
+    if (lookup.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+
+    const { id: schemaId, target, columns: existingCols } = lookup.rows[0];
+    const colsArray = Array.isArray(existingCols) ? existingCols : [];
+
+    // Idempotent — already present in metadata
+    if (colsArray.some(c => c.name === colName)) {
+      return ok({ success: true, tableName, column: colName, action: 'already_exists' }, req.correlationId);
+    }
+
+    // Execute DDL on the correct database
+    const nullStr    = nullable ? '' : ' NOT NULL';
+    const ddlClient  = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+    if (target === 'pgd') await ddlClient.connect();
+
+    await ddlClient.query(
+      `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${colName}" ${colType}${nullStr}`
+    );
+    console.info(`schema: added column ${colName} to ${tableName} on ${target.toUpperCase()}`);
+
+    // Append to PGC_Schema.columns
+    const newCol = { name: colName, type: colType, nullable };
+    await client.query(
+      `UPDATE "PGC_Schema"
+          SET columns    = columns || $1::jsonb,
+              updated_at = now()
+        WHERE id = $2`,
+      [JSON.stringify([newCol]), schemaId]
+    );
+    console.info(`schema: PGC_Schema.columns updated for ${tableName}`);
+
+    return ok({ success: true, tableName, column: colName, action: 'added' }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema addColumn error:', error.message);
+    return err(500, `addColumn failed: ${error.message}`, req.correlationId);
+  } finally {
+    await client.end();
   }
 }
 

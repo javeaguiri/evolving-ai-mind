@@ -1481,7 +1481,7 @@
   },
   {
     "name": "diagnose_prompt_schema",
-    "version": 2,
+    "version": 3,
     "domain": null,
     "description": "Tier 1b reactive repair — deterministic R1–R6 output_schema compatibility fix. Each rule is an independent js_transform step.",
     "steps": [
@@ -1497,10 +1497,10 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "R2 — non-false additionalProperties → false",
+        "description": "R2 — object-typed additionalProperties → false (boolean true/false are valid; only object schemas are rejected)",
         "input_key": "repair_state",
         "output_key": "repair_state",
-        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&node.additionalProperties!==false){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is '+JSON.stringify(node.additionalProperties)+' — set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
+        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&typeof node.additionalProperties==='object'&&node.additionalProperties!==null){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is object schema '+JSON.stringify(node.additionalProperties)+' — set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
         "on_success": "next"
       },
       {

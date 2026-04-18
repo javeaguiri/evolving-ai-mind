@@ -1581,6 +1581,7 @@ function executeCondition({ step, localState, traceId }) {
     && resolved !== 'null'
     && resolved !== 'undefined'
     && resolved !== '0'
+    && resolved !== 'false'
     && !resolved.includes('{{');
 
   const nextStep = isTruthy ? step.on_truthy : step.on_falsy;

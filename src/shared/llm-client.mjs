@@ -41,7 +41,12 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
   // response_format enforces the schema at the model level — reduces field-name
   // hallucination without relying solely on the Ajv correction loop for structure.
   // markdown-fence stripping is kept as a defensive fallback.
-  const responseFormat = outputSchema
+  // IMPORTANT: response_format is only supported by sonar models via the Perplexity
+  // agent endpoint. Non-sonar models (e.g. anthropic/claude-*, openai/gpt-*) routed
+  // through the gateway return HTTP 400 when response_format is present. For those
+  // models schema enforcement relies entirely on the Ajv correction loop in review-output.mjs.
+  const isSonar = typeof model === 'string' && model.includes('sonar');
+  const responseFormat = (isSonar && outputSchema)
     ? { type: 'json_schema', json_schema: { name: 'output', schema: outputSchema, strict: false } }
     : undefined;
   if (responseFormat) body.response_format = responseFormat;
