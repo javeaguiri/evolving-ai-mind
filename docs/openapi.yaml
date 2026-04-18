@@ -2592,7 +2592,12 @@ paths:
         and appends the column definition to PGC_Schema.columns atomically.
 
         Idempotent — if the column already exists in PGC_Schema.columns the
-        operation is a no-op and returns 200.
+        operation is a no-op and returns action=already_exists.
+
+        schemaOnly mode: when the physical column already exists in PostgreSQL
+        (e.g. added manually or by a prior partial run) but PGC_Schema.columns
+        is out of sync, set schemaOnly=true to register the column in metadata
+        without executing DDL. Use this to repair sync gaps.
 
         Column name must be lowercase alphanumeric + underscore.
         Column type must be in the SERV-Schema ALLOWED_TYPES list.
@@ -2613,27 +2618,52 @@ paths:
                   example: PGC_Prompt
                 column:
                   $ref: '#/components/schemas/ColumnDefinition'
-            example:
-              tableName: PGC_Prompt
-              column:
-                name: probe_input
-                type: jsonb
-                nullable: true
+                schemaOnly:
+                  type: boolean
+                  default: false
+                  description: >
+                    Skip DDL — only register the column in PGC_Schema.columns.
+                    Use when the physical column already exists but metadata is out of sync.
+            examples:
+              add_column:
+                summary: Add new column (DDL + metadata)
+                value:
+                  tableName: PGC_Prompt
+                  column:
+                    name: probe_input
+                    type: jsonb
+                    nullable: true
+              schema_only:
+                summary: Register existing physical column in metadata only
+                value:
+                  tableName: PGC_Prompt
+                  column:
+                    name: max_output_tokens
+                    type: integer
+                    nullable: true
+                  schemaOnly: true
       responses:
         '200':
-          description: Column added (or already existed — idempotent)
+          description: Column added or registered
           content:
             application/json:
               examples:
                 added:
-                  summary: Column added
+                  summary: DDL executed + metadata updated
                   value:
                     success: true
                     tableName: PGC_Prompt
                     column: probe_input
                     action: added
+                schema_registered:
+                  summary: Metadata registered (schemaOnly — no DDL)
+                  value:
+                    success: true
+                    tableName: PGC_Prompt
+                    column: max_output_tokens
+                    action: schema_registered
                 already_exists:
-                  summary: Column already present — no-op
+                  summary: Column already in PGC_Schema — no-op
                   value:
                     success: true
                     tableName: PGC_Prompt

@@ -156,7 +156,7 @@ async function createTable(req) {
 // ---------------------------------------------------------------------------
 
 async function addColumn(req) {
-  const { tableName, column } = req.body;
+  const { tableName, column, schemaOnly = false } = req.body;
 
   if (!tableName) return err(400, 'tableName is required', req.correlationId);
   if (!column)    return err(400, 'column is required', req.correlationId);
@@ -191,22 +191,28 @@ async function addColumn(req) {
     const { id: schemaId, target, columns: existingCols } = lookup.rows[0];
     const colsArray = Array.isArray(existingCols) ? existingCols : [];
 
-    // Idempotent — already present in metadata
+    // Check if already registered in PGC_Schema metadata
     if (colsArray.some(c => c.name === colName)) {
       return ok({ success: true, tableName, column: colName, action: 'already_exists' }, req.correlationId);
     }
 
-    // Execute DDL on the correct database
-    const nullStr    = nullable ? '' : ' NOT NULL';
-    const ddlClient  = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
-    if (target === 'pgd') await ddlClient.connect();
+    // Execute DDL unless schemaOnly is true (column already exists physically)
+    if (!schemaOnly) {
+      const nullStr   = nullable ? '' : ' NOT NULL';
+      const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+      if (target === 'pgd') await ddlClient.connect();
 
-    await ddlClient.query(
-      `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${colName}" ${colType}${nullStr}`
-    );
-    console.info(`schema: added column ${colName} to ${tableName} on ${target.toUpperCase()}`);
+      await ddlClient.query(
+        `ALTER TABLE "${tableName}" ADD COLUMN IF NOT EXISTS "${colName}" ${colType}${nullStr}`
+      );
+      console.info(`schema: added column ${colName} to ${tableName} on ${target.toUpperCase()}`);
 
-    // Append to PGC_Schema.columns
+      if (target === 'pgd') await ddlClient.end();
+    } else {
+      console.info(`schema: schemaOnly mode — skipping DDL for ${colName} on ${tableName}`);
+    }
+
+    // Register in PGC_Schema.columns
     const newCol = { name: colName, type: colType, nullable };
     await client.query(
       `UPDATE "PGC_Schema"
@@ -215,9 +221,14 @@ async function addColumn(req) {
         WHERE id = $2`,
       [JSON.stringify([newCol]), schemaId]
     );
-    console.info(`schema: PGC_Schema.columns updated for ${tableName}`);
+    console.info(`schema: PGC_Schema.columns updated for ${tableName} — added ${colName}`);
 
-    return ok({ success: true, tableName, column: colName, action: 'added' }, req.correlationId);
+    return ok({
+      success:    true,
+      tableName,
+      column:     colName,
+      action:     schemaOnly ? 'schema_registered' : 'added',
+    }, req.correlationId);
 
   } catch (error) {
     console.error('schema addColumn error:', error.message);

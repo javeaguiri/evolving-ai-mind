@@ -94,8 +94,13 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 
   if (!rawText) throw new Error('LLM returned empty response');
 
-  // Strip markdown fences defensively, then parse JSON
-  const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  // Strip markdown fences defensively, then parse JSON.
+  // The trailing replace uses [\s\S]* to consume anything after the closing
+  // fence (e.g. model-appended explanations or reasoning text).
+  const clean = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```[\s\S]*$/i, '')
+    .trim();
 
   try {
     return JSON.parse(clean);

@@ -98,13 +98,14 @@ for (const prompt of targets) {
         { column: 'version',         op: 'eq', value: version },
       ],
       updates: {
-        prompt_text:      prompt.prompt_text,
-        model:            prompt.model ?? null,
-        input_variables:  prompt.input_variables  ?? null,
-        output_schema:    prompt.output_schema    ?? null,
-        output_sample:    prompt.output_sample    ?? null,
-        was_successful:   prompt.was_successful   ?? null,
-        probe_input:      prompt.probe_input      ?? null,
+        prompt_text:        prompt.prompt_text,
+        model:              prompt.model              ?? null,
+        input_variables:    prompt.input_variables    ?? null,
+        output_schema:      prompt.output_schema      ?? null,
+        output_sample:      prompt.output_sample      ?? null,
+        was_successful:     prompt.was_successful     ?? null,
+        probe_input:        prompt.probe_input        ?? null,
+        max_output_tokens:  prompt.max_output_tokens  ?? null,
       },
     });
 
@@ -121,15 +122,16 @@ for (const prompt of targets) {
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_Prompt',
       row: {
-        intent_category:  prompt.intent_category,
-        prompt_text:      prompt.prompt_text,
-        model:            prompt.model            ?? null,
+        intent_category:    prompt.intent_category,
+        prompt_text:        prompt.prompt_text,
+        model:              prompt.model              ?? null,
         version,
-        input_variables:  prompt.input_variables  ?? null,
-        output_schema:    prompt.output_schema    ?? null,
-        output_sample:    prompt.output_sample    ?? null,
-        was_successful:   prompt.was_successful   ?? null,
-        probe_input:      prompt.probe_input      ?? null,
+        input_variables:    prompt.input_variables    ?? null,
+        output_schema:      prompt.output_schema      ?? null,
+        output_sample:      prompt.output_sample      ?? null,
+        was_successful:     prompt.was_successful     ?? null,
+        probe_input:        prompt.probe_input        ?? null,
+        max_output_tokens:  prompt.max_output_tokens  ?? null,
       },
     });
 
