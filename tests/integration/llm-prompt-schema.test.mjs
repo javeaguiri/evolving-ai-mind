@@ -106,7 +106,7 @@ async function probePrompt(row) {
   const instructions = substituteProbeInput(prompt_text, probe_input);
   const userMessage  = probe_input ? JSON.stringify(probe_input) : 'probe';
   try {
-    await callLlm(model, instructions, userMessage, output_schema, 'probe-test', max_output_tokens ?? 512);
+    await callLlm(model, instructions, userMessage, output_schema, 'probe-test', max_output_tokens ?? 2048);
     return { passed: true, is400: false };
   } catch (err) {
     const is400 = err.message.includes('400');
