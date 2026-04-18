@@ -140,7 +140,6 @@ Perplexity/OpenAI structured output spec enforced when `response_format: json_sc
 |---|---|---|
 | R1 | `type: ["object","null"]` — array union types rejected | Replace with `anyOf: [{type:"object",...},{type:"null"}]` |
 | R2 | `additionalProperties: {type:"object"}` — typed additionalProperties rejected | Replace with `additionalProperties: false` |
-| R2 | `additionalProperties: true` — rejected | Replace with `additionalProperties: false` |
 | R3 | Object type missing `additionalProperties: false` | Add `additionalProperties: false` |
 | R4 | Object type missing `properties` key | Add `properties: {}` |
 | R5 | Properties defined but not listed in `required` when parent has `additionalProperties: false` | Add all defined properties to `required` |
@@ -171,6 +170,13 @@ rule violations. Seven rounds of isolation tests across 15 curl calls.
   to `PGC_Prompt.output_schema` on confirm, cancels the failed run, notifies user to retry
 - `diagnose_prompt_schema` workflow added to `seed_PGC_Workflow.json`
 
+**R2 rule correction (Session 25):** The original R2 expression flagged `additionalProperties: true`
+as a violation and set it to `false`. This was incorrect — boolean `true` is valid per the API spec
+and is the correct value for open-ended polymorphic arrays (e.g. `steps[]` where each item has
+type-specific extra fields). R2 was causing DIAGNOSE to corrupt schemas that deliberately used `true`,
+triggering a new 400 on the next run. Fixed: R2 now only flags when `typeof additionalProperties === 'object'`
+(i.e. a typed schema such as `{type:"object"}`). `diagnose_prompt_schema` workflow version bumped v2→v3.
+
 **Remaining risk:** Any prompt whose `output_schema` was written before Session 24 may
 contain these violations. The `DIAGNOSE_PROMPT_SCHEMA` auto-detection will surface them
 when first encountered at runtime. All 6 rules are fully deterministic — no manual repair
@@ -183,3 +189,60 @@ gate. On confirm the schema is repaired in-place and the user is asked to retry.
 **Monitor threshold:** Track `error_type: agent_api_400` in `PGC_Prompt.error_log`.
 If `diagnose-prompt-schema` fires for the same prompt twice, the schema was re-broken by
 a manual edit or seed revert — investigate.
+
+---
+
+## Issue 6 — LLM-generated prompts use unsupported model names
+
+**Prompt id:** LLM-generated entries (e.g. `generate_flashcards`, `grade_flashcard_answer`,
+`generate_flashcard_distractors`, `generate_flashcard_quiz`, `generate_flashcard_quiz_spec`,
+`evaluate_flashcard_answer`)
+**Observed:** Session 25
+**Failure pattern:** HTTP 400 from Perplexity gateway immediately: `"validation failed: model
+\"gpt-4\" is not supported"` / `"model \"gpt-4o-mini\" is not supported"`. Every call to
+these prompts fails at the API level before any LLM processing occurs.
+**Root cause:** `analyze_and_design_workflow` generates `prompts_needed[]` entries including
+a `model` field. The LLM chose `gpt-4` and `gpt-4o-mini` — valid OpenAI model names but not
+supported by the Perplexity Agent API gateway. These model names were inserted directly into
+`PGC_Prompt.model` at create_workflow step 11c. The R1–R6 DIAGNOSE rules inspect `output_schema`
+only — they cannot detect an invalid `model` field.
+**Action taken:**
+- Direct DB `updateRows` to patch the 6 affected rows: `model → anthropic/claude-sonnet-4-5`
+- `analyze_and_design_workflow` v9→v10: added rule to `prompts_needed` section constraining
+  `model` to `"anthropic/claude-sonnet-4-5"` (analytical/generative) or `"perplexity/sonar"`
+  (web search only). Never `gpt-4`, `gpt-4o-mini`, or other unsupported names.
+**Remaining risk:** Any `create_workflow` run before v10 may have produced prompts with
+invalid model names. The DIAGNOSE workflow does not currently check the `model` field.
+**R7 candidate:** Add R7 rule to `diagnose_prompt_schema` — check `repair_state.model` against
+supported models list (`["anthropic/claude-sonnet-4-5","perplexity/sonar"]`) and flag + fix if
+unsupported. Requires `diagnose-prompt-schema.mjs` to include `model` in `repair_state` and the
+`serv_update` step to also patch `model` when R7 fires. See seed_PGC_Workflow.json v4.
+**Monitor threshold:** Track `error_type: agent_api_400` with message containing `"not supported"`.
+If count > 0, run DIAGNOSE on the triggering prompt.
+
+---
+
+## Issue 7 — Models intermittently prepend/append prose around fenced JSON
+
+**Prompt id:** Any prompt where the model adds reasoning text (observed on
+`generate_flashcard_distractors`, `analyze_and_design_workflow`, others)
+**Observed:** Session 25
+**Failure pattern:** Two variants:
+1. Model appends `**Explanation:**` or `**Reasoning:**` text after the closing fence.
+   `callLlm` fence stripper used `/\s*```$/i` which only matches a fence at the absolute
+   end — trailing text broke the regex and left the fence inside the JSON parse attempt.
+2. Model prepends reasoning text before the opening fence: `"Looking at the word...\n```json\n{`.
+   The leading `^` anchor on the opening-fence strip also failed.
+   This variant is non-deterministic — appears when the same prompt runs in a long session
+   after many other calls (accumulated context). Passes when run in isolation.
+**Root cause:** LLM non-determinism under long context. Claude models sometimes add unsolicited
+explanations around JSON output despite "Return ONLY a valid JSON object" instructions.
+**Action taken:** `llm-client.mjs` fence extraction replaced with a single regex:
+`rawText.match(/\`\`\`(?:json)?\s*([\s\S]*?)\`\`\`/i)` — extracts content between the first
+fence pair regardless of surrounding text. Falls back to raw trimmed text when no fences present.
+This handles all four patterns: clean JSON, standard fence, trailing prose, leading prose.
+**Remaining risk:** If a model returns multiple JSON blocks in fences (unlikely given our prompts)
+only the first is extracted. Not a current concern.
+**Monitor threshold:** Track `error_type: invalid_json` in `PGC_Prompt.error_log`. Recurring
+failures for the same prompt after this fix indicate a prompt text issue (model ignoring
+"Return ONLY JSON" instruction) rather than an infrastructure issue.

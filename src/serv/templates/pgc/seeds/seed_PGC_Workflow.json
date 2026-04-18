@@ -1481,9 +1481,9 @@
   },
   {
     "name": "diagnose_prompt_schema",
-    "version": 3,
+    "version": 4,
     "domain": null,
-    "description": "Tier 1b reactive repair — deterministic R1–R6 output_schema compatibility fix. Each rule is an independent js_transform step.",
+    "description": "Tier 1b reactive repair — deterministic R1–R7 output_schema and model compatibility fix. Each rule is an independent js_transform step.",
     "steps": [
       {
         "step": "1",
@@ -1542,6 +1542,15 @@
       {
         "step": "7",
         "type": "js_transform",
+        "description": "R7 — unsupported model name → anthropic/claude-sonnet-4-5",
+        "input_key": "repair_state",
+        "output_key": "repair_state",
+        "expression": "(function(){var SUPPORTED=['anthropic/claude-sonnet-4-5','perplexity/sonar'];var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice(),model:items.model};var m=items.model;if(m&&SUPPORTED.indexOf(m)===-1){rs.violations.push({path:'model',rule:'R7',description:'model \"'+m+'\" is not supported by the Perplexity gateway — must be one of: '+SUPPORTED.join(', '),fixedModel:'anthropic/claude-sonnet-4-5'});rs.model='anthropic/claude-sonnet-4-5';}return rs;})()",
+        "on_success": "next"
+      },
+      {
+        "step": "7a",
+        "type": "js_transform",
         "description": "Aggregate violations, build gate message. Reads repair_state; writes gate_payload.",
         "input_key": "repair_state",
         "output_key": "gate_payload",
@@ -1592,7 +1601,8 @@
           "updates": {
             "output_schema": "{{gate_payload.repairedSchema}}",
             "version": "{{input.promptVersionNext}}",
-            "error_log": null
+            "error_log": null,
+            "model": "{{repair_state.model}}"
           }
         },
         "output_key": "schema_update_result",
@@ -1637,7 +1647,7 @@
       {
         "step": "12",
         "type": "notify",
-        "message_template": "ℹ️ `{{input.intentCategory}}` output_schema has no compatibility violations — the 400 error has a different cause. Check CloudWatch logs.",
+        "message_template": "ℹ️ `{{input.intentCategory}}` output_schema has no R1–R7 violations.\n\nKnown causes of HTTP 400 when no schema violations are found:\n• *Wrong model* — check `PGC_Prompt.model` is `anthropic/claude-sonnet-4-5` or `perplexity/sonar`\n• *response_format sent to non-sonar model* — check `llm-client.mjs` has the `isSonar` guard deployed\n\nCheck CloudWatch logs for the exact request body.",
         "on_success": "end"
       },
       {

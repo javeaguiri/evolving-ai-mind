@@ -100,7 +100,7 @@ export async function handle(req) {
   const workflowId = wfResp.rows[0].id;
 
   // ── Insert PGC_WorkflowRun ────────────────────────────────────────────────
-  // repair_state is the initial input to the R1–R6 js_transform rule chain.
+  // repair_state is the initial input to the R1–R7 js_transform rule chain.
   // Each rule step reads repair_state via input_key and writes back via output_key.
   const runResp = await insertRow('PGC_WorkflowRun', {
     workflow_id:  workflowId,
@@ -115,6 +115,7 @@ export async function handle(req) {
       failedRunId:       workflowRunId ?? null,
       repair_state: {
         schema:     promptRow.output_schema,
+        model:      promptRow.model ?? null,
         violations: [],
       },
     },
