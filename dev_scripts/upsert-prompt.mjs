@@ -104,6 +104,7 @@ for (const prompt of targets) {
         output_schema:    prompt.output_schema    ?? null,
         output_sample:    prompt.output_sample    ?? null,
         was_successful:   prompt.was_successful   ?? null,
+        probe_input:      prompt.probe_input      ?? null,
       },
     });
 
@@ -128,6 +129,7 @@ for (const prompt of targets) {
         output_schema:    prompt.output_schema    ?? null,
         output_sample:    prompt.output_sample    ?? null,
         was_successful:   prompt.was_successful   ?? null,
+        probe_input:      prompt.probe_input      ?? null,
       },
     });
 
@@ -154,6 +156,7 @@ for (const prompt of targets) {
   console.log(`    intent_category: ${stored?.intent_category}`);
   console.log(`    version:         ${stored?.version}`);
   console.log(`    model:           ${stored?.model}`);
+  console.log(`    probe_input:     ${stored?.probe_input ? '✓ present' : '✗ null'}`);
   console.log(`    updated_at:      ${stored?.updated_at}`);
 }
 
