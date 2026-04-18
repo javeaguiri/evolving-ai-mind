@@ -2584,6 +2584,68 @@ paths:
         '404':
           description: Table not found
 
+  /api/v1/serv/schema/addColumn:
+    post:
+      summary: Add a column to an existing table — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... ADD COLUMN IF NOT EXISTS on the physical table
+        and appends the column definition to PGC_Schema.columns atomically.
+
+        Idempotent — if the column already exists in PGC_Schema.columns the
+        operation is a no-op and returns 200.
+
+        Column name must be lowercase alphanumeric + underscore.
+        Column type must be in the SERV-Schema ALLOWED_TYPES list.
+        Targets the correct database (pgc or pgd) based on PGC_Schema.target.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, column]
+              properties:
+                tableName:
+                  type: string
+                  example: PGC_Prompt
+                column:
+                  $ref: '#/components/schemas/ColumnDefinition'
+            example:
+              tableName: PGC_Prompt
+              column:
+                name: probe_input
+                type: jsonb
+                nullable: true
+      responses:
+        '200':
+          description: Column added (or already existed — idempotent)
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Column added
+                  value:
+                    success: true
+                    tableName: PGC_Prompt
+                    column: probe_input
+                    action: added
+                already_exists:
+                  summary: Column already present — no-op
+                  value:
+                    success: true
+                    tableName: PGC_Prompt
+                    column: probe_input
+                    action: already_exists
+        '400':
+          description: Invalid tableName, column name, or unsupported column type
+        '404':
+          description: Table not found in PGC_Schema
+        '500':
+          description: ALTER TABLE or PGC_Schema update failed
+
   /api/v1/serv/schema/deleteTable:
     post:
       summary: Drop table + remove from PGC_Schema
