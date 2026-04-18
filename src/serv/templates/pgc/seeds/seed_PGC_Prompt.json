@@ -227,7 +227,8 @@
     },
     "probe_input": {
       "userInput": "golf scores"
-    }
+    },
+    "max_output_tokens": 2000
   },
   {
     "intent_category": "design_table",
@@ -553,7 +554,8 @@
     "probe_input": {
       "domain": "recipes",
       "tables": "[{\"tableName\":\"PGD_Recipes\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\",\"primaryKey\":true},{\"name\":\"name\",\"type\":\"text\",\"nullable\":false},{\"name\":\"description\",\"type\":\"text\",\"nullable\":true},{\"name\":\"created_at\",\"type\":\"timestamptz\",\"nullable\":false,\"default\":\"now()\"},{\"name\":\"updated_at\",\"type\":\"timestamptz\",\"nullable\":false,\"default\":\"now()\"}],\"foreignKeys\":[],\"constraints\":[],\"triggers\":[{\"name\":\"trg_pgd_recipes_updated_at\",\"timing\":\"BEFORE UPDATE\",\"function\":\"set_updated_at()\"}]}]"
-    }
+    },
+    "max_output_tokens": 2000
   },
   {
     "intent_category": "classify_workflow_intent",
@@ -1535,6 +1537,7 @@
       "broken_steps": "[{\"step\":\"1\",\"type\":\"condition\",\"expression\":\"{{results.length}}\",\"on_truthy\":\"next\",\"on_falsy\":\"end\"},{\"step\":\"2\",\"type\":\"end\"}]",
       "issues": "[{\"check\":\"condition_routing\",\"step\":\"1\",\"failure_class\":\"unknown_routing_value\",\"detail\":\"on_truthy must be a bare step key like \\\"2\\\", not the routing token \\\"next\\\"\",\"suggestion\":\"Change on_truthy to \\\"2\\\"\"}]",
       "stack_trace": ""
-    }
+    },
+    "max_output_tokens": 2000
   }
 ]
