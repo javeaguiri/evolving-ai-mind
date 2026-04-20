@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 25 complete  
-Last updated: 2026-04-19 (session 25 — llm-client isSonar guard + fence extraction, "false" falsy in executeCondition, diagnose_prompt_schema R7 + v4, addColumn endpoint with schemaOnly mode, PGC_Prompt probe_input + max_output_tokens, upsert-prompt extended, integration test per prompt)
+Status: Active development — Session 26 in progress  
+Last updated: 2026-04-20 (session 26 — pgvector implemented: Perplexity pplx-embed-v1-4b, embed_source in PGC_Schema, SERV-tier embedding, vectorSearch on getRows; create-workflow.mjs domain resolution; create_workflow v4 design: three-call left brain, six phases, gap-early architecture documented in Section 6.9)
 
 ---
 
@@ -3561,18 +3561,43 @@ simultaneously understand the domain, research best practices, resolve design
 tradeoffs, map schema, design dialog boxes, and generate valid step arrays produces
 inconsistent results for behaviourally complex workflows. The failure mode is not an
 obviously wrong answer but a subtly inconsistent one that passes Ajv and only breaks
-at simulation time. The correct solution is to decompose the cognitive work before
-any step array is generated — which is what the L/R collaboration architecture does.
+at simulation time. The correct solution is to decompose the cognitive work — which
+is what the L/R collaboration architecture does.
 
 ---
 
-#### Decision: L/R collaboration architecture (v3)
+#### Decision: L/R collaboration architecture (v4)
 
-`create_workflow` v3 applies the gap taxonomy (Section 6.11) as its primary design
+`create_workflow` v4 applies the gap taxonomy (Section 6.11) as its primary design
 principle. Every gap type is resolved by its correct owner at the correct point in
 the pipeline — before the step generator receives its input.
 
-The key insight is the role separation:
+**Three distinct left-brain responsibilities, three distinct calls:**
+
+| Call | Intent | Output | Phase |
+|---|---|---|---|
+| `analyze_workflow_gaps` | Classify all gaps; determine routing | `gap_analysis` | Phase 1 |
+| `design_workflow_process` | Design step sequence and state flow | `process_design`, `state_map` | Phase 3 |
+| `design_workflow_dialogs` | Design every human gate dialog | `dialog_designs` | Phase 3 |
+
+**Why three calls, not one:**
+
+Combining gap classification, process design, and dialog design in a single prompt
+produces compounding failures. Gap analysis drives routing decisions — if a workflow
+is `blocked` or `needs_schema`, no design work should run at all. Separating
+classification from design enables early exit through Phase 2 gates before any
+expensive design tokens are spent.
+
+Process design and dialog design are orthogonal concerns. Process design maps
+the data flow, step sequence, and state keys. Dialog design maps the user-facing
+interaction for gate steps. Neither depends on the other's internal details —
+they share only `step_label` as the join key. Combining them forces the model to
+hold two incompatible output schemas simultaneously, producing schema violations.
+
+Each call produces ~800–1,200 tokens and is independently correctable by the
+2-attempt correction loop. A failure in dialog design does not re-run process design.
+
+**The role separation:**
 
 - **Right brain** retrieves world knowledge the system does not have: what are best
   practices for this type of workflow? What design options exist? Which have clear
@@ -3580,205 +3605,293 @@ The key insight is the role separation:
 - **User** resolves genuine preference tradeoffs surfaced by the right brain —
   decisions the system cannot make because there is no objectively better answer,
   only the user's answer.
-- **Left brain** designs the implementation given known preferences and research.
-  It inspects the live domain schema, maps state requirements, designs every dialog
-  box, identifies missing prompts (and writes them), and detects schema gaps. It
-  produces a complete `design_spec` — a gap-free plain-language description of every
-  step in the workflow.
-- **Step generator** translates `design_spec` into a step array. It is a
-  code-generation call, not a design call. All design decisions are already made.
+- **Left brain — gap analysis** classifies all gaps against the taxonomy. Drives
+  Phase 2 routing. Does not design steps or dialogs.
+- **Left brain — process design** designs the workflow step sequence given known
+  preferences, research, and a resolved schema/prompt context. Produces a
+  plain-language step-by-step specification and state map.
+- **Left brain — dialog design** designs every human gate dialog based on the
+  finalised process design. Uses gate_type-specific option shapes.
+- **Step generator** translates the three-part specification into a step array.
+  All design decisions are already made. It is a translation task, not a design task.
 
-This decomposition is what makes the architecture reliable. Each LLM call is narrow,
-well-scoped, and independently correctable by the 2-attempt correction loop.
+---
+
+#### Decision: gap analysis first, gate early, design only on a clear path
+
+The critical ordering change from v3: gap analysis runs in Phase 1 and drives
+Phase 2 routing before any Phase 3 design work begins.
+
+In v3, `analyze_and_design_workflow` combined all left-brain work in one step 7.
+Gap routing (steps 8–11c) ran after this combined call. This wasted design tokens
+on workflows that would immediately be gated by `blocked` or `needs_schema`.
+
+In v4, `analyze_workflow_gaps` (step 7) runs in Phase 1 immediately after
+preference collection. Phase 2 gates consume its output. `design_workflow_process`
+and `design_workflow_dialogs` only run in Phase 3 — after all gaps are resolved,
+all schema issues are decided, and all missing prompts are seeded.
 
 ---
 
 #### Decision: right brain first, user second, left brain third
 
-The right brain runs before the left brain — not after — because the left brain
-designs better when it starts with domain knowledge already in hand. This is not
-how the system was first envisioned (left brain first pass → right brain fills gaps
-→ left brain synthesises), but it is the correct order. The right brain's job is to
-research the domain, not to respond to the left brain's gap list. A domain expert
-does not wait to be asked what they know — they bring knowledge before analysis begins.
-
-The right brain uses Perplexity sonar (`LLM_CHAT_URL`) because this is a retrieval
-task: retrieve current, sourced best practices about the domain. Sonar is built for
-this. Sonnet generates structured output from a complete specification — it is not
-the right model for open-ended domain research.
+The right brain runs before the left brain because the left brain
+designs better when it starts with domain knowledge already in hand. The right brain
+uses Perplexity sonar (`LLM_CHAT_URL`) because this is a retrieval task: retrieve
+current, sourced best practices about the domain. Sonnet generates structured output
+from a complete specification — it is not the right model for open-ended domain research.
 
 User preference gates run between right brain and left brain. By the time the left
-brain designs the workflow, all preference questions are answered. The left brain
-receives a partially resolved specification and produces a fully resolved one.
+brain runs gap analysis, all preference questions are answered. By the time the left
+brain designs the process, preferences are resolved.
 
 ---
 
 #### Decision: PGC_SystemContext injection into executeLlmCall
 
-`generate_workflow_steps` and `analyze_and_design_workflow` receive step type
-contracts and routing rules from `PGC_SystemContext` — not from inline prompt text.
-`executeLlmCall` in `step-executor.mjs` loads all `PGC_SystemContext` rows after
-building `resolvedInput`, filters on `inject_always = true` OR
-`inject_for.includes(intentCategory)`, and merges the matching rows into the
+`design_workflow_process`, `design_workflow_dialogs`, and `generate_workflow_steps`
+receive step type contracts and routing rules from `PGC_SystemContext` — not from
+inline prompt text. `executeLlmCall` in `step-executor.mjs` loads all
+`PGC_SystemContext` rows, filters on `inject_always = true` OR
+`inject_for.includes(intentCategory)`, and merges matching rows into the
 substitution map before `prompt_text` reduction.
 
 Priority: `step.input` values (resolved from `local_state`) take precedence over
 context rows. Context fills placeholders not supplied by step input.
 
 When a new step type goes live, `PGC_StepType` is updated and `upsert-system-context.mjs`
-re-derives `step_type_contracts`. The prompt does not change. This is the correct
+re-derives `step_type_contracts`. The prompts do not change. This is the correct
 locus of control for evolving the instruction set.
 
 ---
 
-#### Decision: left brain writes missing prompts inline
+#### Decision: left brain writes missing prompts inline (gap analysis phase)
 
-When `analyze_and_design_workflow` identifies a required prompt that does not exist
+When `analyze_workflow_gaps` identifies a required prompt that does not exist
 in `PGC_Prompt` (Type 4a gap), it writes the full `prompt_text`, `output_shape`,
 and `model` in the `prompts_needed` entry with `exists: false`. A `js_transform`
-step filters these entries, then an iterator seeds them into `PGC_Prompt` before
-`generate_workflow_steps` runs. The step generator can reference the new prompt
-`intent_category` immediately.
-
-This eliminates the previous requirement to manually seed prompts like
-`evaluate_translation` before running `create_workflow`. The left brain writes them
-as part of its design pass.
+step filters these entries, then an iterator seeds them into `PGC_Prompt` in Phase 2
+before `design_workflow_process` runs. The process designer and step generator can
+reference the new prompt `intent_category` immediately.
 
 ---
 
 #### Decision: schema gap gate cancels cleanly with domain suggestion
 
-When `analyze_and_design_workflow` detects a blocking schema gap (Type 3b), it
-includes a `domain_suggestion` field in `schema_changes[]` — the suggested input
-for `/m create domain` to create the missing table. The schema gap gate shows the
-user what is missing, what they gain, and what they lose without it, with a concrete
-command suggestion. The user chooses: create the table first, build without it, or
-cancel. Sub-workflow dependency tracking (returning to `create_workflow` after
-`create_domain` completes) is Backlog.
+When `analyze_workflow_gaps` detects a blocking schema gap (Type 3b), it
+includes a `domain_suggestion` field in `schema_changes[]`. The schema gap gate
+shows the user what is missing, what they gain, and what they lose without it, with
+a concrete command suggestion. Sub-workflow dependency tracking is Backlog.
 
 ---
 
-#### Five-phase step structure (v3)
+#### Decision: process_design carries no dialog references
+
+In v3, `process_design` items had an optional `dialog` field referencing a
+`dialog_designs` entry by step_label. This created a structural contradiction: the
+schema had to be `anyOf: [empty_object | null]` (because the reference is just a
+pointer, not inline data), but the LLM interpreted `dialog` as a place to put full
+dialog data, causing `additionalProperties` violations on every run.
+
+In v4, the `dialog` field does not exist on `process_design` items. The join between
+a process step and its dialog is made by `step_label` — the step generator receives
+`process_design` and `dialog_designs` as separate arrays and associates them by
+`step_label` match. This is cleaner and removes the schema contradiction entirely.
+
+---
+
+#### Decision: dialog options schema is gate_type-specific
+
+The v3 `dialog_designs` options array required `action` on all options because
+`confirm` gates use `action` for routing. `choice` gates use `value` for writing to
+`local_state` and `on_select` for routing — `action` is meaningless on them. The LLM
+correctly omitted `action` from choice options, causing `required` violations.
+
+In v4, `design_workflow_dialogs` prompt specifies options shape per gate_type:
+- `confirm` / `edit_list` / `review_object` gates: `{ label, action, on_select }`
+- `choice` gates: `{ label, value, description, on_select }`
+- `text_input` gates: no options array required
+
+The output schema mirrors this distinction. The LLM receives an unambiguous
+specification and the schema validates the correct shape for each gate type.
+
+---
+
+#### Six-phase step structure (v4)
 
 ```
 PHASE 0 — DATA LOAD
 Step 1   serv_query PGC_Schema (domain filter)
+         Filter: domain = {{input.domain}} OR domain IS NULL for cross-domain workflows
          → domain_schema
 
 PHASE 1 — L/R COLLABORATION
 Step 2   RIGHT BRAIN: llm_call research_workflow_domain (Perplexity sonar)
          Input:  { workflow_description: "{{input.userInput}}",
-                   domain: "{{input.domain}}" }
+                   domain: "{{input.domain}}", domain_schema: "{{domain_schema}}" }
          Output: right_brain_research
                  { findings: [...], preference_questions: [...], out_of_scope: [...] }
-         on_failure: next  ← research failure is non-blocking; left brain
-                              proceeds without enrichment
+         on_failure: next  ← research failure is non-blocking
 
 Step 3   js_transform — build Tier 1 preference gate descriptors
          Reads: right_brain_research.preference_questions
-         Output: preference_gates (array of gate descriptors with options)
+         Output: preference_gates[]
+
+Step 3a  js_transform — format research summary for user gate
+         Reads: right_brain_research.findings, right_brain_research.preference_questions
+         Output: research_summary { summary, decision_note, question_note }
+
+Step 3b  human_gate confirm — show user what the right brain found
+         Message: research findings + autonomous decisions made + count of preference questions to follow
+         Options: [Continue → next] [Cancel → cancel]
+         Transparency gate — user sees what domain knowledge was retrieved and which decisions
+         were already resolved before being asked any preference questions.
 
 Step 4   condition — any preference questions?
-         on_truthy: next (step 5 iterator)
-         on_falsy: step:6 (skip directly to step type load)
+         on_truthy: step:5 (iterator)
+         on_falsy:  step:6 (skip to step type load)
 
 Step 5   iterator — Tier 1 USER PREFERENCE GATES (sequential)
-         One human_gate confirm per preference question.
+         One human_gate choice per preference question.
          Each gate writes its selection to user_preferences array.
          Output: user_preferences [{ id, selected_value }, ...]
 
 Step 6   serv_query PGC_StepType (status = 'live')
          → step_type_contracts
 
-Step 7   LEFT BRAIN: llm_call analyze_and_design_workflow (Sonnet)
+Step 7   LEFT BRAIN PASS 1: llm_call analyze_workflow_gaps (Sonnet)
          Input:  { userInput, domain, domain_schema, right_brain_research,
                    user_preferences, step_type_contracts }
-         Output: design_spec
+         Output: gap_analysis
          {
-           process_design:   [plain-language step descriptions],
-           state_map:        { key: { type, written_by, read_by } },
-           dialog_designs:   [{ step_label, gate_type, message_template, options }],
-           prompts_needed:   [{ intent_category, exists, prompt_text?, model? }],
-           schema_changes:   [{ table, blocking, recommendation, domain_suggestion? }],
-           deferred:         [{ what, why, how_to_add }],
-           confidence:       "complete" | "needs_user_input" | "needs_schema" | "blocked",
-           blocked_reason?:  string
+           confidence:     "complete" | "needs_user_input" | "needs_schema" | "blocked",
+           blocked_reason: string | null,
+           schema_changes: [{ table, blocking, recommendation,
+                              domain_suggestion?, impact_if_skipped, columns? }],
+           prompts_needed: [{ intent_category, exists, prompt_text?, model?,
+                              inputs, output_shape }],
+           deferred:       [{ what, why, how_to_add }]
          }
+         Narrow, focused output — no design content. Reliable Ajv validation.
 
 PHASE 2 — GAP RESOLUTION
-Step 8   js_transform — evaluate routing flags from design_spec
-         Output: routing_flags { skip_all_gates, needs_schema, is_blocked, has_nonblocking }
+Step 8   js_transform — evaluate routing flags from gap_analysis
+         Output: routing_flags { is_blocked, needs_schema, has_missing_prompts }
 
 Step 9   condition — is_blocked?
-         on_truthy: step:9a (hard stop — missing step type capability)
-         on_falsy: next
+         on_truthy: step:9a
+         on_falsy:  next
 
-Step 9a  notify — "Cannot build this workflow: {{design_spec.blocked_reason}}"
-         → end  (Type 4b hard stop)
+Step 9a  notify — "Cannot build this workflow: {{gap_analysis.blocked_reason}}"
+         → end  (Type 4b hard stop — missing step type capability)
 
 Step 10  condition — needs_schema?
-         on_truthy: step:10a (schema gap gate)
-         on_falsy: next
+         on_truthy: step:10a
+         on_falsy:  next
 
-Step 10a js_transform — build schema gap message from design_spec.schema_changes
-Step 10b human_gate confirm — show gap + domain suggestion + options:
-         [Create table first → cancel with suggestion]
-         [Build without it   → next]
-         [Cancel             → cancel]
+Step 10a js_transform — build schema gap message from gap_analysis.schema_changes
+Step 10b human_gate confirm — show gap details + domain creation suggestion
+         Options: [Create table first → cancel with suggestion] [Build without it → next] [Cancel → cancel]
 
-Step 11a js_transform — filter prompts_needed to exists=false entries
+Step 11a js_transform — filter gap_analysis.prompts_needed where exists=false
 Step 11b condition — any missing prompts?
          on_truthy: step:11c
-         on_falsy: step:12
-Step 11c iterator — seed each missing prompt to PGC_Prompt (Type 4a resolution)
+         on_falsy:  step:12
+Step 11c iterator — seed each missing prompt into PGC_Prompt (Type 4a resolution)
 
-PHASE 3 — STEP GENERATION
-Step 12  llm_call generate_workflow_steps v2 (Sonnet)
-         Input:  { design_spec, user_preferences, domain_schema,
-                   step_type_contracts [from PGC_SystemContext injection],
-                   example [from PGC_SystemContext injection] }
-         Output: draft_workflow { name, description, intent_keywords, steps }
-         The LLM translates the complete design_spec into steps.
-         It does not make design decisions — all decisions were made in Phase 1.
+PHASE 3 — WORKFLOW DESIGN
+Step 12  LEFT BRAIN PASS 2: llm_call design_workflow_process (Sonnet)
+         Input:  { userInput, domain, domain_schema, right_brain_research,
+                   user_preferences, step_type_contracts, gap_analysis }
+         Output: { process_design[], state_map }
+         process_design items — exactly: step_label, step_type, description,
+                                         inputs{}, outputs{}
+         NO dialog field — process design and dialog design are orthogonal.
+         state_map — { key: { type, written_by, read_by[] } }
 
-PHASE 4 — VALIDATION
-Step 13  human_gate review_object — user reviews draft steps
-         context_key: draft_workflow.steps
-         Options: [Looks good → next] [Request changes → step:12] [Cancel → cancel]
+Step 13  LEFT BRAIN PASS 3: llm_call design_workflow_dialogs (Sonnet)
+         Input:  { gate_steps (filtered from process_design where step_type=human_gate),
+                   domain_schema, user_preferences }
+         Output: dialog_designs[]
+         Each item: step_label, gate_type, message_template, options[], output_key?, context_key?
+         Options shape is gate_type-specific (see options schema decision above).
+         step_label links each dialog_designs entry to its process_design counterpart.
+         This step is skipped (condition gate) when process_design has no human_gate steps.
 
-Step 14  simulate Level 1 — static analysis
-         on_failure: step:13  (route back with failures shown in gate context)
+PHASE 4 — STEP GENERATION
+Step 14  llm_call generate_workflow_steps (Sonnet)
+         Input:  { process_design, state_map, dialog_designs, domain_schema,
+                   step_type_contracts [PGC_SystemContext injection],
+                   routing_value_rules  [PGC_SystemContext injection],
+                   create_domain_example [PGC_SystemContext injection] }
+         Output: draft_workflow { name, description, intent_keywords, steps[] }
+         Translation task only — all design decisions already made.
+         The step generator joins process_design + dialog_designs by step_label.
 
-Step 15  llm_call generate_workflow_mocks — produce representative mock outputs
-Step 16  llm_call generate_workflow_paths — produce named simulation paths
-Step 17  simulate Level 2 + Level 3 — full path execution with mocks
-         on_failure: step:13
+PHASE 5 — VALIDATION
+Step 15  human_gate review_object — user reviews draft_workflow.steps
+         Options: [Looks good → next] [Request changes → step:14] [Cancel → cancel]
 
-PHASE 5 — REGISTRATION
-Step 18  human_gate confirm — show simulation results, ask to register
-Step 19  serv_insert PGC_Workflow
-Step 20  serv_insert PGC_IntentMap
+Step 16  simulate Level 1 — static analysis
+         on_failure: step:15  (route back with failures shown in gate context)
+
+Step 17  llm_call generate_workflow_mocks — representative mock outputs per step
+Step 18  llm_call generate_workflow_paths — named simulation paths (happy, cancel, failure)
+Step 19  simulate Level 2 + Level 3 — full path execution with mocks
+         on_failure: step:15
+
+PHASE 6 — REGISTRATION
+Step 20  human_gate confirm — show simulation results, ask to register
+Step 21  serv_insert PGC_Workflow
+Step 22  serv_insert PGC_IntentMap
          row: { pattern: draft_workflow.name, intent_category: draft_workflow.name,
                 action_type: workflow }
          NOTE: no workflow_id column — PGC_IntentMap and PGC_Workflow are structurally
          independent. Routing uses action_type + intent_category name lookup only.
-Step 21  notify — "Workflow {{draft_workflow.name}} registered.
-                   {{design_spec.deferred.length}} enhancements deferred."
-Step 22  end
+Step 23  notify — "Workflow {{draft_workflow.name}} registered.
+                   {{gap_analysis.deferred.length}} enhancements deferred."
+Step 24  end
 ```
 
 ---
 
-#### Gap taxonomy applied — per gap type
+#### Domain mode — three execution contexts
 
-| Gap type | Who owns it | When resolved | How resolved in v3 |
+`design_workflow_process` and `design_workflow_dialogs` behave differently
+depending on what domain context was resolved and what `domain_schema` contains.
+Both prompts receive explicit mode guidance:
+
+**Mode A — existing domain data** (`domain` set, `domain_schema` non-empty):
+Workflow operates on data already in the system. Only use table and column names
+present in `domain_schema`. Never invent tables or columns. Steps read, update,
+or transform existing domain data.
+
+**Mode B — new domain population** (`domain` set, `domain_schema` empty):
+Either the user wants a workflow that creates or populates domain data (design an
+ingestion workflow), or required tables are missing (gap_analysis will have
+detected this as Type 3b and the schema gate will have fired). `design_workflow_process`
+uses `right_brain_research.findings` to distinguish between these cases.
+
+**Mode C — standalone** (`domain` null, `domain_schema` empty):
+Workflow has no domain dependency. May use PGC system tables or operate purely
+on user input and LLM processing with no DB reads/writes required.
+
+`create-workflow.mjs` resolves the domain from `PGC_DomainHelp` via
+`matchDomainAlias()` before creating the `PGC_WorkflowRun` — so by the time
+`input.domain` reaches step 1, the best available alias match has already been applied.
+
+---
+
+#### Gap taxonomy applied — per gap type (v4)
+
+| Gap type | Who owns it | When resolved | How resolved in v4 |
 |---|---|---|---|
 | Type 1 — Preference | User | After right brain, before left brain | Tier 1 preference gate iterator (steps 3–5) |
 | Type 2 — Knowledge | Right brain | Before left brain | `research_workflow_domain` sonar call (step 2) |
-| Type 3a — Schema non-blocking | User | After left brain | Schema gap gate (steps 10–10b), user chooses to proceed |
-| Type 3b — Schema blocking | User | After left brain | Schema gap gate cancels cleanly with domain creation suggestion |
-| Type 4a — Missing prompt | Left brain | After left brain, before step generation | Inline prompt authoring in `design_spec.prompts_needed`, auto-seeded (steps 11a–11c) |
-| Type 4b — Missing step type | Developer (hard stop) | After left brain | `confidence: "blocked"` → notify user → end (steps 9–9a) |
+| Type 3a — Schema non-blocking | User | After gap analysis | Schema gap gate (steps 10–10b), user chooses to proceed |
+| Type 3b — Schema blocking | User | After gap analysis | Schema gap gate cancels cleanly with domain creation suggestion |
+| Type 4a — Missing prompt | Left brain | After gap analysis, before process design | Inline prompt authoring in `gap_analysis.prompts_needed`, auto-seeded (steps 11a–11c) |
+| Type 4b — Missing step type | Developer (hard stop) | After gap analysis | `confidence: "blocked"` → notify → end (steps 9–9a) |
 | Type 5 — Ambiguity | User | Pre-step (not yet implemented) | Future: clarification gate before step 1 when intent is underspecified |
 
 ---
@@ -3789,7 +3902,7 @@ Tier 1 preference gates use the `human_gate choice` type with an iterator
 driving sequential gates — one gate per `preference_questions` entry from
 `right_brain_research`. The user cannot get more than one gate at a time. The
 iterator collects all selections into `user_preferences` as an array of
-`{ id, selected_value }` objects before the left brain runs.
+`{ id, selected_value }` objects before any left-brain call runs.
 
 Each gate shows: the question as a typography heading; a description list showing
 `*A* — label: description` for each option; and lettered action buttons (`A`, `B`, `C`, `Cancel`).
@@ -3804,65 +3917,88 @@ be 0–3 for most workflows.
 
 ---
 
-#### design_spec as the interface between cognition and code generation
+#### generate_workflow_steps — translation contract
 
-`design_spec` is the contract between the left brain and the step generator. It is
-a plain-language, gap-free description of every step in the workflow — what it does,
-what data it reads, what data it writes, what the user sees, and how routing works.
-The step generator receives this specification and produces the step array.
+`generate_workflow_steps` (step 14) is a translation prompt, not a design prompt.
+It receives a complete, gap-free, three-part specification and produces a step array:
 
-The step generator (`generate_workflow_steps` v2) is a code-generation prompt, not
-a design prompt. It does not need to understand the domain, research best practices,
-or make tradeoff decisions. It only needs to translate a complete specification into
-valid step definitions — a well-scoped task that produces consistent results.
+- `process_design[]` — the ordered step sequence with types and data flow
+- `state_map` — the complete data dictionary (key → type, written_by, read_by)
+- `dialog_designs[]` — one entry per human_gate step, linked by `step_label`
 
-This is the fundamental difference from v1/v2 where `generate_workflow_steps`
-received a raw intent string and was expected to be simultaneously an architect,
-a researcher, a UX designer, and a coder.
+The step generator joins `process_design` and `dialog_designs` by `step_label` to
+construct each `human_gate` step's complete definition. This join is the only
+"design" decision the step generator makes — and it is mechanical, not creative.
 
----
-
-#### Prompt dependencies (v3)
-
-| Step | Prompt `intent_category` | Model | Output stored at |
-|---|---|---|---|
-| 2 | `research_workflow_domain` v1 | `perplexity/sonar` | `right_brain_research` |
-| 7 | `analyze_and_design_workflow` v1 | `anthropic/claude-sonnet-4-5` | `design_spec` |
-| 12 | `generate_workflow_steps` v2 | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
-| 15 | `generate_workflow_mocks` v1 | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
-| 16 | `generate_workflow_paths` v1 | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
-
-PGC_SystemContext rows injected into steps 7 and 12 via `executeLlmCall`:
-- `step_type_contracts` — full live step type catalogue (`inject_for: ["generate_workflow_steps", "analyze_and_design_workflow"]`)
-- `routing_value_rules` — valid routing tokens and Guard 3 rule
-- `create_domain_example` v4 — annotated create_domain + flat loop quiz example
+The step generator must not invent steps, modify the process sequence, or add
+state keys not in `state_map`. It translates — it does not design.
 
 ---
 
 #### Gate-bounded correction loops
 
-Steps 13–14 and 13–17 form gate-bounded correction loops. The backward jump from
-step 14 (or step 17) to step 13 is safe because every path from step 13 back to
-step 14 or step 17 passes through the step 13 `human_gate`. This satisfies Guard 3's
+Steps 15–16 and 15–19 form gate-bounded correction loops. The backward jump from
+step 16 (or step 19) to step 15 is safe because every path from step 15 back to
+step 16 or step 19 passes through the step 15 `human_gate`. This satisfies Guard 3's
 cycle-safety rule.
 
-The user is the circuit breaker for these loops. If simulation repeatedly fails and
-the user cannot resolve the issues, they cancel at step 13. There is no automated
+If simulation repeatedly fails, the user cancels at step 15. There is no automated
 retry limit on human-gate-bounded loops.
+
+If the user requests changes at step 15, the backward reference to step 14
+re-runs the step generator only — not the design phases. The three-part specification
+(`process_design`, `state_map`, `dialog_designs`) persists in `local_state` and is
+reused. The user's change request should be captured as a `text_input` gate before
+step 14 to inject the request into the step generator's input.
+
+---
+
+#### Prompt dependencies (v4)
+
+| Step | Prompt `intent_category` | Model | Output key |
+|---|---|---|---|
+| 2  | `research_workflow_domain` | `perplexity/sonar` | `right_brain_research` |
+| 7  | `analyze_workflow_gaps` | `anthropic/claude-sonnet-4-5` | `gap_analysis` |
+| 12 | `design_workflow_process` | `anthropic/claude-sonnet-4-5` | `process_design`, `state_map` |
+| 13 | `design_workflow_dialogs` | `anthropic/claude-sonnet-4-5` | `dialog_designs` |
+| 14 | `generate_workflow_steps` | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
+| 17 | `generate_workflow_mocks` | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
+| 18 | `generate_workflow_paths` | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
+
+PGC_SystemContext rows injected via `executeLlmCall`:
+- `step_type_contracts` — injected into steps 7, 12, 13, 14
+- `routing_value_rules` — injected into steps 12, 13, 14
+- `create_domain_example` — injected into step 14
 
 ---
 
 #### Implementation notes
 
-- `input.domain` comes from `resolveTier3Route()` in `classify-intent.mjs` via the
-  heavy-lift SQS dispatch. Currently only `userInput` is passed — `domain` extraction
-  from the userInput string is done inside `analyze_and_design_workflow` prompt.
-- `execute_top` root frame initialises `current_step: '1'` — step numbering in v3
+- `create-workflow.mjs` resolves the domain from `PGC_DomainHelp` via `matchDomainAlias()`
+  before creating `PGC_WorkflowRun`. The resolved domain flows into `input.domain` so that
+  step 1 (`serv_query PGC_Schema`) returns real schema rows rather than an empty array.
+- `execute_top` root frame initialises `current_step: '1'` — step numbering in v4
   starts at `'1'` (serv_query) not at a prior classification step.
-- The `example` field in step 12's input is populated from `PGC_SystemContext`
+- Steps 3a and 3b (research summary format + confirm gate) are live in the workflow seed and
+  present in every run. They are implementation steps within Phase 1 that give the user
+  visibility into what the right brain found before preference gates appear.
+- The `example` field in step 14's input is populated from `PGC_SystemContext`
   injection, not from `local_state`. The step definition passes `"example":
   "injected_from_pgc_system_context"` as a placeholder; `executeLlmCall` replaces
   it with the live `create_domain_example` content before the LLM call.
+- Step 13 (`design_workflow_dialogs`) receives the full `process_spec.process_design`
+  array. The prompt instructs it to design dialogs only for `human_gate` step_type entries.
+  If no gate steps exist the output is an empty `dialog_designs: []` array. Conditional
+  skipping when there are no gate steps is a future optimisation.
+- `generate_workflow_steps` (step 14) input variables: `process_design`, `state_map`,
+  `dialog_designs`, `domain_schema`, plus `step_type_contracts`, `routing_value_rules`,
+  and `example` injected from `PGC_SystemContext`. The old `design_spec` monolith input
+  is removed. The step generator joins `process_design` and `dialog_designs` by `step_label`.
+- The `generate_workflow_steps` prompt is at v7 for the v4 input contract. The `output_schema`
+  is unchanged — `{ name, description, intent_keywords, steps[] }`.
+- Step 15 (`human_gate review_object`) backward route `"Request changes" → step:14`
+  re-runs the step generator only. The three-part specification persists in `local_state`
+  and is reused unchanged.
 
 ---
 
@@ -4793,10 +4929,11 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 Extension: pgvector (available on RDS PostgreSQL 15+, no extra cost)
 Enable: `CREATE EXTENSION IF NOT EXISTS vector;`
 
-Embedding model: `text-embedding-3-small` (OpenAI), 1536 dimensions
-Used in: `PGC_Workflow`, `PGC_DomainHelp`, `PGC_Prompt`, `PGC_IntentMap`
+Embedding model: `pplx-embed-v1-4b` (Perplexity), 2560 dimensions, INT8 quantization
+Cost: $0.03/million tokens — at household scale ~$0.01/month at heavy use
+Used in: `PGC_DomainHelp` (domain resolution), `PGC_Workflow` (workflow routing — Backlog)
 
-**Active — promoted from Backlog in Session 24.**
+**Implemented — Session 26.**
 
 The alias-based domain resolution in `matchDomainAlias` is a structural weakness confirmed
 across multiple sessions. "Spanish flashcard quiz", "flashcard quiz", "quiz my Spanish" all
@@ -4806,135 +4943,214 @@ phrasing. Every new domain will have the same problem. This is not a data mainte
 
 ### Two problems pgvector solves
 
-**Problem 1 — domain resolution (CREATE_WORKFLOW, Tier 2 routing)**
-`matchDomainAlias` in `classify-intent-tiers.mjs` does substring token matching against
-`PGC_DomainHelp.aliases`. "flashcard quiz" fails because "flashcard" (singular) is not
-in the aliases list even though "flashcards" (plural) is. Any paraphrase not anticipated
-at domain-creation time silently returns `domain: null`, causing `domain_schema: []` to
-be sent to the LLM which then invents tables that already exist.
+**Problem 1 — domain resolution (Pass 2 of Intent Preprocessor)**
+`matchDomainAlias` does substring token matching against `PGC_DomainHelp.aliases`.
+Any paraphrase not anticipated at domain-creation time silently returns `domain: null`,
+causing `domain_schema: []` to be sent to the LLM which then invents tables that already exist.
 
-Fix: replace `matchDomainAlias` with `semanticDomainMatch()` — embed user input,
-cosine similarity against `PGC_DomainHelp.embedding`, threshold 0.75. Aliases still
-feed the embedding text at creation time but are no longer the query mechanism.
+Fix: `semanticDomainMatch()` in `classify-intent.mjs` — sends `queryText` to SERV
+`getRows` with a `vectorSearch` descriptor. SERV embeds the query and ranks domains
+by cosine similarity. Threshold 0.40 (calibrated for pplx-embed-v1-4b).
+`matchDomainAlias` runs first as a zero-cost exact check; semantic match only fires
+when alias lookup returns null.
 
-**Problem 2 — workflow routing (Pass 2 keyword scan)**
+**Problem 2 — workflow routing (Pass 2 keyword scan miss)**
 Pass 2 uses `intent_keywords` on `PGC_Workflow` for token presence. Novel phrasings
 fall through to Tier 2 sonar. After domain is resolved via semantic match, workflow
-routing also uses vector similarity against `PGC_Workflow.intent_embedding`.
+routing can also use vector similarity against `PGC_Workflow.intent_embedding` — Backlog.
 
-### Schema changes required
+---
 
-```sql
--- Enable extension (run once on RDS)
-CREATE EXTENSION IF NOT EXISTS vector;
+### Architectural principle: embedding belongs in the Service tier
 
--- PGC_DomainHelp — domain resolution
-ALTER TABLE "PGC_DomainHelp" ADD COLUMN embedding vector(1536);
+Embedding computation is a prerequisite for persistence — the same category of
+concern as hashing before storing a password. It is not business logic. Therefore:
 
--- PGC_Workflow — already has intent_embedding column (no change needed)
+- `embed-client.mjs` lives in `src/shared/` but is imported **only by ServFunction**
+- `table.mjs` (SERV) calls `embedText()` on `insertRow` and `updateRows` automatically
+  when the column's PGC_Schema definition includes `embed_source`
+- PROC never imports `embed-client.mjs`. `classify-intent.mjs` sends plain text to
+  SERV via `getRows` with a `vectorSearch` descriptor — SERV handles the embedding
+
+This means direct curl calls to SERV endpoints, the backfill script, and
+workflow-driven inserts all get embeddings for free with no workflow step type change.
+
+---
+
+### embed_source in PGC_Schema.columns — the authoritative embedding spec
+
+The specification of what text to embed for a vector column lives in
+`PGC_Schema.columns` alongside the column's type definition:
+
+```json
+{
+  "name": "embedding",
+  "type": "vector",
+  "nullable": true,
+  "embed_source": ["domain", "description", "aliases"],
+  "comment": "pgvector embedding — SERV auto-computes on insert/update"
+}
 ```
 
-Add `vector` to `ALLOWED_TYPES` in `schema.mjs` once extension is enabled.
+`embed_source` is an array of sibling column names whose values are concatenated
+(after normalization) and passed to `embedText()`. This is the single source of
+truth — no workflow step, no endpoint, and no application code needs to know which
+fields contribute to the embedding. SERV reads it from the schema at runtime.
 
-### New module: embed-client.mjs
+**Why PGC_Schema is the right home:**
 
-`src/shared/embed-client.mjs` — thin wrapper for OpenAI embeddings API:
+PGC_Schema already owns the column contract (type, nullable, default, constraints).
+Embedding is a persistence-time computation that depends on column values — it
+belongs in the schema definition, not in workflow step definitions. Any table in the
+system (PGC or PGD) can gain semantic search capability by adding a vector column
+with `embed_source` — no code changes, only a schema update.
 
-```
-embedText(text) → vector(1536)
-  POST https://api.openai.com/v1/embeddings
-  model: text-embedding-3-small
-  input: text
-  Returns: float[] of 1536 dimensions
-  Cost: /bin/sh.02/million tokens ≈ /bin/sh.000001 per 50-token domain description
-```
+**Normalization before embedding:**
 
-Credentials: OpenAI API key stored in SSM as `SecureString`, referenced by name only.
-`embed-client.mjs` reads key name from `process.env.OPENAI_API_KEY_PARAM`, retrieves
-at call time via SSM SDK.
+`resolveEmbedding()` in `table.mjs` normalizes each source field value before
+embedding. Array fields (e.g. `aliases: ["flashcard", "quiz"]`) contribute each
+element as a separate space-delimited token. All values have underscores replaced
+with spaces (`spanish_flashcards` → `spanish flashcards`) so snake_case identifiers
+tokenize correctly. Only array-type embed_source fields are used — scalar fields
+like `description` are excluded because generic management text ("Manage your data")
+pulls the centroid away from the user-vocabulary terms in the aliases.
 
-### classify-intent-tiers.mjs changes
+**updateRows read-before-write:**
 
-Replace `matchDomainAlias()` with `semanticDomainMatch()`:
+When any `embed_source` field appears in the `updates` payload, `table.mjs` performs
+a `SELECT` of the current row, merges it with `updates`, then recomputes the
+embedding from the complete post-update state. This ensures partial updates (changing
+only `aliases` without including `description`) produce a correct embedding.
 
-```
-semanticDomainMatch(userInput, domainRows):
-  1. Embed userInput via embedText()
-  2. For each row in domainRows that has embedding populated:
-       similarity = cosineSimilarity(queryEmbedding, row.embedding)
-  3. If max similarity > 0.75 → return { domain: row.domain, confidence: 'semantic_match' }
-  4. Else → return null (fall through to Tier 2 / heavy-lift)
+---
 
-cosineSimilarity(a, b) = dot(a,b) / (|a| * |b|) — pure JS, no DB round-trip
-```
+### vectorSearch switch on getRows
 
-Cosine similarity is computed in-process because `domainRows` are already loaded in
-`classify()'s` parallel prefetch. No additional DB query needed.
+`getRows` accepts an optional `vectorSearch` descriptor alongside standard `filters`:
 
-Keep `matchDomainAlias` as a fast pre-check (zero cost): if any alias is an exact
-substring match, skip the embed call entirely. Embed only when alias lookup returns null.
-
-### create_domain workflow changes
-
-After the `serv_insert PGC_DomainHelp` step (currently step 8), add:
-
-```
-Step 8b — serv_update PGC_DomainHelp (populate embedding)
-  Call embedText(domain + " " + description + " " + aliases.join(" "))
-  Write vector to PGC_DomainHelp.embedding for the just-inserted row
+```json
+{
+  "tableName": "PGC_DomainHelp",
+  "vectorSearch": {
+    "column": "embedding",
+    "queryText": "spanish flashcard quiz",
+    "threshold": 0.40,
+    "limit": 1
+  }
+}
 ```
 
-This requires a new `serv_embed` step type (or embedding via a `capability_call` step
-once the capability registry is built). The simpler interim approach: add a new SERV
-endpoint `POST /serv/embed/domain` that embeds and updates the row in one call, invoked
-via a `serv_query`-style step.
+When `vectorSearch` is present:
+1. SERV calls `embedText(queryText)` — the caller supplies plain text only
+2. SQL uses pgvector `<=>` cosine distance operator to rank and filter rows
+3. Each result row gains a `similarity` float field (0–1)
+4. Standard `filters` can combine with `vectorSearch` to pre-qualify rows before ranking
+
+**Vector columns are stripped from getRows responses.** The `embedding` field is
+never returned to callers. Direct SQL via the bastion is the appropriate path for
+inspection or debugging.
+
+---
+
+### embed-client.mjs
+
+`src/shared/embed-client.mjs`:
+
+- **`embedText(text, traceId) → number[]`** — single string, used for query-time
+  vectorSearch in `getRows`. Calls the Perplexity embeddings API with one input.
+- **`embedTexts(texts[], traceId) → number[]`** — batch embed multiple strings
+  and return a component-wise averaged vector. Available for future batch use cases.
+  (Currently `table.mjs` uses `embedText` with the pre-concatenated source text.)
+- **`parseVector(pgVal) → number[]`** — parse PostgreSQL vector string
+  (`"[1,2,3,...]"`) to `number[]`. pgvector returns vector columns as text because
+  the `pg` library does not know the `vector` OID.
+
+Credentials are injected into `ServFunction` via CloudFormation at deploy time:
+```yaml
+EMBEDDING_API_URL: 'https://api.perplexity.ai/v1/embeddings'
+EMBEDDING_API_KEY: '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+```
+The same SSM key is reused for both the agent API (PROC) and the embeddings API (SERV).
+No runtime SSM SDK call — CloudFormation resolves `{{resolve:ssm:...}}` at deploy time.
+
+Response format: Perplexity returns base64-encoded signed INT8 per the `base64_int8`
+encoding. `decodeBase64Int8()` decodes to `number[]`. pgvector stores as float4 and
+normalises internally for cosine distance.
+
+---
+
+### Similarity threshold calibration
+
+| Model | Threshold | Notes |
+|---|---|---|
+| `pplx-embed-v1-4b` | 0.40 | Calibrated from live data — exact alias matches score ~0.55–0.60; unrelated domains score ~0.08–0.12 |
+
+The threshold is hardcoded in `classify-intent.mjs` as `DOMAIN_SIMILARITY_THRESHOLD`.
+Threshold calibration per model should eventually be stored in `PGC_SystemContext.pgvector_config`
+so it is adjustable without a code deploy. This is a low-priority Backlog item.
+
+---
+
+### How the Intent Preprocessor uses pgvector
+
+```
+PASS 2 — domain resolution (with pgvector, Session 26):
+  1. matchDomainAlias() — zero-cost exact substring check against aliases array
+  2. If no alias match: semanticDomainMatch() via SERV getRows vectorSearch
+     - SERV embeds userInput, returns top-1 domain by cosine similarity
+     - Threshold 0.40 — returns null if no domain exceeds it
+  3. If domain resolved (either path): matchWorkflowByKeywords() keyword scan
+  4. If no keyword match: fall to Tier 2 sonar
+
+PASS 2 Backlog — workflow routing via intent_embedding:
+  After keyword-scan miss, embed user input and query PGC_Workflow.intent_embedding
+  filtered by resolved domain. Threshold 0.40 (to be calibrated when implemented).
+```
+
+Pass 2 domain resolution is also used in `create-workflow.mjs` before creating the
+`PGC_WorkflowRun` — so `input.domain` is populated with the best available match
+before step 1 (`serv_query PGC_Schema`) runs.
+
+---
+
+### create_domain workflow — automatic embedding on DomainHelp insert
+
+`PGC_DomainHelp.embedding` is populated automatically by SERV on `insertRow` because
+the column definition in `PGC_Schema` includes `embed_source: ["domain", "description", "aliases"]`.
+No workflow step change is needed. The `serv_insert PGC_DomainHelp` step in
+`create_domain` already triggers embedding computation transparently.
+
+---
 
 ### Backfill script
 
 `dev_scripts/backfill-embeddings.mjs`:
-- Read all `PGC_DomainHelp` rows where `embedding IS NULL`
-- For each: embed `domain + description + aliases.join(" ")`
-- Write vector via SERV updateRows
-- Run once after extension is enabled
+- Fetches ALL `PGC_DomainHelp` rows (not just null-embedding rows — backfill is
+  unconditional so re-running after model or normalization changes recomputes everything)
+- For each row: calls `updateRows` with `description` in the updates payload,
+  triggering SERV's read-before-write embed path
+- Run after: pgvector extension enabled, `embedding` column added, SAM deployed
 
-### Similarity threshold
+---
 
-Default: 0.75 for domain resolution, 0.82 for workflow routing.
-Store in `PGC_SystemContext.pgvector_config` as JSON so thresholds are evolvable
-without code deploys.
+### Status — Session 26
 
-### Role in the Intent Preprocessor
-
-```
-PASS 2 — updated flow (with pgvector):
-  1. matchDomainAlias() — zero-cost exact substring check
-  2. If no alias match: semanticDomainMatch() — embed + cosine similarity
-  3. If domain resolved: matchWorkflowByKeywords() then pgvector_workflow_match()
-  4. If no match: fall to Tier 2
-
-PASS 2 Backlog — after keyword-scan miss:
-  Embed user input
-  Query PGC_Workflow WHERE domain = resolved_domain
-    ORDER BY intent_embedding <-> query_embedding LIMIT 1
-  If similarity > 0.82 → confidence: 'semantic_match'
-  Else → Tier 2
-```
-
-### Implementation order
-
-1. Enable pgvector extension on RDS
-2. Add `embedding vector(1536)` to `PGC_DomainHelp`
-3. Add `vector` to `ALLOWED_TYPES` in `schema.mjs`
-4. Write `embed-client.mjs`
-5. Write `backfill-embeddings.mjs` and run it
-6. Update `classify-intent-tiers.mjs` — `semanticDomainMatch()` replacing `matchDomainAlias`
-7. Update `create_domain` workflow — add embedding step after DomainHelp insert
-8. Workflow routing: populate and query `PGC_Workflow.intent_embedding` (Phase 2 followup)
-
-Steps 1–6 fix the immediate domain resolution problem.
-Steps 7–8 extend to new domain registrations and workflow routing.
-
-Status: **Active — Session 26 implementation target.**
+| Item | Status |
+|---|---|
+| pgvector extension enabled on RDS | ✅ Complete |
+| `vector` added to `ALLOWED_TYPES` in `schema.mjs` | ✅ Complete |
+| `embed_source` persisted in `addColumn` → PGC_Schema | ✅ Complete |
+| `PGC_DomainHelp.embedding` column added via `addColumn` curl | ✅ Complete |
+| `seed_PGC_Schema.json` PGC_DomainHelp entry updated with `embed_source` | ✅ Complete |
+| `embed-client.mjs` — Perplexity pplx-embed-v1-4b, base64 INT8 decode | ✅ Complete |
+| `table.mjs` — auto-embed on insertRow/updateRows; vectorSearch on getRows | ✅ Complete |
+| `serv-client.mjs` — vectorSearch param added to getRows wrapper | ✅ Complete |
+| `classify-intent.mjs` — semanticDomainMatch via SERV getRows vectorSearch | ✅ Complete |
+| `create-workflow.mjs` — domain resolution before WorkflowRun creation | ✅ Complete |
+| `backfill-embeddings.mjs` — unconditional backfill via updateRows | ✅ Complete |
+| Threshold calibration — 0.40 for pplx-embed-v1-4b | ✅ Complete |
+| `PGC_Workflow.intent_embedding` vector column — workflow routing | ⬜ Backlog |
+| Threshold config in `PGC_SystemContext.pgvector_config` | ⬜ Backlog |
 
 ---
 
