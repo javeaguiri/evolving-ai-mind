@@ -38,10 +38,10 @@ export async function embedText(text, traceId) {
     throw new Error('embedText: text must be a non-empty string');
   }
 
-  const apiUrl = process.env.EMBEDDINGS_API_URL;
+  const apiUrl = process.env.EMBEDDING_API_URL;
   const apiKey = process.env.EMBEDDING_API_KEY;
 
-  if (!apiUrl) throw new Error('EMBEDDINGS_API_URL env var is not set');
+  if (!apiUrl) throw new Error('EMBEDDING_API_URL env var is not set');
   if (!apiKey) throw new Error('EMBEDDING_API_KEY env var is not set');
 
   const resp = await fetch(apiUrl, {

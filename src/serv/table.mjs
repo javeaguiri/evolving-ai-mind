@@ -189,6 +189,33 @@ async function getRows(req) {
 }
 
 // ---------------------------------------------------------------------------
+// normalizeEmbedText — clean a single field value for embedding
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a row field value to a normalised text fragment for embedding.
+ * Underscores are replaced with spaces so snake_case identifiers (domain names,
+ * alias keys) are tokenised correctly by the embedding model.
+ *
+ * @param {*} v  Raw field value from row
+ * @returns {string}
+ */
+function normalizeEmbedText(v) {
+  if (v === null || v === undefined) return '';
+  let text;
+  if (Array.isArray(v)) {
+    text = v.map(item => String(item ?? '')).join(' ');
+  } else if (typeof v === 'object') {
+    // jsonb objects not caught by Array.isArray — unlikely in embed_source
+    // but handled defensively by extracting string values only.
+    text = Object.values(v).filter(x => typeof x === 'string').join(' ');
+  } else {
+    text = String(v);
+  }
+  return text.replace(/_/g, ' ');
+}
+
+// ---------------------------------------------------------------------------
 // resolveEmbedding — build embed text from source keys and call embedText()
 // ---------------------------------------------------------------------------
 
@@ -202,13 +229,10 @@ async function getRows(req) {
  * @returns {Promise<number[]>}
  */
 async function resolveEmbedding(vectorCol, row, traceId) {
-  const text = vectorCol.embed_source.map(key => {
-    const v = row[key];
-    if (v === null || v === undefined) return '';
-    if (Array.isArray(v)) return v.join(' ');
-    if (typeof v === 'object') return JSON.stringify(v);
-    return String(v);
-  }).join(' ').trim();
+  const text = vectorCol.embed_source
+    .map(key => normalizeEmbedText(row[key]))
+    .join(' ')
+    .trim();
 
   return embedText(text, traceId);
 }
