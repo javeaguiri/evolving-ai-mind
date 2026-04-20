@@ -172,11 +172,23 @@ async function getRows(req) {
 
     if (target === 'pgd') await dbClient.end();
 
+    // Strip vector columns from result rows — embeddings are large, opaque,
+    // and not useful to callers. Direct SQL is the appropriate path for
+    // inspection or debugging.
+    const vectorCols = new Set(schemaColumns.filter(c => c.type === 'vector').map(c => c.name));
+    const rows = vectorCols.size === 0
+      ? result.rows
+      : result.rows.map(row => {
+          const clean = { ...row };
+          for (const col of vectorCols) delete clean[col];
+          return clean;
+        });
+
     return ok({
       success:       true,
       tableName,
-      count:         result.rows.length,
-      rows:          result.rows,
+      count:         rows.length,
+      rows,
       correlationId: req.correlationId,
     }, req.correlationId);
 
@@ -216,12 +228,21 @@ function normalizeEmbedText(v) {
 }
 
 // ---------------------------------------------------------------------------
-// resolveEmbedding — build embed text from source keys and call embedText()
+// resolveEmbedding — build focused embed text from array source fields only
 // ---------------------------------------------------------------------------
 
 /**
- * Given a vector column definition (with embed_source) and a data row,
- * compute and return the embedding vector.
+ * Build a single normalised text string from array-type embed_source fields
+ * (e.g. aliases) and embed it as one unit via embedText().
+ *
+ * Only array fields are used. Scalar fields (domain name, description) are
+ * excluded because:
+ *   - domain is already represented in the aliases
+ *   - description is generic system text ("Manage your data") that pulls the
+ *     centroid away from the user-vocabulary terms in the aliases
+ *
+ * If no array fields are found, falls back to all fields concatenated.
+ * This keeps the document tightly focused on what users would type.
  *
  * @param {{ name: string, embed_source: string[] }} vectorCol
  * @param {object} row  Complete row data (merged current + updates for updateRows)
@@ -229,11 +250,24 @@ function normalizeEmbedText(v) {
  * @returns {Promise<number[]>}
  */
 async function resolveEmbedding(vectorCol, row, traceId) {
-  const text = vectorCol.embed_source
-    .map(key => normalizeEmbedText(row[key]))
-    .join(' ')
-    .trim();
+  // Prefer array fields (aliases) — they are the user-vocabulary source of truth.
+  const arrayTexts = [];
+  const scalarTexts = [];
 
+  for (const key of vectorCol.embed_source) {
+    const v = row[key];
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v)) {
+      arrayTexts.push(normalizeEmbedText(v));
+    } else {
+      scalarTexts.push(normalizeEmbedText(v));
+    }
+  }
+
+  const parts = arrayTexts.length > 0 ? arrayTexts : scalarTexts;
+  const text  = parts.join(' ').replace(/\s+/g, ' ').trim();
+
+  if (!text) throw new Error(`resolveEmbedding: no text to embed for column ${vectorCol.name}`);
   return embedText(text, traceId);
 }
 
