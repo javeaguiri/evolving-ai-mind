@@ -51,13 +51,18 @@ export async function servGet(path) {
 
 /**
  * Fetch rows from a PGC/PGD table via SERV-Table getRows.
+ * Pass vectorSearch to use pgvector cosine similarity ranking instead of
+ * (or combined with) exact filters. SERV embeds queryText and ranks results.
+ *
+ * @param {object} [vectorSearch]  { column, queryText, threshold?, limit? }
  */
-export async function getRows(tableName, filters = [], orderBy, limit) {
+export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch) {
   return servPost('/api/v1/serv/table/getRows', {
     tableName,
     ...(filters.length  && { filters }),
     ...(orderBy         && { orderBy }),
     ...(limit           && { limit }),
+    ...(vectorSearch    && { vectorSearch }),
   });
 }
 

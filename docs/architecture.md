@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 24 complete  
-Last updated: 2026-04-15 (session 24 — iterator gate resume fix, Tier 1b diagnose-prompt-schema, R1–R6 schema rules, repair loop guard, create_workflow routing fixes, pgvector promoted to active implementation)
+Status: Active development — Session 25 complete  
+Last updated: 2026-04-19 (session 25 — llm-client isSonar guard + fence extraction, "false" falsy in executeCondition, diagnose_prompt_schema R7 + v4, addColumn endpoint with schemaOnly mode, PGC_Prompt probe_input + max_output_tokens, upsert-prompt extended, integration test per prompt)
 
 ---
 
@@ -242,55 +242,145 @@ evolving-mind-ai/
 ├── src/
 │   ├── ui/
 │   │   └── slackbot/                 Experience tier — Slack only
-│   │       ├── handler.mjs           Lambda entry point — HTTP dispatch only
-│   │       ├── ping.mjs              /ping-api
-│   │       ├── ping-sqs.mjs          /ping-sqs
-│   │       ├── ping-llm.mjs          /ping-llm
-│   │       ├── ping-e2e.mjs          /ping-e2e
-│   │       ├── create-domain.mjs     /create-domain — ACK + SQS enqueue only
-│   │       ├── mind.mjs              /mind — ACK + CLASSIFY_INTENT SQS enqueue only
-│   │       └── callback.mjs          SQS CallbackResults consumer — Slack reply
+│   │       ├── handler.mjs           Lambda entry point — HTTP dispatch, Slack signing verification
+│   │       ├── ping.mjs              GET /ui/slack/ping-api
+│   │       ├── ping-sqs.mjs          POST /ui/slack/ping-sqs — enqueues PING_SQS to WorkflowQueue
+│   │       ├── ping-llm.mjs          POST /ui/slack/ping-llm
+│   │       ├── ping-e2e.mjs          POST /ui/slack/ping-e2e — enqueues PING_E2E to WorkflowQueue
+│   │       ├── create-domain.mjs     POST /ui/slack/create-domain — ACK + CREATE_DOMAIN SQS enqueue
+│   │       ├── create-workflow.mjs   POST /ui/slack/create-workflow — ACK + CREATE_WORKFLOW SQS enqueue
+│   │       ├── mind.mjs              POST /ui/slack/mind — ACK + CLASSIFY_INTENT SQS enqueue (/mind, /m)
+│   │       ├── help.mjs              POST /ui/slack/help — ACK + HELP SQS enqueue
+│   │       ├── interactive.mjs       POST /ui/slack/interactive — Block Kit button clicks, modal submissions;
+│   │       │                         routes resume_gate + view_submission via enqueueCallback
+│   │       ├── shutdown.mjs          POST /ui/slack/shutdown — ACK + cancel active WorkflowRuns
+│   │       └── callback.mjs          SQS SlackResultsQueue consumer — routes on callback.provider,
+│   │                                 posts threaded Slack replies via @slack/web-api
 │   │
-│   ├── proc/                         Process tier — business logic only
+│   ├── proc/                         Process tier — business logic only, NO AWS SDK
 │   │   ├── handler.mjs               Lambda entry — HTTP + SQS dual dispatch
-│   │   │                             Detects event.Records vs event.httpMethod
-│   │   │                             NO AWS SDK imports
-│   │   ├── ping-llm.mjs              /proc/ping-llm
-│   │   ├── create-domain.mjs         /proc/create-domain — transport-agnostic
-│   │   ├── design-domain.mjs         /proc/design-domain — LLM call, no DB writes
-│   │   ├── run-workflow.mjs          /proc/run-workflow — Step Processor entry point
-│   │   ├── step-executor.mjs         Step type handlers — llm_call, human_gate, serv_schema, etc.
-│   │   ├── template-resolver.mjs     Resolves {{key.path}} against local_state
-│   │   ├── classify-intent.mjs       /proc/classify-intent — Intent Preprocessor
-│   │   ├── classify-intent-tiers.mjs Pure functions — matchIntentMap, matchWorkflowByKeywords,
-│   │   │                             extractSearchTerm, matchCrudVerb — no I/O
-│   │   ├── delete-domain.mjs         /proc/delete-domain — drops PGD tables + registry
-│   │   ├── shutdown.mjs              /proc/shutdown
-│   │   ├── migrations/               One-time DB seed scripts — run manually
+│   │   │                             Detects event.Records vs event.httpMethod; NO AWS SDK imports
+│   │   ├── ping-llm.mjs              POST /proc/ping-llm
+│   │   ├── create-domain.mjs         POST /proc/create-domain — Step Processor entry for CREATE_DOMAIN
+│   │   ├── create-workflow.mjs       POST /proc/create-workflow — Step Processor entry for CREATE_WORKFLOW;
+│   │   │                             initiates create_workflow PGC_WorkflowRun
+│   │   ├── design-domain.mjs         POST /proc/design-domain — standalone LLM call + Ajv validation,
+│   │   │                             no DB writes; used directly from curl / integration tests
+│   │   ├── diagnose-prompt-schema.mjs POST /proc/diagnose-prompt-schema — Tier 1b self-repair;
+│   │   │                             deterministic R1–R7 compatibility rules; no LLM; human gate confirm
+│   │   ├── fix-workflow.mjs          POST /proc/fix-workflow — Tier 1 reactive repair; LLM corrects steps,
+│   │   │                             human gate confirms before PGC_Workflow write; SQS FIX_WORKFLOW type
+│   │   ├── help.mjs                  POST /proc/help — HELP SQS handler; drives help workflow execution
+│   │   ├── llm.test.mjs              Developer integration test harness — calls live LLM endpoints directly;
+│   │   │                             not a unit test runner; run manually with node
+│   │   ├── run-workflow.mjs          POST /proc/run-workflow — Step Processor; executes one stack frame per
+│   │   │                             SQS message (execute_top, resume_gate, cancel)
+│   │   ├── simulate-workflow.mjs     POST /proc/simulate-workflow — standalone workflow simulation endpoint;
+│   │   │                             runs Level 1 + Level 2 analysis without creating a WorkflowRun
+│   │   ├── step-executor.mjs         Step type dispatch — llm_call, js_transform, human_gate, serv_schema,
+│   │   │                             serv_insert, serv_query, serv_update, serv_delete, serv_entity_query,
+│   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate, notify, end
+│   │   ├── template-resolver.mjs     Resolves {{key.path}} tokens against local_state; pure function, no I/O
+│   │   ├── classify-intent.mjs       POST /proc/classify-intent — Intent Preprocessor entry; three-tier pipeline;
+│   │   │                             executes ad_hoc CRUD steps for Pass 1a/1c matches
+│   │   ├── classify-intent-tiers.mjs Pure functions — matchIntentMap, matchDomainAlias, matchWorkflowByKeywords,
+│   │   │                             extractSearchTerm, matchCrudVerb, hasCrudVerb — no I/O, unit-testable
+│   │   ├── delete-domain.mjs         POST /proc/delete-domain — drops PGD tables; cleans PGC_Schema,
+│   │   │                             PGC_TableMap, PGC_EntitySchema, PGC_DomainHelp, PGC_Workflow, PGC_IntentMap
+│   │   ├── shutdown.mjs              POST /proc/shutdown — cancels all active PGC_WorkflowRun rows
+│   │   ├── review-output.mjs         Internal module — Ajv validation + semantic rules + routing value rules;
+│   │   │                             called by step-executor llm_call; not an HTTP endpoint
+│   │   ├── troubleshoot-workflow.mjs POST /proc/troubleshoot-workflow — Tier 1 static analysis on
+│   │   │                             PGC_Workflow.steps; SQS TROUBLESHOOT_WORKFLOW; optionally enqueues FIX_WORKFLOW
+│   │   ├── migrations/               One-time DB migration scripts — run manually via node
 │   │   │   └── seed-*.mjs
-│   │   └── scaffolds/                Phase 2b only — deleted when LLM takes over
+│   │   └── scaffolds/                Phase 2b static scaffolds — superseded by LLM output
 │   │       └── recipes.json
 │   │
-│   ├── serv/                         Service tier — DB access only
+│   ├── serv/                         Service tier — DB access only; pg client allowed here
 │   │   ├── handler.mjs               Lambda entry — HTTP dispatch only
-│   │   ├── ping-db.mjs               /serv/ping-db
-│   │   ├── schema.mjs                /serv/schema/* — DDL
-│   │   ├── table.mjs                 /serv/table/* — DML
-│   │   ├── init-brain.mjs            Bootstrap — PGC table creation + seeding
+│   │   ├── ping-db.mjs               GET /serv/ping-db
+│   │   ├── schema.mjs                POST /serv/schema/createTable — DDL + PGC_Schema + PGC_TableMap write
+│   │   │                             POST /serv/schema/updateTable — metadata update (ALTER TABLE not yet live)
+│   │   │                             POST /serv/schema/addColumn — physical DDL + PGC_Schema sync;
+│   │   │                               schemaOnly: true mode for metadata-only sync without DDL
+│   │   ├── table.mjs                 POST /serv/table/getRows — parameterised SELECT with filters + orderBy
+│   │   │                             POST /serv/table/insertRow — single row INSERT; gated by PGC_TableMap
+│   │   │                             POST /serv/table/updateRows — filtered UPDATE; enforces non-empty filters
+│   │   │                             POST /serv/table/deleteRows — filtered DELETE; enforces non-empty filters
+│   │   ├── entity.mjs                POST /serv/entity/listEntities — assembled entity + child arrays via
+│   │   │                               jsonb_agg joins defined in PGC_EntitySchema
+│   │   │                             POST /serv/entity/getEntity — single assembled entity by id
+│   │   │                             POST /serv/entity/insertEntity — root + child inserts in sequence
+│   │   │                             POST /serv/entity/upsertEntity — upsert on PGC_EntitySchema.upsert_key
+│   │   │                             POST /serv/entity/updateEntity — root row update by id
+│   │   │                             POST /serv/entity/deleteEntity — root row delete by id
+│   │   ├── init-brain.mjs            POST /serv/bootstrap — install-time only; idempotent PGC table creation
+│   │   │                             + seeding; never called on cold start
 │   │   └── templates/
-│   │       └── pgc/                  JSON table definitions imported at build time
+│   │       └── pgc/                  JSON table definitions — static ES module imports (not fs.readFile)
 │   │           ├── PGC_Schema.json
 │   │           ├── PGC_TableMap.json
-│   │           └── ...
+│   │           ├── PGC_EntitySchema.json
+│   │           ├── PGC_DomainHelp.json
+│   │           ├── PGC_Workflow.json
+│   │           ├── PGC_WorkflowRun.json
+│   │           ├── PGC_WorkflowRunStep.json
+│   │           ├── PGC_IntentMap.json
+│   │           ├── PGC_Prompt.json
+│   │           ├── PGC_StepType.json
+│   │           ├── PGC_SystemContext.json
+│   │           ├── PGC_Capability.json
+│   │           └── seed/             Seed JSON consumed by dev_scripts/upsert-*.mjs
+│   │               ├── seed_PGC_Workflow.json
+│   │               ├── seed_PGC_Prompt.json
+│   │               ├── seed_PGC_IntentMap.json
+│   │               ├── seed_PGC_StepType.json
+│   │               └── seed_PGC_SystemContext.json
 │   │
-│   └── shared/                       Cross-cutting utilities — no business logic
-│       ├── lambda-utils.mjs          parseEvent, ok, err — used by all Lambda handlers
-│       └── sqs-callback.mjs          enqueueCallback() — ONLY place @aws-sdk/client-sqs
-│                                     lives in ProcFunction
+│   └── shared/                       Cross-cutting utilities — no business logic, no tier-specific imports
+│       ├── lambda-utils.mjs          parseEvent, ok, err, buildReqFromSqs — used by all Lambda handlers
+│       ├── sqs-callback.mjs          enqueueCallback(), enqueueWorkflow() — ONLY place @aws-sdk/client-sqs
+│       │                             lives in ProcFunction
+│       ├── llm-client.mjs            callLlm(), callLlmWithCorrection() — shared LLM caller;
+│       │                             isSonar guard (response_format only on sonar); fence extraction regex
+│       ├── serv-client.mjs           servPost(), getRows(), insertRow(), updateRows(), deleteRows()
+│       │                             — shared SERV HTTP client; proc→serv cross-tier only
+│       └── embed-client.mjs          embedText(text) → float[1536] — OpenAI text-embedding-3-small;
+│                                     reads OPENAI_API_KEY_PARAM from SSM SecureString at call time
+│                                     ⬜ Session 26 — not yet implemented
 │
 ├── docs/
-│   └── architecture.md
-├── template.yaml                     SAM/CloudFormation — infrastructure only
+│   ├── architecture.md               Primary architectural decision log (this file)
+│   ├── code-review-checklist.md      Per-session code review checklist — patterns, anti-patterns, rules
+│   ├── Javear-use-cases.md           User-facing use case definitions — source of truth for scope decisions
+│   ├── openapi.yaml                  OpenAPI 3.0 spec — all PROC and SERV HTTP endpoints; spec-first rule
+│   ├── perplexityapi.yaml            Perplexity Agent API reference — response_format, model names, constraints
+│   ├── prompt-issues.md              LLM prompt quality log — failure patterns, root causes, mitigations
+│   ├── session-handoff.md            Session-to-session continuity doc — last known state + next steps
+│   ├── unit-test-setup.md            node:test runner setup guide — ESM fixtures, test structure
+│   ├── user-intent-use-cases/        Directory — UC 1.x intent pipeline use case specs
+│   └── evolving_mind_use_cases.html  Visual use case map — rendered HTML for stakeholder review
+│
+├── dev_scripts/                      Developer tooling — run manually, never imported by Lambda code
+│   ├── upsert-workflow.mjs           Upserts one or more PGC_Workflow rows from seed_PGC_Workflow.json
+│   │                                 Usage: node dev_scripts/upsert-workflow.mjs <workflow_name>
+│   ├── upsert-prompt.mjs             Upserts PGC_Prompt rows; writes probe_input + max_output_tokens
+│   │                                 Usage: node dev_scripts/upsert-prompt.mjs <intent_category>
+│   ├── backfill-embeddings.mjs       One-shot — embeds all PGC_DomainHelp rows where embedding IS NULL
+│   │                                 ⬜ Session 26 — not yet implemented
+│   ├── seed_PGC_StepType.mjs         Seeds PGC_StepType rows with routing contracts; safe to re-run
+│   └── seed_PGC_SystemContext.mjs    Reads PGC_StepType; writes step_type_contracts to PGC_SystemContext
+│
+├── tests/
+│   ├── unit/
+│   │   └── classify-intent-tiers.test.mjs   50 tests — matchIntentMap, matchDomainAlias,
+│   │                                          matchWorkflowByKeywords, extractSearchTerm, parseFieldValues
+│   └── integration/
+│       └── llm-prompt-schema.test.mjs        One it() per prompt; probe_input substitution mirrors
+│                                              step-executor; HTTP 400 always hard fail
+│
+├── template.yaml                     SAM/CloudFormation — infrastructure, Lambda env vars, SQS triggers
 ├── samconfig.toml
 ├── package.json
 └── .samignore
@@ -326,8 +416,13 @@ evolving-mind-ai/
 - `lambda-utils.mjs` — `parseEvent`, `ok`, `err`, `buildReqFromSqs`
 - `sqs-callback.mjs` — `enqueueCallback()` — the ONLY place `@aws-sdk/client-sqs`
   is imported in `ProcFunction`. Isolated here so endpoint modules stay AWS-agnostic.
-- `llm-client.mjs` — `callLlm()`, `callLlmWithCorrection()` — shared LLM caller
-- `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client
+- `llm-client.mjs` — `callLlm()`, `callLlmWithCorrection()` — shared LLM caller;
+  `isSonar` guard gates `response_format` to sonar models only; fence extraction
+  regex strips leading/trailing prose around fenced JSON
+- `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()`, `deleteRows()` — shared SERV HTTP client
+- `embed-client.mjs` — `embedText(text) → float[1536]` — OpenAI `text-embedding-3-small`;
+  reads API key name from `process.env.OPENAI_API_KEY_PARAM`, retrieves SSM SecureString at call time.
+  **⬜ Session 26 — not yet implemented.**
 
 ### 3.5a Inter-module call rules — FINAL
 
@@ -579,6 +674,7 @@ being written — aliases are not assumed from LLM output alone.
 | aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
 | description | text | |
 | commands | jsonb | Array of command definitions with examples |
+| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. NULL until backfill script runs. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. ⬜ Column added via addColumn endpoint in Session 26 |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
@@ -670,7 +766,9 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 | input_variables | jsonb | Variables this prompt expects — `[{ name, description, required }]`. Documents contract for prompt improvement |
 | output_schema | jsonb | Expected JSON shape of the LLM response. Used to validate output and guard downstream steps |
 | output_sample | jsonb | Representative successful output stored on first clean run. Used for regression checking when prompt is evolved |
+| probe_input | jsonb | ✦ Minimal substitution map for integration testing — mirrors the `input_variables` contract. Used by `llm-prompt-schema.test.mjs` to substitute template vars before firing the live LLM call |
 | model | text | Which LLM was used |
+| max_output_tokens | integer | ✦ Per-prompt output token ceiling forwarded to `callLlm`. NULL = use LLM default |
 | version | integer | |
 | parent_prompt_id | integer FK | Self-referential — prompt evolution history |
 | was_successful | boolean | |
@@ -4087,7 +4185,7 @@ Both are PROC modules (`troubleshoot-workflow.mjs`, `fix-workflow.mjs`) — no
 confirmation step. This is intentional: the LLM produces a diagnosis and a proposed
 change set, but a human approves the write before it goes to the database.
 
-**Tier 1b — Reactive prompt schema repair** (implemented — Session 24)
+**Tier 1b — Reactive prompt schema repair** (implemented — Sessions 23–25)
 Triggered when an `llm_call` step receives `Agent API error 400` from the structured
 output endpoint. This error class means `PGC_Prompt.output_schema` contains constructs
 incompatible with the Perplexity/OpenAI structured output spec — not a workflow routing
@@ -4095,7 +4193,7 @@ defect. `TROUBLESHOOT_WORKFLOW` is not appropriate (it analyses `PGC_Workflow.st
 
 `diagnose-prompt-schema.mjs` is a PROC module that:
 1. Loads the `PGC_Prompt` row for the failing `intent_category`
-2. Runs a deterministic compatibility check against 6 known rules (R1–R6)
+2. Runs a deterministic compatibility check against 7 known rules (R1–R7)
 3. Produces a repaired schema — no LLM call required; all rules produce unambiguous fixes
 4. Creates an ephemeral `PGC_WorkflowRun` (using the `diagnose_prompt_schema` system
    workflow) to host a single human confirmation gate
@@ -4109,7 +4207,7 @@ Using an LLM for this repair would be unnecessary and slower.
 `run-workflow.mjs` discriminates the 400 error from other LLM errors — `Agent API error 400`
 on an `llm_call` step enqueues `DIAGNOSE_PROMPT_SCHEMA` instead of `TROUBLESHOOT_WORKFLOW`.
 
-**API structured output compatibility rules (R1–R6):**
+**API structured output compatibility rules (R1–R7):**
 
 | Rule | Violation | Required form |
 |---|---|---|
@@ -4119,6 +4217,11 @@ on an `llm_call` step enqueues `DIAGNOSE_PROMPT_SCHEMA` instead of `TROUBLESHOOT
 | R4 | Object type missing `properties` key | Add `properties: {}` |
 | R5 | Properties defined but absent from `required` when parent has `additionalProperties:false` | All defined properties must be in `required` |
 | R6 | `anyOf` member objects violating R3/R4 | Apply R3+R4 to each `anyOf` member |
+| R7 | `model` field contains an unsupported model name | Replace with a supported model name from the approved list |
+
+**Note — R2 correction (Session 25):** boolean `true` is valid for `additionalProperties`.
+R2 only flags typed-object forms (`{type:...}`) and `true` values — NOT `false`. The v3
+seed corrected an over-broad v2 R2 rule that incorrectly flagged `true`.
 
 **Tier 2 — Proactive self-improvement** (medium-term)
 After every successful `fix-workflow` repair, the module updates `PGC_SystemContext`
@@ -4305,7 +4408,7 @@ A separate document `docs/prompt-issues.md` tracks observed LLM prompt quality p
 across sessions. Each issue records the failure pattern, root cause, actions taken, and
 monitor thresholds. This doc feeds the Prompt Performance Monitor (Backlog item 8).
 
-**Active issues as of Session 24:**
+**Active issues as of Session 25:**
 
 | Issue | Prompt | Pattern | Status |
 |---|---|---|---|
@@ -4313,7 +4416,9 @@ monitor thresholds. This doc feeds the Prompt Performance Monitor (Backlog item 
 | 2 | `analyze_and_design_workflow` | Persistent schema mismatch — LLM produces wrong field names on every attempt | Partially superseded by Issue 5. Re-evaluate after Issue 5 resolved |
 | 3 | `fix_workflow_steps` | Produces full 27-step array when only 4 steps needed | Mitigated — step 3 filter + step 4b merge added to fix_workflow |
 | 4 | `research_workflow_domain` | Occasional invalid JSON from sonar web-search mid-response interruption | Open — investigate disabling web search via `tools: []` |
-| 5 | `analyze_and_design_workflow` (any prompt) | `output_schema` API incompatibility — 400 on every llm_call attempt | Resolved — `diagnose-prompt-schema.mjs` deployed; R1–R6 compatibility rules documented |
+| 5 | `analyze_and_design_workflow` (any prompt) | `output_schema` API incompatibility — 400 on every llm_call attempt | Resolved — `diagnose-prompt-schema.mjs` deployed; R1–R7 compatibility rules documented |
+| 6 | any prompt with `model` field | Unsupported model name in `output_schema` or prompt output causes 400 | Resolved — R7 rule added; `model` added to `repair_state`; `analyze_and_design_workflow` v10 constrains `prompts_needed.model` to supported values |
+| 7 | any LLM response | Model returns prose preamble or explanation wrapped around fenced JSON — Ajv fails on raw text | Resolved — fence extraction regex added to `llm-client.mjs`: strips leading/trailing prose before parse attempt |
 
 #### LLM API capabilities in use
 
@@ -4321,7 +4426,7 @@ All LLM calls route through the Perplexity Agent API (`/v1/agent`).
 
 | Capability | Status | Notes |
 |---|---|---|
-| `response_format: { type: "json_schema" }` | ✅ Live (Session 23) | Enforces output schema at model level. Applied when `PGC_Prompt.output_schema` is present. `strict: false` — schema `additionalProperties: false` handles strictness at Ajv validation time |
+| `response_format: { type: "json_schema" }` | ✅ Live (Session 23) | Enforces output schema at model level. Applied when `PGC_Prompt.output_schema` is present. `strict: false` — schema `additionalProperties: false` handles strictness at Ajv validation time. **isSonar guard (Session 25):** only sent when model name contains `"sonar"` — non-sonar models return HTTP 400 with it present |
 | `max_output_tokens` | ✅ Live (Session 23) | Per-prompt ceiling from `PGC_Prompt.max_output_tokens`. Forwarded through `callLlm` and `callLlmWithCorrection` |
 | `reasoning` (`effort: low|medium|high`) | ⬜ Backlog | For complex analytical prompts like `analyze_and_design_workflow`. Not yet configured per-prompt |
 
@@ -4464,6 +4569,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 |---|---|---|---|---|---|
 | `pg` | ^8 | ~3M | MIT | PostgreSQL client — PGC + PGD connections in ServFunction | bootstrap |
 | `@aws-sdk/client-sqs` | ^3 | ~5M | Apache-2.0 | SQS SendMessage — WorkflowQueue + SlackResultsQueue | bootstrap |
+| `@aws-sdk/client-ssm` | ^3 | ~5M | Apache-2.0 | SSM GetParameter — reads SecureString API keys (OpenAI, Slack signing, etc.) in `embed-client.mjs` | Session 26 |
 | `@slack/web-api` | ^7 | ~1M | MIT | Slack API — chat.postMessage, chat.update, Block Kit | bootstrap |
 | `ajv` | ^8 | ~100M | MIT | JSON Schema validation — right-brain output validation loop | v3.2-design-domain-foundation |
 | `acorn` | ^8 | ~50M | MIT | AST parser for `js_transform` sandbox gate — see Section 6.5.1 | Session 19 |
@@ -4512,6 +4618,10 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-js-transform-sandbox-serv-entity-schema` | Session 19 — `condition` step type (expression eval, on_truthy/on_falsy). `get_entity` id-branch via `condition`. `js_transform` generic expression sandbox (acorn AST gate + `vm.runInNewContext`). `serv_entity_schema` step type. Intent fixes: Pass 1 domain derivation, `update_entity` missing fields guard, UC 1.4 `record_id` threading. Slack block 3000-char chunking. `serv_entity_get` not-found graceful handling. `extractSearchTerm` field=value prefix stripping. `seed_PGC_StepType.mjs` updated with `serv_entity_query`, `serv_entity_get`, `serv_entity_schema`. |
 | `v3.2-option-c-domain-registration` | Session 20 — deterministic domain registration |
 | `v3.2-local-state-sandbox-builtins-removed` | Session 21 — `local_state` added to `js_transform` sandbox; all five `transform_type` built-ins replaced by self-contained expressions in seed workflows; generic modal trigger for `add_table` (word-boundary keyword matching, verb-first tiebreaker); `existing_table_modifications` in `design_table` prompt v2; topological table sort in `create_domain` step 3c; `PGC_Schema` migration discipline; `list_entity` `orderBy` removed |: `create_domain` step 6 replaced `generate_crud_workflows` LLM call with `js_transform` expression (entity name, aliases, intent map rows, entity schemas derived from scaffold — no LLM, no variance). Option C: `PGC_EntitySchema.domain` column added; `classify-intent.mjs` reads entity name from DB instead of deriving it (`toEntityName()` kept as fallback). `delete-domain.mjs`: `PGC_EntitySchema` filter changed from `root_table IN` to `domain =`; `PGC_IntentMap` filter changed from `intent_category LIKE %_<domain>` to `pattern LIKE %<domain>%`. `text_input` human gates fixed: `interactive.mjs` opens Slack modal via `views.open` on `add_table` click; `handleViewSubmission()` handles `view_submission` payloads; `callback.mjs` skips posting for `text_input` gate type. Backlog audit: all Phase 3 references reclassified as Backlog or MVP per Javear use cases. |
+| `v3.2-troubleshoot-fix-workflow-complete` | Session 22 — Tier 1 reactive self-repair loop. `troubleshoot-workflow.mjs` PROC module: loads steps from `PGC_Workflow`, Level 1 static analysis, formats TroubleshootWorkflowResponse, `autoFix` path enqueues `FIX_WORKFLOW`. `fix-workflow.mjs` PROC module: LLM corrects failing steps, single human gate before `PGC_Workflow` write, cancels broken runs, posts "fixed — retry" Slack reply. Neither uses PGC_WorkflowRun lifecycle — PROC module pattern is correct fit for single-gate operations. `TROUBLESHOOT_WORKFLOW` + `FIX_WORKFLOW` SQS message types added to WorkflowQueue. Architecture Section 6.12 Tier 1. |
+| `v3.2-response-format-max-tokens` | Session 23 — `response_format: { type: "json_schema" }` restored on Perplexity Agent API calls via `callLlm`. `max_output_tokens` per-prompt ceiling forwarded through `callLlm` and `callLlmWithCorrection`. `PGC_Prompt.max_output_tokens` column added. `diagnose-prompt-schema.mjs` Tier 1b first implementation: R1–R6 rules, ephemeral WorkflowRun, human gate. `diagnose_prompt_schema` system workflow seeded. `DIAGNOSE_PROMPT_SCHEMA` SQS message type. `run-workflow.mjs` discriminates HTTP 400 → `DIAGNOSE_PROMPT_SCHEMA` vs other errors → `TROUBLESHOOT_WORKFLOW`. |
+| `v3.2-session24-complete` | Session 24 — iterator gate resume fix: `resume_gate` correctly resumes iterator frames. `diagnose_prompt_schema` R1–R6 validated end-to-end. Repair loop guard prevents repeated repair attempts on the same `PGC_Prompt` row. `create_workflow` routing fixes: dead `step:N` targets detected by Level 1 analysis. pgvector promoted from Backlog to Active (Section 10). Architecture Section 6.12 updated with full Tier 1a/1b/1c/2/3 taxonomy. |
+| `v3.2-session25-complete` | Session 25 — `llm-client.mjs`: `isSonar` guard — `response_format` only forwarded when model contains "sonar"; non-sonar models return HTTP 400 with it present. Fence extraction regex strips leading/trailing prose around fenced JSON. `step-executor.mjs`: `"false"` added to `executeCondition` falsy set; fixes `diagnose_prompt_schema` step 8 routing. `diagnose_prompt_schema` v3→v4: R7 rule (unsupported model names), step 10 patches `model` field, step 12 actionable guidance. `diagnose-prompt-schema.mjs`: `model` added to `repair_state`. `schema.mjs` + `openapi.yaml`: `POST /serv/schema/addColumn` with `schemaOnly: true` mode for metadata-only sync. `PGC_Prompt`: `probe_input jsonb` + `max_output_tokens integer` columns. `seed_PGC_Prompt.json`: 12 entries (one per intent_category), `probe_input` + `max_output_tokens` on all, `analyze_and_design_workflow` v10 constrains `prompts_needed.model`. `upsert-prompt.mjs` writes `probe_input` + `max_output_tokens`. `tests/integration/llm-prompt-schema.test.mjs`: one `it()` per prompt, `probe_input` substitution, HTTP 400 hard fail. |
 
 ---
 
@@ -4599,6 +4709,24 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — `run-workflow.mjs`, `step-executor.mjs`, `template-resolver.mjs` | ✅ |
 | | — velocity detector, execution accumulator, cycle detector (Section 6.10) | ⬜ deferred — see tech debt register |
 | | — Step Processor checks PGC_WorkflowRun.status before executing (shutdown contract) | ✅ |
+| 6 | Tier 1 reactive self-repair — troubleshoot + fix workflow | ✅ complete — v3.2-troubleshoot-fix-workflow-complete |
+| | — `troubleshoot-workflow.mjs` + `fix-workflow.mjs` PROC modules (no WorkflowRun lifecycle) | ✅ |
+| | — `on_failure: "human_feedback"` + `pushRecoveryGate()` in `run-workflow.mjs` | ✅ |
+| | — `TROUBLESHOOT_WORKFLOW` + `FIX_WORKFLOW` SQS message types | ✅ |
+| 7 | Tier 1b prompt schema repair — `diagnose-prompt-schema.mjs` | ✅ complete — v3.2-response-format-max-tokens / v3.2-session25-complete |
+| | — R1–R7 deterministic compatibility rules | ✅ |
+| | — `DIAGNOSE_PROMPT_SCHEMA` SQS type; `run-workflow.mjs` discriminates HTTP 400 | ✅ |
+| | — `PGC_Prompt.probe_input` + `max_output_tokens` columns | ✅ |
+| | — `POST /serv/schema/addColumn` with `schemaOnly` mode | ✅ |
+| | — Integration test: one `it()` per prompt with `probe_input` substitution | ✅ |
+| 8 | pgvector — semantic domain resolution | ⬜ Session 26 — see Section 10 |
+| | — Enable pgvector extension on RDS | ⬜ |
+| | — `embedding vector(1536)` column on `PGC_DomainHelp` via addColumn endpoint | ⬜ |
+| | — `vector` added to `ALLOWED_TYPES` in `schema.mjs` | ⬜ |
+| | — `src/shared/embed-client.mjs` — OpenAI text-embedding-3-small | ⬜ |
+| | — `dev_scripts/backfill-embeddings.mjs` — backfill existing PGC_DomainHelp rows | ⬜ |
+| | — `classify-intent-tiers.mjs` — `semanticDomainMatch()` replaces alias fallback | ⬜ |
+| | — `create_domain` workflow — embedding step after DomainHelp insert | ⬜ |
 
 **Step types — implemented vs deferred:**
 
@@ -4806,7 +4934,7 @@ PASS 2 Backlog — after keyword-scan miss:
 Steps 1–6 fix the immediate domain resolution problem.
 Steps 7–8 extend to new domain registrations and workflow routing.
 
-Status: **Active — Session 25 implementation target.**
+Status: **Active — Session 26 implementation target.**
 
 ---
 
@@ -4907,9 +5035,33 @@ All Phase 1 refactoring is complete as of `v3.2-clean-baseline`.
 | `POST /proc/design-domain` | ✅ Live — LLM design + validation + WorkflowRun lifecycle |
 | `POST /proc/review-output` | ✅ Live — Ajv + semantic validation, 2-attempt correction loop |
 | `POST /proc/shutdown` | ✅ Live — emergency stop, cancel active runs |
-| `POST /proc/classify-intent` | ⬜ Phase 2 item 4 — Intent Preprocessor |
+| `POST /proc/classify-intent` | ✅ Live — Intent Preprocessor (Phase 2 item 4) |
 | `POST /proc/run-workflow` | ✅ Live — Step Processor |
+| `POST /proc/troubleshoot-workflow` | ✅ Live — Tier 1 static analysis, optional autoFix |
+| `POST /proc/fix-workflow` | ✅ Live — Tier 1 LLM repair + human gate confirm |
+| `POST /proc/diagnose-prompt-schema` | ✅ Live — Tier 1b deterministic R1–R7 schema repair |
+| `POST /proc/simulate-workflow` | ✅ Live — Level 1 + Level 2 analysis without WorkflowRun |
 | `POST /proc/improve-prompt` | ⬜ Backlog — prompt evolution |
+
+**Planned SERV endpoints** (documented in `openapi.yaml`):
+
+| Endpoint | Description |
+|---|---|
+| `POST /serv/schema/createTable` | ✅ Live — DDL + PGC_Schema + PGC_TableMap write |
+| `POST /serv/schema/updateTable` | ✅ Live — metadata update (ALTER TABLE not yet executed) |
+| `POST /serv/schema/addColumn` | ✅ Live (Session 25) — physical DDL + PGC_Schema sync; `schemaOnly: true` for metadata-only |
+| `POST /serv/table/getRows` | ✅ Live |
+| `POST /serv/table/insertRow` | ✅ Live |
+| `POST /serv/table/updateRows` | ✅ Live |
+| `POST /serv/table/deleteRows` | ✅ Live |
+| `POST /serv/entity/listEntities` | ✅ Live |
+| `POST /serv/entity/getEntity` | ✅ Live |
+| `POST /serv/entity/insertEntity` | ✅ Live |
+| `POST /serv/entity/upsertEntity` | ✅ Live |
+| `POST /serv/entity/updateEntity` | ✅ Live |
+| `POST /serv/entity/deleteEntity` | ✅ Live |
+| `POST /serv/bootstrap` | ✅ Live — install-time only |
+| `POST /serv/embed/domain-help` | ⬜ Session 26 — embed + update PGC_DomainHelp.embedding for a given domain id |
 
 ---
 

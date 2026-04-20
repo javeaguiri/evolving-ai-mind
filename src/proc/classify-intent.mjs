@@ -224,7 +224,8 @@ async function classify(userInput, sessionId, traceId) {
   }
 
   // ── Pass 2 — Domain-Workflow Lookup ───────────────────────────────────────
-  const domainMatch = matchDomainAlias(userInput, domainRows);
+  const domainMatch = matchDomainAlias(userInput, domainRows)
+                   ?? await semanticDomainMatch(userInput, traceId);
   if (domainMatch) {
     console.info('classify-intent: Pass 2 domain resolved', { domain: domainMatch.domain, traceId });
 
@@ -275,6 +276,52 @@ async function classify(userInput, sessionId, traceId) {
 
   // ── No Pre-pass, Pass 1, or Pass 2 match — Tier 2 ────────────────────────
   return wrap(await tier2(userInput, null, workflowRows, traceId));
+}
+
+// ---------------------------------------------------------------------------
+// Semantic domain match — pgvector fallback for Pass 2 alias miss
+// ---------------------------------------------------------------------------
+
+// Similarity threshold for domain resolution — read from PGC_SystemContext
+// when that integration exists; hardcoded for MVP.
+const DOMAIN_SIMILARITY_THRESHOLD = 0.75;
+
+/**
+ * Call SERV getRows with vectorSearch to find the best-matching domain by
+ * cosine similarity of PGC_DomainHelp.embedding against the user's input.
+ * Returns the top domain row (with a `similarity` field) or null if no row
+ * meets the threshold. Only called when exact alias matching returns null.
+ *
+ * Embedding computation happens entirely in SERV — classify-intent never
+ * imports embed-client and never sees raw vector values.
+ *
+ * @param {string} userInput
+ * @param {string} traceId
+ * @returns {Promise<object|null>}
+ */
+async function semanticDomainMatch(userInput, traceId) {
+  let resp;
+  try {
+    resp = await getRows('PGC_DomainHelp', [], null, 1, {
+      column:    'embedding',
+      queryText: userInput,
+      threshold: DOMAIN_SIMILARITY_THRESHOLD,
+      limit:     1,
+    });
+  } catch (e) {
+    console.warn('classify-intent: semanticDomainMatch SERV call failed', { traceId, error: e.message });
+    return null;
+  }
+
+  if (resp.statusCode !== 200 || !resp.rows?.length) return null;
+
+  const match = resp.rows[0];
+  console.info('classify-intent: Pass 2 semantic match', {
+    traceId,
+    domain:     match.domain,
+    similarity: match.similarity,
+  });
+  return match;
 }
 
 // ---------------------------------------------------------------------------
