@@ -20,9 +20,10 @@
 import { ok, err }            from '../shared/lambda-utils.mjs';
 import { enqueueWorkflow }    from '../shared/sqs-callback.mjs';
 import { getRows, insertRow } from '../shared/serv-client.mjs';
+import { matchDomainAlias }   from './classify-intent-tiers.mjs';
 
 export async function handle(req) {
-  const { userInput, domain = null } = req.body ?? {};
+  const { userInput, domain: incomingDomain = null } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
 
@@ -39,10 +40,31 @@ export async function handle(req) {
     return err(400, 'userInput is required', req.correlationId);
   }
 
+  // --- Domain resolution ---
+  // Attempt to resolve a domain from userInput via alias matching so that
+  // step 1 (serv_query PGC_Schema filtered by domain) returns real schema rows.
+  // Falls back gracefully — if no domain is found the workflow still runs with
+  // domain_schema: [] and the LLM applies domain-free mode.
+  let domain = incomingDomain ?? null;
+  if (!domain) {
+    try {
+      const dhResp = await getRows('PGC_DomainHelp');
+      if (dhResp.success && dhResp.rows?.length) {
+        const hit = matchDomainAlias(userInput.trim(), dhResp.rows);
+        if (hit) {
+          domain = hit.domain;
+          console.info('proc/create-workflow: domain resolved via alias', { domain, traceId });
+        }
+      }
+    } catch (e) {
+      console.warn('proc/create-workflow: domain resolution failed — continuing with null', { error: e.message, traceId });
+    }
+  }
+
   console.info('proc/create-workflow: received', {
     traceId,
     userInput: userInput.trim(),
-    domain: domain ?? null,
+    domain,
   });
 
   // Resolve create_workflow workflow id
@@ -72,7 +94,7 @@ export async function handle(req) {
     trace_id:     traceId,
     triggered_by: req.source === 'sqs' ? 'slack' : 'api',
     status:       'running',
-    input:        { userInput: userInput.trim(), domain: domain ?? null },
+    input:        { userInput: userInput.trim(), domain },
     callback:     callback ?? null,
     started_at:   new Date().toISOString(),
   });
