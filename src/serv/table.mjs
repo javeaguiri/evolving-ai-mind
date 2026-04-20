@@ -21,8 +21,9 @@
 //   - filters must be non-empty on UPDATE and DELETE — mass unfiltered writes are not permitted
 //   - No raw SQL accepted in any field
 
-import { ok, err }      from '../shared/lambda-utils.mjs';
-import { getClient }    from './init-brain.mjs';
+import { ok, err }    from '../shared/lambda-utils.mjs';
+import { getClient }  from './init-brain.mjs';
+import { embedText }  from '../shared/embed-client.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -56,9 +57,10 @@ export async function handle(req) {
 async function getRows(req) {
   const {
     tableName,
-    filters  = [],
+    filters      = [],
     orderBy,
-    limit    = 100,
+    limit        = 100,
+    vectorSearch = null,
   } = req.body;
 
   if (!tableName) {
@@ -83,44 +85,90 @@ async function getRows(req) {
     }
 
     const { target, columns: schemaColumns } = gate.rows[0];
-
-    // --- Validate filter column names against PGC_Schema ---
     const validColumns = new Set(schemaColumns.map(c => c.name));
-    const filterError  = validateFilters(filters, validColumns);
-    if (filterError) {
-      return err(400, filterError, req.correlationId);
-    }
+
+    // --- Validate regular filter column names ---
+    const filterError = validateFilters(filters, validColumns);
+    if (filterError) return err(400, filterError, req.correlationId);
 
     // --- Validate orderBy column ---
     if (orderBy && !validColumns.has(orderBy.column)) {
       return err(400, `orderBy column "${orderBy.column}" not found in schema`, req.correlationId);
     }
 
-    // --- Validate limit ---
+    // --- Validate vectorSearch if present ---
+    if (vectorSearch) {
+      if (!vectorSearch.column || !vectorSearch.queryText) {
+        return err(400, 'vectorSearch requires column and queryText', req.correlationId);
+      }
+      const vsCol = schemaColumns.find(c => c.name === vectorSearch.column);
+      if (!vsCol) {
+        return err(400, `vectorSearch column "${vectorSearch.column}" not found in schema`, req.correlationId);
+      }
+      if (vsCol.type !== 'vector') {
+        return err(400, `vectorSearch column "${vectorSearch.column}" must be type vector`, req.correlationId);
+      }
+    }
+
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 100), 1000);
 
-    // --- Build parameterised query ---
-    const { whereClause, values } = buildWhereClause(filters);
-
-    const orderClause = orderBy
-      ? `ORDER BY "${orderBy.column}" ${orderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
-      : '';
-
-    // Choose the correct DB client based on where the table lives
     const dbClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
       : pgcClient;
 
     if (target === 'pgd') await dbClient.connect();
 
-    const sql = `
-      SELECT * FROM "${tableName}"
-      ${whereClause}
-      ${orderClause}
-      LIMIT ${safeLimit}
-    `;
+    let result;
 
-    const result = await dbClient.query(sql, values);
+    if (vectorSearch) {
+      // --- pgvector cosine similarity search ---
+      // Embed the query text in SERV — caller supplies plain text only.
+      const queryVec      = await embedText(vectorSearch.queryText, req.correlationId);
+      const threshold     = vectorSearch.threshold ?? 0.75;
+      const vsLimit       = Math.min(vectorSearch.limit ?? safeLimit, safeLimit);
+      const vsCol         = `"${vectorSearch.column}"`;
+
+      // Regular filters fill $1..$n; vector is $n+1; threshold is $n+2.
+      const { whereClause: regularWhere, values: filterVals } = buildWhereClause(filters);
+      const vecIdx = filterVals.length + 1;
+      const thrIdx = filterVals.length + 2;
+
+      const vectorCondition = `(1 - (${vsCol} <=> $${vecIdx}::vector)) >= $${thrIdx}`;
+      const combinedWhere   = filterVals.length > 0
+        ? `${regularWhere} AND ${vectorCondition}`
+        : `WHERE ${vectorCondition}`;
+
+      const sql = `
+        SELECT *, 1 - (${vsCol} <=> $${vecIdx}::vector) AS similarity
+        FROM "${tableName}"
+        ${combinedWhere}
+        ORDER BY ${vsCol} <=> $${vecIdx}::vector
+        LIMIT ${vsLimit}
+      `;
+
+      result = await dbClient.query(sql, [
+        ...filterVals,
+        JSON.stringify(queryVec),
+        threshold,
+      ]);
+
+    } else {
+      // --- Standard parameterised SELECT ---
+      const { whereClause, values } = buildWhereClause(filters);
+
+      const orderClause = orderBy
+        ? `ORDER BY "${orderBy.column}" ${orderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
+        : '';
+
+      const sql = `
+        SELECT * FROM "${tableName}"
+        ${whereClause}
+        ${orderClause}
+        LIMIT ${safeLimit}
+      `;
+
+      result = await dbClient.query(sql, values);
+    }
 
     if (target === 'pgd') await dbClient.end();
 
@@ -138,6 +186,44 @@ async function getRows(req) {
   } finally {
     await pgcClient.end();
   }
+}
+
+// ---------------------------------------------------------------------------
+// resolveEmbedding — build embed text from source keys and call embedText()
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a vector column definition (with embed_source) and a data row,
+ * compute and return the embedding vector.
+ *
+ * @param {{ name: string, embed_source: string[] }} vectorCol
+ * @param {object} row  Complete row data (merged current + updates for updateRows)
+ * @param {string} traceId
+ * @returns {Promise<number[]>}
+ */
+async function resolveEmbedding(vectorCol, row, traceId) {
+  const text = vectorCol.embed_source.map(key => {
+    const v = row[key];
+    if (v === null || v === undefined) return '';
+    if (Array.isArray(v)) return v.join(' ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }).join(' ').trim();
+
+  return embedText(text, traceId);
+}
+
+/**
+ * Return vector columns that have embed_source defined in their schema definition.
+ * These are automatically populated by SERV on insert/update.
+ *
+ * @param {object[]} schemaColumns  Columns array from PGC_Schema
+ * @returns {object[]}
+ */
+function getEmbedColumns(schemaColumns) {
+  return schemaColumns.filter(
+    c => c.type === 'vector' && Array.isArray(c.embed_source) && c.embed_source.length > 0
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -185,9 +271,22 @@ async function insertRow(req) {
       }
     }
 
+    // --- Compute embeddings for vector columns with embed_source ---
+    // Caller does not provide these — SERV always computes them from source fields.
+    const effectiveRow = { ...row };
+    const embedCols = getEmbedColumns(schemaColumns);
+    for (const vc of embedCols) {
+      try {
+        effectiveRow[vc.name] = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+      } catch (embErr) {
+        console.error(`table insertRow: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
+        return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
+      }
+    }
+
     // --- Build parameterised INSERT ---
-    const cols   = Object.keys(row);
-    const vals         = Object.values(row).map(v =>
+    const cols         = Object.keys(effectiveRow);
+    const vals         = Object.values(effectiveRow).map(v =>
       (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
     );
     const colList      = cols.map(c => `"${c}"`).join(', ');
@@ -281,10 +380,52 @@ async function updateRows(req) {
     const filterError = validateFilters(filters, validColumns);
     if (filterError) return err(400, filterError, req.correlationId);
 
+    // --- Setup DB client ---
+    const dbClient = target === 'pgd'
+      ? getClient(process.env.PGD_DATABASE_URL)
+      : pgcClient;
+
+    if (target === 'pgd') await dbClient.connect();
+
+    // --- Re-compute embeddings when any embed_source field is changing ---
+    // Read-before-write: merge current row with updates so the embedding
+    // reflects the full post-update state, not just the changed fields.
+    // Known limitation: when filters match multiple rows the first row's
+    // values are used for missing embed_source fields (same partial data
+    // is being written to all matched rows anyway).
+    let effectiveUpdates = { ...updates };
+    const embedCols = getEmbedColumns(schemaColumns);
+    const needsEmbed = embedCols.filter(vc =>
+      vc.embed_source.some(sk => sk in updates)
+    );
+
+    if (needsEmbed.length > 0) {
+      const { whereClause: readWhere, values: readVals } = buildWhereClause(filters);
+      const existing = await dbClient.query(
+        `SELECT * FROM "${tableName}" ${readWhere} LIMIT 1`,
+        readVals
+      );
+
+      if (existing.rows.length > 0) {
+        const currentRow = existing.rows[0];
+        for (const vc of needsEmbed) {
+          const merged = { ...currentRow, ...effectiveUpdates };
+          try {
+            effectiveUpdates[vc.name] = await resolveEmbedding(vc, merged, req.correlationId);
+          } catch (embErr) {
+            console.error(`table updateRows: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
+            return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
+          }
+        }
+      } else {
+        console.warn('table updateRows: embed re-compute skipped — filters matched no rows', { tableName });
+      }
+    }
+
     // --- Build parameterised SET and WHERE clauses ---
-    // SET clause params are $1..$n; WHERE clause params start at $n+1
-    const updateCols = Object.keys(updates);
-    const updateVals = Object.values(updates).map(v =>
+    // SET clause params are $1..$n; WHERE clause params start at $n+1.
+    const updateCols = Object.keys(effectiveUpdates);
+    const updateVals = Object.values(effectiveUpdates).map(v =>
       (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
     );
     const setClause = updateCols
@@ -292,12 +433,6 @@ async function updateRows(req) {
       .join(', ');
 
     const { whereClause, values: filterVals } = buildWhereClause(filters, updateCols.length + 1);
-
-    const dbClient = target === 'pgd'
-      ? getClient(process.env.PGD_DATABASE_URL)
-      : pgcClient;
-
-    if (target === 'pgd') await dbClient.connect();
 
     const result = await dbClient.query(
       `UPDATE "${tableName}" SET ${setClause} ${whereClause} RETURNING *`,

@@ -92,6 +92,9 @@
       { "name": "aliases",     "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
       { "name": "description", "type": "text",        "nullable": true },
       { "name": "commands",    "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
+      { "name": "embedding",   "type": "vector",      "nullable": true,
+        "embed_source": ["domain", "description", "aliases"],
+        "comment": "pgvector 1024-dim embedding computed by SERV from domain+description+aliases. Used for semantic domain resolution in classify-intent Pass 2." },
       { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
       { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
     ],

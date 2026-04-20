@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: evolving-mind-ai
-  version: 3.4.0
+  version: 3.5.0
   description: >
     Self-evolving cognitive automation system.
     Slack → Lambda → PostgreSQL → LLM pipeline.
@@ -76,6 +76,7 @@ components:
             - date
             - time
             - uuid
+            - vector
         primaryKey:
           type: boolean
         nullable:
@@ -85,6 +86,16 @@ components:
         default:
           type: string
           example: "now()"
+        embed_source:
+          type: array
+          description: >
+            Vector columns only. Names of sibling columns whose concatenated values
+            are used to compute the embedding. SERV automatically calls embedText()
+            on insert and re-computes on update when any embed_source field changes.
+            Callers never supply the vector value — it is always computed by SERV.
+          items:
+            type: string
+          example: ["domain", "description", "aliases"]
 
     ForeignKeyDefinition:
       type: object
@@ -309,6 +320,50 @@ components:
             Required for all operators except is_null and not_null.
             Must be an array when op is in.
           example: active
+
+    VectorSearch:
+      type: object
+      description: >
+        pgvector cosine similarity search descriptor. When present on getRows,
+        SERV embeds queryText using OpenAI text-embedding-3-small and ranks results
+        by cosine similarity against the named vector column. Rows below the
+        similarity threshold are excluded. Each result row gains a `similarity`
+        float field (0–1, where 1 = identical).
+
+        Can be combined with filters — regular filter conditions pre-qualify rows,
+        vectorSearch then ranks the survivors. mutually exclusive with orderBy
+        (vector distance ordering always takes precedence).
+
+        The caller supplies plain text only. SERV owns all embedding operations.
+      required: [column, queryText]
+      properties:
+        column:
+          type: string
+          description: Name of the vector column to search against. Must have type=vector in PGC_Schema.
+          example: embedding
+        queryText:
+          type: string
+          description: >
+            Plain text to embed and compare. SERV calls embedText() and computes
+            cosine similarity against every qualifying row.
+          example: spanish flashcard quiz
+        threshold:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 0.75
+          description: >
+            Minimum cosine similarity for a row to be included in results.
+            0 = accept everything, 1 = exact match only. Default 0.75.
+          example: 0.75
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+          description: Maximum number of rows to return, ordered by descending similarity.
+          example: 1
 
     Callback:
       type: object
@@ -742,13 +797,15 @@ components:
                              error posted to user. No DB operation performed.
         confidence:
           type: string
-          enum: [exact, keyword_match, crud, llm_classified, heavy_lift]
+          enum: [exact, keyword_match, semantic_match, crud, llm_classified, heavy_lift]
           description: >
-            exact         — Pass 1 PGC_IntentMap regex matched. Zero LLM cost.
-            keyword_match — Pass 2 PGC_Workflow.intent_keywords token scan matched. Zero LLM cost.
-            crud          — Pass 2 CRUD fallback for PGC_/PGD_-prefixed table input. Zero LLM cost.
+            exact          — Pass 1 PGC_IntentMap regex matched. Zero LLM cost.
+            keyword_match  — Pass 2 PGC_Workflow.intent_keywords token scan matched. Zero LLM cost.
+            semantic_match — Pass 2 pgvector cosine similarity matched PGC_DomainHelp.embedding.
+                             Zero LLM cost. Falls through to keyword scan for workflow selection.
+            crud           — Pass 2 CRUD fallback for PGC_/PGD_-prefixed table input. Zero LLM cost.
             llm_classified — Tier 2 sonar call produced the classification.
-            heavy_lift    — Tier 3 routed to create_domain or create_workflow.
+            heavy_lift     — Tier 3 routed to create_domain or create_workflow.
         workflow_name:
           type: string
           description: >
@@ -2642,6 +2699,17 @@ paths:
                     type: integer
                     nullable: true
                   schemaOnly: true
+              vector_with_embed_source:
+                summary: >
+                  Add vector column with embed_source — SERV will auto-embed on
+                  insert/update using the named source fields
+                value:
+                  tableName: PGC_DomainHelp
+                  column:
+                    name: embedding
+                    type: vector
+                    nullable: true
+                    embed_source: ["domain", "description", "aliases"]
       responses:
         '200':
           description: Column added or registered
@@ -2718,6 +2786,17 @@ paths:
         Parameterised SELECT gated by PGC_TableMap. Supports filters, orderBy,
         and limit. Column names in filters are validated against PGC_Schema.
         Filter operators — eq, neq, gt, gte, lt, lte, like, in, is_null, not_null.
+
+        **pgvector semantic search (vectorSearch)**
+
+        When vectorSearch is supplied, SERV embeds queryText using OpenAI
+        text-embedding-3-small and ranks results by cosine similarity against the
+        named vector column. Results include a `similarity` float (0–1).
+        vectorSearch can be combined with filters — filters pre-qualify rows,
+        vectorSearch then ranks survivors. vectorSearch takes precedence over
+        orderBy when both are specified.
+
+        The caller supplies plain text only — SERV owns all embedding operations.
       tags: [SERV-Table]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -2739,6 +2818,7 @@ paths:
                     $ref: '#/components/schemas/FilterItem'
                 orderBy:
                   type: object
+                  description: Ignored when vectorSearch is present — similarity ordering always applies.
                   properties:
                     column:
                       type: string
@@ -2751,29 +2831,73 @@ paths:
                   minimum: 1
                   maximum: 1000
                   default: 100
-            example:
-              tableName: PGC_Prompt
-              filters:
-                - { column: intent_category, op: eq, value: create_domain }
-                - { column: was_successful,  op: not_null }
-              orderBy: { column: version, direction: desc }
-              limit: 10
+                vectorSearch:
+                  $ref: '#/components/schemas/VectorSearch'
+            examples:
+              standard:
+                summary: Standard filtered SELECT
+                value:
+                  tableName: PGC_Prompt
+                  filters:
+                    - { column: intent_category, op: eq, value: create_domain }
+                    - { column: was_successful,  op: not_null }
+                  orderBy: { column: version, direction: desc }
+                  limit: 10
+              semantic_search:
+                summary: pgvector semantic domain resolution — top-1 match
+                value:
+                  tableName: PGC_DomainHelp
+                  vectorSearch:
+                    column: embedding
+                    queryText: spanish flashcard quiz
+                    threshold: 0.75
+                    limit: 1
+              combined:
+                summary: Filters + vectorSearch — qualify then rank
+                value:
+                  tableName: PGD_Recipes
+                  filters:
+                    - { column: cuisine_type, op: eq, value: Italian }
+                  vectorSearch:
+                    column: description_embedding
+                    queryText: creamy pasta with eggs and guanciale
+                    threshold: 0.70
+                    limit: 5
       responses:
         '200':
-          description: Matching rows returned
+          description: >
+            Matching rows returned. When vectorSearch was used, each row includes
+            a `similarity` float field (0–1) — absent on standard SELECT.
           content:
             application/json:
-              example:
-                success: true
-                tableName: PGC_Prompt
-                count: 1
-                rows:
-                  - id: 1
-                    intent_category: create_domain
-                    prompt_text: "You are a schema designer..."
-                    version: 1
+              examples:
+                standard:
+                  summary: Standard rows — no similarity field
+                  value:
+                    success: true
+                    tableName: PGC_Prompt
+                    count: 1
+                    rows:
+                      - id: 1
+                        intent_category: create_domain
+                        prompt_text: "You are a schema designer..."
+                        version: 1
+                semantic:
+                  summary: Vector search — similarity field present
+                  value:
+                    success: true
+                    tableName: PGC_DomainHelp
+                    count: 1
+                    rows:
+                      - id: 3
+                        domain: spanish_flashcards
+                        aliases: ["flashcard", "flashcards", "spanish"]
+                        description: Spanish vocabulary flashcard domain
+                        similarity: 0.871
         '400':
-          description: Validation error — bad table name, unknown column, disallowed operator
+          description: >
+            Validation error — bad table name, unknown column, disallowed operator,
+            vectorSearch column not found or not of type vector
           content:
             application/json:
               schema:
@@ -2781,7 +2905,7 @@ paths:
         '404':
           description: Table not registered in PGC_TableMap
         '500':
-          description: Query failed
+          description: Query or embedding call failed
 
   /api/v1/serv/table/insertRow:
     post:
@@ -2789,6 +2913,14 @@ paths:
       description: >
         Single INSERT gated by PGC_TableMap allow_insert flag.
         Column names validated against PGC_Schema. Returns full inserted row.
+
+        **Automatic embedding**
+
+        When the table has vector columns with `embed_source` defined in PGC_Schema,
+        SERV automatically computes the embedding from the named source fields and
+        injects it before executing the INSERT. Callers must not supply the vector
+        column — it is always computed server-side from the source field values in
+        the row payload.
       tags: [SERV-Table]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -2806,17 +2938,32 @@ paths:
                   example: PGC_DomainHelp
                 row:
                   type: object
-                  description: Column/value pairs to insert
-            example:
-              tableName: PGC_DomainHelp
-              row:
-                domain: recipes
-                aliases: ["recipe", "cooking"]
-                description: Recipe management domain
-                commands: []
+                  description: >
+                    Column/value pairs to insert. Vector columns with embed_source
+                    in PGC_Schema are computed and injected by SERV — do not include
+                    them in this payload.
+            examples:
+              standard:
+                summary: Non-vector table insert
+                value:
+                  tableName: PGC_IntentMap
+                  row:
+                    pattern: create.domain|new.domain
+                    intent_category: create_domain
+                    action_type: workflow
+              with_embedding:
+                summary: >
+                  Table with embed_source — omit embedding, SERV computes it automatically
+                value:
+                  tableName: PGC_DomainHelp
+                  row:
+                    domain: recipes
+                    aliases: ["recipe", "cooking"]
+                    description: Recipe management domain
+                    commands: []
       responses:
         '200':
-          description: Row inserted
+          description: Row inserted — embedding column populated automatically when applicable
           content:
             application/json:
               example:
@@ -2825,6 +2972,9 @@ paths:
                 row:
                   id: 1
                   domain: recipes
+                  aliases: ["recipe", "cooking"]
+                  description: Recipe management domain
+                  embedding: "<1536-dim vector — omitted from display>"
         '400':
           description: Validation error — bad table name or unknown column
           content:
@@ -2836,7 +2986,7 @@ paths:
         '404':
           description: Table not registered in PGC_TableMap
         '500':
-          description: Insert failed
+          description: Insert or embedding computation failed
 
   /api/v1/serv/table/updateRows:
     post:
@@ -2846,6 +2996,24 @@ paths:
         Column names in both updates and filters are validated against PGC_Schema.
         filters is required and must be non-empty — unfiltered mass UPDATE is not permitted.
         Returns all updated rows via RETURNING *.
+
+        **Automatic embedding re-computation**
+
+        When the table has vector columns with `embed_source` defined in PGC_Schema,
+        and at least one `embed_source` field is present in `updates`, SERV performs
+        a read-before-write: it SELECTs the current row, merges it with `updates`,
+        recomputes the embedding from all source fields (not just the changed ones),
+        and includes the refreshed vector in the UPDATE. This ensures the embedding
+        always reflects the complete row state, even on partial updates.
+
+        Callers do not need to supply the vector column in `updates`. If an
+        embed_source field is not changing, it still does not need to be included —
+        SERV reads the current value from the DB.
+
+        Known limitation: when filters match multiple rows, the first matched row's
+        values are used for any embed_source fields absent from `updates`. This is
+        the same data being written to all matched rows in any case — uniform bulk
+        updates remain consistent.
       tags: [SERV-Table]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -2869,19 +3037,36 @@ paths:
                     $ref: '#/components/schemas/FilterItem'
                 updates:
                   type: object
-                  description: Column/value pairs to set. jsonb values are serialized automatically.
+                  description: >
+                    Column/value pairs to set. jsonb values are serialized automatically.
+                    Vector columns with embed_source are recomputed by SERV when any
+                    embed_source field appears here — do not supply the vector value directly.
                   example:
                     status: cancelled
-            example:
-              tableName: PGC_WorkflowRun
-              filters:
-                - { column: id,     op: eq,  value: 42 }
-                - { column: status, op: eq,  value: active }
-              updates:
-                status: cancelled
+            examples:
+              standard:
+                summary: Standard update — no vector columns involved
+                value:
+                  tableName: PGC_WorkflowRun
+                  filters:
+                    - { column: id,     op: eq, value: 42 }
+                    - { column: status, op: eq, value: active }
+                  updates:
+                    status: cancelled
+              alias_update:
+                summary: >
+                  Update aliases on PGC_DomainHelp — SERV re-embeds automatically
+                value:
+                  tableName: PGC_DomainHelp
+                  filters:
+                    - { column: domain, op: eq, value: recipes }
+                  updates:
+                    aliases: ["recipe", "cooking", "meal", "dish"]
       responses:
         '200':
-          description: Rows updated — updatedCount is 0 when filters match nothing
+          description: >
+            Rows updated — updatedCount is 0 when filters match nothing.
+            When embedding was recomputed, the updated row includes the refreshed vector.
           content:
             application/json:
               examples:

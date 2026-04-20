@@ -37,6 +37,7 @@ const ALLOWED_TYPES = new Set([
   'jsonb', 'json',
   'timestamptz', 'timestamp', 'date', 'time',
   'uuid',
+  'vector',
 ]);
 
 // Allowed table name pattern — PGC_* system tables, PGD_* user domain tables
@@ -213,7 +214,11 @@ async function addColumn(req) {
     }
 
     // Register in PGC_Schema.columns
+    // Preserve safe metadata fields from the column definition (e.g. embed_source for vector columns).
     const newCol = { name: colName, type: colType, nullable };
+    if (Array.isArray(column.embed_source) && column.embed_source.length > 0) {
+      newCol.embed_source = column.embed_source;
+    }
     await client.query(
       `UPDATE "PGC_Schema"
           SET columns    = columns || $1::jsonb,

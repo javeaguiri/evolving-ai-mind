@@ -395,8 +395,10 @@ Resources:
       Handler: handler.handler
       Environment:
         Variables:
-          PGC_DATABASE_URL:     '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
-          PGD_DATABASE_URL:     '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
+          PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
+          PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
+          EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
+          EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
       Events:
         ServProxy:
           Type: Api
