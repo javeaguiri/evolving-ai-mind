@@ -3,12 +3,14 @@
 // See LICENSE file in the project root for full license terms.
 // dev_scripts/backfill-embeddings.mjs
 //
-// One-shot backfill: embeds all PGC_DomainHelp rows where embedding IS NULL.
+// Backfill: re-embeds ALL PGC_DomainHelp rows unconditionally.
+// Run any time embeddings need to be recomputed — after model changes,
+// normalisation fixes, or new domains added outside the normal workflow.
 //
-// Run once after:
+// Run after:
 //   1. pgvector extension enabled on RDS
 //   2. embedding column added via addColumn endpoint
-//   3. SAM deploy with embed-client.mjs + OPENAI_API_KEY_PARAM in ServFunction
+//   3. SAM deploy with updated embed-client.mjs + table.mjs
 //
 // Usage:
 //   set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/backfill-embeddings.mjs
@@ -37,11 +39,10 @@ async function servPost(path, body) {
 }
 
 async function main() {
-  console.info('backfill-embeddings: reading PGC_DomainHelp rows with null embedding...');
+  console.info('backfill-embeddings: reading all PGC_DomainHelp rows...');
 
   const listResp = await servPost('/serv/table/getRows', {
     tableName: 'PGC_DomainHelp',
-    filters:   [{ column: 'embedding', op: 'is_null' }],
     limit:     1000,
   });
 

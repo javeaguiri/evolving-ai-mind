@@ -7,37 +7,35 @@
 // Used by:
 //   src/serv/table.mjs  — write-time auto-embedding (insertRow, updateRows)
 //
-// Model: pplx-embed-v1-0.6b — 1024 dimensions, INT8 quantization, $0.004/M tokens.
-// Sufficient for domain alias semantic matching and workflow routing similarity.
+// Model: pplx-embed-v1-4b — 2560 dimensions, INT8 quantization, $0.03/M tokens.
+// Higher quality than 0.6b; required for reliable cosine similarity at 0.75 threshold.
+// At household scale (~1K classifications/month) cost is under $0.01/month.
 //
 // API key and endpoint are injected as Lambda environment variables by CloudFormation
 // ({{resolve:ssm:...}} at deploy time). No runtime SSM call required.
 //
 // Response format: base64-encoded signed INT8 values per the Perplexity embeddings spec.
-// Decoded to a number[] before storage — pgvector accepts integer values and normalises
-// internally for cosine distance (<=> operator).
+//
+// Document embedding strategy — embedTexts():
+//   Each source field value (aliases individually, description, domain name) is passed
+//   as a separate string in one batched API call. The resulting vectors are averaged
+//   component-by-component into a single stored vector. This produces better recall
+//   for short focused queries (e.g. "flashcards") because each alias contributes its
+//   own dedicated representation to the averaged centroid rather than being diluted
+//   into a long concatenated string embedding.
+//
+// Query embedding — embedText():
+//   Single-string embed for query-time use in getRows vectorSearch. Short natural
+//   language queries embed correctly as a single input.
 
-const EMBEDDING_MODEL     = 'pplx-embed-v1-0.6b';
-const EMBEDDING_DIMENSION = 1024;
+const EMBEDDING_MODEL     = 'pplx-embed-v1-4b';
+const EMBEDDING_DIMENSION = 2560;
 
 // ---------------------------------------------------------------------------
-// embedText — convert text to a 1024-dimension integer array
+// callEmbeddingsApi — shared HTTP call; returns decoded vectors in input order
 // ---------------------------------------------------------------------------
 
-/**
- * Embed text using Perplexity pplx-embed-v1-0.6b.
- * Returns a number[] of EMBEDDING_DIMENSION signed integer values (INT8 decoded).
- * pgvector stores these as float4 and normalises for cosine similarity.
- *
- * @param {string} text     Source text to embed
- * @param {string} traceId  Correlation ID for logging
- * @returns {Promise<number[]>}
- */
-export async function embedText(text, traceId) {
-  if (!text || !text.trim()) {
-    throw new Error('embedText: text must be a non-empty string');
-  }
-
+async function callEmbeddingsApi(inputs, traceId) {
   const apiUrl = process.env.EMBEDDING_API_URL;
   const apiKey = process.env.EMBEDDING_API_KEY;
 
@@ -50,10 +48,7 @@ export async function embedText(text, traceId) {
       'Content-Type':  'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model:  EMBEDDING_MODEL,
-      input:  [text.trim()],
-    }),
+    body: JSON.stringify({ model: EMBEDDING_MODEL, input: inputs }),
   });
 
   if (!resp.ok) {
@@ -62,22 +57,93 @@ export async function embedText(text, traceId) {
   }
 
   const data = await resp.json();
-  const b64  = data?.data?.[0]?.embedding;
 
-  if (typeof b64 !== 'string') {
-    throw new Error(`embedText: unexpected response shape from Perplexity (traceId=${traceId})`);
+  if (!Array.isArray(data?.data) || data.data.length !== inputs.length) {
+    throw new Error(`callEmbeddingsApi: unexpected response shape (traceId=${traceId})`);
   }
 
-  const vector = decodeBase64Int8(b64);
+  // API returns results in the same order as inputs — decode each.
+  return data.data
+    .sort((a, b) => a.index - b.index)
+    .map(item => {
+      const vec = decodeBase64Int8(item.embedding);
+      if (vec.length !== EMBEDDING_DIMENSION) {
+        throw new Error(
+          `callEmbeddingsApi: expected ${EMBEDDING_DIMENSION} dims, got ${vec.length} (traceId=${traceId})`
+        );
+      }
+      return vec;
+    });
+}
 
-  if (vector.length !== EMBEDDING_DIMENSION) {
-    throw new Error(
-      `embedText: expected ${EMBEDDING_DIMENSION} dimensions, got ${vector.length} (traceId=${traceId})`
-    );
+// ---------------------------------------------------------------------------
+// embedTexts — batch embed multiple strings, return averaged vector
+//
+// Used at document write time. Each string (alias, description, domain name)
+// is embedded separately in one API call and the results are averaged.
+// ---------------------------------------------------------------------------
+
+/**
+ * Embed multiple text strings and return a single averaged vector.
+ * Empty strings are silently filtered before the API call.
+ * One Perplexity API call regardless of how many input strings.
+ *
+ * @param {string[]} texts   Array of text fragments to embed and average
+ * @param {string}   traceId Correlation ID for logging
+ * @returns {Promise<number[]>}
+ */
+export async function embedTexts(texts, traceId) {
+  const valid = texts.map(t => (t ?? '').trim()).filter(Boolean);
+  if (valid.length === 0) throw new Error('embedTexts: no non-empty strings to embed');
+
+  const vectors = await callEmbeddingsApi(valid, traceId);
+
+  const averaged = averageVectors(vectors);
+  console.info('embed-client: embedded text batch', {
+    traceId, inputs: valid.length, dims: averaged.length,
+  });
+  return averaged;
+}
+
+// ---------------------------------------------------------------------------
+// embedText — embed a single string; used for query-time vectorSearch
+// ---------------------------------------------------------------------------
+
+/**
+ * Embed a single text string.
+ * Used by getRows vectorSearch — query text is always a single natural language phrase.
+ *
+ * @param {string} text     Text to embed
+ * @param {string} traceId  Correlation ID for logging
+ * @returns {Promise<number[]>}
+ */
+export async function embedText(text, traceId) {
+  if (!text || !text.trim()) {
+    throw new Error('embedText: text must be a non-empty string');
   }
-
+  const [vector] = await callEmbeddingsApi([text.trim()], traceId);
   console.info('embed-client: embedded text', { traceId, chars: text.length, dims: vector.length });
   return vector;
+}
+
+// ---------------------------------------------------------------------------
+// averageVectors — component-wise mean of N float vectors
+// ---------------------------------------------------------------------------
+
+/**
+ * Average N equal-length vectors component by component.
+ * Result is a float[] matching the input dimension — pgvector accepts float values.
+ *
+ * @param {number[][]} vectors
+ * @returns {number[]}
+ */
+function averageVectors(vectors) {
+  const dim = vectors[0].length;
+  const sum = new Array(dim).fill(0);
+  for (const vec of vectors) {
+    for (let i = 0; i < dim; i++) sum[i] += vec[i];
+  }
+  return sum.map(v => v / vectors.length);
 }
 
 // ---------------------------------------------------------------------------

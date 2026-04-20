@@ -284,7 +284,10 @@ async function classify(userInput, sessionId, traceId) {
 
 // Similarity threshold for domain resolution — read from PGC_SystemContext
 // when that integration exists; hardcoded for MVP.
-const DOMAIN_SIMILARITY_THRESHOLD = 0.75;
+// Calibrated for pplx-embed-v1-4b: exact alias matches score ~0.55–0.60,
+// unrelated domains score ~0.08–0.11. Threshold 0.40 catches true semantic
+// matches while keeping false positives well below.
+const DOMAIN_SIMILARITY_THRESHOLD = 0.40;
 
 /**
  * Call SERV getRows with vectorSearch to find the best-matching domain by
