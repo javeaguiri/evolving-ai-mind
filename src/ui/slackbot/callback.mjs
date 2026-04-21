@@ -408,7 +408,7 @@ function dialogToBlocks(dialog, workflowRunId) {
           });
         }
         // One section block per list item, with optional Remove button
-        for (const item of (field.items ?? [])) {
+        for (const [idx, item] of (field.items ?? []).entries()) {
           const sectionBlock = {
             type: 'section',
             text: {
@@ -421,7 +421,7 @@ function dialogToBlocks(dialog, workflowRunId) {
               type:      'button',
               style:     item.secondaryAction.style === 'danger' ? 'danger' : 'default',
               text:      { type: 'plain_text', text: item.secondaryAction.label },
-              action_id: `workflow_action_${item.id}`,
+              action_id: `workflow_action_${item.id || idx}_${idx}`,
               value:     JSON.stringify({
                 workflowRunId,
                 action:       item.secondaryAction.action,
@@ -515,11 +515,16 @@ function dialogToBlocks(dialog, workflowRunId) {
         // btn.modal is an optional descriptor for buttons that require a text input modal.
         // When present it is encoded into the button value so interactive.mjs can open
         // the modal generically without any knowledge of workflow-specific action names.
-        const elements = (field.buttons ?? []).map(btn => ({
+        //
+        // action_id must be unique within a message. We append the button index so that
+        // blank or duplicate btn.action values (e.g. LLM-generated options missing action)
+        // never produce colliding action_ids. Routing is driven by the value JSON payload,
+        // not by action_id, so this change is safe.
+        const elements = (field.buttons ?? []).map((btn, i) => ({
           type:      'button',
           style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
           text:      { type: 'plain_text', text: btn.label },
-          action_id: `workflow_action_${btn.action}`,
+          action_id: `workflow_action_${btn.action || i}_${i}`,
           value:     JSON.stringify({
             workflowRunId,
             action: btn.action,
