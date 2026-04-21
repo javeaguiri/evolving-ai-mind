@@ -81,7 +81,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "User describes the table they want to add.",
-        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
+        "message_template": "Describe the table you want to add \u2014 what it stores and how it relates to the other tables.",
         "options": [
           {
             "label": "Submit",
@@ -183,7 +183,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "Derive domain registration data deterministically from confirmed scaffold — no LLM.",
+        "description": "Derive domain registration data deterministically from confirmed scaffold \u2014 no LLM.",
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "on_success": "next",
@@ -263,7 +263,7 @@
         "step": "11",
         "type": "notify",
         "description": "Confirm domain creation with concrete command examples.",
-        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n• /m list {{proposed_scaffold.domain}}\n• /m get {{proposed_scaffold.domain}} <n>\n• /m add {{proposed_scaffold.domain}} <description>\n• /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n• /m delete {{proposed_scaffold.domain}} id=<number>",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n\u2022 /m list {{proposed_scaffold.domain}}\n\u2022 /m get {{proposed_scaffold.domain}} <n>\n\u2022 /m add {{proposed_scaffold.domain}} <description>\n\u2022 /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n\u2022 /m delete {{proposed_scaffold.domain}} id=<number>",
         "on_success": "end"
       },
       {
@@ -275,7 +275,7 @@
   {
     "name": "help",
     "domain": null,
-    "description": "Interactive help — shows system commands or live domain help.",
+    "description": "Interactive help \u2014 shows system commands or live domain help.",
     "intent_keywords": [
       "help",
       "what can you do",
@@ -309,13 +309,13 @@
         "output_key": "help_options",
         "on_success": "next",
         "on_failure": "next",
-        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
+        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' \u2014 ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '\u2026' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
       },
       {
         "step": "3",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 1 — What would you like help with?",
+        "description": "Level 1 \u2014 What would you like help with?",
         "message_template": "What would you like help with?",
         "context_key": "help_options.domainButtons",
         "output_key": "help_selection",
@@ -343,13 +343,13 @@
         "on_success": "next",
         "on_failure": "next",
         "input_key": "help_options",
-        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '• `' + c.syntax + '` — ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
+        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '\u2022 `' + c.syntax + '` \u2014 ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
       {
         "step": "5",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 2 — Display the resolved help content.",
+        "description": "Level 2 \u2014 Display the resolved help content.",
         "message_template": "{{resolved_help.content}}",
         "options": [
           {
@@ -380,7 +380,7 @@
   {
     "name": "create_workflow",
     "domain": null,
-    "description": "Designs and stores a new reusable workflow. Right brain researches domain best practices, user confirms preferences, left brain produces a complete design spec, step generator translates to a step array, simulation validates, and the workflow is registered immediately.",
+    "description": "Designs and stores a new reusable workflow. Right brain researches domain best practices, user confirms preferences, left brain classifies gaps then designs the process and dialogs in separate focused calls, step generator translates to a step array, simulation validates, and the workflow is registered immediately.",
     "intent_keywords": [
       "create workflow",
       "new workflow",
@@ -391,65 +391,65 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 13,
+    "version": 14,
     "steps": [
       {
         "step": "1",
         "type": "serv_query",
+        "description": "Load domain schema rows for the target domain so the left brain has live column definitions.",
         "input": {
+          "tableName": "PGC_Schema",
           "filters": [
             {
+              "column": "domain",
               "op": "eq",
-              "value": "{{input.domain}}",
-              "column": "domain"
+              "value": "{{input.domain}}"
             }
-          ],
-          "tableName": "PGC_Schema"
+          ]
         },
-        "on_failure": "human_feedback",
-        "on_success": "next",
         "output_key": "domain_schema",
-        "description": "Load domain schema rows for the target domain so the left brain has live column definitions."
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "2",
         "type": "llm_call",
+        "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure.",
         "input": {
-          "domain": "{{input.domain}}",
           "prompt": "research_workflow_domain",
+          "domain": "{{input.domain}}",
           "workflow_description": "{{input.userInput}}"
         },
-        "on_failure": "next",
-        "on_success": "next",
         "output_key": "right_brain_research",
-        "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure."
+        "on_success": "next",
+        "on_failure": "next"
       },
       {
         "step": "3",
         "type": "js_transform",
+        "description": "Build Tier 1 choice gate descriptors from right_brain_research.preference_questions.",
         "input_key": "right_brain_research",
-        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
-        "on_failure": "next",
-        "on_success": "next",
         "output_key": "preference_gates",
-        "description": "Build Tier 1 choice gate descriptors from right_brain_research.preference_questions. Options carry value/label/description for the choice gate type."
+        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
+        "on_success": "next",
+        "on_failure": "next"
       },
       {
         "step": "3a",
         "type": "js_transform",
+        "description": "Format right brain findings and autonomous decisions into a readable summary for the user gate.",
         "input_key": "right_brain_research",
         "output_key": "research_summary",
+        "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions \u2014 proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()",
         "on_success": "next",
-        "on_failure": "next",
-        "description": "Format right brain findings and autonomous decisions into a readable summary for the user gate.",
-        "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions — proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()"
+        "on_failure": "next"
       },
       {
         "step": "3b",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Show user what the right brain researched and decided before left brain design begins. User can continue or cancel.",
-        "message_template": "🧠 *Right brain research complete for:* {{input.userInput}}\n\n{{research_summary.summary}}\n\n_{{research_summary.decision_note}}. {{research_summary.question_note}}._",
+        "description": "Show user what the right brain researched and decided before preference gates. User can continue or cancel.",
+        "message_template": "\ud83e\udde0 *Right brain research complete for:* {{input.userInput}}\n\n{{research_summary.summary}}\n\n_{{research_summary.decision_note}}. {{research_summary.question_note}}._",
         "options": [
           {
             "label": "Continue",
@@ -468,14 +468,16 @@
       {
         "step": "4",
         "type": "condition",
-        "on_falsy": "6",
-        "on_truthy": "5",
+        "description": "Skip Tier 1 preference gates if right brain found no preference questions.",
         "expression": "{{preference_gates.length}}",
-        "description": "Skip Tier 1 preference gates if right brain found no preference questions."
+        "on_truthy": "5",
+        "on_falsy": "6"
       },
       {
         "step": "5",
         "type": "iterator",
+        "description": "Tier 1 user preference gates \u2014 choice type with lettered buttons and descriptions.",
+        "items_key": "preference_gates",
         "item_step": {
           "type": "human_gate",
           "gate_type": "choice",
@@ -485,94 +487,95 @@
           "on_success": "next",
           "on_failure": "cancel"
         },
-        "items_key": "preference_gates",
-        "on_failure": "cancel",
         "output_key": "user_preferences",
-        "description": "Tier 1 user preference gates — choice type with lettered buttons and descriptions.",
+        "execution_mode": "sequential",
         "on_complete": "next",
-        "execution_mode": "sequential"
+        "on_failure": "cancel"
       },
       {
         "step": "6",
         "type": "serv_query",
+        "description": "Load live PGC_StepType contracts for injection into left brain prompts.",
         "input": {
+          "tableName": "PGC_StepType",
           "filters": [
             {
+              "column": "status",
               "op": "eq",
-              "value": "live",
-              "column": "status"
+              "value": "live"
             }
-          ],
-          "tableName": "PGC_StepType"
+          ]
         },
-        "on_failure": "human_feedback",
-        "on_success": "next",
         "output_key": "step_type_contracts",
-        "description": "Load live PGC_StepType contracts for injection into the left brain prompt."
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "7",
         "type": "llm_call",
+        "description": "Left brain pass 1: classify all gaps (schema, missing prompts, blocked capabilities). No design work.",
         "input": {
-          "domain": "{{input.domain}}",
-          "prompt": "analyze_and_design_workflow",
+          "prompt": "analyze_workflow_gaps",
           "userInput": "{{input.userInput}}",
+          "domain": "{{input.domain}}",
           "domain_schema": "{{domain_schema}}",
+          "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
-          "step_type_contracts": "{{step_type_contracts}}",
-          "right_brain_research": "{{right_brain_research}}"
+          "step_type_contracts": "{{step_type_contracts}}"
         },
-        "on_failure": "human_feedback",
+        "output_key": "gap_analysis",
         "on_success": "next",
-        "output_key": "design_spec",
-        "description": "Left brain: analytically design the complete workflow."
+        "on_failure": "human_feedback"
       },
       {
         "step": "8",
         "type": "js_transform",
-        "input_key": "design_spec",
-        "expression": "(function() {\n  var spec = items;\n  var hasBlockingSchema  = (spec.schema_changes || []).some(function(s) { return s.blocking; });\n  var isBlocked          = spec.confidence === 'blocked';\n  var hasNonBlocking     = (spec.schema_changes || []).some(function(s) { return !s.blocking; });\n  return {\n    skip_all_gates:  (!hasBlockingSchema && !isBlocked && !hasNonBlocking) ? 1 : 0,\n    needs_schema:    (hasBlockingSchema || isBlocked) ? 1 : 0,\n    is_blocked:      isBlocked ? 1 : 0,\n    has_nonblocking: (hasNonBlocking && !hasBlockingSchema && !isBlocked) ? 1 : 0\n  };\n})()",
-        "on_failure": "human_feedback",
-        "on_success": "next",
+        "description": "Evaluate routing flags from gap_analysis.",
+        "input_key": "gap_analysis",
         "output_key": "routing_flags",
-        "description": "Evaluate design_spec routing flags."
+        "expression": "(function() { var g = items; var hasBlockingSchema = (g.schema_changes || []).some(function(s) { return s.blocking; }); var isBlocked = g.confidence === 'blocked'; var hasNonBlocking = (g.schema_changes || []).some(function(s) { return !s.blocking; }); return { is_blocked: isBlocked ? 1 : 0, needs_schema: (hasBlockingSchema || isBlocked) ? 1 : 0, has_missing_prompts: (g.prompts_needed || []).some(function(p) { return p.exists === false; }) ? 1 : 0 }; })()",
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "9",
         "type": "condition",
-        "on_falsy": "10",
-        "on_truthy": "9a",
+        "description": "Hard stop if gap analysis detected a missing step type capability.",
         "expression": "{{routing_flags.is_blocked}}",
-        "description": "Hard stop if left brain detected a missing step type capability."
+        "on_truthy": "9a",
+        "on_falsy": "10"
       },
       {
         "step": "9a",
         "type": "notify",
-        "on_success": "end",
         "description": "Inform user the workflow requires a capability that does not yet exist.",
-        "message_template": "🚫 *Cannot build this workflow yet*\n\n{{design_spec.blocked_reason}}\n\nThis capability has been noted for future implementation."
+        "message_template": "\ud83d\udeab *Cannot build this workflow yet*\n\n{{gap_analysis.blocked_reason}}\n\nThis capability has been noted for future implementation.",
+        "on_success": "end"
       },
       {
         "step": "10",
         "type": "condition",
-        "on_falsy": "11a",
-        "on_truthy": "10a",
+        "description": "Check for blocking schema gaps.",
         "expression": "{{routing_flags.needs_schema}}",
-        "description": "Check for schema gaps."
+        "on_truthy": "10a",
+        "on_falsy": "11a"
       },
       {
         "step": "10a",
         "type": "js_transform",
-        "input_key": "design_spec",
-        "expression": "(function() { var changes = (items.schema_changes || []).filter(function(s) { return s.blocking; }); if (changes.length === 0) changes = items.schema_changes || []; var lines = ['To build the best version of this workflow I need tables that don\\'t exist yet:', '']; changes.forEach(function(c) { lines.push('*Table:* ' + c.table); lines.push('*Why:* ' + c.recommendation); lines.push('*If skipped:* ' + c.impact_if_skipped); if (c.domain_suggestion) lines.push('*Create first:* `/m create domain ' + c.domain_suggestion + '`'); lines.push(''); }); return lines.join('\\n'); })()",
-        "on_failure": "human_feedback",
-        "on_success": "next",
+        "description": "Build schema gap gate message from gap_analysis.schema_changes.",
+        "input_key": "gap_analysis",
         "output_key": "schema_gap_message",
-        "description": "Build schema gap gate message."
+        "expression": "(function() { var changes = (items.schema_changes || []).filter(function(s) { return s.blocking; }); if (changes.length === 0) changes = items.schema_changes || []; var lines = ['To build the best version of this workflow I need tables that don\\'t exist yet:', '']; changes.forEach(function(c) { lines.push('*Table:* ' + c.table); lines.push('*Why:* ' + c.recommendation); lines.push('*If skipped:* ' + c.impact_if_skipped); if (c.domain_suggestion) lines.push('*Create first:* `/m create domain ' + c.domain_suggestion + '`'); lines.push(''); }); return lines.join('\\n'); })()",
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "10b",
         "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Schema gap decision \u2014 create missing table first, build without it, or cancel.",
+        "message_template": "{{schema_gap_message}}",
         "options": [
           {
             "label": "Create the table first",
@@ -590,66 +593,99 @@
             "on_select": "cancel"
           }
         ],
-        "gate_type": "confirm",
-        "on_failure": "cancel",
         "on_success": "next",
-        "description": "Schema gap decision.",
-        "message_template": "{{schema_gap_message}}"
+        "on_failure": "cancel"
       },
       {
         "step": "11a",
         "type": "js_transform",
-        "input_key": "design_spec",
-        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
-        "on_failure": "human_feedback",
-        "on_success": "next",
+        "description": "Filter gap_analysis.prompts_needed to those requiring seeding (exists=false with prompt_text).",
+        "input_key": "gap_analysis",
         "output_key": "missing_prompts",
-        "description": "Filter design_spec.prompts_needed to those needing seeding."
+        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "11b",
         "type": "condition",
-        "on_falsy": "12",
-        "on_truthy": "11c",
+        "description": "Skip prompt seeding if there are no missing prompts.",
         "expression": "{{missing_prompts.length}}",
-        "description": "Skip prompt seeding if there are no missing prompts."
+        "on_truthy": "11c",
+        "on_falsy": "12"
       },
       {
         "step": "11c",
         "type": "iterator",
+        "description": "Seed each missing prompt into PGC_Prompt (Type 4a resolution).",
+        "items_key": "missing_prompts",
         "item_step": {
           "type": "serv_insert",
           "input": {
-            "row": "{{item}}",
-            "tableName": "PGC_Prompt"
+            "tableName": "PGC_Prompt",
+            "row": "{{item}}"
           },
           "on_failure": "human_feedback"
         },
-        "items_key": "missing_prompts",
-        "on_failure": "human_feedback",
         "output_key": "seeded_prompts",
-        "description": "Seed each missing prompt into PGC_Prompt.",
+        "execution_mode": "sequential",
         "on_complete": "next",
-        "execution_mode": "sequential"
+        "on_failure": "human_feedback"
       },
       {
         "step": "12",
         "type": "llm_call",
+        "description": "Left brain pass 2: design step sequence and state map. No dialogs \u2014 those are designed separately.",
         "input": {
-          "prompt": "generate_workflow_steps",
-          "design_spec": "{{design_spec}}",
+          "prompt": "design_workflow_process",
+          "userInput": "{{input.userInput}}",
+          "domain": "{{input.domain}}",
           "domain_schema": "{{domain_schema}}",
+          "gap_analysis": "{{gap_analysis}}",
+          "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
           "step_type_contracts": "{{step_type_contracts}}"
         },
-        "on_failure": "human_feedback",
+        "output_key": "process_spec",
         "on_success": "next",
-        "output_key": "draft_workflow",
-        "description": "Translate design_spec into a step array."
+        "on_failure": "human_feedback"
       },
       {
         "step": "13",
+        "type": "llm_call",
+        "description": "Left brain pass 3: design Slack dialogs for every human_gate step. Joined to process_spec by step_label.",
+        "input": {
+          "prompt": "design_workflow_dialogs",
+          "process_design": "{{process_spec.process_design}}",
+          "domain_schema": "{{domain_schema}}",
+          "user_preferences": "{{user_preferences}}"
+        },
+        "output_key": "dialog_spec",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "14",
+        "type": "llm_call",
+        "description": "Translate the three-part design spec into a step array. Translation only \u2014 no design decisions.",
+        "input": {
+          "prompt": "generate_workflow_steps",
+          "process_design": "{{process_spec.process_design}}",
+          "state_map": "{{process_spec.state_map}}",
+          "dialog_designs": "{{dialog_spec.dialog_designs}}",
+          "domain_schema": "{{domain_schema}}"
+        },
+        "output_key": "draft_workflow",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "15",
         "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User reviews the proposed step array before simulation.",
+        "message_template": "Review the proposed steps for {{draft_workflow.name}}.",
+        "context_key": "draft_workflow.steps",
         "options": [
           {
             "label": "Looks good",
@@ -659,7 +695,7 @@
           {
             "label": "Request changes",
             "action": "request_changes",
-            "on_select": "step:12"
+            "on_select": "step:14"
           },
           {
             "label": "Cancel",
@@ -667,65 +703,64 @@
             "on_select": "cancel"
           }
         ],
-        "gate_type": "review_object",
-        "on_failure": "cancel",
         "on_success": "next",
-        "context_key": "draft_workflow.steps",
-        "description": "User reviews the proposed step array before simulation.",
-        "message_template": "Review the proposed steps for {{draft_workflow.name}}."
-      },
-      {
-        "step": "14",
-        "type": "simulate",
-        "input": {
-          "steps_key": "draft_workflow.steps"
-        },
-        "on_failure": "step:13",
-        "on_success": "next",
-        "output_key": "static_analysis_result",
-        "description": "Level 1 static analysis."
-      },
-      {
-        "step": "15",
-        "type": "llm_call",
-        "input": {
-          "steps": "{{draft_workflow.steps}}",
-          "prompt": "generate_workflow_mocks"
-        },
-        "on_failure": "human_feedback",
-        "on_success": "next",
-        "output_key": "mock_outputs",
-        "description": "Generate representative mock outputs."
+        "on_failure": "cancel"
       },
       {
         "step": "16",
-        "type": "llm_call",
+        "type": "simulate",
+        "description": "Level 1 static analysis \u2014 routing, dead targets, missing templates, gate structure.",
         "input": {
-          "steps": "{{draft_workflow.steps}}",
-          "prompt": "generate_workflow_paths",
-          "mock_outputs": "{{mock_outputs}}"
+          "steps_key": "draft_workflow.steps"
         },
-        "on_failure": "human_feedback",
+        "output_key": "static_analysis_result",
         "on_success": "next",
-        "output_key": "simulation_paths",
-        "description": "Generate named simulation paths."
+        "on_failure": "step:15"
       },
       {
         "step": "17",
-        "type": "simulate",
+        "type": "llm_call",
+        "description": "Generate representative mock outputs for each step.",
         "input": {
-          "paths_key": "simulation_paths",
-          "steps_key": "draft_workflow.steps",
-          "mock_outputs_key": "mock_outputs"
+          "prompt": "generate_workflow_mocks",
+          "steps": "{{draft_workflow.steps}}"
         },
-        "on_failure": "step:13",
+        "output_key": "mock_outputs",
         "on_success": "next",
-        "output_key": "simulation_result",
-        "description": "Level 2 + Level 3 full path simulation."
+        "on_failure": "human_feedback"
       },
       {
         "step": "18",
+        "type": "llm_call",
+        "description": "Generate named simulation paths (happy path, cancel path, failure path).",
+        "input": {
+          "prompt": "generate_workflow_paths",
+          "steps": "{{draft_workflow.steps}}",
+          "mock_outputs": "{{mock_outputs}}"
+        },
+        "output_key": "simulation_paths",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "19",
+        "type": "simulate",
+        "description": "Level 2 + Level 3 full path simulation with mocks.",
+        "input": {
+          "steps_key": "draft_workflow.steps",
+          "mock_outputs_key": "mock_outputs",
+          "paths_key": "simulation_paths"
+        },
+        "output_key": "simulation_result",
+        "on_success": "next",
+        "on_failure": "step:15"
+      },
+      {
+        "step": "20",
         "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Show simulation results and ask user to confirm registration.",
+        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
         "options": [
           {
             "label": "Register",
@@ -738,57 +773,54 @@
             "on_select": "cancel"
           }
         ],
-        "gate_type": "confirm",
-        "on_failure": "cancel",
         "on_success": "next",
-        "description": "Show simulation results and ask user to confirm registration.",
-        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?"
-      },
-      {
-        "step": "19",
-        "type": "serv_insert",
-        "input": {
-          "row": {
-            "name": "{{draft_workflow.name}}",
-            "steps": "{{draft_workflow.steps}}",
-            "domain": "{{input.domain}}",
-            "version": 1,
-            "description": "{{draft_workflow.description}}",
-            "state_strategy": "sequential_with_confirmation",
-            "intent_keywords": "{{draft_workflow.intent_keywords}}"
-          },
-          "tableName": "PGC_Workflow"
-        },
-        "on_failure": "human_feedback",
-        "on_success": "next",
-        "output_key": "registered_workflow",
-        "description": "Write the new workflow to PGC_Workflow."
-      },
-      {
-        "step": "20",
-        "type": "serv_insert",
-        "input": {
-          "row": {
-            "pattern": "{{draft_workflow.name}}",
-            "action_type": "workflow",
-            "intent_category": "{{draft_workflow.name}}"
-          },
-          "tableName": "PGC_IntentMap"
-        },
-        "on_failure": "human_feedback",
-        "on_success": "next",
-        "output_key": "registered_intent_row",
-        "description": "Write the PGC_IntentMap row."
+        "on_failure": "cancel"
       },
       {
         "step": "21",
-        "type": "notify",
-        "on_success": "end",
-        "description": "Confirm the workflow is registered and ready.",
-        "message_template": "Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:*\n{{design_spec.deferred.length}} items noted for future improvement."
+        "type": "serv_insert",
+        "description": "Write the new workflow to PGC_Workflow.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "row": {
+            "name": "{{draft_workflow.name}}",
+            "domain": "{{input.domain}}",
+            "description": "{{draft_workflow.description}}",
+            "intent_keywords": "{{draft_workflow.intent_keywords}}",
+            "steps": "{{draft_workflow.steps}}",
+            "version": 1,
+            "state_strategy": "sequential_with_confirmation"
+          }
+        },
+        "output_key": "registered_workflow",
+        "on_success": "next",
+        "on_failure": "human_feedback"
       },
       {
         "step": "22",
+        "type": "serv_insert",
+        "description": "Write the PGC_IntentMap routing row.",
+        "input": {
+          "tableName": "PGC_IntentMap",
+          "row": {
+            "pattern": "{{draft_workflow.name}}",
+            "intent_category": "{{draft_workflow.name}}",
+            "action_type": "workflow"
+          }
+        },
+        "output_key": "registered_intent_row",
+        "on_success": "next",
+        "on_failure": "human_feedback"
+      },
+      {
+        "step": "23",
+        "type": "notify",
+        "description": "Confirm the workflow is registered and ready.",
+        "message_template": "\u2705 Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:* {{gap_analysis.deferred.length}} item(s) noted for future improvement.",
+        "on_success": "end"
+      },
+      {
+        "step": "24",
         "type": "end"
       }
     ]
@@ -796,7 +828,7 @@
   {
     "name": "fix_workflow",
     "domain": null,
-    "description": "Tier 1 reactive repair — LLM diagnoses static analysis issues in a registered workflow, proposes corrected steps, validates them, presents a human confirmation gate, writes the fix to PGC_Workflow, updates PGC_SystemContext if needed, and cancels affected runs.",
+    "description": "Tier 1 reactive repair \u2014 LLM diagnoses static analysis issues in a registered workflow, proposes corrected steps, validates them, presents a human confirmation gate, writes the fix to PGC_Workflow, updates PGC_SystemContext if needed, and cancels affected runs.",
     "intent_keywords": [
       "fix workflow",
       "repair workflow",
@@ -846,7 +878,7 @@
       {
         "step": "4",
         "type": "llm_call",
-        "description": "Right-brain repair call — diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
+        "description": "Right-brain repair call \u2014 diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
         "input": {
           "prompt": "fix_workflow_steps",
           "workflow_name": "{{fix_context.workflowName}}",
@@ -861,7 +893,7 @@
       {
         "step": "4b",
         "type": "js_transform",
-        "description": "Merge corrected steps back into the full workflow step array. LLM only returns the fixed steps — this patches them into the complete array so downstream steps and the DB write always work with the full workflow.",
+        "description": "Merge corrected steps back into the full workflow step array. LLM only returns the fixed steps \u2014 this patches them into the complete array so downstream steps and the DB write always work with the full workflow.",
         "input_key": "workflow_row",
         "output_key": "merged_steps",
         "on_success": "next",
@@ -871,7 +903,7 @@
       {
         "step": "5",
         "type": "simulate",
-        "description": "Level 1 static analysis on the full merged step array — validates routing, dead targets, templates, gate structure across all steps. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
+        "description": "Level 1 static analysis on the full merged step array \u2014 validates routing, dead targets, templates, gate structure across all steps. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
         "input": {
           "steps_key": "merged_steps"
         },
@@ -884,7 +916,7 @@
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "Show diagnosis, proposed changes, and (on failure path) remaining validation issues. User confirms to apply the fix or requests another LLM attempt.",
-        "message_template": "🔧 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} → v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}} | *Validation issues remaining:* {{post_fix_validation.static_analysis.issues.length}}",
+        "message_template": "\ud83d\udd27 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} \u2192 v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}} | *Validation issues remaining:* {{post_fix_validation.static_analysis.issues.length}}",
         "context_key": "fix_result.changes_applied",
         "options": [
           {
@@ -906,12 +938,12 @@
         "on_success": "next",
         "on_failure": "cancel",
         "item_secondary_key": "after",
-        "item_label_template": "step {{step}} — {{field}}"
+        "item_label_template": "step {{step}} \u2014 {{field}}"
       },
       {
         "step": "7",
         "type": "js_transform",
-        "description": "Compute the new version number — workflowVersion + 1.",
+        "description": "Compute the new version number \u2014 workflowVersion + 1.",
         "input_key": "fix_context",
         "output_key": "new_version",
         "on_success": "next",
@@ -951,7 +983,7 @@
       {
         "step": "10",
         "type": "iterator",
-        "description": "Apply each PGC_SystemContext update produced by the LLM — Tier 2 improvement, prevents the same error class from recurring in future workflow generation.",
+        "description": "Apply each PGC_SystemContext update produced by the LLM \u2014 Tier 2 improvement, prevents the same error class from recurring in future workflow generation.",
         "items_key": "fix_result.context_updates",
         "item_step": {
           "type": "serv_update",
@@ -1065,7 +1097,7 @@
         "step": "16",
         "type": "notify",
         "description": "Confirm the fix was applied. Report version bump, number of context rows updated, and number of runs cancelled.",
-        "message_template": "✅ *{{fix_context.workflowName}}* repaired (v{{fix_context.workflowVersion}} → v{{new_version}})\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes applied:* {{fix_result.changes_applied.length}}\n*Runs cancelled:* {{runs_to_cancel.length}}\n\nYou can try again now.",
+        "message_template": "\u2705 *{{fix_context.workflowName}}* repaired (v{{fix_context.workflowVersion}} \u2192 v{{new_version}})\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes applied:* {{fix_result.changes_applied.length}}\n*Runs cancelled:* {{runs_to_cancel.length}}\n\nYou can try again now.",
         "on_success": "end"
       },
       {
@@ -1077,7 +1109,7 @@
   {
     "name": "get_entity",
     "domain": null,
-    "description": "Find and display a domain entity record by id or name search including all child data. Generic — works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
+    "description": "Find and display a domain entity record by id or name search including all child data. Generic \u2014 works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
     "intent_keywords": [
       "get",
       "show",
@@ -1137,7 +1169,7 @@
         "max_rows": 5,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  var rootLine = '• ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    ◦ ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '—'); });    acc.push('    ◦ ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "5",
@@ -1154,7 +1186,7 @@
   {
     "name": "list_entity",
     "domain": null,
-    "description": "List all records for a domain entity with root columns and ids. Generic — works for any domain. Requires input.entity_name.",
+    "description": "List all records for a domain entity with root columns and ids. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "list",
       "show all",
@@ -1181,13 +1213,13 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Format list results — root columns only, child arrays suppressed.",
+        "description": "Format list results \u2014 root columns only, child arrays suppressed.",
         "input_key": "results",
         "max_rows": 20,
         "root_only": true,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  return '• ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  return '\u2022 ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "3",
@@ -1204,7 +1236,7 @@
   {
     "name": "add_entity",
     "domain": null,
-    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic — works for any domain. Requires input.entity_name.",
+    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "add",
       "create",
@@ -1316,7 +1348,7 @@
   {
     "name": "update_entity",
     "domain": null,
-    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic — works for any domain.",
+    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "update",
       "edit",
@@ -1401,7 +1433,7 @@
   {
     "name": "delete_entity",
     "domain": null,
-    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic — works for any domain.",
+    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "delete",
       "remove"
@@ -1483,12 +1515,12 @@
     "name": "diagnose_prompt_schema",
     "version": 4,
     "domain": null,
-    "description": "Tier 1b reactive repair — deterministic R1–R7 output_schema and model compatibility fix. Each rule is an independent js_transform step.",
+    "description": "Tier 1b reactive repair \u2014 deterministic R1\u2013R7 output_schema and model compatibility fix. Each rule is an independent js_transform step.",
     "steps": [
       {
         "step": "1",
         "type": "js_transform",
-        "description": "R1 — array union types → anyOf",
+        "description": "R1 \u2014 array union types \u2192 anyOf",
         "input_key": "input.repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(Array.isArray(node.type)){var nonNull=node.type.filter(function(t){return t!=='null';});var hasNull=node.type.indexOf('null')!==-1;var anyOf=nonNull.map(function(t){return{type:t};});if(hasNull)anyOf.push({type:'null'});rs.violations.push({path:path,rule:'R1',description:'array union type ['+node.type.join(',')+'] replaced with anyOf'});delete node.type;node.anyOf=anyOf;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1497,16 +1529,16 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "R2 — object-typed additionalProperties → false (boolean true/false are valid; only object schemas are rejected)",
+        "description": "R2 \u2014 object-typed additionalProperties \u2192 false (boolean true/false are valid; only object schemas are rejected)",
         "input_key": "repair_state",
         "output_key": "repair_state",
-        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&typeof node.additionalProperties==='object'&&node.additionalProperties!==null){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is object schema '+JSON.stringify(node.additionalProperties)+' — set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
+        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&typeof node.additionalProperties==='object'&&node.additionalProperties!==null){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is object schema '+JSON.stringify(node.additionalProperties)+' \u2014 set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
         "on_success": "next"
       },
       {
         "step": "3",
         "type": "js_transform",
-        "description": "R3 — add missing additionalProperties:false to objects",
+        "description": "R3 \u2014 add missing additionalProperties:false to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('additionalProperties'in node)){rs.violations.push({path:path,rule:'R3',description:'object missing additionalProperties: false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1515,7 +1547,7 @@
       {
         "step": "4",
         "type": "js_transform",
-        "description": "R4 — add missing properties:{} to objects",
+        "description": "R4 \u2014 add missing properties:{} to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('properties'in node)){rs.violations.push({path:path,rule:'R4',description:'object missing properties key'});node.properties={};}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1524,7 +1556,7 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "R5 — add missing required entries",
+        "description": "R5 \u2014 add missing required entries",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&node.additionalProperties===false&&node.properties){var defined=Object.keys(node.properties);var existing=Array.isArray(node.required)?node.required:[];var missing=defined.filter(function(k){return existing.indexOf(k)===-1;});if(missing.length>0){rs.violations.push({path:path,rule:'R5',description:'properties not in required: ['+missing.join(', ')+']'});node.required=existing.concat(missing);}}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1533,7 +1565,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "R6 — apply R3+R4 to anyOf/oneOf/allOf object members",
+        "description": "R6 \u2014 apply R3+R4 to anyOf/oneOf/allOf object members",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;['anyOf','oneOf','allOf'].forEach(function(kw){if(!Array.isArray(node[kw]))return;node[kw].forEach(function(m,i){if(typeof m!=='object'||m===null||m.type==='null')return;if(m.type==='object'&&!('additionalProperties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing additionalProperties: false'});m.additionalProperties=false;}if(m.type==='object'&&!('properties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing properties key'});m.properties={};}});});var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1542,10 +1574,10 @@
       {
         "step": "7",
         "type": "js_transform",
-        "description": "R7 — unsupported model name → anthropic/claude-sonnet-4-5",
+        "description": "R7 \u2014 unsupported model name \u2192 anthropic/claude-sonnet-4-5",
         "input_key": "repair_state",
         "output_key": "repair_state",
-        "expression": "(function(){var SUPPORTED=['anthropic/claude-sonnet-4-5','perplexity/sonar'];var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice(),model:items.model};var m=items.model;if(m&&SUPPORTED.indexOf(m)===-1){rs.violations.push({path:'model',rule:'R7',description:'model \"'+m+'\" is not supported by the Perplexity gateway — must be one of: '+SUPPORTED.join(', '),fixedModel:'anthropic/claude-sonnet-4-5'});rs.model='anthropic/claude-sonnet-4-5';}return rs;})()",
+        "expression": "(function(){var SUPPORTED=['anthropic/claude-sonnet-4-5','perplexity/sonar'];var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice(),model:items.model};var m=items.model;if(m&&SUPPORTED.indexOf(m)===-1){rs.violations.push({path:'model',rule:'R7',description:'model \"'+m+'\" is not supported by the Perplexity gateway \u2014 must be one of: '+SUPPORTED.join(', '),fixedModel:'anthropic/claude-sonnet-4-5'});rs.model='anthropic/claude-sonnet-4-5';}return rs;})()",
         "on_success": "next"
       },
       {
@@ -1554,7 +1586,7 @@
         "description": "Aggregate violations, build gate message. Reads repair_state; writes gate_payload.",
         "input_key": "repair_state",
         "output_key": "gate_payload",
-        "expression": "(function(){var rs=items;var v=rs.violations;if(v.length===0)return{hasViolations:false,gateMessage:'',repairedSchema:rs.schema,violationCount:0};var lines=v.slice(0,10).map(function(x){return '• `'+x.path+'` ['+x.rule+']: '+x.description;});if(v.length>10)lines.push('• …and '+(v.length-10)+' more');var msg=['🔧 *Schema compatibility repair — `'+local_state.input.intentCategory+'`*','','Found *'+v.length+'* violation'+(v.length!==1?'s':'')+':',lines.join('\\n'),'','Repair is deterministic. Confirm to apply and retry your workflow.'].join('\\n');return{hasViolations:true,gateMessage:msg,repairedSchema:rs.schema,violationCount:v.length};})()",
+        "expression": "(function(){var rs=items;var v=rs.violations;if(v.length===0)return{hasViolations:false,gateMessage:'',repairedSchema:rs.schema,violationCount:0};var lines=v.slice(0,10).map(function(x){return '\u2022 `'+x.path+'` ['+x.rule+']: '+x.description;});if(v.length>10)lines.push('\u2022 \u2026and '+(v.length-10)+' more');var msg=['\ud83d\udd27 *Schema compatibility repair \u2014 `'+local_state.input.intentCategory+'`*','','Found *'+v.length+'* violation'+(v.length!==1?'s':'')+':',lines.join('\\n'),'','Repair is deterministic. Confirm to apply and retry your workflow.'].join('\\n');return{hasViolations:true,gateMessage:msg,repairedSchema:rs.schema,violationCount:v.length};})()",
         "on_success": "next"
       },
       {
@@ -1588,7 +1620,7 @@
       {
         "step": "10",
         "type": "serv_update",
-        "description": "Write repaired schema to PGC_Prompt — bump version, clear error_log",
+        "description": "Write repaired schema to PGC_Prompt \u2014 bump version, clear error_log",
         "input": {
           "tableName": "PGC_Prompt",
           "filters": [
@@ -1641,19 +1673,19 @@
       {
         "step": "11b",
         "type": "notify",
-        "message_template": "✅ *Schema repaired* — `{{input.intentCategory}}` output_schema updated (v{{input.promptVersion}} → v{{input.promptVersionNext}}). Fixed {{gate_payload.violationCount}} violation(s).\n\nPlease retry your workflow.",
+        "message_template": "\u2705 *Schema repaired* \u2014 `{{input.intentCategory}}` output_schema updated (v{{input.promptVersion}} \u2192 v{{input.promptVersionNext}}). Fixed {{gate_payload.violationCount}} violation(s).\n\nPlease retry your workflow.",
         "on_success": "end"
       },
       {
         "step": "12",
         "type": "notify",
-        "message_template": "ℹ️ `{{input.intentCategory}}` output_schema has no R1–R7 violations.\n\nKnown causes of HTTP 400 when no schema violations are found:\n• *Wrong model* — check `PGC_Prompt.model` is `anthropic/claude-sonnet-4-5` or `perplexity/sonar`\n• *response_format sent to non-sonar model* — check `llm-client.mjs` has the `isSonar` guard deployed\n\nCheck CloudWatch logs for the exact request body.",
+        "message_template": "\u2139\ufe0f `{{input.intentCategory}}` output_schema has no R1\u2013R7 violations.\n\nKnown causes of HTTP 400 when no schema violations are found:\n\u2022 *Wrong model* \u2014 check `PGC_Prompt.model` is `anthropic/claude-sonnet-4-5` or `perplexity/sonar`\n\u2022 *response_format sent to non-sonar model* \u2014 check `llm-client.mjs` has the `isSonar` guard deployed\n\nCheck CloudWatch logs for the exact request body.",
         "on_success": "end"
       },
       {
         "step": "13",
         "type": "notify",
-        "message_template": "❌ *Schema repair failed* — could not write repaired schema for `{{input.intentCategory}}`. Check CloudWatch logs. The original schema is unchanged.",
+        "message_template": "\u274c *Schema repair failed* \u2014 could not write repaired schema for `{{input.intentCategory}}`. Check CloudWatch logs. The original schema is unchanged.",
         "on_success": "end"
       },
       {
