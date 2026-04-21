@@ -1,212 +1,184 @@
-# evolving-mind-ai — Session 26 Handoff
+# evolving-mind-ai — Session 27 Handoff
 
-**Git tag:** `v3.2-session25-complete`
-**Session 25 final state:** llm-client.mjs hardened, diagnose_prompt_schema extended to R7,
-probe_input on PGC_Prompt, integration test per-prompt, addColumn endpoint live.
-
----
-
-## What session 26 must accomplish
-
-One track: **Implement pgvector** — permanent fix for domain resolution replacing fragile alias matching.
-
-The alias-patch workaround from the session 25 handoff (Track 1) was applied manually. pgvector is
-the architectural fix that makes alias maintenance unnecessary going forward.
-
-Full spec is in `architecture.md` Section 10. Implementation sequence below.
+**Git tag:** `v3.2-session26-complete`  
+**Date:** 2026-04-20  
+**Session 26 focus:** pgvector implementation complete; `create_workflow` v4 three-call left brain design and implementation
 
 ---
 
-## Pre-work — update architecture.md
+## What was completed in session 26
 
-Before writing any code, Javear will share the current `architecture.md`. Update it to reflect
-everything completed in session 25 before pgvector work begins:
+### pgvector — fully implemented
 
-- Session 25 summary section
-- `llm-client.mjs` — `isSonar` response_format gating (non-sonar models rejected 400 with response_format)
-- `llm-client.mjs` — fence extraction regex (leading/trailing prose around fenced JSON)
-- `step-executor.mjs` — `"false"` added to executeCondition falsy set
-- `diagnose_prompt_schema` — R7 rule (unsupported model names), v3→v4
-- `diagnose_prompt_schema` — R2 correction (boolean `true` is valid; only typed-object schemas flagged)
-- `diagnose-prompt-schema.mjs` — `model` added to `repair_state`
-- `schema.mjs` + `openapi.yaml` — `POST /serv/schema/addColumn` with `schemaOnly` mode
-- `PGC_Prompt` — `probe_input jsonb` and `max_output_tokens integer` columns added
-- `seed_PGC_Prompt.json` — 12 entries, latest version only, `probe_input` + `max_output_tokens` on all
-- `upsert-prompt.mjs` — now writes `probe_input` and `max_output_tokens`
-- `tests/integration/llm-prompt-schema.test.mjs` — one `it()` per prompt, `probe_input` substitution
-
----
-
-## pgvector implementation sequence
-
-### Step 1 — Enable pgvector on RDS
-
-Run directly on the RDS instance via bastion (no Lambda deploy needed):
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-### Step 2 — Add embedding column to PGC_DomainHelp via addColumn endpoint
-
-Use the new `addColumn` endpoint (deployed this session) — this handles both the physical DDL
-and the PGC_Schema metadata update atomically:
-
-```cmd
-curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/schema/addColumn -H "Content-Type: application/json" -d "{\"tableName\":\"PGC_DomainHelp\",\"column\":{\"name\":\"embedding\",\"type\":\"vector\",\"nullable\":true}}"
-```
-
-**Note:** `vector` is not currently in `ALLOWED_TYPES` in `schema.mjs` — this call will fail until
-Step 3 is deployed. Deploy Step 3 first.
-
-### Step 3 — Add `vector` to ALLOWED_TYPES in schema.mjs
-
-Request current `schema.mjs`. Add `'vector'` to the `ALLOWED_TYPES` set. Deploy:
-
-```cmd
-sam build && sam deploy
-```
-
-Then run the Step 2 curl above.
-
-### Step 4 — Write src/shared/embed-client.mjs
-
-New file. Wraps OpenAI `text-embedding-3-small`, reads API key from SSM SecureString:
-
-```js
-export async function embedText(text, traceId) {
-  const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
-  const ssm = new SSMClient({ region: process.env.AWS_REGION ?? 'us-east-2' });
-  const { Parameter } = await ssm.send(new GetParameterCommand({
-    Name: process.env.OPENAI_API_KEY_PARAM,
-    WithDecryption: true,
-  }));
-  const resp = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Parameter.Value}` },
-    body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
-  });
-  if (!resp.ok) throw new Error(`OpenAI embeddings API error ${resp.status}`);
-  const data = await resp.json();
-  return data.data[0].embedding; // float[], 1536 dimensions
-}
-```
-
-Add `OPENAI_API_KEY_PARAM` to the PROC Lambda environment block in `template.yaml`. Store the
-OpenAI key in SSM as a SecureString at the agreed parameter name.
-
-### Step 5 — Write dev_scripts/backfill-embeddings.mjs
-
-One-shot script. Reads all `PGC_DomainHelp` rows where `embedding IS NULL`, calls `embedText`
-with `domain + " " + description + " " + aliases.join(" ")` for each, writes the vector back
-via SERV `updateRows`. Run once after Steps 1–4 are deployed.
-
-### Step 6 — Update classify-intent-tiers.mjs
-
-Add semantic fallback alongside the existing exact alias check. Only called when
-`matchDomainAlias()` returns null:
-
-```js
-export async function semanticDomainMatch(userInput, domainRows) {
-  const populated = domainRows.filter(r => r.embedding);
-  if (!populated.length) return null;
-  const queryVec = await embedText(userInput);
-  let best = null, bestSim = 0;
-  for (const row of populated) {
-    const sim = cosineSimilarity(queryVec, row.embedding);
-    if (sim > bestSim) { bestSim = sim; best = row; }
-  }
-  const threshold = 0.75; // read from PGC_SystemContext.pgvector_config when available
-  return bestSim >= threshold ? { domain: best.domain, confidence: 'semantic_match' } : null;
-}
-```
-
-Update `classify-intent.mjs` — `CREATE_WORKFLOW` domain resolution block and Pass 2 domain
-match to call `semanticDomainMatch()` when `matchDomainAlias()` returns null.
-
-### Step 7 — Update create_domain workflow to embed on domain creation
-
-After the step that inserts the `PGC_DomainHelp` row, add an embedding step. Two options:
-
-**Option A** (simpler, no new endpoint): add a `capability_call` step once that step type exists.
-
-**Option B** (available now): add a new SERV endpoint `POST /serv/embed/domain-help` that takes
-`{ id }`, reads the row, calls `embedText`, writes the vector back. Invoke via `serv_query`-style
-step in the `create_domain` workflow. Requires openapi.yaml update first (spec-first rule).
-
-Decide at session start which option to use based on whether `capability_call` is available.
-
----
-
-## Files needed at session start
-
-Request these from the repo before writing any code:
-
-- `architecture.md` — share first; update before anything else
-- `src/serv/schema.mjs` — to add `vector` to ALLOWED_TYPES
-- `template.yaml` — to add OPENAI_API_KEY_PARAM env var to PROC Lambda
-- `src/proc/classify-intent.mjs` — for domain resolution update
-- `src/proc/classify-intent-tiers.mjs` — for semantic fallback addition
-- `src/serv/openapi.yaml` — if Option B chosen for Step 7
-- `seed_PGC_Workflow.json` — for create_domain update in Step 7
-
----
-
-## Session 25 completed items (do not redo)
-
-**System fixes:**
-- `llm-client.mjs` — `isSonar` guard: `response_format` only sent to sonar models; non-sonar models return HTTP 400 with it present
-- `llm-client.mjs` — fence extraction: `rawText.match(/```(?:json)?\s*([\s\S]*?)```/i)` handles leading preamble and trailing explanations
-- `step-executor.mjs` — `"false"` added to `executeCondition` falsy set; fixes `diagnose_prompt_schema` step 8 routing
-- `seed_PGC_Workflow.json` — `diagnose_prompt_schema` R2 fix (v2→v3): boolean `true` no longer flagged
-
-**New capability:**
-- `schema.mjs` + `openapi.yaml` — `POST /serv/schema/addColumn` with `schemaOnly: true` mode for metadata-only sync
-- `PGC_Prompt.json` — `probe_input jsonb` and `max_output_tokens integer` columns
-- `diagnose_prompt_schema` v4: R7 rule (unsupported model names), step 10 patches `model` field, step 12 actionable guidance
-- `diagnose-prompt-schema.mjs` — `model` added to `repair_state`
-
-**Evolving-mind artifacts:**
-- `seed_PGC_Prompt.json` — 12 entries, one per intent_category (latest version only); `probe_input` + `max_output_tokens` on all; `analyze_and_design_workflow` v10 constrains `prompts_needed.model` to supported values
-- `upsert-prompt.mjs` — writes `probe_input` and `max_output_tokens` in both update and insert paths
-- `prompt-issues.md` — Issue 5 R2 corrected; Issue 6 (unsupported model names); Issue 7 (prose around fenced JSON)
-
-**Integration test:**
-- `tests/integration/llm-prompt-schema.test.mjs` — one `it()` per prompt via ESM top-level await; `probe_input` substitution mirrors `step-executor.mjs`; HTTP 400 always hard fail; non-400 hard fail only when `probe_input` present
-
-## Pending deploys going into session 26
-
-```cmd
-sam build && sam deploy
-
-node dev_scripts/upsert-workflow.mjs diagnose_prompt_schema
-node dev_scripts/upsert-prompt.mjs create_domain
-node dev_scripts/upsert-prompt.mjs generate_crud_workflows
-node dev_scripts/upsert-prompt.mjs analyze_and_design_workflow
-node dev_scripts/upsert-prompt.mjs generate_workflow_steps
-node dev_scripts/upsert-prompt.mjs fix_workflow_steps
-node dev_scripts/upsert-prompt.mjs research_workflow_domain
-node dev_scripts/upsert-prompt.mjs design_table
-node dev_scripts/upsert-prompt.mjs classify_intent_tier2
-node dev_scripts/upsert-prompt.mjs classify_workflow_intent
-node dev_scripts/upsert-prompt.mjs generate_workflow_mocks
-node dev_scripts/upsert-prompt.mjs generate_workflow_paths
-node dev_scripts/upsert-prompt.mjs parse_entity_input
-```
-
-## Known open issues carried forward
-
-| Issue | Status |
+| Item | Status |
 |---|---|
-| pgvector / semantic domain matching | **Primary session 26 goal** |
-| `create_workflow` end-to-end validation with Spanish flashcards | Unblocked after pgvector — retry after Step 6 |
-| `create_domain` step 6–12 — limited end-to-end run history | Still open |
-| Session layer `PGC_Session` / `PGC_SessionEntry` | Backlog |
-| `sub_workflow` and `capability_call` step types | Backlog |
-| Guard 3 cycle detector backward reference handling | Medium priority |
-| `serv_update` and `serv_delete` step types | Deferred |
-| Flashcard domain artifact prompts missing `probe_input` (`grade_flashcard_answer`, `generate_flashcard_quiz_spec`) | Patch via `updateRows` before next test run |
+| pgvector extension enabled on RDS | ✅ |
+| `vector` added to `ALLOWED_TYPES` in `schema.mjs` | ✅ |
+| `embed_source` persisted in `addColumn` → `PGC_Schema` | ✅ |
+| `PGC_DomainHelp.embedding` column added | ✅ |
+| `seed_PGC_Schema.json` PGC_DomainHelp entry updated with `embed_source` | ✅ |
+| `embed-client.mjs` — Perplexity `pplx-embed-v1-4b`, base64 INT8 decode | ✅ |
+| `table.mjs` — auto-embed on `insertRow`/`updateRows`; `vectorSearch` on `getRows` | ✅ |
+| `serv-client.mjs` — `vectorSearch` param added to `getRows` wrapper | ✅ |
+| `classify-intent.mjs` — `semanticDomainMatch` via SERV `getRows` `vectorSearch` | ✅ |
+| `create-workflow.mjs` — domain resolution before `WorkflowRun` creation | ✅ |
+| `backfill-embeddings.mjs` — unconditional backfill via `updateRows` | ✅ |
+| Threshold calibrated at 0.40 for `pplx-embed-v1-4b` | ✅ |
 
-## Git tag suggestion
+**Confirmed working in production:** "spanish flashcard quiz" → `spanish_flashcards` at similarity 0.558 (threshold 0.40 ✅). Separation to next domain (recipes) is 0.11 — unambiguous.
 
-`v3.2-session25-complete`
+**Key architectural decision recorded in Section 10:** Embedding computation belongs in the SERV tier. `embed_source` in `PGC_Schema.columns` is the single source of truth for what text to embed. Any table in the system gains semantic search by adding a vector column with `embed_source` — no code changes.
+
+---
+
+### create_workflow v4 — designed and implemented
+
+**Root cause of previous failures:** The single `analyze_and_design_workflow` prompt was simultaneously classifying gaps, designing the process, designing dialogs, and writing prompts. At 3,245 output tokens it was at the model's reliable precision limit. Two structural schema contradictions were embedded in the output_schema:
+- `dialog` field on `process_design` items declared `anyOf: [empty_object | null]` but the prompt instructed the LLM to put a step_label reference there — schema and prompt contradicted each other on every run
+- `choice` gate options required `action` but `action` is semantically meaningless on choice options (which use `value`) — the LLM correctly omitted it, causing required-field violations on every run
+
+**The v4 fix:** Three focused left-brain calls replacing the single monolith.
+
+| Step | Prompt | Phase | Output | Token budget |
+|---|---|---|---|---|
+| 7 | `analyze_workflow_gaps` v1 | Phase 1 | `gap_analysis` | ~1,500 |
+| 12 | `design_workflow_process` v1 | Phase 3 | `process_spec` (`process_design`, `state_map`) | ~2,000 |
+| 13 | `design_workflow_dialogs` v1 | Phase 3 | `dialog_spec` (`dialog_designs`) | ~2,000 |
+| 14 | `generate_workflow_steps` v7 | Phase 4 | `draft_workflow` | ~3,000 |
+
+**Files changed:**
+
+| File | Change |
+|---|---|
+| `seed_PGC_Prompt.json` | Added `analyze_workflow_gaps` v1, `design_workflow_process` v1, `design_workflow_dialogs` v1, `generate_workflow_steps` v7 |
+| `seed_PGC_Workflow.json` | `create_workflow` bumped to v14 — 31 steps across 6 phases |
+| `architecture.md` | Section 6.9 fully rewritten for v4; Section 10 updated with implemented pgvector design |
+
+**Bug fixes also deployed this session:**
+- `callback.mjs` — `action_id` uniqueness: index suffix appended to both `actions` and `list` case action_ids. Eliminated `duplicate action_id → invalid_blocks` Slack error.
+- `analyze_and_design_workflow` v11 — `blocked_reason` made nullable; `state_map` `additionalProperties` corrected; `needs_preferences` added to DO NOT use list; domain Mode A/B/C guidance added.
+
+---
+
+## Session 27 startup checklist
+
+1. Share `architecture.md` from session 26 outputs (or raw GitHub URL) — do not rely on memory
+2. Read **Section 6.9** (v4 six-phase step structure) and **Section 10** (pgvector implementation) before writing any code
+3. Confirm git tag `v3.2-session26-complete` is present on the repo
+4. Run the end-to-end validation test described below
+
+---
+
+## Primary objective: end-to-end validation of create_workflow v14
+
+Run `/m create workflow spanish flashcard quiz` in Slack and verify each phase passes.
+
+### Phase 0–1 checkpoints (steps 1–6)
+
+- Step 1 `serv_query PGC_Schema`: `domain_schema` should be non-empty — confirm flashcard tables are returned (proves `create-workflow.mjs` domain resolution is working and flowing into `input.domain`)
+- Step 2 `research_workflow_domain`: right brain research completes; step has `on_failure: next` so a failure is non-blocking
+- Steps 3/3a/3b: preference gates and research summary gate render correctly in Slack
+- Step 6 `serv_query PGC_StepType`: `step_type_contracts` loaded
+
+### Phase 1 left brain checkpoint (step 7)
+
+- `analyze_workflow_gaps` passes Ajv on attempt 1 — narrow output schema should be reliable
+- `gap_analysis.confidence` should be `"complete"` (flashcard domain exists, all tables present)
+- `gap_analysis.schema_changes` should be empty or non-blocking only
+- Phase 2 routing (steps 8–11c) should fall through to step 12 without any gates firing
+
+### Phase 3 checkpoints (steps 12–13)
+
+- Step 12 `design_workflow_process`: `process_spec.process_design` should contain no `dialog` field on any item — this is the structural fix; verify in `PGC_WorkflowRun.state`
+- Step 12: `process_spec.state_map` should document all local_state keys
+- Step 13 `design_workflow_dialogs`: `dialog_spec.dialog_designs` options should use `value` on choice options and `action` on confirm options — no AJV violations
+
+### Phase 4 checkpoint (step 14)
+
+- `generate_workflow_steps` v7 produces a valid step array
+- Check that `dialog_designs` entries were correctly joined to `process_design` entries by `step_label` — look at `draft_workflow.steps` in `PGC_WorkflowRun.state`
+- Step 15 review gate renders correctly in Slack — no `invalid_blocks` error
+
+### Phase 5 checkpoints (steps 16–19)
+
+- Step 16 Level 1 static analysis passes — routing references valid, no dead targets
+- Steps 17–18 mock and path generation complete
+- Step 19 Level 2+3 simulation passes (or identifies fixable issues)
+
+### Phase 6 (steps 20–23)
+
+- Steps 21–22 insert to `PGC_Workflow` and `PGC_IntentMap`
+- Step 23 notify confirms workflow is registered
+- Verify the new workflow appears in `PGC_Workflow` via a `getRows` curl
+
+**Diagnostic path for any step failure:**
+
+1. `PGC_WorkflowRun.error` — the step key and error message
+2. `PGC_Prompt.error_log` for the relevant `intent_category` — AJV errors from both correction attempts
+3. CloudWatch logs: `aws logs tail /aws/lambda/evomind-proc --follow`
+
+---
+
+## Known open issues
+
+### 1. `research_workflow_domain` generates wrong preference questions (Medium priority)
+
+**Symptom:** Right brain produces questions about browser data persistence and initial card set size — standalone app concerns — rather than workflow behaviour questions (quiz grading method, score tracking, session length).
+
+**Root cause:** Step 2's input does not pass `domain_schema` to the right brain prompt. Without schema context, the right brain does not know a `PGD_Flashcards` table already exists and treats the request as a greenfield app build.
+
+**Fix (prompt + seed only, no code):**
+- `research_workflow_domain` v2: add `domain_schema` input variable; add Mode A instruction — "when domain_schema is non-empty, ask only about workflow behaviour (how the workflow should work), not about data storage architecture (which tables to create or where to store data)"
+- `seed_PGC_Workflow.json`: add `"domain_schema": "{{domain_schema}}"` to step 2's input
+- `seed_PGC_Prompt.json`: add v2 entry
+- Deploy: `node dev_scripts/upsert-prompt.mjs research_workflow_domain` + `node dev_scripts/upsert-workflow.mjs create_workflow`
+
+### 2. `generate_workflow_steps` v7 is untested end-to-end (High priority — will surface in session 27)
+
+The updated prompt has not been exercised against real inputs. The input contract change from `design_spec` (monolith) to `process_design` + `state_map` + `dialog_designs` (three separate inputs) is structurally correct but prompt tuning may be needed after the first live run. The `PGC_Prompt.error_log` will capture any AJV violations.
+
+### 3. `create_domain` may not auto-embed new DomainHelp rows (Low priority)
+
+New domains created after the pgvector deploy should have `embedding` populated automatically because `PGC_DomainHelp` has `embed_source` in `PGC_Schema` and `table.mjs` `insertRow` reads it. This has not been verified on a live `create_domain` run. If a new domain is created and `embedding` is null on the `PGC_DomainHelp` row, the fix is to run `backfill-embeddings.mjs` — or confirm that `table.mjs` is correctly reading `embed_source` from the schema registry.
+
+### 4. UC 1.1 fix — Pass 2 keyword scan excludes `domain: null` workflows (Low priority, pre-existing)
+
+`matchWorkflowByKeywords` excludes workflows where `domain` is null from keyword matching. System workflows (`create_workflow`, `help`, `ping`, `shutdown`) have `domain: null` and can only be reached via Tier 3 heavy-lift or explicit alias. This causes unnecessary Tier 2 sonar calls for known system commands. Fix deferred — addressable as a prompt update to the Tier 2 classification prompt or a code change to include `domain: null` workflows in Pass 2 scanning.
+
+---
+
+## Next milestone after session 27 validation
+
+Once `create_workflow` end-to-end validation succeeds and the `flashcard_quiz` workflow is successfully registered, the next integration probe is **running the generated workflow against real flashcard data**:
+
+- `/m quiz me on spanish flashcards` — verify the generated workflow is triggered via the Intent Preprocessor
+- Verify the quiz loop runs (one card at a time), score is tracked, and the session ends cleanly
+- Any framework gaps surfaced are fixed at the framework level — not patched in the generated workflow
+
+This validates the full self-extension loop: user asks for a workflow → brain designs and registers it → workflow is immediately callable → produces correct results on real domain data.
+
+---
+
+## Deployment commands reference
+
+```cmd
+rem Deploy code changes
+sam build && sam deploy
+
+rem Upsert new/updated prompts
+node dev_scripts/upsert-prompt.mjs analyze_workflow_gaps
+node dev_scripts/upsert-prompt.mjs design_workflow_process
+node dev_scripts/upsert-prompt.mjs design_workflow_dialogs
+node dev_scripts/upsert-prompt.mjs generate_workflow_steps
+
+rem Upsert create_workflow v14
+node dev_scripts/upsert-workflow.mjs create_workflow
+
+rem Tail logs
+aws logs tail /aws/lambda/evomind-proc --follow
+aws logs tail /aws/lambda/evomind-serv --follow
+aws logs tail /aws/lambda/evomind-callback --follow
+
+rem Verify domain embeddings
+curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/table/getRows -H "Content-Type: application/json" -d "{\"tableName\":\"PGC_DomainHelp\",\"vectorSearch\":{\"column\":\"embedding\",\"queryText\":\"spanish flashcard quiz\",\"threshold\":0,\"limit\":5}}"
+```
