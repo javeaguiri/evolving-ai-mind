@@ -40,8 +40,8 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { callLlm }          from '../shared/llm-client.mjs';
-import { validate }         from './review-output.mjs';
+import { callLlm, callLlmWithCorrection, callLlmWithResumption } from '../shared/llm-client.mjs';
+import { validate, logPromptError }     from './review-output.mjs';
 import { servPost, getRows, insertRow, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
 import {
   resolvePath,
@@ -156,23 +156,68 @@ async function executeLlmCall({ step, localState, run, traceId }) {
   });
 
   const t0 = Date.now();
-  const rawOutput = await callLlm(
-    promptRow.model,
-    instructions,
-    userInput || JSON.stringify(resolvedInput),
-    promptRow.output_schema,
-    traceId,
-    promptRow.max_output_tokens ?? undefined,
-  );
+  let rawOutput;
+  let priorErrorType;
+  try {
+    rawOutput = await callLlm(
+      promptRow.model,
+      instructions,
+      userInput || JSON.stringify(resolvedInput),
+      promptRow.output_schema,
+      traceId,
+      promptRow.max_output_tokens ?? undefined,
+    );
+  } catch (parseErr) {
+    if (!parseErr.rawOutput) throw parseErr;
+    if (parseErr.isTruncated) {
+      // Response was cut at the token ceiling — correction is useless, regenerate from scratch
+      // with a doubled budget. If the resumption also fails, log token_truncation so the
+      // prompt_quality_monitor can auto-raise the ceiling for future runs.
+      console.info('step-executor: llm_call truncated — attempting resumption', { intentCategory, traceId });
+      try {
+        rawOutput = await callLlmWithResumption(
+          promptRow.model,
+          instructions,
+          userInput || JSON.stringify(resolvedInput),
+          promptRow.output_schema,
+          traceId,
+          promptRow.max_output_tokens ?? undefined,
+        );
+      } catch (resumptionErr) {
+        await logPromptError(promptRow.id, {
+          error_type:      'token_truncation',
+          error_message:   `Truncated at ${promptRow.max_output_tokens} tokens; resumption also failed: ${resumptionErr.message}`,
+          recovery_action: 'halt',
+        });
+        throw resumptionErr;
+      }
+      priorErrorType = 'token_truncation';
+    } else {
+      console.info('step-executor: llm_call parse error — attempting correction', { intentCategory, traceId });
+      rawOutput = await callLlmWithCorrection(
+        promptRow.model,
+        instructions,
+        userInput || JSON.stringify(resolvedInput),
+        promptRow.output_schema,
+        [{ message: parseErr.message }],
+        parseErr.rawOutput,
+        traceId,
+        promptRow.max_output_tokens ?? undefined,
+      );
+    }
+  }
   const llmMs = Date.now() - t0;
 
   console.info('step-executor: llm_call completed', { llmMs, traceId });
 
-  // Validate output — 2-attempt correction loop
+  // Validate output — 2-attempt correction loop.
+  // priorErrorType is forwarded when this validate() call follows a truncation+resumption
+  // so the error_log correctly labels the root cause if validation ultimately fails.
   const validationResult = await validate({
     intentCategory,
     output: rawOutput,
     traceId,
+    priorErrorType,
   });
 
   if (!validationResult.valid) {
