@@ -118,15 +118,15 @@ between sessions the same character may appear differently in git.
 
 ### 3. Data inspection dev script for PGC_WorkflowRun analysis
 
-**Purpose:** Enable rapid analysis of `create_workflow` phase outputs (particularly Phase 1 `research_workflow_domain` data) without requiring a DB client or manual curl parsing.
+**Purpose:** Enable rapid analysis of json data (particularly Phase 1 `research_workflow_domain` data obtained by command line curl to /serv/table(getRows))
 
 **Specification:**
 - Script: `dev_scripts/extract-run-data.mjs`
-- Usage: `node dev_scripts/extract-run-data.mjs <workflowRunId> <jsonPath>`
-- `jsonPath` is a dot-path into `PGC_WorkflowRun.state.local_state` (e.g. `right_brain_research`, `process_spec.process_design`)
-- Fetches the run via `GET /api/v1/serv/table/getRows` with `id` filter
-- Extracts the value at the given path from the run's local_state
-- Outputs to stdout as formatted JSON (`JSON.stringify(value, null, 2)`)
+- Usage: `node dev_scripts/extract-run-data.mjs <JsonDataFilename> <jsonPath>`
+- `jsonPath` is a dot-path into json data contained in JsonDataFilename file (e.g. `right_brain_research`, `process_spec.process_design`)
+- Extracts the value at the given path. The path may be a relative path not anchored to the root node of the json file. 
+  The code will have to traverse recursively the entire document.
+- Outputs to stdout as formatted and valid JSON document (`JSON.stringify(value, null, 2)`)
 - Optional `--raw` flag to skip JSON formatting (for piping)
 
 **Primary use case:** Inspect Phase 1 research outputs to evaluate whether `research_workflow_domain` is producing useful design questions versus irrelevant app-architecture questions (known issue #1 from session 26 handoff).
