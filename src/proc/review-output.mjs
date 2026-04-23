@@ -22,6 +22,7 @@ import Ajv                                    from 'ajv';
 import { ok, err }                            from '../shared/lambda-utils.mjs';
 import { getRows, updateRows }                from '../shared/serv-client.mjs';
 import { callLlm, callLlmWithCorrection }     from '../shared/llm-client.mjs';
+import { monitorPromptQuality }               from './monitor-prompt-quality.mjs';
 
 const ajv = new Ajv({ allErrors: true });
 
@@ -55,9 +56,12 @@ export async function handle(req) {
  * @param {string} params.intentCategory  e.g. 'create_domain'
  * @param {object} params.output          The LLM-generated object to validate
  * @param {string} params.traceId
+ * @param {string} [params.priorErrorType] Error type from the calling context
+ *   (e.g. 'token_truncation') — forwarded to error_log so the root cause is
+ *   preserved even when the resumed output then fails schema validation.
  * @returns {Promise<ValidationResult>}
  */
-export async function validate({ intentCategory, output, traceId }) {
+export async function validate({ intentCategory, output, traceId, priorErrorType }) {
   // --- Load prompt row for output_schema and model ---
   const promptResp = await getRows(
     'PGC_Prompt',
@@ -137,12 +141,18 @@ export async function validate({ intentCategory, output, traceId }) {
     traceId,
   });
 
+  const errorType = priorErrorType ?? classifyAjvErrors(attempt2Errors);
   await logPromptError(promptRow.id, {
-    error_type:      'json_schema_validation',
+    error_type:      errorType,
     error_message:   `Validation failed after 2 attempts — ${attempt2Errors.length} error(s)`,
     ajv_errors:      attempt2Errors,
     recovery_action: 'halt',
   });
+
+  // Fire-and-forget — prompt_quality_monitor analyses the error_log and auto-patches
+  // token ceilings or flags patterns for right-brain improvement. Does not block.
+  monitorPromptQuality({ intentCategory, promptId: promptRow.id, traceId })
+    .catch(e => console.error('review-output: monitor fire-and-forget failed', { error: e.message, traceId }));
 
   return {
     valid:       false,
@@ -360,10 +370,27 @@ function runRoutingValueRules(steps) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Classify AJV error array into a coarse error type for the monitor.
+ * The most actionable distinction is schema_contract (wrong array element shape)
+ * vs schema_violation (missing fields, wrong enum, etc.).
+ */
+function classifyAjvErrors(errors) {
+  if (!errors || errors.length === 0) return 'unknown';
+  const firstErr = errors[0];
+  // Wrong array element type (e.g. inputs: [{...}] instead of inputs: ["string"])
+  if (firstErr.keyword === 'type' && firstErr.instancePath?.includes('/0')) {
+    return 'schema_contract';
+  }
+  return 'schema_violation';
+}
+
+/**
  * Append a structured error entry to PGC_Prompt.error_log.
+ * Exported so step-executor can log token_truncation errors that occur
+ * before validate() is reached (e.g. when resumption also fails).
  * Non-fatal — if this fails we log to CloudWatch but don't throw.
  */
-async function logPromptError(promptId, errorEntry) {
+export async function logPromptError(promptId, errorEntry) {
   try {
     // Read current error_log
     const resp = await getRows(

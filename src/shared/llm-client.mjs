@@ -81,6 +81,9 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 
   const data = await response.json();
 
+  // Capture token usage before any parsing — needed for truncation detection below.
+  const outputTokens = data.usage?.output_tokens ?? 0;
+
   console.info('llm-client: response received', {
     model,
     outputLen: data.output?.length,
@@ -104,8 +107,39 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
   try {
     return JSON.parse(clean);
   } catch (error) {
-    throw new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
+    const parseErr = new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
+    parseErr.rawOutput = clean;
+    // Truncation detection: output_tokens exactly equals the ceiling — the model was cut
+    // off mid-response, not confused. A correction prompt won't help; a resumption will.
+    if (maxOutputTokens && outputTokens >= parseInt(maxOutputTokens, 10)) {
+      parseErr.isTruncated = true;
+    }
+    throw parseErr;
   }
+}
+
+/**
+ * Call LLM with a resumption prompt — used when the previous attempt was truncated
+ * at the token ceiling. Regenerates the full response from scratch with a doubled
+ * token budget. Unlike the correction loop, no partial output is included — a
+ * truncated response cannot serve as a valid base for incremental correction.
+ *
+ * @param {string} model           LLM model name
+ * @param {string} instructions    Original system prompt
+ * @param {string} userMessage     Original user message
+ * @param {object} outputSchema    JSON schema for output enforcement
+ * @param {string} traceId
+ * @param {number} maxOutputTokens Original ceiling — doubled for this attempt
+ * @returns {Promise<object>}      Parsed JSON response
+ */
+export async function callLlmWithResumption(model, instructions, userMessage, outputSchema, traceId, maxOutputTokens) {
+  const doubledTokens = maxOutputTokens ? Math.min(parseInt(maxOutputTokens, 10) * 2, 8000) : 4000;
+
+  const resumptionMessage = `Your previous response was cut off before the JSON was complete because it hit the output token limit. Regenerate the complete response from the beginning. Return only the complete valid JSON object — no explanation, no preamble, no markdown fences.`;
+
+  console.info('llm-client: sending resumption prompt', { originalCeiling: maxOutputTokens, doubledCeiling: doubledTokens, traceId });
+
+  return callLlm(model, instructions, resumptionMessage, outputSchema, traceId, doubledTokens);
 }
 
 /**
