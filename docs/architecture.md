@@ -2077,6 +2077,25 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 fields are available to the prompt template via `{{variable}}` substitution.
 Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
 
+**Right-brain hooks in `llm_call`.** Every `llm_call` step has two right-brain
+mechanisms wired into it by the Step Processor — no workflow definition changes needed:
+
+1. **Validation and correction loop** (Section 6.6): After the LLM responds, `review-output.mjs`
+   runs Ajv + semantic validation. On failure, a correction prompt is sent automatically.
+   If both attempts fail, the structured errors are written to `PGC_Prompt.error_log`.
+
+2. **Truncation-aware resumption** (Section 6.6): If the response is cut off mid-JSON because
+   `max_output_tokens` was reached (`output_tokens === ceiling`), a resumption prompt
+   regenerates from scratch at double the token budget, rather than sending the broken
+   partial output to the correction loop. If resumption also fails, `token_truncation` is
+   logged to `PGC_Prompt.error_log`.
+
+3. **Prompt quality monitor** (Section 6.6): After any 2-attempt failure is written to
+   `error_log`, `monitor-prompt-quality.mjs` fires asynchronously. It classifies the
+   failure pattern and, for `token_truncation` with 2+ consecutive occurrences, inserts
+   a new `PGC_Prompt` version with a raised ceiling automatically. No human intervention
+   required. Schema errors are logged as advisory for the Phase 3 right-brain loop.
+
 ##### `js_transform`
 
 Every `js_transform` step requires an `expression` field — a pure synchronous JavaScript
@@ -3101,26 +3120,29 @@ contract.
 
 ---
 
-### 6.6 Right-Brain Output Validation — correction loop
+### 6.6 Right-Brain Output Validation, Resumption, and Quality Monitor
 
-Every `llm_call` step runs through a two-attempt validation loop before its output
-is accepted and stored in `local_state`. This is implemented in `review-output.mjs`
-and called directly (intra-proc import) from `step-executor.mjs`.
+Every `llm_call` step passes through a multi-stage right-brain pipeline before its
+output is accepted and stored in `local_state`. This pipeline is implemented across
+three modules — `review-output.mjs`, `llm-client.mjs`, and `monitor-prompt-quality.mjs`
+— all called directly (intra-proc import) from `step-executor.mjs`. No workflow
+definition changes are needed to get these capabilities; they apply to every `llm_call`
+step in every workflow automatically.
 
 #### Validation passes
 
 Three passes run in strict order. Later passes only execute if all earlier passes
 have returned zero errors.
 
-**Pass 1 — Ajv JSON Schema**
+**Pass 1 -- Ajv JSON Schema**
 The `output_schema` field on the `PGC_Prompt` row is an Ajv-compatible JSON Schema.
 The LLM output is validated against it. If it fails, the specific Ajv errors are
 collected and passed to the correction attempt.
 
 Every prompt must have an `output_schema`. A prompt without one skips Ajv
-validation entirely — this is a known gap in any prompt row that lacks the field.
+validation entirely -- this is a known gap in any prompt row that lacks the field.
 
-**Pass 2a — Schema semantic rules** (`runSemanticRules()`)
+**Pass 2a -- Schema semantic rules** (`runSemanticRules()`)
 Runs only if Pass 1 passed, and only when the output contains a `tables` array
 (i.e. `create_domain` and `design_table` prompts). Rules:
 
@@ -3128,10 +3150,10 @@ Runs only if Pass 1 passed, and only when the output contains a `tables` array
 - Rule 2: Every `upsert_key` column must have a matching UNIQUE constraint
 - Rule 3: Every FK parent table must exist in the same scaffold
 
-These rules catch cross-reference errors that JSON Schema cannot express —
+These rules catch cross-reference errors that JSON Schema cannot express --
 a FK pointing to a table not in the output, or a constraint on a nonexistent column.
 
-**Pass 2b — Routing value rules** (`runRoutingValueRules()`)
+**Pass 2b -- Routing value rules** (`runRoutingValueRules()`)
 Runs only if Pass 1 passed, and only when the output contains a `steps` array
 (i.e. workflow generation prompts: `generate_workflow_steps` and any prompt whose
 output shape includes a steps array). Does not run on `create_domain` output.
@@ -3140,42 +3162,152 @@ Rules enforced on every step in the array:
 
 - Every `on_success`, `on_failure`, and `on_complete` value must be a known routing
   token: `next`, `end`, `cancel`, `human_feedback`, or `step:<key>`
-- Every `step:N` target must exist as a step key in the same array — dead targets
+- Every `step:N` target must exist as a step key in the same array -- dead targets
   are caught here before the workflow is ever registered or simulated
 - Every `human_gate` must have at least one option with `action: "cancel"`
 
-Pass 2a and Pass 2b are mutually exclusive by output shape — an output with `tables`
+Pass 2a and Pass 2b are mutually exclusive by output shape -- an output with `tables`
 never has `steps`, and vice versa. Both use the same error format
 `{ type: "semantic", rule, message, step? }` so the correction loop handles them
 identically.
 
-#### Correction loop
+#### Full pipeline -- parse, truncation detection, correction, resumption
+
+The pipeline runs in this order on every `llm_call` step:
 
 ```
-Attempt 1:
-  Call LLM → parse JSON → run validation (Pass 1 + Pass 2a or 2b)
-  Valid → store at output_key, continue
-  Invalid → collect errors, attempt 2
+Step Processor calls callLlm():
+  LLM responds
+    |
+    +-- JSON parses cleanly?
+    |     Yes --> run validation (Pass 1 + Pass 2a or 2b)
+    |             Valid   --> store at output_key, continue
+    |             Invalid --> callLlmWithCorrection (Attempt 2 -- see below)
+    |
+    +-- JSON parse fails:
+          |
+          +-- output_tokens >= max_output_tokens? (truncation detected)
+          |     Yes --> callLlmWithResumption
+          |               Doubled token budget (max 8000)
+          |               "Regenerate the complete response from scratch"
+          |               Success --> run validation on resumed output
+          |               Failure --> log token_truncation to PGC_Prompt.error_log
+          |                          --> step throws
+          |
+          +-- Ordinary parse error (unescaped quote, malformed structure)
+                callLlmWithCorrection with parse error as the correction input
+                Success --> run validation
+                Failure --> step throws
 
-Attempt 2 (callLlmWithCorrection):
+Attempt 2 (callLlmWithCorrection -- Ajv/semantic errors only):
   Call LLM with original prompt + all collected errors injected
-  Valid → store corrected output at output_key, continue
-  Invalid → log errors to PGC_Prompt.error_log → step throws
+  Valid  --> store corrected output at output_key, continue
+  Invalid --> log errors to PGC_Prompt.error_log
+              --> fire monitor-prompt-quality asynchronously
+              --> step throws
 
-Step throws → run-workflow.mjs catch block:
-  on_failure === "human_feedback" → push recovery gate (Retry / Skip / Cancel)
-  on_failure !== "human_feedback" → mark run failed → WORKFLOW_ERROR to Slack
+Step throws --> run-workflow.mjs catch block:
+  on_failure === "human_feedback" --> push recovery gate (Retry / Skip / Cancel)
+  on_failure !== "human_feedback" --> mark run failed --> WORKFLOW_ERROR to Slack
 ```
 
-The correction is a second LLM call with the same prompt plus the specific
-validation errors. The LLM sees exactly what was wrong and why. This is not a
-retry — it is a targeted correction.
+**Key distinction between correction and resumption:** The correction loop sends the
+broken output back to the LLM with the specific errors. This works when the LLM
+misunderstood a schema contract. It fails when the response was simply cut off --
+there is nothing to correct in a truncated response, and the correction call hits the
+same ceiling. Resumption bypasses this by requesting a clean regeneration at double
+the budget.
 
-When both attempts fail, the step throws. Whether the run is marked failed or
-a recovery gate is shown to the user depends entirely on the step's `on_failure`
-field — not on anything inside `review-output.mjs`. The validation module is
-responsible only for determining validity and collecting errors; routing on
-failure is the Step Processor's responsibility.
+**`priorErrorType` forwarding:** When resumption succeeds at parsing but AJV then
+fails, `validate()` receives `priorErrorType: "token_truncation"` so the error_log
+correctly records the root cause rather than the downstream schema error.
+
+#### `PGC_Prompt.error_log` -- the right-brain accumulation surface
+
+Every 2-attempt failure appends a structured entry to `PGC_Prompt.error_log`:
+
+```json
+{
+  "attempts": [
+    {
+      "at": "2026-04-22T15:58:56Z",
+      "error_type": "token_truncation",
+      "error_message": "Truncated at 1500 tokens; resumption also failed: ...",
+      "recovery_action": "halt"
+    },
+    {
+      "at": "2026-04-22T16:10:12Z",
+      "error_type": "schema_contract",
+      "error_message": "Validation failed after 2 attempts -- 3 error(s)",
+      "ajv_errors": [...],
+      "recovery_action": "halt"
+    }
+  ]
+}
+```
+
+`error_type` values and their meanings:
+
+| Value | Cause | Auto-fixable |
+|---|---|---|
+| `token_truncation` | `output_tokens >= max_output_tokens` on any attempt | Yes -- monitor raises ceiling |
+| `schema_contract` | Wrong array element shape (e.g. objects instead of strings) | No -- prompt example needed |
+| `schema_violation` | Missing required field, wrong enum, type mismatch | No -- prompt clarification needed |
+| `llm_correction_failed` | The correction LLM call itself threw (network, timeout) | No |
+| `unknown` | None of the above patterns matched | No |
+
+#### Prompt quality monitor -- `monitor-prompt-quality.mjs`
+
+Fires asynchronously (fire-and-forget) from `review-output.mjs` after every
+2-attempt failure is written to `error_log`. Does not block the workflow error
+path. Available as both a direct intra-proc import and a POST HTTP endpoint for
+manual triggering.
+
+**Classification rule:** requires 2+ consecutive failures with the same `error_type`
+in the last 5 attempts. A single occurrence is not a pattern. Consecutive occurrences
+indicate a structural issue that will recur on every run.
+
+**Autonomous action -- `token_truncation`:**
+When 2+ consecutive `token_truncation` entries are detected, the monitor inserts a
+new `PGC_Prompt` version (parent_prompt_id set to the failing version) with:
+- `max_output_tokens` raised by 1.5x, capped at 8000
+- `prompt_text`, `output_schema`, `model` copied unchanged
+- `error_log` cleared (fresh slate for the new version)
+
+The Step Processor always loads the latest version via `ORDER BY version DESC LIMIT 1`,
+so the raised ceiling takes effect on the next run without any deployment or manual
+intervention.
+
+**Cooldown guard:** The monitor skips if a newer version was already inserted within
+the last 24 hours, preventing runaway version inflation when a prompt is failing
+persistently faster than the fix can be verified.
+
+**Advisory only -- `schema_contract` / `schema_violation`:**
+These require a right-brain prompt improvement loop (Phase 3). The monitor logs an
+advisory to CloudWatch and does not modify the prompt. The `error_log` accumulates
+the failure data that the Phase 3 loop will consume.
+
+**Not in scope for the monitor:** Content errors -- outputs that are structurally
+valid and pass AJV but are semantically wrong (e.g. `confidence: "blocked"` when
+the workflow is buildable). These require `PGC_WorkflowStats` correlation to detect
+and the full Phase 3 loop to fix.
+
+#### HTTP endpoint
+
+`POST /api/v1/proc/monitor-prompt-quality` -- accepts `{ intentCategory, promptId }`
+for manual triggering. Returns the action taken: `auto_patched`, `advisory`,
+`skipped`, or `error`. Useful for testing the monitor without triggering a live
+workflow failure.
+
+handler.mjs additions required to activate the HTTP and SQS paths:
+```js
+// HTTP
+case 'monitor-prompt-quality': return monitorHandle(req)
+// SQS
+case 'MONITOR_PROMPT_QUALITY': return monitorHandle(buildReq(message))
+// Import
+import { handle as monitorHandle } from './monitor-prompt-quality.mjs'
+```
 
 ---
 

@@ -1,184 +1,254 @@
-# evolving-mind-ai — Session 27 Handoff
+# evolving-mind-ai -- Session 28 Handoff
 
-**Git tag:** `v3.2-session26-complete`  
-**Date:** 2026-04-20  
-**Session 26 focus:** pgvector implementation complete; `create_workflow` v4 three-call left brain design and implementation
-
----
-
-## What was completed in session 26
-
-### pgvector — fully implemented
-
-| Item | Status |
-|---|---|
-| pgvector extension enabled on RDS | ✅ |
-| `vector` added to `ALLOWED_TYPES` in `schema.mjs` | ✅ |
-| `embed_source` persisted in `addColumn` → `PGC_Schema` | ✅ |
-| `PGC_DomainHelp.embedding` column added | ✅ |
-| `seed_PGC_Schema.json` PGC_DomainHelp entry updated with `embed_source` | ✅ |
-| `embed-client.mjs` — Perplexity `pplx-embed-v1-4b`, base64 INT8 decode | ✅ |
-| `table.mjs` — auto-embed on `insertRow`/`updateRows`; `vectorSearch` on `getRows` | ✅ |
-| `serv-client.mjs` — `vectorSearch` param added to `getRows` wrapper | ✅ |
-| `classify-intent.mjs` — `semanticDomainMatch` via SERV `getRows` `vectorSearch` | ✅ |
-| `create-workflow.mjs` — domain resolution before `WorkflowRun` creation | ✅ |
-| `backfill-embeddings.mjs` — unconditional backfill via `updateRows` | ✅ |
-| Threshold calibrated at 0.40 for `pplx-embed-v1-4b` | ✅ |
-
-**Confirmed working in production:** "spanish flashcard quiz" → `spanish_flashcards` at similarity 0.558 (threshold 0.40 ✅). Separation to next domain (recipes) is 0.11 — unambiguous.
-
-**Key architectural decision recorded in Section 10:** Embedding computation belongs in the SERV tier. `embed_source` in `PGC_Schema.columns` is the single source of truth for what text to embed. Any table in the system gains semantic search by adding a vector column with `embed_source` — no code changes.
+**Git tag:** `v3.2-session27-complete`
+**Date:** 2026-04-23
+**Session 27 focus:** create_workflow v14 end-to-end validation; self-healing pipeline (resumption prompt, prompt_quality_monitor); iterative workflow design loop
 
 ---
 
-### create_workflow v4 — designed and implemented
+## What was completed in session 27
 
-**Root cause of previous failures:** The single `analyze_and_design_workflow` prompt was simultaneously classifying gaps, designing the process, designing dialogs, and writing prompts. At 3,245 output tokens it was at the model's reliable precision limit. Two structural schema contradictions were embedded in the output_schema:
-- `dialog` field on `process_design` items declared `anyOf: [empty_object | null]` but the prompt instructed the LLM to put a step_label reference there — schema and prompt contradicted each other on every run
-- `choice` gate options required `action` but `action` is semantically meaningless on choice options (which use `value`) — the LLM correctly omitted it, causing required-field violations on every run
+### create_workflow -- Phase 0-4 validated end-to-end
 
-**The v4 fix:** Three focused left-brain calls replacing the single monolith.
+All phases now reach step 15 (user review gate) reliably. Run 245 confirmed:
 
-| Step | Prompt | Phase | Output | Token budget |
-|---|---|---|---|---|
-| 7 | `analyze_workflow_gaps` v1 | Phase 1 | `gap_analysis` | ~1,500 |
-| 12 | `design_workflow_process` v1 | Phase 3 | `process_spec` (`process_design`, `state_map`) | ~2,000 |
-| 13 | `design_workflow_dialogs` v1 | Phase 3 | `dialog_spec` (`dialog_designs`) | ~2,000 |
-| 14 | `generate_workflow_steps` v7 | Phase 4 | `draft_workflow` | ~3,000 |
+| Phase | Steps | Status |
+|---|---|---|
+| 0 -- bootstrap | 1-3b | Confirmed clean across all runs |
+| 1 -- gap analysis | 7-11a | analyze_workflow_gaps v2 valid on attempt 2; confidence: "complete"; routing_flags all 0 |
+| 2 -- routing | 8-11b | Falls through to step 12 with no gates firing |
+| 3 -- design | 12 (design_workflow_process v2), 13 (design_workflow_dialogs v1) | Both valid attempt 1 |
+| 4 -- generate | 14 (generate_workflow_steps v7) | Valid after AJV schema fix |
+| 5 -- review + simulate | 15, 16 | Step 15 renders correctly; simulate fires |
 
-**Files changed:**
+Phases 5-6 (simulation, registration) are next to fully validate in session 28.
 
-| File | Change |
-|---|---|
-| `seed_PGC_Prompt.json` | Added `analyze_workflow_gaps` v1, `design_workflow_process` v1, `design_workflow_dialogs` v1, `generate_workflow_steps` v7 |
-| `seed_PGC_Workflow.json` | `create_workflow` bumped to v14 — 31 steps across 6 phases |
-| `architecture.md` | Section 6.9 fully rewritten for v4; Section 10 updated with implemented pgvector design |
+### Bugs fixed this session
 
-**Bug fixes also deployed this session:**
-- `callback.mjs` — `action_id` uniqueness: index suffix appended to both `actions` and `list` case action_ids. Eliminated `duplicate action_id → invalid_blocks` Slack error.
-- `analyze_and_design_workflow` v11 — `blocked_reason` made nullable; `state_map` `additionalProperties` corrected; `needs_preferences` added to DO NOT use list; domain Mode A/B/C guidance added.
+| Bug | Root cause | Fix |
+|---|---|---|
+| `analyze_workflow_gaps` confidence=blocked | No Mode A instruction -- LLM treated interactive quiz as needing non-existent UI capability | Added DOMAIN MODE section to v2, interactive patterns explicitly mapped to human_gate + js_transform + condition |
+| JSON parse error in blocked_reason | Unescaped double-quotes in LLM string values | Added `parseErr.rawOutput` to thrown error; correction loop retry via `callLlmWithCorrection` |
+| `generate_workflow_steps` AJV: 24 errors | `output_schema.steps.items.required` included `on_failure`, `on_success`, `on_complete` -- invalid for `end`, `condition`, `notify` step types | Reduced required to `["step", "type"]` only |
+| `analyze_workflow_gaps` AJV: inputs as objects | `prompts_needed[].inputs` spec ambiguous -- LLM returned `[{name, type}]` instead of `["string"]` | Added explicit CRITICAL clause with correct/wrong example in v3 |
+| `design_workflow_process` JSON truncated at position 6707 | `max_output_tokens: 2000` too low for complex domain process designs | Raised to 4000 in v3 |
+| `analyze_workflow_gaps` JSON truncated at position 5508 | `max_output_tokens: 1500` too low | Raised to 2500 in v4 |
+| `[object Object]` in step 15 review_object | `item_primary_key` defaulted to "tableName", `item_secondary_key` to "columns" -- workflow step objects have neither | Added `item_label_template: "Step {{step}} ({{type}})"` and `item_secondary_key: "description"` to step 15 |
+| Step 15 -> 16 endless loop | `simulate on_failure: "step:15"` routed back to review gate with no fix path | Added steps 16a (js_transform: format errors) and 16b (human_gate: show errors, offer Regenerate or Cancel) |
+| text_input modal not opening | "Regenerate with feedback" click advanced workflow to step 15a via SQS, but trigger_id was expired by the time callback.mjs tried to open modal | Added `modal` descriptor to option definition -- `interactive.mjs` opens modal synchronously on the button click within the 3-second trigger_id window |
+| `[object Object]` in callback.mjs review_object | Plain object values fell through to `String(item.value)` | Added `else if (typeof item.value === 'object')` branch with `JSON.stringify` |
 
----
+### create_workflow seed -- version history
 
-## Session 27 startup checklist
+| Version | Steps | Key change |
+|---|---|---|
+| v14 | 31 | Three-call left brain (gap analysis + process design + dialog design + step generation) |
+| v15 | 33 | Added steps 16a, 16b (simulation error display + user choice) |
+| v16 | 34 | Added step 15a (text_input feedback gate); step 14 now receives user_feedback + simulation_errors |
+| v17 | 34 | Added `modal` descriptor to "Regenerate with feedback" in steps 15 and 16b |
 
-1. Share `architecture.md` from session 26 outputs (or raw GitHub URL) — do not rely on memory
-2. Read **Section 6.9** (v4 six-phase step structure) and **Section 10** (pgvector implementation) before writing any code
-3. Confirm git tag `v3.2-session26-complete` is present on the repo
-4. Run the end-to-end validation test described below
+### Prompt version history (session 27)
 
----
+| Prompt | Version | Key change |
+|---|---|---|
+| `analyze_workflow_gaps` | v2 | Added DOMAIN MODE (A/B/C); Type 4b guidance; apostrophes-not-quotes rule |
+| `analyze_workflow_gaps` | v3 | Added CRITICAL clause for inputs format (strings not objects) |
+| `analyze_workflow_gaps` | v4 | max_output_tokens 1500 -> 2500 |
+| `design_workflow_process` | v2 | Mode A/B/C; flat loop pattern 8-step guide; no dialog field instruction |
+| `design_workflow_process` | v3 | max_output_tokens 2000 -> 4000 |
+| `design_workflow_dialogs` | v2 | max_output_tokens 2000 -> 3000 |
+| `generate_workflow_steps` | v7 | Three-input contract (process_design + state_map + dialog_designs) replacing monolith |
+| `generate_workflow_steps` | v8 | Added user_feedback and simulation_errors input variables |
 
-## Primary objective: end-to-end validation of create_workflow v14
+### Self-healing pipeline -- implemented (not yet deployed in production)
 
-Run `/m create workflow spanish flashcard quiz` in Slack and verify each phase passes.
+Four new/modified files ready for deployment in session 28:
 
-### Phase 0–1 checkpoints (steps 1–6)
+| File | Status | Change summary |
+|---|---|---|
+| `src/shared/llm-client.mjs` | Modified | Captures output_tokens; sets parseErr.isTruncated when ceiling hit; adds callLlmWithResumption (1.5x budget, max 8000) |
+| `src/proc/step-executor.mjs` | Modified | Branches on isTruncated -> callLlmWithResumption; logs token_truncation on resumption failure; passes priorErrorType to validate() |
+| `src/proc/review-output.mjs` | Modified | Exports logPromptError; adds classifyAjvErrors(); adds priorErrorType param; fires monitor-prompt-quality fire-and-forget after 2-attempt failure |
+| `src/proc/monitor-prompt-quality.mjs` | New | Classifies consecutive failure patterns; auto-patches token ceiling (2+ consecutive truncations); 24h cooldown; advisory-only for schema errors |
 
-- Step 1 `serv_query PGC_Schema`: `domain_schema` should be non-empty — confirm flashcard tables are returned (proves `create-workflow.mjs` domain resolution is working and flowing into `input.domain`)
-- Step 2 `research_workflow_domain`: right brain research completes; step has `on_failure: next` so a failure is non-blocking
-- Steps 3/3a/3b: preference gates and research summary gate render correctly in Slack
-- Step 6 `serv_query PGC_StepType`: `step_type_contracts` loaded
+Architecture documented in Section 6.6 (expanded) and Section 6.5.1 (right-brain hook reference added).
 
-### Phase 1 left brain checkpoint (step 7)
-
-- `analyze_workflow_gaps` passes Ajv on attempt 1 — narrow output schema should be reliable
-- `gap_analysis.confidence` should be `"complete"` (flashcard domain exists, all tables present)
-- `gap_analysis.schema_changes` should be empty or non-blocking only
-- Phase 2 routing (steps 8–11c) should fall through to step 12 without any gates firing
-
-### Phase 3 checkpoints (steps 12–13)
-
-- Step 12 `design_workflow_process`: `process_spec.process_design` should contain no `dialog` field on any item — this is the structural fix; verify in `PGC_WorkflowRun.state`
-- Step 12: `process_spec.state_map` should document all local_state keys
-- Step 13 `design_workflow_dialogs`: `dialog_spec.dialog_designs` options should use `value` on choice options and `action` on confirm options — no AJV violations
-
-### Phase 4 checkpoint (step 14)
-
-- `generate_workflow_steps` v7 produces a valid step array
-- Check that `dialog_designs` entries were correctly joined to `process_design` entries by `step_label` — look at `draft_workflow.steps` in `PGC_WorkflowRun.state`
-- Step 15 review gate renders correctly in Slack — no `invalid_blocks` error
-
-### Phase 5 checkpoints (steps 16–19)
-
-- Step 16 Level 1 static analysis passes — routing references valid, no dead targets
-- Steps 17–18 mock and path generation complete
-- Step 19 Level 2+3 simulation passes (or identifies fixable issues)
-
-### Phase 6 (steps 20–23)
-
-- Steps 21–22 insert to `PGC_Workflow` and `PGC_IntentMap`
-- Step 23 notify confirms workflow is registered
-- Verify the new workflow appears in `PGC_Workflow` via a `getRows` curl
-
-**Diagnostic path for any step failure:**
-
-1. `PGC_WorkflowRun.error` — the step key and error message
-2. `PGC_Prompt.error_log` for the relevant `intent_category` — AJV errors from both correction attempts
-3. CloudWatch logs: `aws logs tail /aws/lambda/evomind-proc --follow`
+**handler.mjs addition still needed before monitor is reachable via HTTP/SQS:**
+```js
+import { handle as monitorHandle } from './monitor-prompt-quality.mjs'
+// HTTP:
+case 'monitor-prompt-quality': return monitorHandle(req)
+// SQS:
+case 'MONITOR_PROMPT_QUALITY': return monitorHandle(buildReqFromSqs(message))
+```
 
 ---
 
-## Known open issues
+## Session 28 objectives -- evaluated in priority order
 
-### 1. `research_workflow_domain` generates wrong preference questions (Medium priority)
+Before deploying the self-healing pipeline, session 28 evaluates and resolves the following issues. Items are ordered by technical dependency; items 1-2 are prerequisites for clean code management, items 3-5 are feature work, items 6-8 are code quality.
 
-**Symptom:** Right brain produces questions about browser data persistence and initial card set size — standalone app concerns — rather than workflow behaviour questions (quiz grading method, score tracking, session length).
+### 1. Character set issues -- encoding consistency across the codebase
 
-**Root cause:** Step 2's input does not pass `domain_schema` to the right brain prompt. Without schema context, the right brain does not know a `PGD_Flashcards` table already exists and treats the request as a greenfield app build.
+**Symptom:** Em dash and other non-ASCII characters render inconsistently in git
+diffs and in prompt seed files. When prompt seed files are modified, characters
+oscillate between UTF-8 rendered (`--`) and JSON unicode escape (`\u2014`), and
+between sessions the same character may appear differently in git.
 
-**Fix (prompt + seed only, no code):**
-- `research_workflow_domain` v2: add `domain_schema` input variable; add Mode A instruction — "when domain_schema is non-empty, ask only about workflow behaviour (how the workflow should work), not about data storage architecture (which tables to create or where to store data)"
-- `seed_PGC_Workflow.json`: add `"domain_schema": "{{domain_schema}}"` to step 2's input
-- `seed_PGC_Prompt.json`: add v2 entry
-- Deploy: `node dev_scripts/upsert-prompt.mjs research_workflow_domain` + `node dev_scripts/upsert-workflow.mjs create_workflow`
+**Evaluation tasks:**
+- Confirm the repo's `.gitattributes` and editor settings enforce UTF-8 + LF line endings end-to-end
+- Audit `seed_PGC_Prompt.json` and `seed_PGC_Workflow.json` for mixed encoding
+- Determine whether the Perplexity/Claude LLM APIs return unicode escapes or rendered characters in JSON string values, and whether this matters for prompt text display in Slack
+- Evaluate whether all prompt text should standardise on `\u2014` (JSON-safe, git-stable) or on UTF-8 rendered characters (human-readable in seed files)
+- Confirm `.editorconfig` or similar tooling is in place to prevent future drift
 
-### 2. `generate_workflow_steps` v7 is untested end-to-end (High priority — will surface in session 27)
+**Decision needed:** establish the authoritative encoding standard and write it into the code review checklist.
 
-The updated prompt has not been exercised against real inputs. The input contract change from `design_spec` (monolith) to `process_design` + `state_map` + `dialog_designs` (three separate inputs) is structurally correct but prompt tuning may be needed after the first live run. The `PGC_Prompt.error_log` will capture any AJV violations.
+### 2. Code collaboration and tooling improvements
 
-### 3. `create_domain` may not auto-embed new DomainHelp rows (Low priority)
+**Symptom:** Claude cannot access the GitHub repo directly. Stale snapshot files in `/mnt/project` have caused incorrect edits in prior sessions. Lines untouched by a change have been inadvertently modified. Prior session changes have been overwritten.
 
-New domains created after the pgvector deploy should have `embedding` populated automatically because `PGC_DomainHelp` has `embed_source` in `PGC_Schema` and `table.mjs` `insertRow` reads it. This has not been verified on a live `create_domain` run. If a new domain is created and `embedding` is null on the `PGC_DomainHelp` row, the fix is to run `backfill-embeddings.mjs` — or confirm that `table.mjs` is correctly reading `embed_source` from the schema registry.
+**Evaluation tasks:**
+- Assess whether the public GitHub repo URL (`https://github.com/javeaguiri/evolving-ai-mind`) can now be accessed via web_fetch, which would allow reading raw file contents without manual sharing
+- Evaluate storing raw GitHub file URLs for key system files in `architecture.md` so Claude can fetch the current deployed version before modifying it, rather than requiring manual upload each session
+- Evaluate whether Claude's str_replace editing approach (replace a unique string with a new string) is sufficiently precise given the stale-file incidents -- should every session start with a mandatory "share these files" checklist
+- Assess whether the current `view_range` + `str_replace` pattern adequately prevents touching unchanged lines, or whether a diff-generation approach would be safer
 
-### 4. UC 1.1 fix — Pass 2 keyword scan excludes `domain: null` workflows (Low priority, pre-existing)
+**Decision needed:** update the session startup checklist in `architecture.md` and establish the file-sharing protocol that prevents stale-snapshot incidents.
 
-`matchWorkflowByKeywords` excludes workflows where `domain` is null from keyword matching. System workflows (`create_workflow`, `help`, `ping`, `shutdown`) have `domain: null` and can only be reached via Tier 3 heavy-lift or explicit alias. This causes unnecessary Tier 2 sonar calls for known system commands. Fix deferred — addressable as a prompt update to the Tier 2 classification prompt or a code change to include `domain: null` workflows in Pass 2 scanning.
+### 3. Data inspection dev script for PGC_WorkflowRun analysis
+
+**Purpose:** Enable rapid analysis of `create_workflow` phase outputs (particularly Phase 1 `research_workflow_domain` data) without requiring a DB client or manual curl parsing.
+
+**Specification:**
+- Script: `dev_scripts/extract-run-data.mjs`
+- Usage: `node dev_scripts/extract-run-data.mjs <workflowRunId> <jsonPath>`
+- `jsonPath` is a dot-path into `PGC_WorkflowRun.state.local_state` (e.g. `right_brain_research`, `process_spec.process_design`)
+- Fetches the run via `GET /api/v1/serv/table/getRows` with `id` filter
+- Extracts the value at the given path from the run's local_state
+- Outputs to stdout as formatted JSON (`JSON.stringify(value, null, 2)`)
+- Optional `--raw` flag to skip JSON formatting (for piping)
+
+**Primary use case:** Inspect Phase 1 research outputs to evaluate whether `research_workflow_domain` is producing useful design questions versus irrelevant app-architecture questions (known issue #1 from session 26 handoff).
+
+### 4. Design iteration loop in Phase 1 (research_workflow_domain)
+
+**Current state:** Phase 1 presents the right-brain research summary and a single preference gate (one question at a time via iterator). The user selects from pre-defined options. There is no mechanism to give free-text input at this stage, and no way to signal that a question is not applicable.
+
+**Evaluation tasks:**
+- Add N/A option to each preference gate in the iterator (step 5) -- `on_select: "next"`, does not write to `user_preferences`, signals the question was irrelevant
+- Add Cancel option to each preference gate (already present in some but should be universal)
+- Add a free-text human gate after the preference iterator (similar to step 15a in create_workflow) -- allows the user to add context that the right-brain did not surface as a structured question
+- Evaluate whether the design iteration loop belongs in Phase 1 (before gap analysis) or Phase 3 (after process design) -- the two locations serve different purposes:
+  - Phase 1 free text: "here's what matters to me about how this workflow should behave"
+  - Phase 3 free text (step 15a): "change these specific generated steps"
+- Evaluate whether `research_workflow_domain` should receive `domain_schema` as input (known issue #1 from session 26 -- without it, the right brain treats the request as greenfield even when domain tables exist)
+
+**Decision needed:** confirm scope and routing before implementing seed changes.
+
+### 5. AI chat as standalone and design iteration vehicle
+
+**Concept:** A `/chat` Slack command that opens a stateful LLM conversation, usable standalone or as the free-text input mechanism for workflow design iteration (item 4 above).
+
+**Evaluation tasks:**
+- Assess whether `PGC_Session` and `PGC_SessionEntry` (currently Backlog -- Section 4.3.4) are required prerequisites for a meaningful chat implementation, or whether a stateless single-turn chat is useful without them
+- Evaluate the interaction model: does the user type multiple turns in Slack (thread replies), or is each `/chat` invocation a single-turn exchange?
+- Evaluate whether chat and workflow design iteration should share the same session context, or whether they are structurally separate
+- Assess the cost model: chat calls the LLM on every turn; at household scale this is acceptable but should be documented
+- Determine the minimum viable implementation scope before committing to `PGC_Session` infrastructure
+
+**Decision needed:** MVP scope and session model before any code is written.
+
+### 6. Code review -- rendering bugs and general quality
+
+**Tasks in priority order:**
+
+1. Update `docs/code-review-checklist.md` before beginning the code review:
+   - Add rendering check: `review_object` gate -- verify `item_primary_key` and `item_secondary_key` are appropriate for the actual data type at `context_key` (not defaulting to "tableName"/"columns" for non-table data)
+   - Add rendering check: any `review_object` or `description_list` value that could be an object must pass through a serialisation guard
+   - Add check: `on_failure` routing in simulated steps must not route back to the same gate without a fix path available to the user
+   - Add check: every workflow iterating over a preference array must have N/A and Cancel options on each item gate
+
+2. Review `src/ui/slackbot/callback.mjs`:
+   - Evaluate whether the large number of `postX` functions per message type is necessary or whether `dialogToBlocks()` can be the universal renderer (item 7 below)
+   - Review all string-to-block conversions for the 3000-character Slack section block hard limit
+   - Identify any hardcoded message formats that should be data-driven
+
+3. Write unit tests for `buildDialog()` in `step-executor.mjs`:
+   - Each gate type with a representative local_state fixture
+   - Specifically test `review_object` with array-of-step-objects input (the `[object Object]` regression)
+   - Test `choice` gate option rendering (value vs action distinction)
+
+### 7. callback.mjs message type consolidation
+
+**Current state:** `callback.mjs` has 10+ `postX` functions (`postPingSqsResult`, `postPingE2eResult`, `postCreateDomainResult`, `postDesignDomainGate`, `postDesignDomainError`, `postHelpGate`, `postHelpResult`, etc.), each with its own Block Kit construction logic. `dialogToBlocks()` already provides a generic Block Kit renderer for `WORKFLOW_GATE` messages.
+
+**Evaluation questions:**
+- Which message types carry structured dialog data that `dialogToBlocks()` could render vs. which carry truly bespoke layouts that require dedicated renderers?
+- Can `WORKFLOW_NOTIFY` and `WORKFLOW_ERROR` be simplified to use a common text-to-blocks pattern rather than per-type formatting logic?
+- Should all free-form text strings be run through a `textToBlocks(text)` utility that handles the 3000-character limit automatically, rather than per-function chunking logic?
+- What is the correct scope for the Experience tier: should it be block-construction-free (PROC builds blocks, EXP just posts them) or is it acceptable for EXP to own some block construction for UI-specific messages like ping results?
+
+**Decision needed:** confirm architectural boundary before refactoring.
+
+### 8. Slack API capability review
+
+**Purpose:** Ensure `callback.mjs` and `buildDialog()` correctly implement all Slack Block Kit elements needed for current and near-future workflows.
+
+**Items to review against Slack API documentation (to be provided):**
+- Button element: `style`, `confirm` dialog, `url` property
+- Checkboxes: multi-select pattern for future `select_many` gate type
+- Date/time pickers: potential use in workflow scheduling features
+- File input: evaluate for future document/attachment upload flows
+- Multi-select menu vs static_select: when each is appropriate
+- Number input: evaluate for quantity fields in domain data entry workflows
+- Plain-text input: max length constraints; single vs multiline
+- Section block with accessory vs separate actions block: layout implications
+- Rich text blocks: evaluate for formatted workflow notifications
+- Table block (if available): evaluate for `review_object` tabular display
+
+**Output:** Document supported elements and their correct Block Kit construction in `docs/slack-block-kit-reference.md` (new file). Reference from `callback.mjs` header.
 
 ---
 
-## Next milestone after session 27 validation
-
-Once `create_workflow` end-to-end validation succeeds and the `flashcard_quiz` workflow is successfully registered, the next integration probe is **running the generated workflow against real flashcard data**:
-
-- `/m quiz me on spanish flashcards` — verify the generated workflow is triggered via the Intent Preprocessor
-- Verify the quiz loop runs (one card at a time), score is tracked, and the session ends cleanly
-- Any framework gaps surfaced are fixed at the framework level — not patched in the generated workflow
-
-This validates the full self-extension loop: user asks for a workflow → brain designs and registers it → workflow is immediately callable → produces correct results on real domain data.
-
----
-
-## Deployment commands reference
+## Deployment checklist for session 28
 
 ```cmd
-rem Deploy code changes
+rem Deploy code changes (self-healing pipeline -- session 27 output)
+rem PREREQUISITE: add handler.mjs case for monitor-prompt-quality (handler.mjs not yet shared)
 sam build && sam deploy
 
-rem Upsert new/updated prompts
+rem Upsert prompts (already deployed during session 27 manual testing)
 node dev_scripts/upsert-prompt.mjs analyze_workflow_gaps
 node dev_scripts/upsert-prompt.mjs design_workflow_process
 node dev_scripts/upsert-prompt.mjs design_workflow_dialogs
 node dev_scripts/upsert-prompt.mjs generate_workflow_steps
 
-rem Upsert create_workflow v14
+rem Upsert create_workflow v17
 node dev_scripts/upsert-workflow.mjs create_workflow
 
-rem Tail logs
-aws logs tail /aws/lambda/evomind-proc --follow
-aws logs tail /aws/lambda/evomind-serv --follow
-aws logs tail /aws/lambda/evomind-callback --follow
-
-rem Verify domain embeddings
-curl -s -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/serv/table/getRows -H "Content-Type: application/json" -d "{\"tableName\":\"PGC_DomainHelp\",\"vectorSearch\":{\"column\":\"embedding\",\"queryText\":\"spanish flashcard quiz\",\"threshold\":0,\"limit\":5}}"
+rem Validate end-to-end -- Phase 5 and 6 are the primary targets
+rem (Phases 0-4 confirmed working in session 27)
 ```
+
+## Session 28 startup checklist
+
+1. Share `architecture.md` from session 27 outputs
+2. Confirm git tag `v3.2-session27-complete`
+3. Before any code: request `handler.mjs` to add the `monitor-prompt-quality` case
+4. Run `/m create workflow spanish flashcard quiz` -- target: reach Phase 6 (workflow registration)
+5. Begin session 28 evaluation items in order: character encoding -> file sharing -> dev script -> iterate
+
+## Known open issues carried from session 26
+
+### 1. research_workflow_domain -- no domain_schema input (Medium)
+Right brain treats all requests as greenfield. Fix: add `"domain_schema": "{{domain_schema}}"` to step 2 input; add Mode A instruction to `research_workflow_domain` v2.
+
+### 2. Phase 5-6 not yet validated end-to-end (High -- primary session 28 target)
+Steps 17 (generate_workflow_mocks), 18 (generate_workflow_paths), 19 (simulate Level 2+3), 20-23 (registration) have not completed a successful run.
+
+### 3. create_domain auto-embed not verified (Low)
+If a new domain is created and `embedding` is null on the `PGC_DomainHelp` row, run `backfill-embeddings.mjs`.
+
+### 4. Pass 2 keyword scan excludes domain:null workflows (Low)
+System workflows (create_workflow, help, ping, shutdown) are unreachable via Pass 2 keyword scan. Causes unnecessary Tier 2 sonar calls for known system commands.
