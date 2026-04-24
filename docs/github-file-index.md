@@ -4,8 +4,9 @@
 
 Blob URL pattern: `https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/<path>`
 
-Fetch protocol: paste the blob URL in chat once per session -- I can then fetch it directly.
-The tree URL is blocked by robots.txt; individual blob URLs work.
+Fetch protocol: Raw URLs in this index are fetchable directly — no paste required. If however files are
+still truncated, stop and request files from Javear.
+
 
 ### src/ui/slackbot/
 | File | Blob URL |

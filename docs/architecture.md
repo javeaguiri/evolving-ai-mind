@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 28 in progress  
-Last updated: 2026-04-23 (session 28 — pgvector implemented: Perplexity pplx-embed-v1-4b, embed_source in PGC_Schema, SERV-tier embedding, vectorSearch on getRows; create-workflow.mjs domain resolution; create_workflow v4 design: three-call left brain, six phases, gap-early architecture documented in Section 6.9)
+Status: Active development — Session 28 complete  
+Last updated: 2026-04-24 (session 28 — dev tooling overhaul: idempotent upsert-prompt/upsert-workflow with SHA-256 fingerprinting; pull-prompt.mjs writes directly to seed file; extract-run-data.mjs CLI; encoding standard: \uXXXX in seed JSON; GitHub raw URL access protocol; research_workflow_domain v2 with workflow_mode gate and schema constraints; create_workflow v19 with D1-D4 preference quality fixes; seed_PGC_Prompt.json reconciled to DB versions)
 
 ---
 
@@ -45,6 +45,7 @@ A self-evolving, low-cost cognitive automation brain that:
 - `OutExtension: .js=.mjs` on all functions — Lambda loads as ESM
 - JSON template files imported as static ES module imports — NOT read via `fs.readFile` at runtime (esbuild bundles them)
 - PROC endpoint modules are transport-agnostic — never import AWS SDK or Slack SDK. Check `req.source` ('http' or 'sqs') only to determine response path. Business logic is identical for both transports.
+- **Seed file encoding — FINAL:** JSON seed files use `\uXXXX` escape sequences for all non-ASCII characters. `JSON.stringify` produces this natively — no round-trip drift. Markdown/YAML docs use UTF-8 rendered characters. `.gitattributes` and `.editorconfig` in repo root enforce LF line endings and UTF-8 encoding.
 
 ---
 
@@ -353,20 +354,31 @@ evolving-mind-ai/
 ├── docs/
 │   ├── architecture.md               Primary architectural decision log (this file)
 │   ├── code-review-checklist.md      Per-session code review checklist — patterns, anti-patterns, rules
+│   ├── github-file-index.md          Raw GitHub URL index for all source files — used for direct session-start fetches
 │   ├── Javear-use-cases.md           User-facing use case definitions — source of truth for scope decisions
 │   ├── openapi.yaml                  OpenAPI 3.0 spec — all PROC and SERV HTTP endpoints; spec-first rule
 │   ├── perplexityapi.yaml            Perplexity Agent API reference — response_format, model names, constraints
+│   ├── perplexity-embeddings.yaml    Perplexity embedding API reference
+│   ├── perplexityLLMS.md             Perplexity model catalogue and constraints
+│   ├── slack-block-kit.md            Slack Block Kit element reference with JSON snippets — used for callback.mjs review
+│   ├── slack-messaging.md            Slack messaging API reference
 │   ├── prompt-issues.md              LLM prompt quality log — failure patterns, root causes, mitigations
 │   ├── session-handoff.md            Session-to-session continuity doc — last known state + next steps
 │   ├── unit-test-setup.md            node:test runner setup guide — ESM fixtures, test structure
-│   ├── user-intent-use-cases/        Directory — UC 1.x intent pipeline use case specs
+│   ├── user-intent-use-cases.md      UC 1.x intent pipeline use case specs
 │   └── evolving_mind_use_cases.html  Visual use case map — rendered HTML for stakeholder review
 │
 ├── dev_scripts/                      Developer tooling — run manually, never imported by Lambda code
 │   ├── upsert-workflow.mjs           Upserts one or more PGC_Workflow rows from seed_PGC_Workflow.json
 │   │                                 Usage: node dev_scripts/upsert-workflow.mjs <workflow_name>
-│   ├── upsert-prompt.mjs             Upserts PGC_Prompt rows; writes probe_input + max_output_tokens
+│   ├── upsert-prompt.mjs             Upserts PGC_Prompt rows; idempotent via SHA-256 fingerprint;
 │   │                                 Usage: node dev_scripts/upsert-prompt.mjs <intent_category>
+│   ├── pull-prompt.mjs               Pulls highest-version DB row per intent_category; writes directly
+│   │                                 to seed_PGC_Prompt.json in place; removes old-version cluster entries
+│   │                                 Usage: node dev_scripts/pull-prompt.mjs <intent_category>
+│   ├── extract-run-data.mjs          CLI: extract all values at a relative dot-path from a JSON file;
+│   │                                 fans through arrays; --raw flag for piping
+│   │                                 Usage: node dev_scripts/extract-run-data.mjs <file> <dot.path>
 │   ├── backfill-embeddings.mjs       One-shot — embeds all PGC_DomainHelp rows where embedding IS NULL
 │   │                                 ⬜ Session 26 — not yet implemented
 │   ├── seed_PGC_StepType.mjs         Seeds PGC_StepType rows with routing contracts; safe to re-run
@@ -1075,9 +1087,16 @@ bumps, output schema changes. Must be run before the new prompt version is activ
 runtime, since the Step Processor loads prompts from the DB at execution time
 (`ORDER BY version DESC LIMIT 1` per `intent_category`).
 
-**Idempotency:** Uses `WHERE NOT EXISTS ON (intent_category, version)` — safe to
-re-run. Existing rows at the same version are not overwritten. Bump the version number
-to deploy a changed prompt. Old versions are retained as history.
+**Idempotency:** Computes a SHA-256 content fingerprint over `prompt_text`, `model`,
+`output_schema`, and `input_variables` before every write. If the fingerprint matches
+the highest-version DB row — no-op, prints "already current". If the DB version is
+ahead of the seed version and content differs — skips the update and prints a pull
+instruction; never overwrites a newer DB row with older seed content. Only the
+highest-version seed entry per `intent_category` is deployed; older version entries
+in the seed file are skipped with a warning to clean them up.
+
+**When DB is ahead of seed:** run `pull-prompt.mjs <intent_category>` to pull the DB
+content into the seed file, then verify with `git diff` before committing.
 
 **Key behaviour:**
 - Writes `prompt_text`, `output_schema`, `input_variables`, `model`, `version`
@@ -1104,8 +1123,10 @@ workflow — e.g. `upsert-workflow.mjs create_workflow`. Without an argument the
 upserts all workflows in the seed file. Prefer the targeted form on live systems to
 avoid touching workflows that have active runs.
 
-**Idempotency:** Update if exists (`updateRows`), insert if not. Matches on `name`.
-Safe to re-run — the script reads the current DB state before deciding insert vs update.
+**Idempotency:** Computes a SHA-256 content fingerprint over `steps`, `description`,
+and `model_used` before every write. If the fingerprint matches the current DB row —
+no-op, prints "already current". Version is only incremented when a real content diff
+is detected. Safe to re-run indefinitely without spurious version bumps.
 
 **Key behaviour:**
 - Writes `name`, `domain`, `description`, `intent_keywords`, `steps`, `state_strategy`,
@@ -1176,7 +1197,55 @@ node dev_scripts/upsert-system-context.mjs step_type_contracts
 ```
 
 ---
-## 5. Service Layer â€” SERV
+
+##### `pull-prompt.mjs`
+
+Pulls the highest-version `PGC_Prompt` row for one or more `intent_category` values
+from the DB and writes the result directly into `seed_PGC_Prompt.json`, replacing all
+existing entries for that category with the single authoritative DB row.
+
+**When to run:** When the DB is ahead of the seed file — after a prompt is improved
+by the self-healing pipeline or manually patched in the DB without updating the seed.
+This is the reverse of `upsert-prompt.mjs` — it syncs DB → seed.
+
+**Workflow:**
+```cmd
+node dev_scripts/pull-prompt.mjs <intent_category>
+git diff src/serv/templates/pgc/seeds/seed_PGC_Prompt.json
+node dev_scripts/upsert-prompt.mjs <intent_category>
+git commit
+```
+
+**Encoding:** `JSON.stringify` produces `\uXXXX` for all non-ASCII characters.
+This is the project-standard encoding for seed JSON files — git-stable, immune to
+round-trip drift, no Slack display difference (decoded identically at render time).
+
+**Argument:** `intent_category` name. Omit to pull all categories found in the seed file.
+
+---
+
+##### `extract-run-data.mjs`
+
+CLI tool for inspecting JSON data files — particularly `PGC_WorkflowRun` state
+snapshots saved from curl responses or the run analysis workflow.
+
+**Usage:**
+```cmd
+node dev_scripts/extract-run-data.mjs <file> <dot.path> [--raw]
+node dev_scripts/extract-run-data.mjs run-245.json right_brain_research
+node dev_scripts/extract-run-data.mjs run-245.json preference_questions.question
+node dev_scripts/extract-run-data.mjs run-245.json confidence --raw
+```
+
+Path matching is **relative and depth-first** — the document is searched recursively
+for every node where the path applies. Intermediate arrays are fanned out automatically;
+`[]` bracket notation is accepted but not required. Multiple matches return as a JSON
+array; a single match returns unwrapped. `--raw` suppresses formatting for pipe use.
+
+Save analysis files to `dev_scripts/data/` (gitignored). Primary use: inspect Phase 1
+research outputs to evaluate `research_workflow_domain` question quality across runs.
+
+--- â€” SERV
 
 ### 5.1 SERV-Schema (complete)
 DDL executor and PGC metadata registry.
