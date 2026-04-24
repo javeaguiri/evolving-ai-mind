@@ -6,15 +6,17 @@
 //
 // Upserts a prompt definition into PGC_Prompt via SERV.
 //
-// Idempotency behaviour:
-//   - Fetches the highest-version row for the intent_category from the DB.
-//   - Computes a content fingerprint over: prompt_text, model, output_schema,
-//     input_variables. Fields excluded from fingerprint: was_successful,
-//     probe_input, max_output_tokens (operational metadata, not prompt content).
-//   - If fingerprints match --> no-op. Prints "already current" and exits.
-//   - If fingerprints differ --> updates the target version row in-place.
-//   - If the DB highest version is ahead of the seed version --> warns that
-//     the seed file version field is stale and should be updated.
+// Idempotency and version safety rules:
+//   1. When multiple seed entries exist for the same intent_category, only the
+//      highest-version entry is processed. Old versions in the seed file are
+//      historical noise and must never be deployed over a newer DB row.
+//   2. Computes a content fingerprint over prompt_text, model, output_schema,
+//      input_variables before every write.
+//   3. Fingerprints match --> no-op. "Already current."
+//   4. Fingerprints differ AND seed version >= DB version --> update DB row.
+//   5. Fingerprints differ AND DB version > seed version --> SKIP. The DB is
+//      ahead of the seed. Print instructions to pull DB content into the seed.
+//      Never overwrite a newer DB version with older seed content.
 //
 // Reads from: ../src/serv/templates/pgc/seeds/seed_PGC_Prompt.json
 //
@@ -41,14 +43,33 @@ if (!SERV_API_URL) {
 const seedPath = new URL('../src/serv/templates/pgc/seeds/seed_PGC_Prompt.json', import.meta.url);
 const seed = JSON.parse(readFileSync(seedPath, 'utf8'));
 
-const targets = INTENT_CATEGORY
+// Filter to requested intent_category (or all)
+const candidates = INTENT_CATEGORY
   ? seed.filter(p => p.intent_category === INTENT_CATEGORY)
   : seed;
 
-if (targets.length === 0) {
+if (candidates.length === 0) {
   console.error(`ERROR: intent_category "${INTENT_CATEGORY}" not found in seed_PGC_Prompt.json`);
-  console.error(`Available: ${seed.map(p => `${p.intent_category} v${p.version}`).join(', ')}`);
+  console.error(`Available: ${[...new Set(seed.map(p => p.intent_category))].join(', ')}`);
   process.exit(1);
+}
+
+// Deduplicate: for each intent_category keep only the highest seed version.
+// Old versions in the seed file must never be deployed.
+const latestByCat = new Map();
+for (const p of candidates) {
+  const v = VERSION_OVERRIDE ?? p.version ?? 1;
+  const existing = latestByCat.get(p.intent_category);
+  if (!existing || v > (VERSION_OVERRIDE ?? existing.version ?? 1)) {
+    latestByCat.set(p.intent_category, p);
+  }
+}
+const targets = [...latestByCat.values()];
+
+if (targets.length < candidates.length) {
+  const skipped = candidates.length - targets.length;
+  console.warn(`NOTE: ${skipped} older seed version(s) skipped -- only the highest version per intent_category is deployed.`);
+  console.warn('      Remove old version entries from seed_PGC_Prompt.json to eliminate this warning.\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -64,16 +85,15 @@ async function servPost(path, body) {
 }
 
 // ---------------------------------------------------------------------------
-// Content fingerprint -- canonical JSON serialisation with sorted keys so
-// field ordering differences in the seed file don't produce false diffs.
+// Content fingerprint -- canonical JSON with sorted keys so field ordering
+// differences between seed and DB do not produce false diffs.
+// Covers: prompt_text, model, output_schema, input_variables.
+// Excludes: was_successful, probe_input, max_output_tokens (operational metadata).
 // ---------------------------------------------------------------------------
 function sortedJson(value) {
   if (value === null || value === undefined) return 'null';
   if (typeof value !== 'object' || Array.isArray(value)) return JSON.stringify(value);
-  const sorted = Object.keys(value).sort().reduce((acc, k) => {
-    acc[k] = value[k];
-    return acc;
-  }, {});
+  const sorted = Object.keys(value).sort().reduce((acc, k) => { acc[k] = value[k]; return acc; }, {});
   return JSON.stringify(sorted);
 }
 
@@ -90,6 +110,8 @@ function fingerprint(entry) {
 // ---------------------------------------------------------------------------
 // Upsert each target prompt
 // ---------------------------------------------------------------------------
+let needsAttention = false;
+
 for (const prompt of targets) {
   const seedVersion = VERSION_OVERRIDE ?? prompt.version ?? 1;
   const seedFp = fingerprint(prompt);
@@ -97,7 +119,7 @@ for (const prompt of targets) {
   console.log(`\nPrompt: ${prompt.intent_category}`);
   console.log(`  Seed version : v${seedVersion}  fingerprint: ${seedFp}`);
 
-  // Fetch all rows for this intent_category, find highest version
+  // Fetch highest-version DB row for this intent_category
   const existing = await servPost('/api/v1/serv/table/getRows', {
     tableName: 'PGC_Prompt',
     filters: [{ column: 'intent_category', op: 'eq', value: prompt.intent_category }],
@@ -110,9 +132,9 @@ for (const prompt of targets) {
     process.exit(1);
   }
 
-  // No row exists at all -- insert at seed version
+  // No DB row -- insert at seed version
   if (existing.count === 0) {
-    console.log('  DB row      : none -- inserting...');
+    console.log('  DB row       : none -- inserting...');
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_Prompt',
       row: {
@@ -129,7 +151,7 @@ for (const prompt of targets) {
       },
     });
     if (!result.success) { console.error('ERROR: insertRow failed', result); process.exit(1); }
-    console.log(`  Result      : inserted at v${seedVersion} (id: ${result.row?.id})`);
+    console.log(`  Result       : inserted at v${seedVersion} (id: ${result.row?.id})`);
     continue;
   }
 
@@ -137,23 +159,30 @@ for (const prompt of targets) {
   const dbVersion = dbRow.version;
   const dbFp = fingerprint(dbRow);
 
-  console.log(`  DB highest  : v${dbVersion}  fingerprint: ${dbFp}`);
+  console.log(`  DB highest   : v${dbVersion}  fingerprint: ${dbFp}`);
 
-  // Warn if DB version is ahead of the seed file
-  if (dbVersion > seedVersion) {
-    console.warn(`  WARNING: DB is at v${dbVersion} but seed file declares v${seedVersion}.`);
-    console.warn(`           Update the seed file version field to ${dbVersion} to resolve the mismatch.`);
-  }
-
-  // Fingerprints match -- no-op
+  // Fingerprints match -- no-op regardless of version numbers
   if (seedFp === dbFp) {
-    console.log(`  Result      : no changes -- already current (v${dbVersion})`);
+    console.log(`  Result       : no changes -- already current (v${dbVersion})`);
+    if (seedVersion !== dbVersion) {
+      console.warn(`  NOTE: Seed declares v${seedVersion} but DB is v${dbVersion}. Update seed version field.`);
+      needsAttention = true;
+    }
     continue;
   }
 
-  // Content differs -- update the highest DB version row in-place
-  console.log(`  Content diff detected -- updating v${dbVersion}...`);
+  // Content differs AND DB is ahead of seed -- do NOT overwrite
+  if (dbVersion > seedVersion) {
+    console.warn(`  SKIP: DB v${dbVersion} has different content from seed v${seedVersion}.`);
+    console.warn(`        The seed is stale. Pull the DB content before deploying:`);
+    console.warn(`        node dev_scripts/pull-prompt.mjs ${prompt.intent_category}`);
+    needsAttention = true;
+    continue;
+  }
+
+  // Content differs AND seed version >= DB version -- safe to update
   const targetVersion = dbVersion;
+  console.log(`  Content diff detected -- updating v${targetVersion}...`);
 
   const result = await servPost('/api/v1/serv/table/updateRows', {
     tableName: 'PGC_Prompt',
@@ -174,12 +203,7 @@ for (const prompt of targets) {
   });
 
   if (!result.success) { console.error('ERROR: updateRows failed', result); process.exit(1); }
-
-  if (dbVersion !== seedVersion) {
-    console.warn(`  NOTE: Changes written to DB v${dbVersion} (not seed v${seedVersion}).`);
-    console.warn(`        Update seed file version field to ${dbVersion}.`);
-  }
-  console.log(`  Result      : updated v${targetVersion} -- ${result.updatedCount ?? 1} row(s) affected`);
+  console.log(`  Result       : updated v${targetVersion} -- ${result.updatedCount ?? 1} row(s) affected`);
 
   // Verify
   const verify = await servPost('/api/v1/serv/table/getRows', {
@@ -191,7 +215,12 @@ for (const prompt of targets) {
     limit: 1,
   });
   const stored = verify.rows?.[0];
-  console.log(`  Verified    : v${stored?.version}  updated_at: ${stored?.updated_at}`);
+  console.log(`  Verified     : v${stored?.version}  updated_at: ${stored?.updated_at}`);
+}
+
+if (needsAttention) {
+  console.warn('\n ACTION REQUIRED: one or more prompts were skipped or have version mismatches.');
+  console.warn(' Run: node dev_scripts/pull-prompt.mjs <intent_category> to pull DB content.');
 }
 
 console.log('\nDone.');
