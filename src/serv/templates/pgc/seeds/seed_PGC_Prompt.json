@@ -947,39 +947,39 @@
   },
   {
     "intent_category": "analyze_and_design_workflow",
-    "version": 10,
+    "version": 11,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
       {
         "name": "userInput",
-        "description": "The user raw workflow creation request",
-        "required": true
+        "required": true,
+        "description": "The user raw workflow creation request"
       },
       {
         "name": "domain",
-        "description": "The domain name resolved by the intent preprocessor",
-        "required": true
+        "required": true,
+        "description": "The domain name resolved by the intent preprocessor"
       },
       {
         "name": "domain_schema",
-        "description": "JSON array of PGC_Schema rows for the domain",
-        "required": true
+        "required": true,
+        "description": "JSON array of PGC_Schema rows for the domain"
       },
       {
         "name": "right_brain_research",
-        "description": "Output from research_workflow_domain — findings and resolved preference recommendations",
-        "required": false
+        "required": false,
+        "description": "Output from research_workflow_domain — findings and resolved preference recommendations"
       },
       {
         "name": "user_preferences",
-        "description": "Array of { id, selected_value } objects from Tier 1 user preference gates — may be empty",
-        "required": false
+        "required": false,
+        "description": "Array of { id, selected_value } objects from Tier 1 user preference gates — may be empty"
       },
       {
         "name": "step_type_contracts",
-        "description": "Live PGC_StepType rows — the complete instruction set available to workflows",
-        "required": true
+        "required": true,
+        "description": "Live PGC_StepType rows — the complete instruction set available to workflows"
       }
     ],
     "output_schema": {
@@ -991,63 +991,57 @@
         "prompts_needed",
         "schema_changes",
         "deferred",
-        "confidence",
-        "blocked_reason"
+        "confidence"
       ],
-      "additionalProperties": false,
       "properties": {
-        "process_design": {
+        "deferred": {
           "type": "array",
           "items": {
             "type": "object",
             "required": [
-              "step_label",
-              "step_type",
-              "description",
-              "inputs",
-              "outputs",
-              "dialog"
+              "what",
+              "why",
+              "how_to_add"
             ],
-            "additionalProperties": false,
             "properties": {
-              "step_label": {
+              "why": {
                 "type": "string"
               },
-              "step_type": {
+              "what": {
                 "type": "string"
               },
-              "description": {
+              "how_to_add": {
                 "type": "string"
-              },
-              "inputs": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-              },
-              "outputs": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-              },
-              "dialog": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "state_map": {
           "type": "object",
-          "properties": {},
-          "additionalProperties": false
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "confidence": {
+          "enum": [
+            "complete",
+            "needs_user_input",
+            "needs_schema",
+            "blocked"
+          ],
+          "type": "string"
+        },
+        "blocked_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required only when confidence is blocked. Null for all other confidence values."
         },
         "dialog_designs": {
           "type": "array",
@@ -1061,35 +1055,18 @@
               "context_key",
               "output_key"
             ],
-            "additionalProperties": false,
             "properties": {
-              "step_label": {
-                "type": "string"
-              },
-              "gate_type": {
-                "type": "string",
-                "enum": [
-                  "confirm",
-                  "edit_list",
-                  "text_input",
-                  "review_object",
-                  "choice"
-                ]
-              },
-              "message_template": {
-                "type": "string"
-              },
-              "context_key": {
-                "type": "string"
-              },
-              "output_key": {
-                "type": "string"
-              },
               "options": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "additionalProperties": false,
+                  "required": [
+                    "label",
+                    "value",
+                    "action",
+                    "description",
+                    "on_select"
+                  ],
                   "properties": {
                     "label": {
                       "type": "string"
@@ -1100,23 +1077,88 @@
                     "action": {
                       "type": "string"
                     },
-                    "description": {
+                    "on_select": {
                       "type": "string"
                     },
-                    "on_select": {
+                    "description": {
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "label",
-                    "value",
-                    "action",
-                    "description",
-                    "on_select"
-                  ]
+                  "additionalProperties": false
                 }
+              },
+              "gate_type": {
+                "enum": [
+                  "confirm",
+                  "edit_list",
+                  "text_input",
+                  "review_object",
+                  "choice"
+                ],
+                "type": "string"
+              },
+              "output_key": {
+                "type": "string"
+              },
+              "step_label": {
+                "type": "string"
+              },
+              "context_key": {
+                "type": "string"
+              },
+              "message_template": {
+                "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
+          }
+        },
+        "process_design": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "step_label",
+              "step_type",
+              "description",
+              "inputs",
+              "outputs",
+              "dialog"
+            ],
+            "properties": {
+              "dialog": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "inputs": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              },
+              "outputs": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              },
+              "step_type": {
+                "type": "string"
+              },
+              "step_label": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "prompts_needed": {
@@ -1131,10 +1173,12 @@
               "prompt_text",
               "model"
             ],
-            "additionalProperties": false,
             "properties": {
-              "intent_category": {
+              "model": {
                 "type": "string"
+              },
+              "exists": {
+                "type": "boolean"
               },
               "inputs": {
                 "type": "array",
@@ -1142,21 +1186,19 @@
                   "type": "string"
                 }
               },
+              "prompt_text": {
+                "type": "string"
+              },
               "output_shape": {
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
               },
-              "exists": {
-                "type": "boolean"
-              },
-              "prompt_text": {
-                "type": "string"
-              },
-              "model": {
+              "intent_category": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "schema_changes": {
@@ -1171,7 +1213,6 @@
               "columns",
               "domain_suggestion"
             ],
-            "additionalProperties": false,
             "properties": {
               "table": {
                 "type": "string"
@@ -1185,63 +1226,29 @@
               "recommendation": {
                 "type": "string"
               },
-              "impact_if_skipped": {
-                "type": "string"
-              },
               "domain_suggestion": {
                 "type": "string"
-              }
-            }
-          }
-        },
-        "deferred": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "what",
-              "why",
-              "how_to_add"
-            ],
-            "properties": {
-              "what": {
-                "type": "string"
               },
-              "why": {
-                "type": "string"
-              },
-              "how_to_add": {
+              "impact_if_skipped": {
                 "type": "string"
               }
             },
             "additionalProperties": false
           }
-        },
-        "confidence": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "needs_user_input",
-            "needs_schema",
-            "blocked"
-          ]
-        },
-        "blocked_reason": {
-          "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "prompt_text": "You are the analytical design intelligence of evolving-mind-ai. Produce a complete workflow design specification that a step generator can implement without making any design decisions.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nCRITICAL — OUTPUT FIELD NAMES. Use ONLY these exact field names. No other fields are allowed:\n\nprocess_design items — EXACTLY these fields only:\n  step_label    (string, required) — short identifier e.g. \"load_flashcards\"\n  step_type     (string, required) — one of the step types from step_type_contracts\n  description   (string, required) — what this step does\n  inputs        (object, optional) — key/value pairs this step reads from local_state\n  outputs       (object, optional) — key/value pairs this step writes to local_state\n  dialog        (object|null, optional) — reference to a dialog_designs entry by step_label\n\ndialog_designs items — EXACTLY these fields only:\n  step_label        (string, required) — matches the process_design step_label\n  gate_type         (string, required) — one of: confirm, edit_list, text_input, review_object, choice\n  message_template  (string, required) — Slack message with {{state_key}} placeholders\n  options           (array, required)  — array of button option objects\n  output_key        (string, optional) — local_state key written on gate completion\n  context_key       (string, optional) — local_state key to display in review_object gate\n\nDO NOT use: step_id, step, order, label, reads_state, writes_state, reads_from_state,\nwrites_to_state, reads_from_local_state, writes_to_local_state, produces_data_for_step,\non_success, on_error, on_cancel, on_true, on_false, next_step_id, transform_logic,\nrationale, message, trigger, output_written, human_interaction, schema_dependencies,\ncondition_expression, intent_category, reads, writes, gaps_found, or any other field\nnot listed above.\n\nEXAMPLE process_design item:\n{ \"step_label\": \"load_flashcards\", \"step_type\": \"serv_query\", \"description\": \"Load all flashcards for the quiz\", \"inputs\": {}, \"outputs\": { \"flashcards\": \"array of flashcard rows\" } }\n\nEXAMPLE dialog_designs item:\n{ \"step_label\": \"show_card\", \"gate_type\": \"confirm\", \"message_template\": \"{{current_card.spanish}}\", \"options\": [{\"label\": \"Show answer\", \"action\": \"confirm\"}, {\"label\": \"Cancel\", \"action\": \"cancel\"}], \"output_key\": \"card_response\" }\n\nstate_map must be a plain object: { \"key_name\": { \"type\": \"string|array|object|integer|boolean\", \"written_by\": \"step_label\", \"read_by\": [\"step_label\"] } }\n\nGap resolution rules — apply in order:\n- Type 2 (knowledge gaps): resolved by right_brain_research.findings. Apply recommendation directly. Never surface to user.\n- Type 1 (preference gaps): resolved by user_preferences. If settled, apply directly.\n- Type 3a (non-blocking schema): add to schema_changes with blocking=false.\n- Type 3b (blocking schema): add to schema_changes with blocking=true, set confidence=needs_schema.\n- Type 4a (missing prompts): write full prompt_text in prompts_needed[], set exists=false.\n- Type 4b (missing step types): set confidence=blocked with blocked_reason.\n\nprompts_needed items: inputs must be array of strings. output_shape must be a plain object {}.\nmodel for prompts_needed items must be one of: \"anthropic/claude-sonnet-4-5\" (for analytical/generative tasks) or \"perplexity/sonar\" (only for prompts that require live web search). Never use gpt-4, gpt-4o-mini, or any other model — these are not supported by the system.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
-    "max_output_tokens": 4000,
-    "error_log": null,
+    "prompt_text": "You are the analytical design intelligence of evolving-mind-ai. Produce a complete workflow design specification that a step generator can implement without making any design decisions.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nCRITICAL — OUTPUT FIELD NAMES. Use ONLY these exact field names. No other fields are allowed:\n\nprocess_design items — EXACTLY these fields only:\n  step_label    (string, required) — short identifier e.g. \"load_flashcards\"\n  step_type     (string, required) — one of the step types from step_type_contracts\n  description   (string, required) — what this step does\n  inputs        (object, optional) — key/value pairs this step reads from local_state\n  outputs       (object, optional) — key/value pairs this step writes to local_state\n  dialog        (object|null, optional) — reference to a dialog_designs entry by step_label\n\ndialog_designs items — EXACTLY these fields only:\n  step_label        (string, required) — matches the process_design step_label\n  gate_type         (string, required) — one of: confirm, edit_list, text_input, review_object, choice\n  message_template  (string, required) — Slack message with {{state_key}} placeholders\n  options           (array, required)  — array of button option objects\n  output_key        (string, optional) — local_state key written on gate completion\n  context_key       (string, optional) — local_state key to display in review_object gate\n\nDO NOT use: step_id, step, order, label, reads_state, writes_state, reads_from_state,\nwrites_to_state, reads_from_local_state, writes_to_local_state, produces_data_for_step,\non_success, on_error, on_cancel, on_true, on_false, next_step_id, transform_logic,\nrationale, message, trigger, output_written, human_interaction, schema_dependencies,\ncondition_expression, intent_category, reads, writes, gaps_found, needs_preferences,\nor any other field not listed above.\n\nEXAMPLE process_design item:\n{ \"step_label\": \"load_flashcards\", \"step_type\": \"serv_query\", \"description\": \"Load all flashcards for the quiz\", \"inputs\": {}, \"outputs\": { \"flashcards\": \"array of flashcard rows\" } }\n\nEXAMPLE dialog_designs item:\n{ \"step_label\": \"show_card\", \"gate_type\": \"confirm\", \"message_template\": \"{{current_card.spanish}}\", \"options\": [{\"label\": \"Show answer\", \"action\": \"confirm\"}, {\"label\": \"Cancel\", \"action\": \"cancel\"}], \"output_key\": \"card_response\" }\n\nstate_map must be a plain object: { \"key_name\": { \"type\": \"string|array|object|integer|boolean\", \"written_by\": \"step_label\", \"read_by\": [\"step_label\"] } }\n\nDomain context — apply the correct mode based on inputs:\n- Mode A (domain_schema non-empty): Workflow operates on existing domain data. Use ONLY the\n  table and column names present in domain_schema. Never invent tables or columns.\n  Design steps to read, update, or transform that data.\n- Mode B (domain set but domain_schema empty): Either (a) the user wants a workflow that\n  creates or populates domain data — design an ingestion or setup workflow, or (b) required\n  tables are missing — flag as Type 3b blocking schema gap with confidence=needs_schema.\n  Use right_brain_research.findings to distinguish between (a) and (b).\n- Mode C (domain null, domain_schema empty): Standalone workflow with no domain dependency.\n  May use PGC system tables (PGC_Workflow, PGC_IntentMap, etc.) or operate purely on\n  user input and LLM calls with no DB reads/writes required.\n\nGap resolution rules — apply in order:\n- Type 2 (knowledge gaps): resolved by right_brain_research.findings. Apply recommendation directly. Never surface to user.\n- Type 1 (preference gaps): resolved by user_preferences. If settled, apply directly.\n- Type 3a (non-blocking schema): add to schema_changes with blocking=false.\n- Type 3b (blocking schema): add to schema_changes with blocking=true, set confidence=needs_schema.\n- Type 4a (missing prompts): write full prompt_text in prompts_needed[], set exists=false.\n- Type 4b (missing step types): set confidence=blocked with blocked_reason.\n\nprompts_needed items: inputs must be array of strings. output_shape must be a plain object {}.\nmodel for prompts_needed items must be one of: \"anthropic/claude-sonnet-4-5\" (for analytical/generative tasks) or \"perplexity/sonar\" (only for prompts that require live web search). Never use gpt-4, gpt-4o-mini, or any other model — these are not supported by the system.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
     "probe_input": {
-      "userInput": "quiz me on my Spanish flashcards, show one card at a time and track my score",
       "domain": "spanish_flashcards",
+      "userInput": "quiz me on my Spanish flashcards, show one card at a time and track my score",
       "domain_schema": "[{\"table_name\":\"PGD_Flashcards\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"spanish\",\"type\":\"text\"},{\"name\":\"english\",\"type\":\"text\"},{\"name\":\"difficulty\",\"type\":\"text\"}]},{\"table_name\":\"PGD_FlashcardSets\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"name\",\"type\":\"text\"}]}]",
+      "user_preferences": "[]",
       "step_type_contracts": "[{\"name\":\"serv_query\"},{\"name\":\"serv_insert\"},{\"name\":\"human_gate\"},{\"name\":\"js_transform\"},{\"name\":\"condition\"},{\"name\":\"notify\"},{\"name\":\"end\"}]",
-      "right_brain_research": "{\"findings\":[],\"preference_questions\":[]}",
-      "user_preferences": "[]"
-    }
+      "right_brain_research": "{\"findings\":[],\"preference_questions\":[]}"
+    },
+    "max_output_tokens": 4000
   },
   {
     "intent_category": "fix_workflow_steps",
@@ -1405,314 +1412,6 @@
       "stack_trace": ""
     },
     "max_output_tokens": 2000
-  },
-  {
-    "intent_category": "analyze_and_design_workflow",
-    "version": 11,
-    "model": "anthropic/claude-sonnet-4-5",
-    "was_successful": null,
-    "input_variables": [
-      {
-        "name": "userInput",
-        "description": "The user raw workflow creation request",
-        "required": true
-      },
-      {
-        "name": "domain",
-        "description": "The domain name resolved by the intent preprocessor",
-        "required": true
-      },
-      {
-        "name": "domain_schema",
-        "description": "JSON array of PGC_Schema rows for the domain",
-        "required": true
-      },
-      {
-        "name": "right_brain_research",
-        "description": "Output from research_workflow_domain — findings and resolved preference recommendations",
-        "required": false
-      },
-      {
-        "name": "user_preferences",
-        "description": "Array of { id, selected_value } objects from Tier 1 user preference gates — may be empty",
-        "required": false
-      },
-      {
-        "name": "step_type_contracts",
-        "description": "Live PGC_StepType rows — the complete instruction set available to workflows",
-        "required": true
-      }
-    ],
-    "output_schema": {
-      "type": "object",
-      "required": [
-        "process_design",
-        "state_map",
-        "dialog_designs",
-        "prompts_needed",
-        "schema_changes",
-        "deferred",
-        "confidence"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "process_design": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "step_label",
-              "step_type",
-              "description",
-              "inputs",
-              "outputs",
-              "dialog"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "step_label": {
-                "type": "string"
-              },
-              "step_type": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              },
-              "inputs": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-              },
-              "outputs": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-              },
-              "dialog": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          }
-        },
-        "state_map": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object"
-          }
-        },
-        "dialog_designs": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "step_label",
-              "gate_type",
-              "message_template",
-              "options",
-              "context_key",
-              "output_key"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "step_label": {
-                "type": "string"
-              },
-              "gate_type": {
-                "type": "string",
-                "enum": [
-                  "confirm",
-                  "edit_list",
-                  "text_input",
-                  "review_object",
-                  "choice"
-                ]
-              },
-              "message_template": {
-                "type": "string"
-              },
-              "context_key": {
-                "type": "string"
-              },
-              "output_key": {
-                "type": "string"
-              },
-              "options": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "label": {
-                      "type": "string"
-                    },
-                    "value": {
-                      "type": "string"
-                    },
-                    "action": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string"
-                    },
-                    "on_select": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "label",
-                    "value",
-                    "action",
-                    "description",
-                    "on_select"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "prompts_needed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "intent_category",
-              "inputs",
-              "output_shape",
-              "exists",
-              "prompt_text",
-              "model"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "intent_category": {
-                "type": "string"
-              },
-              "inputs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "output_shape": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-              },
-              "exists": {
-                "type": "boolean"
-              },
-              "prompt_text": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "schema_changes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "table",
-              "blocking",
-              "recommendation",
-              "impact_if_skipped",
-              "columns",
-              "domain_suggestion"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "table": {
-                "type": "string"
-              },
-              "columns": {
-                "type": "array"
-              },
-              "blocking": {
-                "type": "boolean"
-              },
-              "recommendation": {
-                "type": "string"
-              },
-              "impact_if_skipped": {
-                "type": "string"
-              },
-              "domain_suggestion": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "deferred": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "what",
-              "why",
-              "how_to_add"
-            ],
-            "properties": {
-              "what": {
-                "type": "string"
-              },
-              "why": {
-                "type": "string"
-              },
-              "how_to_add": {
-                "type": "string"
-              }
-            },
-            "additionalProperties": false
-          }
-        },
-        "confidence": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "needs_user_input",
-            "needs_schema",
-            "blocked"
-          ]
-        },
-        "blocked_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Required only when confidence is blocked. Null for all other confidence values."
-        }
-      }
-    },
-    "prompt_text": "You are the analytical design intelligence of evolving-mind-ai. Produce a complete workflow design specification that a step generator can implement without making any design decisions.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nCRITICAL — OUTPUT FIELD NAMES. Use ONLY these exact field names. No other fields are allowed:\n\nprocess_design items — EXACTLY these fields only:\n  step_label    (string, required) — short identifier e.g. \"load_flashcards\"\n  step_type     (string, required) — one of the step types from step_type_contracts\n  description   (string, required) — what this step does\n  inputs        (object, optional) — key/value pairs this step reads from local_state\n  outputs       (object, optional) — key/value pairs this step writes to local_state\n  dialog        (object|null, optional) — reference to a dialog_designs entry by step_label\n\ndialog_designs items — EXACTLY these fields only:\n  step_label        (string, required) — matches the process_design step_label\n  gate_type         (string, required) — one of: confirm, edit_list, text_input, review_object, choice\n  message_template  (string, required) — Slack message with {{state_key}} placeholders\n  options           (array, required)  — array of button option objects\n  output_key        (string, optional) — local_state key written on gate completion\n  context_key       (string, optional) — local_state key to display in review_object gate\n\nDO NOT use: step_id, step, order, label, reads_state, writes_state, reads_from_state,\nwrites_to_state, reads_from_local_state, writes_to_local_state, produces_data_for_step,\non_success, on_error, on_cancel, on_true, on_false, next_step_id, transform_logic,\nrationale, message, trigger, output_written, human_interaction, schema_dependencies,\ncondition_expression, intent_category, reads, writes, gaps_found, needs_preferences,\nor any other field not listed above.\n\nEXAMPLE process_design item:\n{ \"step_label\": \"load_flashcards\", \"step_type\": \"serv_query\", \"description\": \"Load all flashcards for the quiz\", \"inputs\": {}, \"outputs\": { \"flashcards\": \"array of flashcard rows\" } }\n\nEXAMPLE dialog_designs item:\n{ \"step_label\": \"show_card\", \"gate_type\": \"confirm\", \"message_template\": \"{{current_card.spanish}}\", \"options\": [{\"label\": \"Show answer\", \"action\": \"confirm\"}, {\"label\": \"Cancel\", \"action\": \"cancel\"}], \"output_key\": \"card_response\" }\n\nstate_map must be a plain object: { \"key_name\": { \"type\": \"string|array|object|integer|boolean\", \"written_by\": \"step_label\", \"read_by\": [\"step_label\"] } }\n\nDomain context — apply the correct mode based on inputs:\n- Mode A (domain_schema non-empty): Workflow operates on existing domain data. Use ONLY the\n  table and column names present in domain_schema. Never invent tables or columns.\n  Design steps to read, update, or transform that data.\n- Mode B (domain set but domain_schema empty): Either (a) the user wants a workflow that\n  creates or populates domain data — design an ingestion or setup workflow, or (b) required\n  tables are missing — flag as Type 3b blocking schema gap with confidence=needs_schema.\n  Use right_brain_research.findings to distinguish between (a) and (b).\n- Mode C (domain null, domain_schema empty): Standalone workflow with no domain dependency.\n  May use PGC system tables (PGC_Workflow, PGC_IntentMap, etc.) or operate purely on\n  user input and LLM calls with no DB reads/writes required.\n\nGap resolution rules — apply in order:\n- Type 2 (knowledge gaps): resolved by right_brain_research.findings. Apply recommendation directly. Never surface to user.\n- Type 1 (preference gaps): resolved by user_preferences. If settled, apply directly.\n- Type 3a (non-blocking schema): add to schema_changes with blocking=false.\n- Type 3b (blocking schema): add to schema_changes with blocking=true, set confidence=needs_schema.\n- Type 4a (missing prompts): write full prompt_text in prompts_needed[], set exists=false.\n- Type 4b (missing step types): set confidence=blocked with blocked_reason.\n\nprompts_needed items: inputs must be array of strings. output_shape must be a plain object {}.\nmodel for prompts_needed items must be one of: \"anthropic/claude-sonnet-4-5\" (for analytical/generative tasks) or \"perplexity/sonar\" (only for prompts that require live web search). Never use gpt-4, gpt-4o-mini, or any other model — these are not supported by the system.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
-    "max_output_tokens": 4000,
-    "error_log": null,
-    "probe_input": {
-      "userInput": "quiz me on my Spanish flashcards, show one card at a time and track my score",
-      "domain": "spanish_flashcards",
-      "domain_schema": "[{\"table_name\":\"PGD_Flashcards\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"spanish\",\"type\":\"text\"},{\"name\":\"english\",\"type\":\"text\"},{\"name\":\"difficulty\",\"type\":\"text\"}]},{\"table_name\":\"PGD_FlashcardSets\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"name\",\"type\":\"text\"}]}]",
-      "step_type_contracts": "[{\"name\":\"serv_query\"},{\"name\":\"serv_insert\"},{\"name\":\"human_gate\"},{\"name\":\"js_transform\"},{\"name\":\"condition\"},{\"name\":\"notify\"},{\"name\":\"end\"}]",
-      "right_brain_research": "{\"findings\":[],\"preference_questions\":[]}",
-      "user_preferences": "[]"
-    },
-    "parent_prompt_id": null,
-    "quality_score": null
   },
   {
     "intent_category": "analyze_workflow_gaps",
