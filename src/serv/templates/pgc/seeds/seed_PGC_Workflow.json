@@ -412,13 +412,47 @@
         "on_failure": "human_feedback"
       },
       {
+        "step": "1a",
+        "type": "human_gate",
+        "gate_type": "choice",
+        "description": "User declares workflow mode before research begins. Eliminates entire classes of irrelevant preference questions.",
+        "message_template": "What should this workflow do with your *{{input.domain}}* data?",
+        "options": [
+          { "value": "read",    "label": "A", "description": "Read, query, or display existing records",   "on_select": "step:2" },
+          { "value": "write",   "label": "B", "description": "Add or import new records into the domain",  "on_select": "step:2" },
+          { "value": "enrich",  "label": "C", "description": "Transform or update existing records",        "on_select": "step:2" },
+          { "value": "analyze", "label": "D", "description": "Aggregate, report, or summarize data",        "on_select": "step:2" },
+          { "value": "other",   "label": "E", "description": "Something else -- describe below",            "on_select": "next"   },
+          { "value": "cancel",  "label": "Cancel", "description": "",                                       "on_select": "cancel" }
+        ],
+        "output_key": "workflow_mode",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "1b",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Captures free-text description when user selected 'Something else' in step 1a.",
+        "message_template": "Describe what this workflow should do:",
+        "output_key": "workflow_mode_other",
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
         "step": "2",
         "type": "llm_call",
         "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure.",
         "input": {
-          "prompt": "research_workflow_domain",
-          "domain": "{{input.domain}}",
-          "workflow_description": "{{input.userInput}}"
+           "prompt": "research_workflow_domain",
+           "domain": "{{input.domain}}",
+           "workflow_description": "{{input.userInput}}",
+           "domain_schema": "{{domain_schema}}",
+           "workflow_mode": "{{workflow_mode}}"
         },
         "output_key": "right_brain_research",
         "on_success": "next",
@@ -430,7 +464,7 @@
         "description": "Build Tier 1 choice gate descriptors from right_brain_research.preference_questions.",
         "input_key": "right_brain_research",
         "output_key": "preference_gates",
-        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
+        "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C','D','E']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
         "on_success": "next",
         "on_failure": "next"
       },
@@ -471,7 +505,7 @@
         "description": "Skip Tier 1 preference gates if right brain found no preference questions.",
         "expression": "{{preference_gates.length}}",
         "on_truthy": "5",
-        "on_falsy": "6"
+        "on_falsy": "5a"
       },
       {
         "step": "5",
@@ -489,7 +523,22 @@
         },
         "output_key": "user_preferences",
         "execution_mode": "sequential",
-        "on_complete": "next",
+        "on_complete": "5a",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5a",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Optional free-text gate for user to provide design context not surfaced by the preference questions. Skip proceeds without writing anything.",
+        "message_template": "Anything else I should know about how this workflow should behave? Add context the questions above didn\u2019t cover, or press Skip.",
+        "output_key": "user_design_notes",
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "next"   },
+          { "label": "Skip",   "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
         "on_failure": "cancel"
       },
       {
