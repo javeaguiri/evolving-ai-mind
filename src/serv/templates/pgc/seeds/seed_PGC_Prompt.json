@@ -824,7 +824,10 @@
     ],
     "output_schema": {
       "type": "object",
-      "required": ["findings", "preference_questions"],
+      "required": [
+        "findings",
+        "preference_questions"
+      ],
       "additionalProperties": false,
       "properties": {
         "findings": {
@@ -832,25 +835,49 @@
           "description": "Autonomous design decisions resolved by research -- topics where best practice is clear and no user preference is needed",
           "items": {
             "type": "object",
-            "required": ["topic", "what_is_known", "options", "recommendation", "rationale"],
+            "required": [
+              "topic",
+              "what_is_known",
+              "options",
+              "recommendation",
+              "rationale"
+            ],
             "additionalProperties": false,
             "properties": {
-              "topic": { "type": "string" },
-              "what_is_known": { "type": "string" },
+              "topic": {
+                "type": "string"
+              },
+              "what_is_known": {
+                "type": "string"
+              },
               "options": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["label", "description", "tradeoffs"],
+                  "required": [
+                    "label",
+                    "description",
+                    "tradeoffs"
+                  ],
                   "properties": {
-                    "label": { "type": "string" },
-                    "description": { "type": "string" },
-                    "tradeoffs": { "type": "string" }
+                    "label": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "tradeoffs": {
+                      "type": "string"
+                    }
                   }
                 }
               },
-              "recommendation": { "type": "string" },
-              "rationale": { "type": "string" }
+              "recommendation": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              }
             }
           }
         },
@@ -859,23 +886,48 @@
           "description": "Genuine design decisions the user must make -- only ask when the answer cannot be inferred from the schema or workflow mode",
           "items": {
             "type": "object",
-            "required": ["id", "question", "affects", "default", "options"],
+            "required": [
+              "id",
+              "question",
+              "affects",
+              "default",
+              "options"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
-              "question": { "type": "string" },
-              "affects": { "type": "string" },
-              "default": { "type": "string" },
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "question": {
+                "type": "string"
+              },
+              "affects": {
+                "type": "string"
+              },
+              "default": {
+                "type": "string"
+              },
               "options": {
                 "type": "array",
                 "minItems": 2,
                 "items": {
                   "type": "object",
-                  "required": ["label", "value", "description"],
+                  "required": [
+                    "label",
+                    "value",
+                    "description"
+                  ],
                   "properties": {
-                    "label": { "type": "string" },
-                    "value": { "type": "string" },
-                    "description": { "type": "string" }
+                    "label": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -894,7 +946,7 @@
     "max_output_tokens": 2500
   },
   {
-	"intent_category": "analyze_and_design_workflow",
+    "intent_category": "analyze_and_design_workflow",
     "version": 10,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
@@ -1664,15 +1716,9 @@
   },
   {
     "intent_category": "analyze_workflow_gaps",
-    "version": 2,
+    "version": 4,
     "model": "anthropic/claude-sonnet-4-5",
-    "parent_prompt_id": null,
     "was_successful": null,
-    "quality_score": null,
-    "error_log": null,
-    "probe_input": null,
-    "max_output_tokens": 1500,
-    "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns — empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE — determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows — quizzes, approval loops, step-by-step forms — are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform — for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved — do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved — do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b — use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        — no blocking gaps; workflow can be built as requested\n- 'needs_schema'    — at least one Type 3b blocking schema gap exists\n- 'blocked'         — a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
     "input_variables": [
       {
         "name": "userInput",
@@ -1714,15 +1760,37 @@
         "prompts_needed",
         "deferred"
       ],
-      "additionalProperties": false,
       "properties": {
+        "deferred": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "what",
+              "why",
+              "how_to_add"
+            ],
+            "properties": {
+              "why": {
+                "type": "string"
+              },
+              "what": {
+                "type": "string"
+              },
+              "how_to_add": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
         "confidence": {
-          "type": "string",
           "enum": [
             "complete",
             "needs_schema",
             "blocked"
-          ]
+          ],
+          "type": "string"
         },
         "blocked_reason": {
           "anyOf": [
@@ -1735,39 +1803,6 @@
           ],
           "description": "Required when confidence=blocked. Null otherwise."
         },
-        "schema_changes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "table",
-              "blocking",
-              "recommendation",
-              "impact_if_skipped"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "table": {
-                "type": "string"
-              },
-              "blocking": {
-                "type": "boolean"
-              },
-              "recommendation": {
-                "type": "string"
-              },
-              "impact_if_skipped": {
-                "type": "string"
-              },
-              "columns": {
-                "type": "array"
-              },
-              "domain_suggestion": {
-                "type": "string"
-              }
-            }
-          }
-        },
         "prompts_needed": {
           "type": "array",
           "items": {
@@ -1778,9 +1813,8 @@
               "inputs",
               "output_shape"
             ],
-            "additionalProperties": false,
             "properties": {
-              "intent_category": {
+              "model": {
                 "type": "string"
               },
               "exists": {
@@ -1792,56 +1826,64 @@
                   "type": "string"
                 }
               },
-              "output_shape": {
-                "type": "object"
-              },
               "prompt_text": {
                 "type": "string"
               },
-              "model": {
+              "output_shape": {
+                "type": "object"
+              },
+              "intent_category": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
-        "deferred": {
+        "schema_changes": {
           "type": "array",
           "items": {
             "type": "object",
             "required": [
-              "what",
-              "why",
-              "how_to_add"
+              "table",
+              "blocking",
+              "recommendation",
+              "impact_if_skipped"
             ],
-            "additionalProperties": false,
             "properties": {
-              "what": {
+              "table": {
                 "type": "string"
               },
-              "why": {
+              "columns": {
+                "type": "array"
+              },
+              "blocking": {
+                "type": "boolean"
+              },
+              "recommendation": {
                 "type": "string"
               },
-              "how_to_add": {
+              "domain_suggestion": {
+                "type": "string"
+              },
+              "impact_if_skipped": {
                 "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "output_sample": null
+    "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns — empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE — determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows — quizzes, approval loops, step-by-step forms — are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform — for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved — do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved — do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n  CRITICAL: inputs must be a flat array of plain strings — variable names only, NOT objects.\n  Correct:   \"inputs\": [\"domain\", \"table_schema\", \"user_input\"]\n  WRONG:     \"inputs\": [{\"name\":\"domain\",\"type\":\"string\"}, ...]  ← NEVER do this\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b — use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        — no blocking gaps; workflow can be built as requested\n- 'needs_schema'    — at least one Type 3b blocking schema gap exists\n- 'blocked'         — a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
+    "probe_input": null,
+    "max_output_tokens": 2500
   },
   {
     "intent_category": "design_workflow_process",
     "version": 3,
     "model": "anthropic/claude-sonnet-4-5",
-    "parent_prompt_id": null,
     "was_successful": null,
-    "quality_score": null,
-    "error_log": null,
-    "probe_input": null,
-    "max_output_tokens": 2000,
-    "prompt_text": "You are the process designer for evolving-mind-ai. Design the step sequence and state map for this workflow. You do NOT design dialog boxes — that is a separate step.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns):\n{{domain_schema}}\n\nGap analysis (already completed — gaps are resolved):\n{{gap_analysis}}\n\nDomain research findings:\n{{right_brain_research}}\n\nUser preferences confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDomain context — apply the correct mode:\n- Mode A (domain_schema non-empty): Use ONLY table and column names from domain_schema. Never invent tables or columns. Design steps that read, update, or transform existing data.\n- Mode B (domain set, domain_schema empty): Design a workflow that creates or populates domain data, OR flag as needing schema (gap_analysis will already have detected this).\n- Mode C (domain null): Standalone workflow. May use PGC system tables or operate purely on user input and LLM processing.\n\nFlat loop pattern — use this when the workflow must interact with the user once per item in a collection (quizzes, approval loops, card-by-card review):\n  1. serv_query — load the collection\n  2. js_transform — initialise loop state (e.g. { index: 0, score: 0, cards: shuffled_array, done: false })\n  3. condition — check done flag (index >= cards.length); on_truthy routes to summary, on_falsy routes to next step\n  4. human_gate choice — present the current item and collect the user response (output_key written to local_state)\n  5. js_transform — process the response (update score, advance index, set done flag)\n  6. on_success: step:N back to the condition step (backward reference is safe because at least one human_gate exists in the path)\n  7. serv_update (optional) — persist scores or state to PGD tables after the loop exits\n  8. notify — send summary\nAll loop state lives in a single local_state key to keep the state_map clean.\n\nprocess_design items — EXACTLY these fields, no others:\n  step_label    (string, required) — short snake_case identifier e.g. 'load_flashcards'\n  step_type     (string, required) — must be a type from step_type_contracts\n  description   (string, required) — what this step does in plain language\n  inputs        (object, optional) — key/value pairs this step reads from local_state\n  outputs       (object, optional) — key/value pairs this step writes to local_state\n\nDO NOT add a 'dialog' field to process_design items. Dialog design is handled separately.\n\nstate_map — document every local_state key the workflow uses:\n{ \"key_name\": { \"type\": \"string|array|object|integer|boolean\", \"written_by\": \"step_label\", \"read_by\": [\"step_label\"] } }\n\nInclude all steps including: data loads (serv_query), transforms (js_transform), LLM calls (llm_call), human gates (human_gate), conditions (condition), notifications (notify), and end.\n\nApply decisions from gap_analysis and user_preferences directly — do not re-ask.\nApply knowledge from right_brain_research.findings — do not re-research.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
     "input_variables": [
       {
         "name": "userInput",
@@ -1885,8 +1927,13 @@
         "process_design",
         "state_map"
       ],
-      "additionalProperties": false,
       "properties": {
+        "state_map": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
         "process_design": {
           "type": "array",
           "items": {
@@ -1896,47 +1943,38 @@
               "step_type",
               "description"
             ],
-            "additionalProperties": false,
             "properties": {
-              "step_label": {
-                "type": "string"
-              },
-              "step_type": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              },
               "inputs": {
                 "type": "object"
               },
               "outputs": {
                 "type": "object"
+              },
+              "step_type": {
+                "type": "string"
+              },
+              "step_label": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
               }
-            }
-          }
-        },
-        "state_map": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object"
+            },
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "output_sample": null
+    "prompt_text": "You are the process designer for evolving-mind-ai. Design the step sequence and state map for this workflow. You do NOT design dialog boxes — that is a separate step.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns):\n{{domain_schema}}\n\nGap analysis (already completed — gaps are resolved):\n{{gap_analysis}}\n\nDomain research findings:\n{{right_brain_research}}\n\nUser preferences confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDomain context — apply the correct mode:\n- Mode A (domain_schema non-empty): Use ONLY table and column names from domain_schema. Never invent tables or columns. Design steps that read, update, or transform existing data.\n- Mode B (domain set, domain_schema empty): Design a workflow that creates or populates domain data, OR flag as needing schema (gap_analysis will already have detected this).\n- Mode C (domain null): Standalone workflow. May use PGC system tables or operate purely on user input and LLM processing.\n\nFlat loop pattern — use this when the workflow must interact with the user once per item in a collection (quizzes, approval loops, card-by-card review):\n  1. serv_query — load the collection\n  2. js_transform — initialise loop state (e.g. { index: 0, score: 0, cards: shuffled_array, done: false })\n  3. condition — check done flag (index >= cards.length); on_truthy routes to summary, on_falsy routes to next step\n  4. human_gate choice — present the current item and collect the user response (output_key written to local_state)\n  5. js_transform — process the response (update score, advance index, set done flag)\n  6. on_success: step:N back to the condition step (backward reference is safe because at least one human_gate exists in the path)\n  7. serv_update (optional) — persist scores or state to PGD tables after the loop exits\n  8. notify — send summary\nAll loop state lives in a single local_state key to keep the state_map clean.\n\nprocess_design items — EXACTLY these fields, no others:\n  step_label    (string, required) — short snake_case identifier e.g. 'load_flashcards'\n  step_type     (string, required) — must be a type from step_type_contracts\n  description   (string, required) — what this step does in plain language\n  inputs        (object, optional) — key/value pairs this step reads from local_state\n  outputs       (object, optional) — key/value pairs this step writes to local_state\n\nDO NOT add a 'dialog' field to process_design items. Dialog design is handled separately.\n\nstate_map — document every local_state key the workflow uses:\n{ \"key_name\": { \"type\": \"string|array|object|integer|boolean\", \"written_by\": \"step_label\", \"read_by\": [\"step_label\"] } }\n\nInclude all steps including: data loads (serv_query), transforms (js_transform), LLM calls (llm_call), human gates (human_gate), conditions (condition), notifications (notify), and end.\n\nApply decisions from gap_analysis and user_preferences directly — do not re-ask.\nApply knowledge from right_brain_research.findings — do not re-research.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
+    "probe_input": null,
+    "max_output_tokens": 2000
   },
   {
     "intent_category": "design_workflow_dialogs",
     "version": 2,
     "model": "anthropic/claude-sonnet-4-5",
-    "parent_prompt_id": null,
     "was_successful": null,
-    "quality_score": null,
-    "error_log": null,
-    "probe_input": null,
-    "max_output_tokens": 2000,
-    "prompt_text": "You are the dialog designer for evolving-mind-ai. Design Slack Block Kit dialog specifications for every human_gate step in the process design. You do NOT design the process flow — that is already done.\n\nProcess design (complete step sequence):\n{{process_design}}\n\nDomain schema (for context when designing gate messages):\n{{domain_schema}}\n\nUser preferences confirmed (to personalise gate messages):\n{{user_preferences}}\n\nFor each step in process_design where step_type is 'human_gate', produce one dialog_designs entry using the step_label as the join key.\nIf no steps have step_type 'human_gate', return dialog_designs: [].\n\ndialog_designs item fields — EXACTLY these, no others:\n  step_label        (string, required) — matches process_design step_label exactly\n  gate_type         (string, required) — confirm | edit_list | text_input | review_object | choice\n  message_template  (string, required) — Slack mrkdwn with {{state_key}} placeholders\n  options           (array, required)  — button objects; shape depends on gate_type (see below)\n  output_key        (string, optional) — local_state key written on gate completion\n  context_key       (string, optional) — dot-path to data shown in review_object or edit_list\n\nOPTIONS SHAPE BY GATE TYPE — use the correct shape for each gate_type:\n\nconfirm / edit_list / review_object gates:\n  options items: { label, action, on_select }\n  'action' is required. Must include at least one with action: 'cancel'.\n  Example: [{\"label\":\"Looks good\",\"action\":\"confirm\",\"on_select\":\"next\"},{\"label\":\"Cancel\",\"action\":\"cancel\",\"on_select\":\"cancel\"}]\n\nchoice gates (single-select with lettered buttons):\n  options items: { label, value, description, on_select }\n  'action' is NOT used on choice options — use 'value' instead.\n  label should be a short letter or word (A, B, C). value is the machine identifier written to output_key. description is the explanatory sentence shown to the user.\n  Must include a Cancel option: {\"label\":\"Cancel\",\"value\":\"cancel\",\"description\":\"\",\"on_select\":\"cancel\"}\n  Example: [{\"label\":\"A\",\"value\":\"multiple_choice\",\"description\":\"Show card and pick from options.\",\"on_select\":\"next\"}]\n\ntext_input gates:\n  options: exactly [{\"label\":\"Submit\",\"action\":\"confirm\",\"on_select\":\"next\"},{\"label\":\"Cancel\",\"action\":\"cancel\",\"on_select\":\"cancel\"}]\n  output_key is required for text_input.\n\nROUTING in on_select: use 'next', 'cancel', 'end', or 'step:N' (bare step key).\nThe step key refers to steps in the GENERATED workflow, not the process_design labels.\nUse 'next' for the primary path. The step generator assigns numeric step keys later.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
     "input_variables": [
       {
         "name": "process_design",
@@ -1959,7 +1997,6 @@
       "required": [
         "dialog_designs"
       ],
-      "additionalProperties": false,
       "properties": {
         "dialog_designs": {
           "type": "array",
@@ -1971,39 +2008,42 @@
               "message_template",
               "options"
             ],
-            "additionalProperties": false,
             "properties": {
-              "step_label": {
-                "type": "string"
+              "options": {
+                "type": "array"
               },
               "gate_type": {
-                "type": "string",
                 "enum": [
                   "confirm",
                   "edit_list",
                   "text_input",
                   "review_object",
                   "choice"
-                ]
-              },
-              "message_template": {
+                ],
                 "type": "string"
-              },
-              "options": {
-                "type": "array"
               },
               "output_key": {
                 "type": "string"
               },
+              "step_label": {
+                "type": "string"
+              },
               "context_key": {
                 "type": "string"
+              },
+              "message_template": {
+                "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "output_sample": null
+    "prompt_text": "You are the dialog designer for evolving-mind-ai. Design Slack Block Kit dialog specifications for every human_gate step in the process design. You do NOT design the process flow — that is already done.\n\nProcess design (complete step sequence):\n{{process_design}}\n\nDomain schema (for context when designing gate messages):\n{{domain_schema}}\n\nUser preferences confirmed (to personalise gate messages):\n{{user_preferences}}\n\nFor each step in process_design where step_type is 'human_gate', produce one dialog_designs entry using the step_label as the join key.\nIf no steps have step_type 'human_gate', return dialog_designs: [].\n\ndialog_designs item fields — EXACTLY these, no others:\n  step_label        (string, required) — matches process_design step_label exactly\n  gate_type         (string, required) — confirm | edit_list | text_input | review_object | choice\n  message_template  (string, required) — Slack mrkdwn with {{state_key}} placeholders\n  options           (array, required)  — button objects; shape depends on gate_type (see below)\n  output_key        (string, optional) — local_state key written on gate completion\n  context_key       (string, optional) — dot-path to data shown in review_object or edit_list\n\nOPTIONS SHAPE BY GATE TYPE — use the correct shape for each gate_type:\n\nconfirm / edit_list / review_object gates:\n  options items: { label, action, on_select }\n  'action' is required. Must include at least one with action: 'cancel'.\n  Example: [{\"label\":\"Looks good\",\"action\":\"confirm\",\"on_select\":\"next\"},{\"label\":\"Cancel\",\"action\":\"cancel\",\"on_select\":\"cancel\"}]\n\nchoice gates (single-select with lettered buttons):\n  options items: { label, value, description, on_select }\n  'action' is NOT used on choice options — use 'value' instead.\n  label should be a short letter or word (A, B, C). value is the machine identifier written to output_key. description is the explanatory sentence shown to the user.\n  Must include a Cancel option: {\"label\":\"Cancel\",\"value\":\"cancel\",\"description\":\"\",\"on_select\":\"cancel\"}\n  Example: [{\"label\":\"A\",\"value\":\"multiple_choice\",\"description\":\"Show card and pick from options.\",\"on_select\":\"next\"}]\n\ntext_input gates:\n  options: exactly [{\"label\":\"Submit\",\"action\":\"confirm\",\"on_select\":\"next\"},{\"label\":\"Cancel\",\"action\":\"cancel\",\"on_select\":\"cancel\"}]\n  output_key is required for text_input.\n\nROUTING in on_select: use 'next', 'cancel', 'end', or 'step:N' (bare step key).\nThe step key refers to steps in the GENERATED workflow, not the process_design labels.\nUse 'next' for the primary path. The step generator assigns numeric step keys later.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
+    "probe_input": null,
+    "max_output_tokens": 2000
   },
   {
     "intent_category": "generate_workflow_steps",
@@ -2060,40 +2100,25 @@
         "intent_keywords",
         "steps"
       ],
-      "additionalProperties": false,
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
-        "description": {
-          "type": "string",
-          "minLength": 10
-        },
-        "intent_keywords": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "minItems": 2
-        },
         "steps": {
           "type": "array",
-          "minItems": 2,
           "items": {
             "type": "object",
             "required": [
               "step",
               "type"
             ],
-            "additionalProperties": true,
             "properties": {
               "step": {
                 "type": "string",
                 "minLength": 1
               },
               "type": {
-                "type": "string",
                 "enum": [
                   "llm_call",
                   "js_transform",
@@ -2111,191 +2136,36 @@
                   "notify",
                   "end",
                   "iterator"
-                ]
+                ],
+                "type": "string"
               }
-            }
-          }
+            },
+            "additionalProperties": true
+          },
+          "minItems": 2
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10
+        },
+        "intent_keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nAvailable step types and their contracts (use ONLY these — never invent step types):\n{{step_type_contracts}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nUser feedback for this generation attempt (apply these instructions if non-empty — add, remove, or modify specific steps exactly as described):\n{{user_feedback}}\n\nSimulation errors from the previous attempt to fix (fix each listed issue exactly — do not change steps that were not flagged):\n{{simulation_errors}}\n\nTRANSLATION RULES:\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key ('1', '2', '3', ...).\n2. For steps where step_type is 'human_gate': find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key. If no dialog_designs entry exists for a human_gate step, use a sensible default confirm gate.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. Every routing target (on_success, on_failure, on_select) must be a valid step key in the generated step array, or one of: next, end, cancel, human_feedback.\n5. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n\nFlat loop pattern — when a collection requires human interaction per item:\n- Loop state (index, accumulators) lives in local_state, written by js_transform\n- Backward reference is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\" }\n  ]\n}",
     "probe_input": {
+      "example": "{\"name\":\"list_items\",\"description\":\"List all items\",\"intent_keywords\":[\"list\",\"show\"],\"steps\":[{\"step\":\"1\",\"type\":\"serv_query\",\"input\":{\"tableName\":\"PGD_Items\"},\"output_key\":\"results\",\"on_success\":\"next\",\"on_failure\":\"human_feedback\"},{\"step\":\"2\",\"type\":\"notify\",\"message_template\":\"Found {{results.length}} items\",\"on_success\":\"end\"},{\"step\":\"3\",\"type\":\"end\"}]}",
       "design_spec": "{\"process_design\":[{\"step_label\":\"load_recipes\",\"step_type\":\"serv_query\",\"description\":\"Load all recipes\",\"inputs\":{},\"outputs\":{\"results\":\"array of recipe rows\"}},{\"step_label\":\"notify_results\",\"step_type\":\"notify\",\"description\":\"Show results to user\",\"inputs\":{\"results\":\"array\"},\"outputs\":{}}],\"state_map\":{\"results\":{\"type\":\"array\",\"written_by\":\"load_recipes\",\"read_by\":[\"notify_results\"]}},\"dialog_designs\":[],\"prompts_needed\":[],\"schema_changes\":[],\"deferred\":[],\"confidence\":\"complete\",\"blocked_reason\":\"\"}",
       "domain_schema": "[{\"table_name\":\"PGD_Recipes\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"description\",\"type\":\"text\"}]}]",
-      "step_type_contracts": "[{\"name\":\"serv_query\",\"description\":\"SELECT rows\"},{\"name\":\"notify\",\"description\":\"Send message\"},{\"name\":\"end\",\"description\":\"End workflow\"}]",
-      "example": "{\"name\":\"list_items\",\"description\":\"List all items\",\"intent_keywords\":[\"list\",\"show\"],\"steps\":[{\"step\":\"1\",\"type\":\"serv_query\",\"input\":{\"tableName\":\"PGD_Items\"},\"output_key\":\"results\",\"on_success\":\"next\",\"on_failure\":\"human_feedback\"},{\"step\":\"2\",\"type\":\"notify\",\"message_template\":\"Found {{results.length}} items\",\"on_success\":\"end\"},{\"step\":\"3\",\"type\":\"end\"}]}",
-      "user_preferences": "[]"
+      "user_preferences": "[]",
+      "step_type_contracts": "[{\"name\":\"serv_query\",\"description\":\"SELECT rows\"},{\"name\":\"notify\",\"description\":\"Send message\"},{\"name\":\"end\",\"description\":\"End workflow\"}]"
     },
-    "error_log": null,
-    "quality_score": null
-  },
-  {
-    "intent_category": "analyze_workflow_gaps",
-    "version": 4,
-    "model": "anthropic/claude-sonnet-4-5",
-    "parent_prompt_id": null,
-    "was_successful": null,
-    "quality_score": null,
-    "error_log": null,
-    "probe_input": null,
-    "max_output_tokens": 2500,
-    "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns — empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE — determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows — quizzes, approval loops, step-by-step forms — are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform — for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved — do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved — do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n  CRITICAL: inputs must be a flat array of plain strings — variable names only, NOT objects.\n  Correct:   \"inputs\": [\"domain\", \"table_schema\", \"user_input\"]\n  WRONG:     \"inputs\": [{\"name\":\"domain\",\"type\":\"string\"}, ...]  ← NEVER do this\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b — use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        — no blocking gaps; workflow can be built as requested\n- 'needs_schema'    — at least one Type 3b blocking schema gap exists\n- 'blocked'         — a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
-    "input_variables": [
-      {
-        "name": "userInput",
-        "required": true,
-        "description": "Raw user workflow creation request"
-      },
-      {
-        "name": "domain",
-        "required": true,
-        "description": "Resolved domain name or null"
-      },
-      {
-        "name": "domain_schema",
-        "required": true,
-        "description": "PGC_Schema rows for the domain"
-      },
-      {
-        "name": "right_brain_research",
-        "required": false,
-        "description": "Output from research_workflow_domain"
-      },
-      {
-        "name": "user_preferences",
-        "required": false,
-        "description": "Array of { id, selected_value }"
-      },
-      {
-        "name": "step_type_contracts",
-        "required": true,
-        "description": "Live PGC_StepType rows"
-      }
-    ],
-    "output_schema": {
-      "type": "object",
-      "required": [
-        "confidence",
-        "blocked_reason",
-        "schema_changes",
-        "prompts_needed",
-        "deferred"
-      ],
-      "additionalProperties": false,
-      "properties": {
-        "confidence": {
-          "type": "string",
-          "enum": [
-            "complete",
-            "needs_schema",
-            "blocked"
-          ]
-        },
-        "blocked_reason": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Required when confidence=blocked. Null otherwise."
-        },
-        "schema_changes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "table",
-              "blocking",
-              "recommendation",
-              "impact_if_skipped"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "table": {
-                "type": "string"
-              },
-              "blocking": {
-                "type": "boolean"
-              },
-              "recommendation": {
-                "type": "string"
-              },
-              "impact_if_skipped": {
-                "type": "string"
-              },
-              "columns": {
-                "type": "array"
-              },
-              "domain_suggestion": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "prompts_needed": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "intent_category",
-              "exists",
-              "inputs",
-              "output_shape"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "intent_category": {
-                "type": "string"
-              },
-              "exists": {
-                "type": "boolean"
-              },
-              "inputs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "output_shape": {
-                "type": "object"
-              },
-              "prompt_text": {
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              }
-            }
-          }
-        },
-        "deferred": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "what",
-              "why",
-              "how_to_add"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "what": {
-                "type": "string"
-              },
-              "why": {
-                "type": "string"
-              },
-              "how_to_add": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      }
-    },
-    "output_sample": null
+    "max_output_tokens": null
   }
 ]
