@@ -28,3 +28,6 @@ Thumbs.db
 #Postman
 .postman
 postman/
+
+#dev data
+dev_scripts/data

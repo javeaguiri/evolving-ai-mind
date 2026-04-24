@@ -4,8 +4,8 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 26 in progress  
-Last updated: 2026-04-20 (session 26 — pgvector implemented: Perplexity pplx-embed-v1-4b, embed_source in PGC_Schema, SERV-tier embedding, vectorSearch on getRows; create-workflow.mjs domain resolution; create_workflow v4 design: three-call left brain, six phases, gap-early architecture documented in Section 6.9)
+Status: Active development — Session 28 in progress  
+Last updated: 2026-04-23 (session 28 — pgvector implemented: Perplexity pplx-embed-v1-4b, embed_source in PGC_Schema, SERV-tier embedding, vectorSearch on getRows; create-workflow.mjs domain resolution; create_workflow v4 design: three-call left brain, six phases, gap-early architecture documented in Section 6.9)
 
 ---
 
@@ -331,7 +331,7 @@ evolving-mind-ai/
 │   │           ├── PGC_StepType.json
 │   │           ├── PGC_SystemContext.json
 │   │           ├── PGC_Capability.json
-│   │           └── seed/             Seed JSON consumed by dev_scripts/upsert-*.mjs
+│   │           └── seeds/            Seed JSON consumed by dev_scripts/upsert-*.mjs
 │   │               ├── seed_PGC_Workflow.json
 │   │               ├── seed_PGC_Prompt.json
 │   │               ├── seed_PGC_IntentMap.json

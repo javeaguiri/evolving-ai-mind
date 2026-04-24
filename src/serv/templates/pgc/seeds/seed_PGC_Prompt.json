@@ -904,171 +904,104 @@
   },
   {
     "intent_category": "research_workflow_domain",
-    "version": 1,
-    "model": "perplexity/sonar",
+    "version": 2,
+    "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
       {
-        "name": "workflow_description",
-        "description": "The user raw description of the workflow they want to create",
+        "name": "domain",
+        "description": "Snake_case domain name the workflow will operate on",
         "required": true
       },
       {
-        "name": "domain",
-        "description": "The domain name resolved by the intent preprocessor",
-        "required": false
+        "name": "workflow_description",
+        "description": "User's natural language description of what the workflow should do",
+        "required": true
+      },
+      {
+        "name": "domain_schema",
+        "description": "JSON array of PGC_Schema rows -- table names, column names and types already defined for this domain",
+        "required": true
+      },
+      {
+        "name": "workflow_mode",
+        "description": "Declared intent mode: read | write | enrich | analyze | other",
+        "required": true
       }
     ],
     "output_schema": {
       "type": "object",
-      "required": [
-        "findings"
-      ],
+      "required": ["findings", "preference_questions"],
       "additionalProperties": false,
       "properties": {
         "findings": {
           "type": "array",
+          "description": "Autonomous design decisions resolved by research -- topics where best practice is clear and no user preference is needed",
           "items": {
             "type": "object",
-            "required": [
-              "topic",
-              "what_is_known",
-              "options",
-              "recommendation",
-              "rationale"
-            ],
+            "required": ["topic", "what_is_known", "options", "recommendation", "rationale"],
             "additionalProperties": false,
             "properties": {
-              "topic": {
-                "type": "string",
-                "maxLength": 60
-              },
-              "what_is_known": {
-                "type": "string",
-                "maxLength": 300
-              },
+              "topic": { "type": "string" },
+              "what_is_known": { "type": "string" },
               "options": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": [
-                    "label",
-                    "description"
-                  ],
-                  "additionalProperties": false,
+                  "required": ["label", "description", "tradeoffs"],
                   "properties": {
-                    "label": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string",
-                      "maxLength": 150
-                    },
-                    "tradeoffs": {
-                      "type": "string"
-                    }
+                    "label": { "type": "string" },
+                    "description": { "type": "string" },
+                    "tradeoffs": { "type": "string" }
                   }
-                },
-                "maxItems": 3
+                }
               },
-              "recommendation": {
-                "type": "string",
-                "maxLength": 100
-              },
-              "rationale": {
-                "type": "string",
-                "maxLength": 200
-              }
+              "recommendation": { "type": "string" },
+              "rationale": { "type": "string" }
             }
-          },
-          "maxItems": 3
+          }
         },
         "preference_questions": {
           "type": "array",
+          "description": "Genuine design decisions the user must make -- only ask when the answer cannot be inferred from the schema or workflow mode",
           "items": {
             "type": "object",
-            "required": [
-              "id",
-              "question",
-              "options",
-              "affects",
-              "default"
-            ],
+            "required": ["id", "question", "affects", "default", "options"],
             "additionalProperties": false,
             "properties": {
-              "id": {
-                "type": "string",
-                "pattern": "^[a-z][a-z0-9_]*$"
-              },
-              "question": {
-                "type": "string",
-                "maxLength": 150
-              },
+              "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+              "question": { "type": "string" },
+              "affects": { "type": "string" },
+              "default": { "type": "string" },
               "options": {
                 "type": "array",
                 "minItems": 2,
                 "items": {
                   "type": "object",
-                  "required": [
-                    "value",
-                    "label",
-                    "description"
-                  ],
-                  "additionalProperties": false,
+                  "required": ["label", "value", "description"],
                   "properties": {
-                    "value": {
-                      "type": "string"
-                    },
-                    "label": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string"
-                    }
+                    "label": { "type": "string" },
+                    "value": { "type": "string" },
+                    "description": { "type": "string" }
                   }
-                },
-                "maxItems": 3
-              },
-              "affects": {
-                "type": "string",
-                "maxLength": 100
-              },
-              "default": {
-                "type": "string"
-              }
-            }
-          },
-          "maxItems": 3
-        },
-        "out_of_scope": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "topic",
-              "why"
-            ],
-            "properties": {
-              "topic": {
-                "type": "string"
-              },
-              "why": {
-                "type": "string"
+                }
               }
             }
           }
         }
       }
     },
-    "prompt_text": "You are a workflow design advisor for evolving-mind-ai, a personal automation system.\n\nThe user wants to build: \"{{workflow_description}}\"\nDomain context: {{domain}}\n\nYour task has two tightly scoped parts. Be concise — every field has a token budget.\n\nPART 1 — Domain findings (max 3 findings)\nFor each finding: identify ONE design decision that materially affects workflow structure. Skip anything resolved by obvious best practice.\n- topic: 5 words max\n- what_is_known: 1–2 sentences max\n- options: 2–3 options max, each description 1 sentence max\n- recommendation: the best option label only (no explanation)\n- rationale: 1 sentence max\n\nPART 2 — Preference questions (max 3 questions)\nOnly include a question if: (a) the answer structurally changes the step array, AND (b) best practice cannot resolve it alone.\nIf all decisions are resolved by findings, return preference_questions: [].\n- question: one sentence\n- options: 2–3 choices, each description 1 sentence max\n- affects: 10 words max describing what structurally changes\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<5 words max>\",\n      \"what_is_known\": \"<1-2 sentences>\",\n      \"options\": [\n        { \"label\": \"<option name>\", \"description\": \"<1 sentence>\", \"tradeoffs\": \"<1 sentence>\" }\n      ],\n      \"recommendation\": \"<option label>\",\n      \"rationale\": \"<1 sentence>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_id>\",\n      \"question\": \"<1 sentence>\",\n      \"options\": [\n        { \"value\": \"<option_value>\", \"label\": \"<button label>\", \"description\": \"<1 sentence>\" }\n      ],\n      \"affects\": \"<10 words max>\",\n      \"default\": \"<value>\"\n    }\n  ],\n  \"out_of_scope\": [\n    { \"topic\": \"<topic>\", \"why\": \"<1 sentence>\" }\n  ]\n}\n\nRules:\n- Never ask about schema, tables, or database structure\n- Never ask about implementation details the user would not understand\n- preference_questions.id must be snake_case, unique, and descriptive\n- Return ONLY the JSON object, nothing else",
-    "max_output_tokens": 2000,
+    "prompt_text": "You are the right brain of evolving-mind-ai -- a research agent that surfaces domain best practices and identifies genuine user preference decisions before a workflow is designed.\n\nYou will be given:\n- The domain name and its existing schema (tables and columns already in the database)\n- A description of what the workflow should do\n- The workflow mode declared by the user\n\nYour job is to:\n1. Research best practices for this type of workflow in this domain\n2. Resolve decisions where best practice is clear (put these in findings)\n3. Identify the small number of genuine preference decisions the user must make (put these in preference_questions)\n\nReturn ONLY a valid JSON object -- no markdown, no explanation, no backticks.\n\n---\n\nDOMAIN: {{domain}}\n\nWORKFLOW DESCRIPTION: {{workflow_description}}\n\nEXISTING DOMAIN SCHEMA:\n{{domain_schema}}\n\nWORKFLOW MODE: {{workflow_mode}}\n\n---\n\nWORKFLOW MODE CONSTRAINTS -- apply strictly:\n\n- read: The workflow reads and displays data that ALREADY EXISTS in the schema above. NEVER ask where data comes from, what format it is in, what content to create, or how to populate the domain. Ask only about filtering preferences, sort order, result limits, and output presentation.\n\n- write: The workflow adds new records. You MAY ask about required vs optional fields, validation strictness, and confirmation behaviour. Do NOT ask about display or reporting preferences.\n\n- enrich: The workflow transforms or updates existing records. Ask about transformation rules, match criteria, and conflict handling. Do NOT ask about initial data setup.\n\n- analyze: The workflow aggregates or summarizes existing data. Ask about grouping dimensions, time ranges, output format, and threshold values. NEVER ask about data content, creation, or source.\n\n- other: Read the workflow_description carefully to infer which constraints apply.\n\n---\n\nSCHEMA CONSTRAINTS -- always apply regardless of mode:\n\nThe domain_schema above shows the tables and columns that already exist. This is authoritative.\n- Do NOT ask where the data comes from -- it comes from these tables.\n- Do NOT ask what columns or fields are available -- the schema defines them.\n- Do NOT ask about data types or formats -- the column types define them.\n- Do NOT suggest creating data sets or seeding test data -- this is a production domain.\n- Any question about data structure is answerable from the schema. Do not ask it.\n\n---\n\nPREFERENCE QUESTION RULES:\n\nBefore adding a question to preference_questions, apply this test:\n1. Can this be answered by reading the schema? If yes -- do NOT ask it.\n2. Is this question relevant to the declared workflow_mode? If no -- do NOT ask it.\n3. Is this a genuine behavioral choice (not a technical implementation detail)? If no -- do NOT ask it.\n4. Would different answers produce meaningfully different workflow step structures? If no -- do NOT ask it.\n\nOnly ask questions that PASS ALL FOUR tests.\n\nMAX 5 preference_questions. Fewer is better. Zero is valid if the schema and mode answer everything.\n\nEach question must have exactly 2-4 options. Do not use open-ended questions -- every question must be answerable by selecting one of the provided options.\n\nNever ask:\n- What data format to use (the schema defines this)\n- Where the data comes from (the schema defines this)\n- What difficulty level (this is a content decision, not a workflow structure decision)\n- Whether to use a preset list vs user-entered data (the schema already defines what is stored)\n- What the domain stores or represents (the schema shows this)\n\n---\n\nFINDINGS RULES:\n\nFor each topic where best practice is unambiguous given the mode and schema, record it as a finding with your recommendation. This removes it from the preference gate queue. Good finding topics include:\n- Ordering and pagination defaults for read/analyze modes\n- Error handling patterns\n- Confirmation behaviour for write/enrich modes\n- Idiomatic patterns for this type of workflow\n\n---\n\nReturn ONLY this JSON shape:\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<short topic label>\",\n      \"what_is_known\": \"<one sentence of relevant domain knowledge>\",\n      \"options\": [\n        { \"label\": \"<option_key>\", \"description\": \"<what this option does>\", \"tradeoffs\": \"<tradeoffs>\" }\n      ],\n      \"recommendation\": \"<chosen option label>\",\n      \"rationale\": \"<one sentence why this is the right default>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_id>\",\n      \"question\": \"<one clear question the user can answer by selecting an option>\",\n      \"affects\": \"<what workflow behaviour this controls>\",\n      \"default\": \"<default option value>\",\n      \"options\": [\n        { \"label\": \"<button_label>\", \"value\": \"<stored_value>\", \"description\": \"<what selecting this means>\" }\n      ]\n    }\n  ]\n}",
     "probe_input": {
-      "workflow_description": "send a weekly summary of my recipes to Slack including most recently added",
-      "domain": "recipes"
-    }
+      "domain": "spanish_flashcards",
+      "workflow_description": "run a spanish flashcard quiz",
+      "domain_schema": "[{\"table_name\":\"PGD_SpanishFlashcards\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"spanish_word\",\"type\":\"text\"},{\"name\":\"english_translation\",\"type\":\"text\"},{\"name\":\"difficulty\",\"type\":\"integer\"},{\"name\":\"created_at\",\"type\":\"timestamptz\"},{\"name\":\"updated_at\",\"type\":\"timestamptz\"}]}]",
+      "workflow_mode": "read"
+    },
+    "max_output_tokens": 2500
   },
   {
-    "intent_category": "analyze_and_design_workflow",
+	"intent_category": "analyze_and_design_workflow",
     "version": 10,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,

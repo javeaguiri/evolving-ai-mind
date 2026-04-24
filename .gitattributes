@@ -1,0 +1,18 @@
+# Normalise line endings to LF on checkin for all text files.
+# This prevents the upsert scripts from producing false content
+# diffs due to CRLF/LF differences on Windows dev machines.
+* text=auto eol=lf
+*.json text eol=lf
+*.mjs  text eol=lf
+*.md   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.toml text eol=lf
+
+# Explicitly mark binary files so git never touches their line endings.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.zip  binary
