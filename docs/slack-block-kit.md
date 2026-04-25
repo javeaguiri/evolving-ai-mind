@@ -1,222 +1,745 @@
-Source: https://docs.slack.dev/block-kit
+# Slack Block Kit Reference
 
-# Block Kit
+> Source: https://docs.slack.dev/block-kit  
+> Examples captured from live Slack workspace — responses show actual payloads,
+> not Block Kit Builder simulations. Block Kit Builder cannot simulate interactive
+> responses (button clicks, form submissions) — those responses require a live app.
 
-The Block Kit UI framework is built with _blocks_, _block elements_ and _composition objects_.
+---
 
-_Blocks_ are visual components that can be arranged to create app layouts. Apps can add blocks to _surfaces_ like [the Home tab](/surfaces/app-home), [messages](/messaging) and [modals](/surfaces/modals). You can include up to 50 blocks in each message, and 100 blocks in modals or Home tabs.
+## Concepts
 
-Blocks may also contain _block elements_. Block elements are usually interactive components, such as buttons and menus.
+Block Kit is built from three layers:
 
-Blocks and block elements are built with _composition objects_. Composition objects define text, options, or other interactive features within certain blocks and block elements.
+- **Blocks** — visual layout components (`section`, `actions`, `input`, `context`, `divider`, `header`, `image`)
+- **Block elements** — interactive components inside blocks (`button`, `plain_text_input`, `static_select`, `radio_buttons`, `overflow`)
+- **Composition objects** — reusable text and option structures (`plain_text`, `mrkdwn`, `option`, `confirm`)
 
-![](/assets/images/bk_landing_bkb-e64c290c97543b50e0b09c0b291c7c78.png)
+Blocks are placed in a `blocks` array and sent to a surface (message, modal, or Home tab). Up to 50 blocks per message; up to 100 blocks per modal or Home tab.
 
-Whether you're composing layouts for modals, messages, or tabs, the Block Kit building experience is the same — your app will be sculpting specially-structured JSON to express itself. The result is clear, interactive communication between your app and its users.
+### Surface compatibility
 
-Eager to see Block Kit in action? [Take a peek in Block Kit Builder.](https://api.slack.com/tools/block-kit-builder?blocks=%5B%7B%22type%22%3A%22section%22%2C%22text%22%3A%7B%22type%22%3A%22mrkdwn%22%2C%22text%22%3A%22Hey%20there%20%F0%9F%91%8B%20I%27m%20TaskBot.%20I%27m%20here%20to%20help%20you%20create%20and%20manage%20tasks%20in%20Slack.%5CnThere%20are%20two%20ways%20to%20quickly%20create%20tasks%3A%22%7D%7D%2C%7B%22type%22%3A%22section%22%2C%22text%22%3A%7B%22type%22%3A%22mrkdwn%22%2C%22text%22%3A%22*1%EF%B8%8F%E2%83%A3%20Use%20the%20%60%2Ftask%60%20command*.%20Type%20%60%2Ftask%60%20followed%20by%20a%20short%20description%20of%20your%20tasks%20and%20I%27ll%20ask%20for%20a%20due%20date%20\(if%20applicable\).%20Try%20it%20out%20by%20using%20the%20%60%2Ftask%60%20command%20in%20this%20channel.%22%7D%7D%2C%7B%22type%22%3A%22section%22%2C%22text%22%3A%7B%22type%22%3A%22mrkdwn%22%2C%22text%22%3A%22*2%EF%B8%8F%E2%83%A3%20Use%20the%20_Create%20a%20Task_%20action.*%20If%20you%20want%20to%20create%20a%20task%20from%20a%20message%2C%20select%20%60Create%20a%20Task%60%20in%20a%20message%27s%20context%20menu.%20Try%20it%20out%20by%20selecting%20the%20_Create%20a%20Task_%20action%20for%20this%20message%20\(shown%20below\).%22%7D%7D%2C%7B%22type%22%3A%22image%22%2C%22title%22%3A%7B%22type%22%3A%22plain_text%22%2C%22text%22%3A%22image1%22%2C%22emoji%22%3Atrue%7D%2C%22image_url%22%3A%22https%3A%2F%2Fapi.slack.com%2Fimg%2Fblocks%2Fbkb_template_images%2FonboardingComplex.jpg%22%2C%22alt_text%22%3A%22image1%22%7D%2C%7B%22type%22%3A%22section%22%2C%22text%22%3A%7B%22type%22%3A%22mrkdwn%22%2C%22text%22%3A%22%E2%9E%95%20To%20start%20tracking%20your%20team%27s%20tasks%2C%20*add%20me%20to%20a%20channel*%20and%20I%27ll%20introduce%20myself.%20I%27m%20usually%20added%20to%20a%20team%20or%20project%20channel.%20Type%20%60%2Finvite%20%40TaskBot%60%20from%20the%20channel%20or%20pick%20a%20channel%20on%20the%20right.%22%7D%2C%22accessory%22%3A%7B%22type%22%3A%22conversations_select%22%2C%22placeholder%22%3A%7B%22type%22%3A%22plain_text%22%2C%22text%22%3A%22Select%20a%20channel...%22%2C%22emoji%22%3Atrue%7D%7D%7D%2C%7B%22type%22%3A%22divider%22%7D%2C%7B%22type%22%3A%22context%22%2C%22elements%22%3A%5B%7B%22type%22%3A%22mrkdwn%22%2C%22text%22%3A%22%F0%9F%91%80%20View%20all%20tasks%20with%20%60%2Ftask%20list%60%5Cn%E2%9D%93Get%20help%20at%20any%20time%20with%20%60%2Ftask%20help%60%20or%20type%20*help*%20in%20a%20DM%20with%20me%22%7D%5D%7D%5D)
+| Block type | Messages | Modals | Home tab |
+|---|---|---|---|
+| `section` | Yes | Yes | Yes |
+| `actions` | Yes | Yes | Yes |
+| `input` | Yes* | Yes | Yes |
+| `context` | Yes | Yes | Yes |
+| `divider` | Yes | Yes | Yes |
+| `header` | Yes | Yes | Yes |
 
-Read on to learn how you can construct the stacks of blocks that app surfaces love to consume.
+*`input` blocks render in messages but their `state.values` are only populated in the interaction payload when the user clicks a button in the same message. Block Kit Builder cannot simulate this — the `value` field will appear as `null` in the builder's preview even though it populates correctly in a live Slack channel.
 
-* * *
+### Response payload types
 
-## Placing blocks within surfaces {#adding_blocks}
+| User action | Payload type | Received by |
+|---|---|---|
+| Button click in a message | `block_actions` | `/interactive` endpoint |
+| Modal Submit button | `view_submission` | `/interactive` endpoint |
+| Modal Close button | `view_closed` | `/interactive` endpoint (if `notify_on_close: true`) |
 
-Blocks are used within all [app surfaces](/surfaces): [Home tabs](/surfaces/app-home), [messages](/messaging) and [modals](/surfaces/modals) can all be designed using blocks.
+All `block_actions` payloads include `trigger_id` — required to open a modal within the 3-second window.
 
-Each of them uses a `blocks` array that you prepare by [stacking individual blocks together](#stack_of_blocks).
+---
 
-Check out [app surfaces](/surfaces) to learn more about using these different surfaces, and how to add blocks to your app's [Home tab](/surfaces/app-home#composing), [messages](/messaging), and [modals](/surfaces/modals#composing_modal).
+## Template — multi-block message
 
-Some blocks can only be used in particular app surfaces.
-
-Read the [Block Kit reference guides](/reference/block-kit/blocks) to check if a block is compatible with your app's surfaces.
-
-## Building blocks {#getting_started}
-
-There's no special setup needed to start using blocks in [app surfaces](/surfaces). However, just as when you open a pack of generic, colorful, interlocking plastic bricks, you should read the instructions first.
-
-### Defining a single block {#block_basics}
-
-Each block is represented in our APIs as a JSON object. Here's an example of a [`section`](/reference/block-kit/blocks/section-block) block:
-
-```
-{  "type": "section",  "text": {    "type": "mrkdwn",    "text": "New Paid Time Off request from <example.com|Fred Enriquez>\n\n<https://example.com|View request>"  }}
-```
-
-[Preview in Block Kit Builder](https://api.slack.com/tools/block-kit-builder/#%7B%22blocks%22:%5B%7B%22type%22:%22section%22,%22text%22:%7B%22type%22:%22mrkdwn%22,%22text%22:%22New%20Paid%20Time%20Off%20request%20from%20%3Cexample.com%7CFred%20Enriquez%3E%5Cn%5Cn%3Chttps://example.com%7CView%20request%3E%22%7D%7D%5D%7D)
-
-Every block contains a `type` field — specifying which of the [available blocks](/reference/block-kit/blocks) to use — along with other fields that describe the content of the block.
-
-[Block Kit Builder](https://api.slack.com/tools/block-kit-builder) is a visual prototyping sandbox that will let you choose from, configure, and preview all the available blocks.
-
-If you want to skip the builder, the [block reference guide](/reference/block-kit/blocks) contains the specifications of every block, and the JSON fields required for each of them.
-
-### Stacking multiple blocks {#stack_of_blocks}
-
-Individual blocks can be stacked together to create complex visual layouts.
-
-When you've chosen each of the blocks you want in your layout, place each of them in an array, in visual order, like this:
-
-```
-[  {    "type": "header",    "text": {      "type": "plain_text",      "text": "New request"      }  },  {    "type": "section",    "fields": [      {        "type": "mrkdwn",        "text": "*Type:*\nPaid Time Off"      },      {        "type": "mrkdwn",        "text": "*Created by:*\n<example.com|Fred Enriquez>"      }    ]  },  {    "type": "section",    "fields": [      {        "type": "mrkdwn",        "text": "*When:*\nAug 10 - Aug 13"      }    ]  },  {    "type": "section",    "text": {      "type": "mrkdwn",      "text": "<https://example.com|View request>"    }  }]
-```
-
-[Preview in Block Kit Builder](https://api.slack.com/block-kit-builder/#%7B%22blocks%22:%5B%7B%22type%22:%22header%22,%22text%22:%7B%22type%22:%22plain_text%22,%22text%22:%22New%20request%22,%22emoji%22:true%7D%7D,%7B%22type%22:%22section%22,%22fields%22:%5B%7B%22type%22:%22mrkdwn%22,%22text%22:%22*Type:*%5CnPaid%20Time%20Off%22%7D,%7B%22type%22:%22mrkdwn%22,%22text%22:%22*Created%20by:*%5Cn%3Cexample.com%7CFred%20Enriquez%3E%22%7D%5D%7D,%7B%22type%22:%22section%22,%22fields%22:%5B%7B%22type%22:%22mrkdwn%22,%22text%22:%22*When:*%5CnAug%2010%20-%20Aug%2013%22%7D,%7B%22type%22:%22mrkdwn%22,%22text%22:%22*Type:*%5CnPaid%20time%20off%22%7D%5D%7D,%7B%22type%22:%22section%22,%22fields%22:%5B%7B%22type%22:%22mrkdwn%22,%22text%22:%22*Hours:*%5Cn16.0%20\(2%20days\)%22%7D,%7B%22type%22:%22mrkdwn%22,%22text%22:%22*Remaining%20balance:*%5Cn32.0%20hours%20\(4%20days\)%22%7D%5D%7D,%7B%22type%22:%22section%22,%22text%22:%7B%22type%22:%22mrkdwn%22,%22text%22:%22%3Chttps://example.com%7CView%20request%3E%22%7D%7D%5D%7D)
-
-[Block Kit Builder](https://api.slack.com/tools/block-kit-builder) will allow you to drag, drop, and rearrange blocks to design and preview Block Kit layouts.
-
-Alternatively you can use the [block reference guide](/reference/block-kit/blocks) to manually generate a complete `blocks` array, like the one shown above.
-
-Your newly created array of blocks can be used [with a range of different app surfaces](#adding_blocks).
-
-### Accessibility considerations {#accessibility}
-
-When posting messages, it is expected behavior that screen readers will default to the top-level `text` field of the post, and will not read the content of any interior `blocks` in the underlying structure of the message. Therefore, to make an accessible app, you must either:
-
-*   include all necessary content for screen reader users in the top-level `text` field of your message, or
-*   do not include a top-level `text` field if the message has `blocks`, and allow Slack attempt to build it for you by appending content from supported `blocks` to be read by the screen reader.
-
-* * *
-
-## Adding interactivity to blocks with block elements {#making-things-interactive}
-
-Blocks can be made to interact with users via Block Kit _elements_. Elements include interactive components such as buttons, menus and text inputs.
-
-Here's an example of a [`button`](/reference/block-kit/block-elements/button-element) element within a [`section`](/reference/block-kit/blocks/section-block) block.
-
-```
-{  "blocks": [    {      "type": "section",      "text": {        "type": "mrkdwn",        "text": "This is a section block with a button."      },      "accessory": {        "type": "button",        "text": {          "type": "plain_text",          "text": "Click Me",          "emoji": true        },        "value": "click_me_123",        "action_id": "button-action"      }    }  ]}
-```
-
-[View in Block Kit Builder](https://api.slack.com/block-kit-builder/#%7B"blocks":%5B%7B"type":"section","text":%7B"type":"mrkdwn","text":"This%20is%20a%20section%20block%20with%20a%20button."%7D,"accessory":%7B"type":"button","text":%7B"type":"plain_text","text":"Click%20Me","emoji":true%7D,"value":"click_me_123","action_id":"button-action"%7D%7D%5D%7D)
-
-When you add an interactive component to a surface in your Slack app, you've opened the door to user interaction. People will push your app's buttons and expecting a helpful and prompt reaction.
-
-Apps need to handle the requests that start to flow their way, and respond appropriately. Follow our [guide to handling user interaction](/interactivity/handling-user-interaction) to prepare your app for the interactivity that Block Kit will inspire.
-
-Block Kit builder allows you to add elements to blocks as well. Give it a try! Alternatively, read the [Block Kit element reference guide](/reference/block-kit/block-elements) for all the info you'll need for manually implementing individual elements.
-
-* * *
-
-## Onward {#onward}
-
-Check out the following guides for everything blocks:
-
-*   [Blocks](/reference/block-kit/blocks)
-*   [Block elements, including interactive components](/reference/block-kit/block-elements)
-*   [Composition objects](/reference/block-kit/composition-objects)
-*   [View objects](/reference/views)
-
-
-# Slack blocks 
-## Template
-```json
-{
-	"blocks": [
-		{
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "Hey there 👋 I'm TaskBot. I'm here to help you create and manage tasks in Slack.\nThere are two ways to quickly create tasks:"
-			}
-		},
-		{
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "*1️⃣ Use the `/task` command*. Type `/task` followed by a short description of your tasks and I'll ask for a due date (if applicable). Try it out by using the `/task` command in this channel."
-			}
-		},
-		{
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "*2️⃣ Use the _Create a Task_ action.* If you want to create a task from a message, select `Create a Task` in a message's context menu. Try it out by selecting the _Create a Task_ action for this message (shown below)."
-			}
-		},
-		{
-			"type": "image",
-			"title": {
-				"type": "plain_text",
-				"text": "image1",
-				"emoji": true
-			},
-			"image_url": "https://api.slack.com/img/blocks/bkb_template_images/onboardingComplex.jpg",
-			"alt_text": "image1"
-		},
-		{
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "➕ To start tracking your team's tasks, *add me to a channel* and I'll introduce myself. I'm usually added to a team or project channel. Type `/invite @TaskBot` from the channel or pick a channel on the right."
-			},
-			"accessory": {
-				"type": "conversations_select",
-				"placeholder": {
-					"type": "plain_text",
-					"text": "Select a channel...",
-					"emoji": true
-				}
-			}
-		},
-		{
-			"type": "divider"
-		},
-		{
-			"type": "context",
-			"elements": [
-				{
-					"type": "mrkdwn",
-					"text": "👀 View all tasks with `/task list`\n❓Get help at any time with `/task help` or type *help* in a DM with me"
-				}
-			]
-		}
-	]
-}
-```
-
-## Text Input
+A representative layout using section, image, accessory, divider, and context blocks.
 
 ```json
 {
-	"blocks": [
-		{
-			"type": "input",
-			"element": {
-				"type": "plain_text_input",
-				"action_id": "plain_text_input-action"
-			},
-			"label": {
-				"type": "plain_text",
-				"text": "Label",
-				"emoji": true
-			},
-			"optional": false
-		}
-	]
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "Hey there \ud83d\udc4b I'm TaskBot. I'm here to help you create and manage tasks in Slack.\nThere are two ways to quickly create tasks:"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*1\ufe0f\u20e3 Use the `/task` command*. Type `/task` followed by a short description of your tasks and I'll ask for a due date (if applicable)."
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*2\ufe0f\u20e3 Use the _Create a Task_ action.* Select `Create a Task` in a message's context menu."
+      }
+    },
+    {
+      "type": "image",
+      "title": { "type": "plain_text", "text": "image1", "emoji": true },
+      "image_url": "https://api.slack.com/img/blocks/bkb_template_images/onboardingComplex.jpg",
+      "alt_text": "image1"
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "\u2795 To start tracking your team's tasks, *add me to a channel* and I'll introduce myself."
+      },
+      "accessory": {
+        "type": "conversations_select",
+        "placeholder": { "type": "plain_text", "text": "Select a channel...", "emoji": true }
+      }
+    },
+    { "type": "divider" },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "mrkdwn",
+          "text": "\ud83d\udc40 View all tasks with `/task list`\n\u2753 Get help at any time with `/task help`"
+        }
+      ]
+    }
+  ]
 }
 ```
 
-## Multi-line Input
+---
+
+## Input blocks
+
+### Text input (single-line)
+
+No `block_id` specified — Slack assigns a random one. The `action_id` is the key used
+to retrieve the value from `state.values` in the interaction payload.
+
 ```json
 {
-	"blocks": [
-		{
-			"type": "input",
-			"element": {
-				"type": "plain_text_input",
-				"multiline": true,
-				"action_id": "plain_text_input-action"
-			},
-			"label": {
-				"type": "plain_text",
-				"text": "Label",
-				"emoji": true
-			},
-			"optional": false
-		}
-	]
+  "blocks": [
+    {
+      "type": "input",
+      "element": {
+        "type": "plain_text_input",
+        "action_id": "plain_text_input-action"
+      },
+      "label": { "type": "plain_text", "text": "Label", "emoji": true },
+      "optional": false
+    }
+  ]
 }
 ```
 
+### Multi-line text input in a message
+
+`input` blocks work in messages. The `state.values` in the response payload is populated
+with the typed text when the user clicks the Submit button. Block Kit Builder shows `null`
+for this value because it cannot simulate live user input — in a real Slack channel it
+contains whatever the user typed.
+
+#### Code
+```json
+{
+  "blocks": [
+    {
+      "type": "input",
+      "block_id": "note_input_block",
+      "element": {
+        "type": "plain_text_input",
+        "action_id": "note_text_action",
+        "multiline": true,
+        "placeholder": { "type": "plain_text", "text": "Enter your notes here..." }
+      },
+      "label": { "type": "plain_text", "text": "Notes" }
+    },
+    {
+      "type": "actions",
+      "block_id": "button_actions_block",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Submit" },
+          "style": "primary",
+          "action_id": "action_submit",
+          "value": "submit_clicked"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Cancel" },
+          "style": "danger",
+          "action_id": "action_cancel",
+          "value": "cancel_clicked"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Response (block_actions — live Slack channel)
+```json
+{
+  "type": "block_actions",
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "container": { "type": "message", "text": "The contents of the original message where the action originated" },
+  "trigger_id": "12466734323.1395872398",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavea-guiri" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "state": {
+    "values": {
+      "note_input_block": {
+        "note_text_action": {
+          "type": "plain_text_input",
+          "value": "This is the text the user typed in the live Slack channel"
+        }
+      }
+    }
+  },
+  "response_url": "%Slack-url%",
+  "actions": [
+    {
+      "type": "button",
+      "block_id": "button_actions_block",
+      "action_id": "action_submit",
+      "text": { "type": "plain_text", "text": "Submit", "emoji": true },
+      "value": "submit_clicked",
+      "style": "primary",
+      "action_ts": "1777102743.324075"
+    }
+  ]
+}
+```
+
+**Note:** `state.values` is keyed by `block_id` then `action_id`. When no `block_id` is
+specified in the block definition, Slack assigns a random one (e.g. `"nBXMV"`). Always
+specify explicit `block_id` values for `input` blocks so `state.values` can be read
+reliably by key rather than by position.
+
+---
+
+## Select input
+
+`static_select` inside an `input` block, with Submit/Cancel `actions` block.
+The selected value appears in `state.values` keyed by the auto-assigned `block_id`.
+
+#### Code
+```json
+{
+  "blocks": [
+    {
+      "type": "input",
+      "element": {
+        "type": "static_select",
+        "placeholder": { "type": "plain_text", "text": "Select an item", "emoji": true },
+        "options": [
+          { "text": { "type": "plain_text", "text": "Option 0", "emoji": true }, "value": "value-0" },
+          { "text": { "type": "plain_text", "text": "Option 1", "emoji": true }, "value": "value-1" },
+          { "text": { "type": "plain_text", "text": "Option 2", "emoji": true }, "value": "value-2" }
+        ],
+        "action_id": "static_select-action"
+      },
+      "label": { "type": "plain_text", "text": "Label", "emoji": true },
+      "optional": false
+    },
+    {
+      "type": "actions",
+      "block_id": "button_actions_block",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Submit" },
+          "style": "primary",
+          "action_id": "action_submit",
+          "value": "submit_clicked"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Cancel" },
+          "style": "danger",
+          "action_id": "action_cancel",
+          "value": "cancel_clicked"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Response (block_actions)
+```json
+{
+  "type": "block_actions",
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "container": { "type": "message", "text": "The contents of the original message where the action originated" },
+  "trigger_id": "12466734323.1395872398",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavia-vida" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "state": {
+    "values": {
+      "nBXMV": {
+        "static_select-action": {
+          "type": "static_select",
+          "selected_option": {
+            "text": { "type": "plain_text", "text": "Option 1", "emoji": true },
+            "value": "value-1"
+          }
+        }
+      }
+    }
+  },
+  "response_url": "%Slack-url%",
+  "actions": [
+    {
+      "type": "button",
+      "block_id": "button_actions_block",
+      "action_id": "action_submit",
+      "text": { "type": "plain_text", "text": "Submit", "emoji": true },
+      "value": "submit_clicked",
+      "style": "primary",
+      "action_ts": "1777103260.962789"
+    }
+  ]
+}
+```
+
+---
+
+## Radio button input
+
+`radio_buttons` inside an `input` block. Selected value appears in `state.values`.
+
+#### Code
+```json
+{
+  "blocks": [
+    {
+      "type": "input",
+      "element": {
+        "type": "radio_buttons",
+        "options": [
+          { "text": { "type": "plain_text", "text": "Option 0", "emoji": true }, "value": "value-0" },
+          { "text": { "type": "plain_text", "text": "Option 1", "emoji": true }, "value": "value-1" },
+          { "text": { "type": "plain_text", "text": "Option 2", "emoji": true }, "value": "value-2" }
+        ],
+        "action_id": "radio_buttons-action"
+      },
+      "label": { "type": "plain_text", "text": "Label", "emoji": true },
+      "optional": false
+    },
+    {
+      "type": "actions",
+      "block_id": "button_actions_block",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Submit" },
+          "style": "primary",
+          "action_id": "action_submit",
+          "value": "submit_clicked"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Cancel" },
+          "style": "danger",
+          "action_id": "action_cancel",
+          "value": "cancel_clicked"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Response (block_actions)
+```json
+{
+  "type": "block_actions",
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "container": { "type": "message", "text": "The contents of the original message where the action originated" },
+  "trigger_id": "12466734323.1395872398",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavia-vida" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "state": {
+    "values": {
+      "exoHu": {
+        "radio_buttons-action": {
+          "type": "radio_buttons",
+          "selected_option": {
+            "text": { "type": "plain_text", "text": "Option 1", "emoji": true },
+            "value": "value-1"
+          }
+        }
+      }
+    }
+  },
+  "response_url": "%Slack-url%",
+  "actions": [
+    {
+      "type": "button",
+      "block_id": "button_actions_block",
+      "action_id": "action_submit",
+      "text": { "type": "plain_text", "text": "Submit", "emoji": true },
+      "value": "submit_clicked",
+      "style": "primary",
+      "action_ts": "1777104961.563772"
+    }
+  ]
+}
+```
+
+---
+
+## Modals
+
+Modals are opened via `views.open` using a `trigger_id` from a button click or slash
+command. They use `view_submission` payloads (not `block_actions`). Submit and Cancel
+button labels are defined as top-level `submit` and `close` properties of the modal
+view object, not as blocks.
+
+### Multi-line input modal
+
+#### Code — view object passed to views.open
+```json
+{
+  "type": "modal",
+  "title": { "type": "plain_text", "text": "My App", "emoji": true },
+  "submit": { "type": "plain_text", "text": "Submit", "emoji": true },
+  "close": { "type": "plain_text", "text": "Cancel", "emoji": true },
+  "blocks": [
+    {
+      "type": "input",
+      "block_id": "note_input_block",
+      "element": {
+        "type": "plain_text_input",
+        "action_id": "note_text_action",
+        "multiline": true,
+        "placeholder": { "type": "plain_text", "text": "Enter your notes here..." }
+      },
+      "label": { "type": "plain_text", "text": "Notes" }
+    }
+  ]
+}
+```
+
+#### Response (view_submission)
+
+The submitted text is at `payload.view.state.values[block_id][action_id].value`.
+
+```json
+{
+  "type": "view_submission",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavia-vida" },
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "trigger_id": "123456789.123456789",
+  "view": {
+    "id": "V1234567890",
+    "team_id": "T0ADHNQUB8T",
+    "type": "modal",
+    "callback_id": "",
+    "private_metadata": "",
+    "state": {
+      "values": {
+        "note_input_block": {
+          "note_text_action": {
+            "type": "plain_text_input",
+            "value": null
+          }
+        }
+      }
+    },
+    "hash": "1777104003.9UrGJ5Jo",
+    "title": { "type": "plain_text", "text": "My App", "emoji": true },
+    "submit": { "type": "plain_text", "text": "Submit", "emoji": true },
+    "close": { "type": "plain_text", "text": "Cancel", "emoji": true },
+    "clear_on_close": false,
+    "notify_on_close": false,
+    "previous_view_id": null,
+    "root_view_id": "V1234567890",
+    "app_id": "A02",
+    "bot_id": "B00"
+  },
+  "response_urls": [],
+  "is_enterprise_install": false,
+  "enterprise": null
+}
+```
+
+**Note:** `state.values.note_input_block.note_text_action.value` is `null` in this
+captured response because the modal was submitted without entering text. In a live
+submission with text, this field contains the typed string.
+
+### views.open API call
+
+```json
+{
+  "trigger_id": "YOUR_TRIGGER_ID_HERE",
+  "view": {
+    "type": "modal",
+    "callback_id": "modal_identifier_123",
+    "title": { "type": "plain_text", "text": "My App Modal" },
+    "submit": { "type": "plain_text", "text": "Submit" },
+    "close": { "type": "plain_text", "text": "Cancel" },
+    "blocks": [
+      {
+        "type": "input",
+        "block_id": "note_input_block",
+        "element": {
+          "type": "plain_text_input",
+          "action_id": "note_text_action",
+          "multiline": true,
+          "placeholder": { "type": "plain_text", "text": "Enter your notes here..." }
+        },
+        "label": { "type": "plain_text", "text": "Detailed Notes" }
+      }
+    ]
+  }
+}
+```
+
+**Key fields:**
+- `trigger_id` — required, expires after 3 seconds from the user action that generated it
+- `callback_id` — identifies this modal in the `view_submission` payload received by `/interactive`
+- `submit` / `close` — modal-level button labels; do NOT add button blocks for these
+- Up to 100 blocks per modal
+
+---
+
+## Button patterns
+
+### Choice gate — lettered buttons in a single actions block
+
+All buttons in one `actions` block fire a single `block_actions` event. The clicked
+button's `action_id` and `value` identify the selection.
+
+#### Code
+```json
+{
+  "blocks": [
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "A" },
+          "action_id": "choice_A",
+          "value": "option_a"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "B" },
+          "action_id": "choice_B",
+          "value": "option_b"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "C" },
+          "action_id": "choice_C",
+          "value": "option_c"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Cancel" },
+          "action_id": "choice_cancel",
+          "value": "cancel",
+          "style": "danger"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Response (block_actions — user clicked C)
+```json
+{
+  "type": "block_actions",
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "container": { "type": "message", "text": "The contents of the original message where the action originated" },
+  "trigger_id": "12466734323.1395872398",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavia-vida" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "state": { "values": {} },
+  "response_url": "%Slack-url%",
+  "actions": [
+    {
+      "type": "button",
+      "block_id": "7+Odf",
+      "action_id": "choice_C",
+      "text": { "type": "plain_text", "text": "C", "emoji": true },
+      "value": "option_c",
+      "action_ts": "1777106850.871749"
+    }
+  ]
+}
+```
+
+**Note:** `state.values` is empty for pure button-only `actions` blocks — there are no
+`input` blocks to capture. The selected value is read from `payload.actions[0].value`
+and the selection identity from `payload.actions[0].action_id`.
+
+### Section buttons (one button per row, with descriptive text)
+
+Use when each option needs a description shown alongside the button. Each section fires
+its own `block_actions` event independently.
+
+#### Code
+```json
+{
+  "blocks": [
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "This is option A with a description." },
+      "accessory": {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "A", "emoji": true },
+        "value": "click_A",
+        "action_id": "button-action"
+      }
+    },
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "This is option B with a description." },
+      "accessory": {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "B", "emoji": true },
+        "value": "click_B",
+        "action_id": "button-action"
+      }
+    },
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "This is option C with a description." },
+      "accessory": {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "C", "emoji": true },
+        "value": "click_C",
+        "action_id": "button-action"
+      }
+    }
+  ]
+}
+```
+
+#### Response (block_actions — user clicked C)
+```json
+{
+  "type": "block_actions",
+  "user": { "id": "U0AD8M05TLP", "username": "javeaguiri", "name": "javeaguiri", "team_id": "T0ADHNQUB8T" },
+  "api_app_id": "A02",
+  "token": "Shh_its_a_seekrit",
+  "container": { "type": "message", "text": "The contents of the original message where the action originated" },
+  "trigger_id": "12466734323.1395872398",
+  "team": { "id": "T0ADHNQUB8T", "domain": "xavia-vida" },
+  "enterprise": null,
+  "is_enterprise_install": false,
+  "state": { "values": {} },
+  "response_url": "%Slack-webhook-url%",
+  "actions": [
+    {
+      "type": "button",
+      "block_id": "0ubyu",
+      "action_id": "button-action",
+      "text": { "type": "plain_text", "text": "C", "emoji": true },
+      "value": "click_C",
+      "action_ts": "1777106391.916790"
+    }
+  ]
+}
+```
+
+---
+
+## Context block
+
+Up to 10 elements per context block. Supports `plain_text`, `mrkdwn`, and `image` elements.
+
+```json
+{
+  "blocks": [
+    {
+      "type": "context",
+      "elements": [
+        { "type": "plain_text", "text": "Author: K A Applegate", "emoji": true }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        {
+          "type": "image",
+          "image_url": "https://pbs.twimg.com/profile_images/625633822235693056/lNGUneLX_400x400.jpg",
+          "alt_text": "cute cat"
+        },
+        { "type": "mrkdwn", "text": "*Cat* has approved this message." }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Overflow accessory
+
+A `...` menu attached to a section block. Supports a `confirm` dialog before the action
+fires. Fires a `block_actions` event with the selected option's `value`.
+
+```json
+{
+  "blocks": [
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "*Task: Review Q1 Project Plan*" },
+      "accessory": {
+        "type": "overflow",
+        "action_id": "task_overflow_menu",
+        "options": [
+          { "text": { "type": "plain_text", "text": "Edit" }, "value": "edit" },
+          { "text": { "type": "plain_text", "text": "Delete" }, "value": "delete" }
+        ],
+        "confirm": {
+          "title": { "type": "plain_text", "text": "Confirm Action" },
+          "text": { "type": "plain_text", "text": "Are you sure you want to proceed?" },
+          "confirm": { "type": "plain_text", "text": "Yes" },
+          "deny": { "type": "plain_text", "text": "No" }
+        }
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Design notes for evolving-mind-ai
+
+### choice gate rendering
+Use a single `actions` block with lettered buttons when options are short labels (A, B, C).
+Use section accessory buttons when each option needs a description alongside it.
+Both patterns fire `block_actions`. The clicked button's `value` is the selected option.
+
+### text_input gate rendering
+`input` blocks work in both messages and modals. In messages, pair an `input` block with
+an `actions` block containing Submit/Cancel buttons. The `state.values` in the resulting
+`block_actions` payload contains the typed text at `state.values[block_id][action_id].value`.
+Use explicit `block_id` values so the key is predictable.
+
+### trigger_id window
+`trigger_id` from a button click expires after 3 seconds. If opening a modal in response
+to a button click, `views.open` must be called before acknowledging the interaction or
+from within the synchronous acknowledgement path. Any async processing (SQS round-trip)
+will expire the `trigger_id` before the modal can be opened.
+
+### Reading block_actions vs view_submission
+- `block_actions`: selected value at `payload.actions[0].value`; typed input at `payload.state.values[block_id][action_id].value`
+- `view_submission`: typed input at `payload.view.state.values[block_id][action_id].value`; modal identity at `payload.view.callback_id`
