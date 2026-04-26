@@ -6,6 +6,13 @@
 // Routes on callback.provider and posts replies back to the originating UI.
 // No HTTP trigger — fires only when a message lands on SYSSQSCallbackResults.
 //
+// Message type taxonomy:
+//   HUMAN_GATE         — suspends workflow, renders interactive dialog via dialogToBlocks()
+//   HUMAN_NOTIFICATION — informational text message, rendered via textToBlocks()
+//   WORKFLOW_ERROR     — workflow failure summary (error summarisation applied in EXP tier)
+//   PING_SQS_RESULT    — dev/system ping with hop timing context
+//   PING_E2E_RESULT    — dev/system ping with round-trip timing context
+//
 // Adding a new UI provider:
 //   1. Add a case to routeCallback() below.
 //   2. No new queue or Lambda needed for the common case.
@@ -79,44 +86,16 @@ async function processRecord(record) {
         await postPingE2eResult(message);
         break;
 
-      case 'SERV_NOTIFICATION':
-        await postServNotification(message);
+      case 'HUMAN_GATE':
+        await postHumanGate(message);
         break;
 
-      case 'WORKFLOW_NOTIFY':
-        await postWorkflowNotify(message);
-        break;
-
-      case 'CREATE_DOMAIN_RESULT':
-        await postCreateDomainResult(message);
-        break;
-
-      case 'WORKFLOW_GATE':
-        await postWorkflowGate(message);
+      case 'HUMAN_NOTIFICATION':
+        await postHumanNotification(message);
         break;
 
       case 'WORKFLOW_ERROR':
         await postWorkflowError(message);
-        break;
-
-      case 'WORKFLOW_CANCELLED':
-        await postWorkflowCancelled(message);
-        break;
-
-      case 'DESIGN_DOMAIN_GATE':
-        await postDesignDomainGate(message);
-        break;
-
-      case 'DESIGN_DOMAIN_ERROR':
-        await postDesignDomainError(message);
-        break;
-
-      case 'HELP_GATE':
-        await postHelpGate(message);
-        break;
-
-      case 'HELP_RESULT':
-        await postHelpResult(message);
         break;
 
       // Future result types added here:
@@ -138,102 +117,26 @@ async function processRecord(record) {
   }
 }
 
-async function postPingSqsResult(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.message, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: result.message },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `traceId: ${result.traceId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`,
-        },
-      ],
-    },
-  ]);
-  console.info('callback: Slack message posted', {
-    channel: callback.channel,
-    traceId: message.traceId,
-  });
-}
+// ---------------------------------------------------------------------------
+// textToBlocks — shared utility for HUMAN_NOTIFICATION and WORKFLOW_ERROR.
+// Splits text on newlines into ≤2800-char section blocks to stay safely under
+// Slack's 3000-character hard limit. Appends a context block when contextText
+// is provided. All notification handlers call this — the limit is never missed.
+// ---------------------------------------------------------------------------
 
-async function postPingE2eResult(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.message, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: result.message },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `traceId: ${result.traceId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`,
-        },
-      ],
-    },
-  ]);
-  console.info('callback: ping-e2e Slack message posted', {
-    channel: callback.channel,
-    traceId: message.traceId,
-  });
-}
-
-async function postServNotification(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.message, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: result.message },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `traceId: ${message.traceId}`,
-        },
-      ],
-    },
-  ]);
-  console.info('callback: SERV notification posted', {
-    channel: callback.channel,
-    traceId: message.traceId,
-  });
-}
-
-// Generic workflow notification — used by any workflow notify step
-// that does not set a custom notify_type.
-//
-// Slack section blocks have a 3000-character hard limit. Long workflow
-// results (e.g. recipes with many ingredients and steps) exceed this.
-// Split on newlines into chunks ≤ BLOCK_CHAR_LIMIT — one section block
-// per chunk. The context block is always appended last and is always short.
-async function postWorkflowNotify(message) {
-  const { callback, message: text, traceId, workflowRunId } = message;
-  const contextText = workflowRunId
-    ? `runId: ${workflowRunId} | traceId: ${traceId}`
-    : `traceId: ${traceId}`;
-
+function textToBlocks(text, contextText) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
 
   if (text.length <= BLOCK_CHAR_LIMIT) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
   } else {
-    // Split on newlines and accumulate into ≤2800-char chunks
-    const lines  = text.split('\n');
-    let   chunk  = '';
+    const lines = text.split('\n');
+    let chunk = '';
     for (const line of lines) {
       const candidate = chunk ? chunk + '\n' + line : line;
       if (candidate.length > BLOCK_CHAR_LIMIT) {
         if (chunk) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });
-        // If a single line itself exceeds the limit, hard-truncate it
         chunk = line.length > BLOCK_CHAR_LIMIT ? line.slice(0, BLOCK_CHAR_LIMIT - 3) + '...' : line;
       } else {
         chunk = candidate;
@@ -242,103 +145,111 @@ async function postWorkflowNotify(message) {
     if (chunk) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });
   }
 
-  blocks.push({
-    type: 'context',
-    elements: [{ type: 'mrkdwn', text: contextText }],
-  });
+  if (contextText) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: contextText }],
+    });
+  }
 
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
+// Dev / system ping handlers — unique timing context, always short.
+// Not merged into HUMAN_NOTIFICATION because their context blocks carry
+// hop-specific timing fields that differ from the standard runId | traceId shape.
+// ---------------------------------------------------------------------------
+
+async function postPingSqsResult(message) {
+  const { callback, result } = message;
+  const contextText = `traceId: ${result.traceId} | hop1: ${result.hop1EnqueuedAt} | hop2: ${result.hop2ProcessedAt}`;
+  await routeCallback(callback, result.message, textToBlocks(result.message, contextText));
+  console.info('callback: PING_SQS_RESULT posted', {
+    channel: callback.channel,
+    traceId: message.traceId,
+  });
+}
+
+async function postPingE2eResult(message) {
+  const { callback, result } = message;
+  const contextText = `traceId: ${result.traceId} | enqueued: ${result.enqueuedAt} | completed: ${result.completedAt}`;
+  await routeCallback(callback, result.message, textToBlocks(result.message, contextText));
+  console.info('callback: PING_E2E_RESULT posted', {
+    channel: callback.channel,
+    traceId: message.traceId,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// HUMAN_NOTIFICATION — universal informational text message.
+// All workflow notifications, CRUD results, errors, and cancellations route here.
+// message.message is always the display-ready text — PROC is responsible for
+// producing human-readable content before enqueuing.
+// ---------------------------------------------------------------------------
+
+async function postHumanNotification(message) {
+  const { callback, traceId, workflowRunId } = message;
+  const text = message.message ?? 'No message provided.';
+  const contextText = workflowRunId
+    ? `runId: ${workflowRunId} | traceId: ${traceId}`
+    : `traceId: ${traceId}`;
+  const blocks = textToBlocks(text, contextText);
   await routeCallback(callback, text.slice(0, 150), blocks);
-  console.info('callback: WORKFLOW_NOTIFY posted', {
+  console.info('callback: HUMAN_NOTIFICATION posted', {
     channel:    callback.channel,
     traceId,
     blockCount: blocks.length,
   });
 }
 
-async function postCreateDomainResult(message) {
-  // Step Processor sends: { type, workflowRunId, message, callback, traceId }
-  // Legacy shape:         { type, callback, result: { message, ... }, traceId }
-  const text     = message.message ?? message.result?.message ?? 'Domain created.';
-  const callback = message.callback;
-  await routeCallback(callback, text, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `traceId: ${message.traceId}`,
-        },
-      ],
-    },
-  ]);
-  console.info('callback: CREATE_DOMAIN_RESULT posted', {
-    channel: callback.channel,
-    traceId: message.traceId,
-  });
-}
+// ---------------------------------------------------------------------------
+// WORKFLOW_ERROR — workflow failure.
+// Error summarisation is applied here (EXP responsibility per architecture Section 3.1)
+// because PROC emits raw technical error strings that may exceed Slack's block limit.
+// Full detail is always in CloudWatch and PGC_Prompt.error_log.
+// ---------------------------------------------------------------------------
 
-// Replaced placeholder postDesignDomainResult — now receives pre-built blocks
-// from design-domain.mjs. callback.mjs formats for the UI; block building is PROC's concern.
-async function postDesignDomainGate(message) {
-  const { callback, result } = message;
-  const fallbackText = `🧠 Domain *${result.domain}* — ${result.tableCount} table(s) selected. Review and confirm.`;
-  await routeCallback(callback, fallbackText, result.blocks);
-  console.info('callback: DESIGN_DOMAIN_GATE posted', {
-    channel:      callback.channel,
-    domain:       result.domain,
-    tableCount:   result.tableCount,
-    workflowRunId: result.workflowRunId,
-    traceId:      message.traceId,
-  });
-}
-
-async function postDesignDomainError(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.error, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: result.error },
-    },
-    {
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `runId: ${result.runId} | traceId: ${message.traceId}`,
-        },
-      ],
-    },
-  ]);
-  console.info('callback: design-domain error posted', {
-    channel: callback.channel,
-    runId:   result.runId,
-    traceId: message.traceId,
-  });
+async function postWorkflowError(message) {
+  const { callback, step, message: errMessage, traceId, workflowRunId } = message;
+  const isValidationError = typeof errMessage === 'string' && errMessage.includes('llm_call validation failed');
+  const isLlmError        = typeof errMessage === 'string' && /LLM (returned|call timed)/.test(errMessage);
+  const errCount          = errMessage.match(/"keyword"/g)?.length ?? '?';
+  let summary;
+  if (isValidationError) {
+    summary = `LLM output validation failed after 2 attempts (${errCount} schema errors). The prompt has been logged for improvement.`;
+  } else if (isLlmError) {
+    summary = `LLM call failed: ${errMessage.slice(0, 200)}`;
+  } else {
+    summary = typeof errMessage === 'string' ? errMessage.slice(0, 500) : 'An unexpected error occurred.';
+  }
+  const displayText = `\u26a0\ufe0f *Workflow failed*${step ? ` at step ${step}` : ''}\n\n${summary}`;
+  const contextText = `runId: ${workflowRunId} | traceId: ${traceId}`;
+  const blocks = textToBlocks(displayText, contextText);
+  await routeCallback(callback, displayText.slice(0, 150), blocks);
+  console.info('callback: WORKFLOW_ERROR posted', { channel: callback.channel, traceId });
 }
 
 // ---------------------------------------------------------------------------
-// WORKFLOW_GATE — renders human_gate dialog as Slack Block Kit
-// Translates the UI-neutral dialog (from Step Processor) to Block Kit blocks.
-// gate_type is used as a layout hint only (e.g. whether to use chat.update).
+// HUMAN_GATE — renders a human_gate dialog as Slack Block Kit.
+// Translates the UI-neutral dialog (from Step Processor or design-domain.mjs)
+// to Block Kit blocks via dialogToBlocks(). gate_type is used as a layout hint
+// only (e.g. whether to use chat.update for in-place re-renders).
 // ---------------------------------------------------------------------------
 
-async function postWorkflowGate(message) {
+async function postHumanGate(message) {
   const { callback, gate_type: gateType, dialog, workflowRunId, message_ts, traceId } = message;
 
   // text_input gates are handled via Slack modal opened in interactive.mjs.
   // The modal is already open at this point — nothing to post.
   if (gateType === 'text_input') {
-    console.info('callback: WORKFLOW_GATE text_input skipped (modal handles this)', { workflowRunId, traceId });
+    console.info('callback: HUMAN_GATE text_input skipped (modal handles this)', { workflowRunId, traceId });
     return;
   }
 
   const blocks = dialogToBlocks(dialog, workflowRunId);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
-    ?? 'Workflow gate — please review and respond.';
+    ?? 'Workflow gate \u2014 please review and respond.';
 
   if (message_ts) {
     // remove_item re-render — update the existing message in-place
@@ -349,11 +260,10 @@ async function postWorkflowGate(message) {
       blocks,
     });
   } else {
-    // Initial gate post — new threaded message
     await routeCallback(callback, fallbackText, blocks);
   }
 
-  console.info('callback: WORKFLOW_GATE posted', {
+  console.info('callback: HUMAN_GATE posted', {
     channel:       callback.channel,
     gateType,
     workflowRunId,
@@ -362,14 +272,16 @@ async function postWorkflowGate(message) {
   });
 }
 
-/**
- * Translate a UI-neutral dialog object into Slack Block Kit blocks.
- * Each field type maps to one or more Block Kit blocks.
- *
- * @param {object} dialog           Resolved dialog from Step Processor
- * @param {number} workflowRunId    For encoding into button values
- * @returns {Array}                 Slack Block Kit blocks array
- */
+// ---------------------------------------------------------------------------
+// dialogToBlocks — translate a UI-neutral dialog object to Slack Block Kit.
+// Each field type maps to one or more Block Kit blocks.
+// Called by postHumanGate for all gate types.
+//
+// @param {object} dialog           Resolved dialog from Step Processor
+// @param {number} workflowRunId    Encoded into button values
+// @returns {Array}                 Slack Block Kit blocks array
+// ---------------------------------------------------------------------------
+
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];
 
@@ -379,16 +291,15 @@ function dialogToBlocks(dialog, workflowRunId) {
       case 'typography':
         blocks.push({
           type: 'section',
-          text: { type: 'mrkdwn', text: `🧠 ${field.value}` },
+          text: { type: 'mrkdwn', text: `\ud83e\udde0 ${field.value}` },
         });
         break;
 
       case 'description_list': {
         // Renders choice gate options as a formatted list above the action buttons.
         // One line per option: *A* — label: description
-        // Mirrors HTML radio button helper text — keeps button labels short.
         const lines = (field.items ?? []).map(item =>
-          `*${item.label}* — ${item.description || item.label}`
+          `*${item.label}* \u2014 ${item.description || item.label}`
         );
         if (lines.length > 0) {
           blocks.push({
@@ -400,14 +311,12 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'list': {
-        // Header showing item count (from label)
         if (field.label) {
           blocks.push({
             type: 'section',
             text: { type: 'mrkdwn', text: `*${field.label}*` },
           });
         }
-        // One section block per list item, with optional Remove button
         for (const [idx, item] of (field.items ?? []).entries()) {
           const sectionBlock = {
             type: 'section',
@@ -444,22 +353,14 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'textbox':
         // text_input gates are handled via Slack modal (views.open in interactive.mjs).
-        // The modal is opened synchronously when the user clicks the trigger button,
-        // using trigger_id before it expires. No block posted here — the modal is
-        // already open. plain_text_input is invalid in channel messages.
+        // No block posted here — the modal is already open.
         break;
 
       case 'review_object': {
-        // Render the context as formatted key-value pairs.
-        // item.value may be a scalar, an array of strings (column names),
-        // or an array of objects (commands). Render each appropriately.
-        //
-        // Slack section blocks have a 3000-character limit on text.text.
-        // We emit one section block per field line, and truncate any single
-        // value that exceeds BLOCK_CHAR_LIMIT to prevent invalid_blocks errors.
-        // Long recipes, notes, or instruction arrays would otherwise overflow
-        // a single block.
-        const BLOCK_CHAR_LIMIT = 2800; // safe margin below Slack's 3000 hard limit
+        // Render context as formatted key-value pairs.
+        // One section block per field line — each bounded by BLOCK_CHAR_LIMIT
+        // to prevent invalid_blocks errors on large data (recipes, steps, etc.).
+        const BLOCK_CHAR_LIMIT = 2800;
 
         for (const item of (field.items ?? [])) {
           let valueText;
@@ -467,12 +368,10 @@ function dialogToBlocks(dialog, workflowRunId) {
             if (item.value.length === 0) {
               valueText = '(none)';
             } else if (typeof item.value[0] === 'object') {
-              // Array of objects (e.g. commands, ingredients, steps) — sub-list
               valueText = '\n' + item.value
-                .map(v => `    • ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
                 .join('\n');
             } else {
-              // Array of strings (e.g. column names, aliases) — comma list
               valueText = item.value.join(', ');
             }
           } else {
@@ -480,8 +379,6 @@ function dialogToBlocks(dialog, workflowRunId) {
           }
 
           let line = `*${item.key}:* ${valueText}`;
-
-          // Truncate if a single field still exceeds the block limit
           if (line.length > BLOCK_CHAR_LIMIT) {
             line = line.slice(0, BLOCK_CHAR_LIMIT - 3) + '...';
           }
@@ -513,13 +410,9 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'actions': {
         // btn.modal is an optional descriptor for buttons that require a text input modal.
-        // When present it is encoded into the button value so interactive.mjs can open
-        // the modal generically without any knowledge of workflow-specific action names.
-        //
-        // action_id must be unique within a message. We append the button index so that
-        // blank or duplicate btn.action values (e.g. LLM-generated options missing action)
-        // never produce colliding action_ids. Routing is driven by the value JSON payload,
-        // not by action_id, so this change is safe.
+        // action_id must be unique within a message — append button index so that blank
+        // or duplicate btn.action values never produce colliding action_ids.
+        // Routing is driven by the value JSON payload, not by action_id.
         const elements = (field.buttons ?? []).map((btn, i) => ({
           type:      'button',
           style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
@@ -543,116 +436,4 @@ function dialogToBlocks(dialog, workflowRunId) {
   }
 
   return blocks;
-}
-
-async function postWorkflowError(message) {
-  const { callback, step, message: errMessage, traceId, workflowRunId } = message;
-  // errMessage may be a full AJV validation error JSON string — thousands of chars.
-  // Slack section blocks have a 3000-char hard limit. Show a human-readable summary
-  // only; full details are in CloudWatch and PGC_Prompt.error_log.
-  const isValidationError = typeof errMessage === 'string' && errMessage.includes('llm_call validation failed');
-  const isLlmError        = typeof errMessage === 'string' && /LLM (returned|call timed)/.test(errMessage);
-  let summary;
-  if (isValidationError) {
-    const match = errMessage.match(/after 2 attempt\(s\): (\d+|\[)/);
-    const errCount = errMessage.match(/"keyword"/g)?.length ?? '?';
-    summary = `LLM output validation failed after 2 attempts (${errCount} schema errors). The prompt has been logged for improvement.`;
-  } else if (isLlmError) {
-    summary = `LLM call failed: ${errMessage.slice(0, 200)}`;
-  } else {
-    summary = typeof errMessage === 'string' ? errMessage.slice(0, 500) : 'An unexpected error occurred.';
-  }
-  const displayText = `⚠️ *Workflow failed*${step ? ` at step ${step}` : ''}
-
-${summary}`;
-  await routeCallback(callback, displayText, [
-    { type: 'section', text: { type: 'mrkdwn', text: displayText } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }] },
-  ]);
-  console.info('callback: WORKFLOW_ERROR posted', { channel: callback.channel, traceId });
-}
-
-async function postWorkflowCancelled(message) {
-  const { callback, traceId, workflowRunId } = message;
-  const text = message.message ?? 'Workflow cancelled.';
-  await routeCallback(callback, text, [
-    { type: 'section', text: { type: 'mrkdwn', text } },
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `runId: ${workflowRunId} | traceId: ${traceId}` }] },
-  ]);
-  console.info('callback: WORKFLOW_CANCELLED posted', { channel: callback.channel, traceId });
-}
-
-// ---------------------------------------------------------------------------
-// HELP handlers
-// ---------------------------------------------------------------------------
-
-/**
- * Post the Block Kit help gate — confirm/cancel buttons.
- * Button values encode { workflowRunId, action } so interactive.mjs
- * can route the response without a DB lookup.
- */
-async function postHelpGate(message) {
-  const { callback, result } = message;
-  const { workflowRunId, traceId } = result;
-
-  const blocks = [
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: '👋 *Welcome to evolving-mind!*\n\nI can help you build and manage data domains using natural language. Want to see what I can do?',
-      },
-    },
-    {
-      type: 'actions',
-      elements: [
-        {
-          type:      'button',
-          style:     'primary',
-          text:      { type: 'plain_text', text: '✅ Yes, show me' },
-          action_id: 'help_confirm',
-          value:     JSON.stringify({ workflowRunId, action: 'confirm', legacy: true }),
-        },
-        {
-          type:      'button',
-          text:      { type: 'plain_text', text: '❌ Not now' },
-          action_id: 'help_cancel',
-          value:     JSON.stringify({ workflowRunId, action: 'cancel', legacy: true }),
-        },
-      ],
-    },
-    {
-      type: 'context',
-      elements: [
-        { type: 'mrkdwn', text: `traceId: ${traceId}` },
-      ],
-    },
-  ];
-
-  await routeCallback(callback, '👋 Welcome to evolving-mind! Want to see what I can do?', blocks);
-  console.info('callback: HELP_GATE posted', { channel: callback.channel, traceId });
-}
-
-/**
- * Post the help result — plain threaded reply after user responds.
- */
-async function postHelpResult(message) {
-  const { callback, result } = message;
-  await routeCallback(callback, result.message, [
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: result.message },
-    },
-    {
-      type: 'context',
-      elements: [
-        { type: 'mrkdwn', text: `traceId: ${result.traceId} | completed: ${result.completedAt}` },
-      ],
-    },
-  ]);
-  console.info('callback: HELP_RESULT posted', {
-    channel:      callback.channel,
-    userResponse: result.userResponse,
-    traceId:      result.traceId,
-  });
 }

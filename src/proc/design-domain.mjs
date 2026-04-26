@@ -17,10 +17,10 @@
 //   4. Load create_domain prompt from PGC_Prompt
 //   5. Call LLM → proposed_scaffold
 //   6. Call review-output validate() — Ajv + semantic rules (2-attempt loop)
-//   7a. Validation failed → update run status: failed, enqueue error callback
+//   7a. Validation failed → update run status: failed, enqueue HUMAN_NOTIFICATION
 //   7b. Validation passed → update run: status: awaiting_human_gate,
 //       write state.proposed_scaffold, increment step_count + total_execution_ms
-//   8. SQS: enqueue DESIGN_DOMAIN_GATE with UI-neutral gate payload
+//   8. SQS: enqueue HUMAN_GATE with UI-neutral dialog spec
 //      HTTP: return scaffold directly (no UI interaction)
 //
 // Also exports handleResumeGate() — called by run-workflow.mjs when a
@@ -47,9 +47,9 @@ export async function handle(req) {
   if (!userInput?.trim()) {
     if (req.source === 'sqs' && callback) {
       await enqueueCallback(callback, {
-        type:    'DESIGN_DOMAIN_ERROR',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
-        result:  { success: false, error: 'Usage: /create-domain <description>' },
+        message: 'Usage: /create-domain <description>',
       });
       return;
     }
@@ -119,13 +119,11 @@ export async function handleResumeGate({ run, userResponse, responseData, gateTy
           return err(409, `Table "${tableName}" is referenced by a foreign key — remove the child table first`, req.correlationId);
         }
         // Re-post gate unchanged with a warning — gate stays open
-        await enqueueCallback(callback, {
-          type:   'DESIGN_DOMAIN_GATE',
-          traceId,
-          result: buildGatePayload(scaffold, workflowRunId, traceId, {
-            warning: `"${tableName}" cannot be removed — another table references it. Remove the child table first.`,
-          }),
-        });
+        await enqueueCallback(callback,
+          buildGatePayload(scaffold, workflowRunId, traceId, {
+            warning: `"${tableName}" cannot be removed \u2014 another table references it. Remove the child table first.`,
+          })
+        );
         return;
       }
 
@@ -145,12 +143,10 @@ export async function handleResumeGate({ run, userResponse, responseData, gateTy
         tableName, remaining: updatedScaffold.tables.length, workflowRunId, traceId,
       });
 
-      const payload = buildGatePayload(updatedScaffold, workflowRunId, traceId);
-
       if (req.source === 'http') {
-        return ok({ success: true, action: 'resume_gate', workflowRunId, gateStatus: 'open', ...payload }, req.correlationId);
+        return ok({ success: true, action: 'resume_gate', workflowRunId, gateStatus: 'open' }, req.correlationId);
       }
-      await enqueueCallback(callback, { type: 'DESIGN_DOMAIN_GATE', traceId, result: payload });
+      await enqueueCallback(callback, buildGatePayload(updatedScaffold, workflowRunId, traceId));
       return;
     }
 
@@ -187,7 +183,7 @@ export async function handleResumeGate({ run, userResponse, responseData, gateTy
       }
 
       // gateType === 'review_tables' (or unset) — user happy with table list,
-      // advance to Step 6 (final confirmation gate)
+      // advance to final confirmation gate
       const scaffold = run.state?.proposed_scaffold;
       if (!scaffold) throw new Error(`WorkflowRun ${workflowRunId} has no proposed_scaffold in state`);
 
@@ -203,18 +199,7 @@ export async function handleResumeGate({ run, userResponse, responseData, gateTy
         return ok({ success: true, action: 'resume_gate', workflowRunId, gateStatus: 'confirmed' }, req.correlationId);
       }
 
-      // UI-neutral final confirmation payload — EXP renders the buttons
-      await enqueueCallback(callback, {
-        type:   'DESIGN_DOMAIN_GATE',
-        traceId,
-        result: {
-          gateType:     'final_confirm',
-          workflowRunId,
-          domain:       scaffold.domain,
-          tableCount:   scaffold.tables.length,
-          traceId,
-        },
-      });
+      await enqueueCallback(callback, buildFinalConfirmPayload(scaffold, workflowRunId, traceId));
       return;
     }
 
@@ -233,9 +218,10 @@ export async function handleResumeGate({ run, userResponse, responseData, gateTy
 
       if (callback) {
         await enqueueCallback(callback, {
-          type:   'DESIGN_DOMAIN_ERROR',
+          type:          'HUMAN_NOTIFICATION',
           traceId,
-          result: { success: false, runId: workflowRunId, error: 'Domain creation cancelled.' },
+          workflowRunId,
+          message: 'Domain creation cancelled.',
         });
       }
       return;
@@ -302,10 +288,12 @@ async function runDesignDomain({ userInput, workflowRunId, callback, traceId, st
       step_count: 1, total_execution_ms: totalMs,
     });
     if (source === 'sqs' && callback) {
-      await enqueueCallback(callback, { type: 'DESIGN_DOMAIN_ERROR', traceId, result: {
-        success: false, runId,
-        error: 'Domain design failed — the LLM produced an invalid schema after 2 attempts. Please try again or rephrase your description.',
-      }});
+      await enqueueCallback(callback, {
+        type:          'HUMAN_NOTIFICATION',
+        traceId,
+        workflowRunId: runId,
+        message: 'Domain design failed \u2014 the LLM produced an invalid schema after 2 attempts. Please try again or rephrase your description.',
+      });
       return { success: false, runId, validationFailed: true };
     }
     return { success: false, runId, errors: validationResult.errors, attempt: validationResult.attempt };
@@ -331,33 +319,31 @@ async function runDesignDomain({ userInput, workflowRunId, callback, traceId, st
     };
   }
 
-  // Enqueue UI-neutral gate payload — callback.mjs renders the Slack Block Kit message
-  await enqueueCallback(callback, {
-    type:   'DESIGN_DOMAIN_GATE',
-    traceId,
-    result: buildGatePayload(finalScaffold, runId, traceId),
-  });
+  await enqueueCallback(callback, buildGatePayload(finalScaffold, runId, traceId));
 
   return { success: true, runId };
 }
 
 // ---------------------------------------------------------------------------
-// buildGatePayload — UI-neutral data describing the review_tables gate.
-// No Slack constructs. callback.mjs translates this into Block Kit (or any UI).
+// buildGatePayload — HUMAN_GATE dialog spec for the review_tables gate.
 //
-// Shape:
+// Returns the complete HUMAN_GATE message payload ready for enqueueCallback.
+// callback.mjs renders this via dialogToBlocks() — no Slack constructs here.
+//
+// Shape emitted:
 // {
-//   gateType:     'review_tables',
-//   workflowRunId,
-//   domain:       string,
-//   tableCount:   number,
-//   tables: [{
-//     tableName:     string,
-//     columnSummary: string | null,   // first 4 non-system column names, comma-separated
-//     isParent:      boolean,         // true = referenced by FK, no Remove allowed
-//   }],
-//   warning:  string | null,          // shown when a remove was rejected
-//   traceId:  string,
+//   type:          'HUMAN_GATE',
+//   gate_type:     'edit_list',
+//   workflowRunId: number,
+//   dialog: {
+//     fields: [
+//       { type: 'typography', value: string },
+//       { type: 'list', label: string, items: [{ id, primary, secondary, secondaryAction? }] },
+//       { type: 'typography', value: string },   // optional warning
+//       { type: 'actions', buttons: [...] },
+//     ]
+//   },
+//   traceId: string,
 // }
 // ---------------------------------------------------------------------------
 
@@ -365,21 +351,88 @@ function buildGatePayload(scaffold, workflowRunId, traceId, { warning = null } =
   const tables           = scaffold.tables ?? [];
   const referencedTables = buildReferencedSet(tables);
 
+  const listItems = tables.map(table => ({
+    id:        table.tableName,
+    primary:   table.tableName,
+    secondary: (table.columns ?? [])
+      .filter(c => !SYSTEM_COLUMNS.has(c.name))
+      .slice(0, 4)
+      .map(c => c.name)
+      .join(', ') || null,
+    // Parent tables (referenced by FK) cannot be removed — omit secondaryAction.
+    ...(referencedTables.has(table.tableName) ? {} : {
+      secondaryAction: {
+        label:   'Remove',
+        action:  'remove_table',
+        style:   'danger',
+        confirm: `Remove ${table.tableName} from this domain?`,
+      },
+    }),
+  }));
+
+  const fields = [
+    {
+      type:  'typography',
+      value: `Here's my plan for domain ${scaffold.domain}. You can remove child tables you don't need, or add one that's missing.`,
+    },
+    {
+      type:  'list',
+      label: `${tables.length} table(s) proposed`,
+      items: listItems,
+    },
+    ...(warning ? [{ type: 'typography', value: `\u26a0\ufe0f ${warning}` }] : []),
+    {
+      type:    'actions',
+      buttons: [
+        { label: 'Looks good',   action: 'confirm',   style: 'primary' },
+        {
+          label:  'Add a table',
+          action: 'add_table',
+          modal:  {
+            title:       'Add a table',
+            input_label: 'Describe the table',
+            placeholder: 'What it stores and how it relates to the other tables.',
+            multiline:   true,
+          },
+        },
+        { label: 'Cancel', action: 'cancel' },
+      ],
+    },
+  ];
+
   return {
-    gateType:     'review_tables',
+    type:          'HUMAN_GATE',
+    gate_type:     'edit_list',
     workflowRunId,
-    domain:       scaffold.domain,
-    tableCount:   tables.length,
-    tables:       tables.map(table => ({
-      tableName:     table.tableName,
-      columnSummary: (table.columns ?? [])
-        .filter(c => !SYSTEM_COLUMNS.has(c.name))
-        .slice(0, 4)
-        .map(c => c.name)
-        .join(', ') || null,
-      isParent: referencedTables.has(table.tableName),
-    })),
-    warning,
+    dialog:        { fields },
+    traceId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// buildFinalConfirmPayload — HUMAN_GATE dialog spec for the final_confirm gate.
+// ---------------------------------------------------------------------------
+
+function buildFinalConfirmPayload(scaffold, workflowRunId, traceId) {
+  return {
+    type:          'HUMAN_GATE',
+    gate_type:     'confirm',
+    workflowRunId,
+    dialog: {
+      fields: [
+        {
+          type:  'typography',
+          value: `Ready to create domain *${scaffold.domain}* with ${scaffold.tables.length} table(s). This will create the physical database tables.`,
+        },
+        {
+          type:    'actions',
+          buttons: [
+            { label: 'Create it', action: 'confirm', style: 'primary' },
+            { label: 'Cancel',    action: 'cancel' },
+          ],
+        },
+      ],
+    },
     traceId,
   };
 }

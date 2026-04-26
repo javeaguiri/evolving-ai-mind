@@ -58,7 +58,7 @@ export async function handle(req) {
     console.error('classify-intent: classification failed', { traceId, error: error.message });
     if (req.source === 'sqs' && callback) {
       await enqueueCallback(callback, {
-        type:    'WORKFLOW_NOTIFY',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
         message: `Classification failed: ${error.message}`,
       });
@@ -435,7 +435,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
         const domain    = result.domain ?? 'entity';
         const exampleId = 1;
         await enqueueCallback(callback, {
-          type:    'WORKFLOW_NOTIFY',
+          type:    'HUMAN_NOTIFICATION',
           traceId,
           message: `To ${verb} a ${domain} record I need an explicit id.\n\n` +
                    `Use: \`/m list ${domain}\` to find the id, then:\n` +
@@ -453,7 +453,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
         if (!parsedUpdates) {
           const domain = result.domain ?? 'entity';
           await enqueueCallback(callback, {
-            type:    'WORKFLOW_NOTIFY',
+            type:    'HUMAN_NOTIFICATION',
             traceId,
             message: `To update a ${domain} record I need at least one field=value pair.\n\n` +
                      `Example: \`/m update ${domain} id=${parsedId} <field>=<value>\``,
@@ -513,9 +513,9 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
   if (result.action_type === 'heavy_lift') {
     const { sqsType, notifyText } = resolveTier3Route(result.intent_category);
 
-    if (sqsType === 'WORKFLOW_NOTIFY') {
+    if (sqsType === 'HUMAN_NOTIFICATION') {
       await enqueueCallback(callback, {
-        type:    'WORKFLOW_NOTIFY',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
         message: notifyText,
       });
@@ -590,7 +590,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
       message = `I could not complete that request — please be more specific.`;
     }
 
-    await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message });
+    await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     return;
   }
 
@@ -598,7 +598,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
   console.warn('classify-intent: unhandled result in handoff', { result, traceId });
   if (callback) {
     await enqueueCallback(callback, {
-      type:    'WORKFLOW_NOTIFY',
+      type:    'HUMAN_NOTIFICATION',
       traceId,
       message: 'I was not sure how to handle that. Try rephrasing or use /create-workflow.',
     });
@@ -675,7 +675,7 @@ async function executeCrudStep(result, callback, traceId) {
       stepType: step.type, tableName, error: stepError.message, traceId,
     });
     await enqueueCallback(callback, {
-      type:    'WORKFLOW_NOTIFY',
+      type:    'HUMAN_NOTIFICATION',
       traceId,
       message: `Something went wrong with your ${step.type.replace('serv_', '')} on \`${tableName}\`: ${stepError.message}`,
     });
@@ -683,7 +683,7 @@ async function executeCrudStep(result, callback, traceId) {
   }
 
   const message = formatTableCrudResult(step.type, tableName, output, step.input?.row);
-  await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message });
+  await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
 }
 
 /**

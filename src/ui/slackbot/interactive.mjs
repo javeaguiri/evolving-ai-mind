@@ -241,7 +241,7 @@ export async function handle(req) {
     : `✅ ${userResponse}.${gateContext}`;
 
   // For remove_item we keep the gate open — don't replace the full message,
-  // just acknowledge. The Step Processor will re-enqueue an updated WORKFLOW_GATE.
+  // just acknowledge. The Step Processor will re-enqueue an updated HUMAN_GATE.
   // For confirm/cancel we replace the message to prevent further clicks.
   if (userResponse !== 'remove_item') {
     try {
@@ -278,7 +278,7 @@ export async function handle(req) {
         userResponse,
         ...(mergedResponseData && { responseData: mergedResponseData }),
         // message_ts is the ts of the gate message being interacted with.
-        // Forwarded so run-workflow can pass it to the re-render WORKFLOW_GATE
+        // Forwarded so run-workflow can pass it to the re-render HUMAN_GATE
         // payload, enabling callback.mjs to chat.update in-place on remove_item.
         message_ts:    threadId,
         slackUserId,

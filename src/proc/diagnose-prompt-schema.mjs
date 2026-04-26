@@ -45,7 +45,7 @@ export async function handle(req) {
   if (!intentCategory) {
     const msg = 'diagnose-prompt-schema: intentCategory is required';
     if (req.source === 'http') return err(400, msg, req.correlationId);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
 
@@ -62,7 +62,7 @@ export async function handle(req) {
     const msg = `diagnose-prompt-schema: prompt "${intentCategory}" not found in PGC_Prompt`;
     console.error('proc/diagnose-prompt-schema:', msg);
     if (req.source === 'http') return err(404, msg, req.correlationId);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
   const promptRow = promptResp.rows[0];
@@ -70,7 +70,7 @@ export async function handle(req) {
   if (!promptRow.output_schema) {
     const msg = `diagnose-prompt-schema: prompt "${intentCategory}" has no output_schema — cannot diagnose`;
     if (req.source === 'http') return err(400, msg, req.correlationId);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
 
@@ -94,7 +94,7 @@ export async function handle(req) {
   if (!wfResp.success || wfResp.count === 0) {
     const msg = 'diagnose_prompt_schema workflow not found — run: node dev_scripts/upsert-workflow.mjs diagnose_prompt_schema';
     console.error('proc/diagnose-prompt-schema:', msg);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
   const workflowId = wfResp.rows[0].id;
@@ -125,7 +125,7 @@ export async function handle(req) {
   if (!runResp.success) {
     const msg = `diagnose-prompt-schema: failed to create WorkflowRun: ${runResp.error}`;
     console.error('proc/diagnose-prompt-schema:', msg);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
   const diagRunId = runResp.row.id;

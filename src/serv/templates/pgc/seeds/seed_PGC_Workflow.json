@@ -423,7 +423,14 @@
           { "value": "enrich",  "label": "C", "description": "Transform or update existing records",        "on_select": "step:2" },
           { "value": "analyze", "label": "D", "description": "Aggregate, report, or summarize data",        "on_select": "step:2" },
           { "value": "other",   "label": "E", "description": "Something else -- describe below",            "on_select": "next"   },
-          { "value": "cancel",  "label": "Cancel", "description": "",                                       "on_select": "cancel" }
+          { "value": "other",   "label": "E", "description": "Something else -- describe below",            "on_select": "next",
+            "modal": {
+               "title": "Describe your workflow","input_label": "What should this workflow do?",
+               "placeholder": "Describe the goal, the data it works with, and any steps or decisions involved.",
+               "multiline": true
+               }
+          },       
+          { "value": "cancel",  "label": "Cancel", "description": "", "on_select": "cancel" }
         ],
         "output_key": "workflow_mode",
         "on_success": "next",

@@ -128,7 +128,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
 
   // Guard against SQS redelivery executing a step while the run is suspended at a
   // human_gate. Without this check, a redelivered execute_top re-executes the gate
-  // step and posts a second WORKFLOW_GATE message to Slack. The user sees two
+  // step and posts a second HUMAN_GATE message to Slack. The user sees two
   // identical gate messages — clicking the second one leaves the first with
   // buttons permanently visible since chat.update targets the clicked message's ts,
   // not the orphaned earlier one.
@@ -385,7 +385,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
   // ── Handle notify ──────────────────────────────────────────────────────
   if (step.type === 'notify' && result.notifyMessage) {
     await enqueueCallback(run.callback, {
-      type:          step.notify_type ?? 'WORKFLOW_NOTIFY',
+      type:          step.notify_type ?? 'HUMAN_NOTIFICATION',
       workflowRunId: run.id,
       message:       result.notifyMessage,
       traceId,
@@ -477,7 +477,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
 
     const updatedDialog = buildDialog(stepRef, localState);
     await enqueueCallback(run.callback, {
-      type:          'WORKFLOW_GATE',
+      type:          'HUMAN_GATE',
       workflowRunId: run.id,
       gate_type:     gateType,
       dialog:        updatedDialog,
@@ -501,7 +501,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     );
     if (run.callback) {
       await enqueueCallback(run.callback, {
-        type: 'WORKFLOW_CANCELLED', workflowRunId: run.id,
+        type: 'HUMAN_NOTIFICATION', workflowRunId: run.id,
         message: 'Workflow cancelled.', traceId,
       });
     }
