@@ -31,7 +31,7 @@ export async function handle(req) {
     if (req.source === 'sqs' && callback) {
       const { enqueueCallback } = await import('../shared/sqs-callback.mjs');
       await enqueueCallback(callback, {
-        type:    'WORKFLOW_NOTIFY',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
         message: 'Usage: /m create workflow <description>',
       });
@@ -79,7 +79,7 @@ export async function handle(req) {
     if (req.source === 'http') return err(500, msg, req.correlationId);
     if (callback) {
       const { enqueueCallback } = await import('../shared/sqs-callback.mjs');
-      await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+      await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
       return;
     }
     throw new Error(msg);

@@ -11,7 +11,7 @@
 //
 //   outputValue  — value to write to localState[step.output_key]
 //   nextAction   — 'next' | 'end' | 'step:N' | 'suspend' | 'cancel'
-//   gatePayload  — set only for human_gate steps; the WORKFLOW_GATE message body
+//   gatePayload  — set only for human_gate steps; the HUMAN_GATE message body
 //
 // Implemented step types:
 //   llm_call     — calls LLM, runs validate(), returns scaffold
@@ -362,7 +362,7 @@ export function runSandboxedExpression(expression, items, localState, traceId) {
 }
 
 // ---------------------------------------------------------------------------
-// human_gate — builds WORKFLOW_GATE dialog
+// human_gate — builds HUMAN_GATE dialog
 // ---------------------------------------------------------------------------
 
 async function executeHumanGate({ step, localState, run, traceId }) {
@@ -370,7 +370,7 @@ async function executeHumanGate({ step, localState, run, traceId }) {
   const dialog   = buildDialog(step, localState);
 
   const gatePayload = {
-    type:          'WORKFLOW_GATE',
+    type:          'HUMAN_GATE',
     workflowRunId: run.id,
     gate_type:     gateType,
     dialog,
@@ -392,11 +392,11 @@ async function executeHumanGate({ step, localState, run, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
-// Dialog builder — translates human_gate step intent into WORKFLOW_GATE dialog
+// Dialog builder — translates human_gate step intent into HUMAN_GATE dialog
 // ---------------------------------------------------------------------------
 
 /**
- * Build a fully resolved WORKFLOW_GATE dialog from a human_gate step definition.
+ * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
  * Called by executeHumanGate and by resume_gate when re-rendering after remove_item.
  *
  * @param {object} step        human_gate step definition
@@ -1647,7 +1647,7 @@ async function executeNotify({ step, localState, traceId }) {
 
   console.info('step-executor: notify', { traceId });
 
-  // run-workflow.mjs will enqueue the CREATE_DOMAIN_RESULT to SlackResultsQueue
+  // run-workflow.mjs will enqueue the HUMAN_NOTIFICATION to SlackResultsQueue
   return {
     outputValue: { message },
     nextAction:  resolveNextAction(step.on_success, null),

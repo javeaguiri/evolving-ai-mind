@@ -191,15 +191,16 @@ Each invocation receives and processes exactly one message, posting one Slack re
 
 **Message types today:**
 
-| type | Posted by callback.mjs as |
-|---|---|
-| `PING_SQS_RESULT` | Plain text threaded reply |
-| `PING_E2E_RESULT` | Plain text threaded reply with RDS version |
-| `CREATE_DOMAIN_RESULT` | Plain text threaded reply with table list |
-| `HELP_GATE` | Block Kit message with confirm/cancel buttons |
-| `HELP_RESULT` | Plain text threaded reply |
-| `SERV_NOTIFICATION` | Plain text threaded reply |
-| `WORKFLOW_NOTIFY` | Plain text threaded reply — used for intent classification results and unexecutable CRUD intents |
+Two canonical types handle all live traffic. Ping types are dev/system diagnostics.
+
+| type | Rendered by | Produced by |
+|---|---|---|
+| `HUMAN_GATE` | `postHumanGate()` → `dialogToBlocks()` — interactive dialog, Block Kit with action buttons | `step-executor.mjs` (human_gate steps), `design-domain.mjs` (legacy create_domain path) |
+| `HUMAN_NOTIFICATION` | `postHumanNotification()` → `textToBlocks()` — plain text with 3000-char chunking | `run-workflow.mjs` (notify + cancel steps), `classify-intent.mjs` (CRUD results, errors), `create-domain.mjs` (error), `design-domain.mjs` (error, cancel) |
+| `WORKFLOW_ERROR` | `postWorkflowError()` → `textToBlocks()` — error summary (EXP summarises raw PROC errors) | `run-workflow.mjs` (step failure, stuck-step guard, step-not-found) |
+| `PING_SQS_RESULT` | `postPingSqsResult()` — hop timing context block | `proc/handler.mjs` (inline ping handler) |
+| `PING_E2E_RESULT` | `postPingE2eResult()` — round-trip timing context block | `proc/handler.mjs` (inline ping handler) |
+
 
 **Design decisions:**
 - `BatchSize: 1` — one message per invocation keeps Slack post ordering clean
@@ -208,6 +209,17 @@ Each invocation receives and processes exactly one message, posting one Slack re
   provider. Adding Teams or webhook support is one new `case` with no other changes.
 - PROC never imports `@slack/web-api` — all Slack SDK code is isolated to
   `SlackCallbackListenerFunction` and `SlackbotFunction`.
+- `textToBlocks(text, contextText)` — shared utility in `callback.mjs` splits text on newlines
+  into ≤2800-char section blocks (below Slack's 3000-char hard limit). All notification
+  handlers call this — the char limit is enforced uniformly and cannot be missed by new handlers.
+- `dialogToBlocks(dialog, workflowRunId)` — shared renderer for `HUMAN_GATE` messages.
+  Both the Step Processor and `design-domain.mjs` (legacy path) produce the same UI-neutral
+  dialog spec; `callback.mjs` renders it identically for all gate types. Adding a new gate type
+  is one new `case` in `dialogToBlocks`.
+- Error summarisation is an EXP responsibility — PROC emits raw technical error strings for
+  `WORKFLOW_ERROR` to preserve full fidelity in CloudWatch. `callback.mjs` summarises before
+  posting to Slack so users see a human-readable message, not AJV error arrays.
+
 
 #### DLQs
 
@@ -560,7 +572,7 @@ export async function handle(req) {
     return ok(result, req.traceId);          // JSON response to API Gateway caller
   }
 
-  // SQS — hand off to downstream workflow or enqueue WORKFLOW_NOTIFY
+  // SQS — hand off to downstream workflow or enqueue HUMAN_NOTIFICATION
   await handoff(result, req.callback, req.traceId);
 }
 ```
@@ -1431,11 +1443,11 @@ All results flow back to the UI via `callback: { provider, channel, threadId }`.
 
 The callback abstraction handles two distinct message types flowing back to the UI:
 
-- **WORKFLOW_NOTIFY / WORKFLOW_ERROR / WORKFLOW_CANCELLED** — completion and status
+- **HUMAN_NOTIFICATION / WORKFLOW_ERROR / WORKFLOW_CANCELLED** — completion and status
   messages posted as Slack thread replies. These are fire-and-forget.
-- **WORKFLOW_GATE** — a human gate suspension event. The Step Processor builds a
+- **HUMAN_GATE** — a human gate suspension event. The Step Processor builds a
   structured dialog payload and enqueues it via the same callback path. `callback.mjs`
-  translates the UI-agnostic `WORKFLOW_GATE` message into Slack Block Kit blocks and
+  translates the UI-agnostic `HUMAN_GATE` message into Slack Block Kit blocks and
   posts the interactive message to the thread. The user's interaction with that message
   is what resumes the suspended stack. See Section 6.5.4 for the full gate lifecycle and message contract.
 
@@ -1625,7 +1637,7 @@ TIER 2 — Cheap LLM classification (perplexity/sonar)
 TIER 3 — Heavy lift handoff (no additional LLM call)
   ├── intent_category = 'create_domain'   → enqueue CREATE_DOMAIN
   ├── intent_category = 'create_workflow' → enqueue CREATE_WORKFLOW
-  └── unknown heavy_lift                  → WORKFLOW_NOTIFY: "I understood this
+  └── unknown heavy_lift                  → HUMAN_NOTIFICATION: "I understood this
                                             but have no workflow for it yet."
 ```
 
@@ -1756,8 +1768,8 @@ The routing rules are final — do not add per-workflow special cases here:
 | `action_type` | `workflow_name` | Route |
 |---|---|---|
 | `workflow` | set | Look up `PGC_Workflow` by `workflow_name` from pre-loaded rows, create `PGC_WorkflowRun`, enqueue `WORKFLOW_STEP execute_top`. If `result.search_term` is set, pass as `input.search` — no per-workflow special cases |
-| `heavy_lift` | — | `resolveTier3Route()` → enqueue `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `WORKFLOW_NOTIFY` |
-| `crud` | — | `executeCrudStep()` — executes `ad_hoc_step` directly, posts result as `WORKFLOW_NOTIFY` |
+| `heavy_lift` | — | `resolveTier3Route()` → enqueue `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `HUMAN_NOTIFICATION` |
+| `crud` | — | `executeCrudStep()` — executes `ad_hoc_step` directly, posts result as `HUMAN_NOTIFICATION` |
 | `crud_ambiguous` | — | Post instructive error to user (missing id, missing fields, unknown domain) |
 
 **`search_term` handling is generic.** When `result.search_term` is set, `handoff()` passes
@@ -1857,7 +1869,7 @@ Every return path in `classify()` produces this shape:
 | Pass 2 — CRUD fallback | Domain resolved, no keyword match, field=value pairs present | Returns `ad_hoc_step`, `confidence: 'crud'` |
 | Pass 2 — Backlog semantic | After keyword scan miss, pgvector similarity > threshold | Returns `workflow_name`, `confidence: 'semantic_match'` |
 | Tier 2 (sonar) | Raw user input + optional domain hint | Returns `{ intent_category, workflow_name, action_type }` — no `ad_hoc_step`, no `domain` resolution. `handoff()` looks up workflow from pre-loaded rows |
-| Tier 3 | `intent_category` string | Routes to `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `WORKFLOW_NOTIFY` — no further classification |
+| Tier 3 | `intent_category` string | Routes to `CREATE_DOMAIN` / `CREATE_WORKFLOW` / `HUMAN_NOTIFICATION` — no further classification |
 
 ##### handoff() routing — FINAL, do not add per-workflow cases
 
@@ -1869,16 +1881,16 @@ action_type === 'workflow' AND workflow_name set
 
 action_type === 'heavy_lift'
   → resolveTier3Route(intent_category)
-  → enqueue CREATE_DOMAIN | CREATE_WORKFLOW | WORKFLOW_NOTIFY
+  → enqueue CREATE_DOMAIN | CREATE_WORKFLOW | HUMAN_NOTIFICATION
 
 action_type === 'crud' AND ad_hoc_step set
-  → executeCrudStep() — runs step directly, posts WORKFLOW_NOTIFY
+  → executeCrudStep() — runs step directly, posts HUMAN_NOTIFICATION
 
 action_type === 'crud_ambiguous'
-  → enqueueCallback(WORKFLOW_NOTIFY, instructive error message)
+  → enqueueCallback(HUMAN_NOTIFICATION, instructive error message)
 
 action_type === 'crud' AND no ad_hoc_step (Tier 2 crud path — no root table resolved)
-  → enqueueCallback(WORKFLOW_NOTIFY, "could not determine which table to use")
+  → enqueueCallback(HUMAN_NOTIFICATION, "could not determine which table to use")
 ```
 
 ##### PGC_IntentMap schema — FINAL
@@ -2015,7 +2027,7 @@ Execute step (see 6.5.1 — step types)
                   ├── result.nextAction = 'suspend' (human_gate)
                   │     push human_gate frame
                   │     set status = awaiting_human_gate
-                  │     enqueue WORKFLOW_GATE to callback
+                  │     enqueue HUMAN_GATE to callback
                   │     STOP — next SQS message comes from user interaction
                   │
                   ├── result.nextAction = 'iterator'
@@ -2101,7 +2113,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ notify       ║ Resolve message_template from local_state, enqueue   ║ ✅ Implemented   ║
-║              ║ WORKFLOW_NOTIFY to callback                          ║                  ║
+║              ║ HUMAN_NOTIFICATION to callback                          ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ iterator     ║ Loop over an array in local_state, execute item_step ║ ✅ Implemented   ║
 ║              ║ for each item sequentially                           ║                  ║
@@ -2355,7 +2367,7 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 {
   "step": "11", "type": "notify",
   "message_template": "Domain {{proposed_scaffold.domain}} created. Try: {{generated.domainHelp.commands.0.syntax}}",
-  "notify_type": "WORKFLOW_NOTIFY",
+  "notify_type": "HUMAN_NOTIFICATION",
   "on_success": "next"
 }
 ```
@@ -2719,8 +2731,8 @@ Step Processor executes human_gate step
   │
   ├── Pushes human_gate frame onto stack
   ├── Sets PGC_WorkflowRun.status = 'awaiting_human_gate'
-  ├── Builds WORKFLOW_GATE dialog from gate_type + context_key data
-  ├── Enqueues WORKFLOW_GATE to SQS SlackResults
+  ├── Builds HUMAN_GATE dialog from gate_type + context_key data
+  ├── Enqueues HUMAN_GATE to SQS SlackResults
   └── Lambda returns — stack suspended, no timeout, zero cost while waiting
 
 SlackResults → CallbackListener → Slack API → dialog rendered in thread
@@ -2839,15 +2851,15 @@ User cancellation is always routed via the option with `action: "cancel"`.
 
 ---
 
-#### UI Dialog Contract — WORKFLOW_GATE message
+#### UI Dialog Contract — HUMAN_GATE message
 
-The Step Processor produces a UI-agnostic `WORKFLOW_GATE` message. `callback.mjs`
+The Step Processor produces a UI-agnostic `HUMAN_GATE` message. `callback.mjs`
 translates it to Slack Block Kit. Adding a new UI is one new renderer in
 `callback.mjs` — the Step Processor and all workflows are unchanged.
 
 ```json
 {
-  "type":          "WORKFLOW_GATE",
+  "type":          "HUMAN_GATE",
   "workflowRunId": 23,
   "gate_type":     "edit_list",
   "dialog": {
@@ -4593,7 +4605,7 @@ decisions. The execution stack suspends between gates — the user is part of th
 execution path.
 
 `troubleshoot-workflow` has no human gates — it is pure diagnosis: load steps, run
-Level 1, format report, post to Slack. One SQS message in, one `WORKFLOW_NOTIFY` out.
+Level 1, format report, post to Slack. One SQS message in, one `HUMAN_NOTIFICATION` out.
 
 `fix-workflow` has exactly one human gate — the confirmation step before committing
 the corrected steps. This gate is structurally simpler than the `create_*` gates:
@@ -4629,7 +4641,7 @@ Behaviour:
   2. Run Level 1 static analysis (executeSimulate Level 1 in step-executor.mjs)
   3. Format TroubleshootWorkflowResponse with summary string
   4. If autoFix=true and issues found: enqueue TROUBLESHOOT_WORKFLOW → FIX_WORKFLOW
-  5. enqueueCallback WORKFLOW_NOTIFY with summary
+  5. enqueueCallback HUMAN_NOTIFICATION with summary
 
 HTTP: return TroubleshootWorkflowResponse directly
 SQS: post to Slack thread via callback
@@ -4669,8 +4681,8 @@ Behaviour:
        b. If context_updates present: updateRows PGC_SystemContext for each key
        c. If prompt_text_change present: log to PGC_Prompt.error_log (do NOT apply)
        d. Cancel all active/failed WorkflowRun rows for this workflowName
-       e. For each cancelled run: enqueueCallback WORKFLOW_NOTIFY "Workflow repaired — try again"
-       f. enqueueCallback WORKFLOW_NOTIFY with FixWorkflowResponse summary
+       e. For each cancelled run: enqueueCallback HUMAN_NOTIFICATION "Workflow repaired — try again"
+       f. enqueueCallback HUMAN_NOTIFICATION with FixWorkflowResponse summary
 
 HTTP: return FixWorkflowResponse directly (skips human gate — for developer testing)
 SQS: post confirmation gate via callback, await resume_gate
@@ -4787,7 +4799,7 @@ correction attempts.
 | Semantic validation rules for create_domain scaffold | ~~High~~ | ✅ Implemented in `src/proc/review-output.mjs` — all three rules enforced in `runSemanticRules()` |
 | `resume_gate` routes to HELP workflow only | ~~High~~ | ✅ Resolved — Step Processor dispatches generically via `run-workflow.mjs dispatchSqs()`. No per-workflow routing in handler |
 | `create-domain.mjs` ignores scaffold from design-domain and calls LLM again | ~~High~~ | ✅ Resolved — Step Processor drives `create_domain` declaratively from `PGC_Workflow.steps` |
-| Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `WORKFLOW_GATE` → `callback.mjs` `chat.update` |
+| Gate re-renders post new Slack messages instead of `chat.update` in-place | ~~Medium~~ | ✅ Resolved — `message_ts` threaded through SQS → `run-workflow.mjs` → `HUMAN_GATE` → `callback.mjs` `chat.update` |
 | Duplicate domain detection — LLM runs every time | High | `/create-domain recipes` re-runs the LLM even if the domain already exists. Correct fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` — now unblocked, fix in Phase 2 item 4a |
 | `create_domain` prompt produces varying schemas across runs | Medium | LLM variance at `temperature: 0.2`. Correct fix: right-brain prompt evolution via `PGC_WorkflowStats` + `PGC_Prompt.error_log`. Do not invest in defensive patching before the feedback loop exists |
 | ~~`js_transform` built-in `columnSummary` only~~ | ~~Medium~~ | ✅ Resolved — generic sandbox implemented in Session 19. `expression` field added to `js_transform` step type. acorn AST gate rejects async, network, eval, and Node globals before `vm.runInNewContext` executes. Built-ins retained as named transforms; `buildEntitySchema` removed and replaced by `serv_entity_schema` step type. See Section 6.5.1 |
@@ -4944,7 +4956,7 @@ Any high/critical CVE blocks the addition unless a patch is available and pinned
 | `v3.2-design-domain-gate-complete` | proc/design-domain Block Kit review gate + in-place remove. human_gate suspend/resume wired |
 | `v3.2-step-processor-complete` | Step Processor fully operational: run-workflow.mjs, step-executor.mjs, template-resolver.mjs. First successful create_domain end-to-end (WorkflowRun 12 — PGD_Recipes, PGD_Ingredients, PGD_RecipeTags). help workflow through Step Processor |
 | `v3.2-tangential-features` | /create-domain + /help fully wired to Step Processor. proc/create-domain.mjs as Step Processor entry point. dev_scripts/upsert-workflow.mjs. seed_PGC_Workflow.json: create_domain v2 (8 steps) + help (3 steps) + create_workflow stub |
-| `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational end-to-end. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs. Three-tier pipeline verified: Pass 1a (exact), Pass 1b+1c (alias+CRUD with PGC_Schema fallback), Tier 2 (sonar via LLM_CHAT_URL, prompt from PGC_Prompt). Tier 3 routes to CREATE_DOMAIN / CREATE_WORKFLOW / WORKFLOW_NOTIFY. /mind and /m verified in Slack. openapi.yaml v3.3.5. seed_PGC_Prompt.json: classify_intent_tier2 row added. callback.mjs: runId suppressed when absent. Architecture session 7: WorkflowQueue two-category framing, PGC_Session + PGC_SessionEntry design, intent tuning surface, session architecture Section 6.13 |
+| `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational end-to-end. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs. Three-tier pipeline verified: Pass 1a (exact), Pass 1b+1c (alias+CRUD with PGC_Schema fallback), Tier 2 (sonar via LLM_CHAT_URL, prompt from PGC_Prompt). Tier 3 routes to CREATE_DOMAIN / CREATE_WORKFLOW / HUMAN_NOTIFICATION. /mind and /m verified in Slack. openapi.yaml v3.3.5. seed_PGC_Prompt.json: classify_intent_tier2 row added. callback.mjs: runId suppressed when absent. Architecture session 7: WorkflowQueue two-category framing, PGC_Session + PGC_SessionEntry design, intent tuning surface, session architecture Section 6.13 |
 | `v3.2-crud-adhoc-complete` | Ad_hoc CRUD execution from /mind fully operational. serv_query/update/delete step types live in step-executor.mjs. deleteRows wrapper in serv-client.mjs. executeCrudStep() in classify-intent.mjs executes ad_hoc steps directly for all four verbs. Structured input enforcement: id=N for delete/update, field=value for insert/update. Ambiguity errors with table field listing. Domain name as implicit alias in matchDomainAlias. matchCrudVerb returns ambiguous with reason for insert/update/delete. /mind ACK echoes truncated user input. init-brain concurrent cold-start race fixed (DO NOTHING). Code review fixes: cancelled status check, dynamic imports eliminated, callLlm user-turn resolved generically. Architecture session 9 |
 | `v3.2-create-domain-with-crud` | First complete `create_domain` end-to-end: LLM schema design, 5 human gates, 4 PGD tables created, CRUD workflows + IntentMap registered, domain immediately usable from /mind. Guard 1 stuck-step detection proven. CHECK constraint expression guard in `buildCreateTableSQL`. `status=failed` check in `executeTop` stops SQS retry storm. `response_format` removed from Perplexity Agent API calls. Architecture sessions 9–10 |
 | `v3.2-create-workflow-complete` | `create_workflow` workflow fully implemented. `on_failure: "human_feedback"` live in `run-workflow.mjs` (`pushRecoveryGate()` in both catch blocks). `simulate` step type live in `step-executor.mjs` (Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis). Pass 2b routing value rules in `review-output.mjs`. `seed_PGC_StepType.mjs` + `seed_PGC_SystemContext.mjs` new dev scripts. Four new prompts in `seed_PGC_Prompt.json`. `create_workflow` v2 (12 steps) in `seed_PGC_Workflow.json`. `seedPGCPrompt` extended to write `output_schema` + `input_variables`. Architecture session 11 |
@@ -4992,7 +5004,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — `src/proc/classify-intent.mjs` + `classify-intent-tiers.mjs` — three-tier pipeline | ✅ |
 | | — Tier 1: Pass 1a (PGC_IntentMap regex), Pass 1b (PGC_DomainHelp alias + domain name), Pass 1c (CRUD verb) | ✅ |
 | | — Tier 2: perplexity/sonar via LLM_CHAT_URL, domain hint injection, prompt loaded from PGC_Prompt | ✅ |
-| | — Tier 3: enqueue CREATE_DOMAIN / CREATE_WORKFLOW, WORKFLOW_NOTIFY for unknowns | ✅ |
+| | — Tier 3: enqueue CREATE_DOMAIN / CREATE_WORKFLOW, HUMAN_NOTIFICATION for unknowns | ✅ |
 | | — openapi.yaml v3.3.5: /ui/slack/mind and /proc/classify-intent | ✅ |
 | | — Pass 1c PGC_Schema fallback when PGC_EntitySchema not populated | ✅ |
 | | — /m alias wired to /mind in Slack app | ✅ |
@@ -5074,7 +5086,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `human_gate` | ✅ live | `confirm` + `edit_list` proven end-to-end |
 | `serv_schema` | ✅ live | `createTable` via SERV |
 | `serv_insert` | ✅ live | `insertRow` via SERV |
-| `notify` | ✅ live | Resolves `message_template`, enqueues `WORKFLOW_NOTIFY` |
+| `notify` | ✅ live | Resolves `message_template`, enqueues `HUMAN_NOTIFICATION` |
 | `end` | ✅ live | Marks run completed |
 | `iterator` | ✅ live | Sequential only — one SQS hop per item |
 | `serv_query` | ✅ live | Resolves template vars in filters/orderBy/limit, writes rows array to output_key |

@@ -695,7 +695,7 @@
         "type": "string",
         "field": "notify_type",
         "required": false,
-        "description": "SQS message type — defaults to WORKFLOW_NOTIFY"
+        "description": "SQS message type — defaults to HUMAN_NOTIFICATION"
       },
       {
         "type": "string",

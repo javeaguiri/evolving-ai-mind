@@ -35,7 +35,7 @@ export async function handle(req) {
   if (!workflowName && !suppliedSteps) {
     const msg = 'troubleshoot-workflow: workflowName or steps is required';
     if (req.source === 'http') return err(400, msg, req.correlationId);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
 
@@ -55,7 +55,7 @@ export async function handle(req) {
       const msg = `troubleshoot-workflow: workflow "${workflowName}" not found in PGC_Workflow`;
       console.error('proc/troubleshoot-workflow:', msg);
       if (req.source === 'http') return err(404, msg, req.correlationId);
-      if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+      if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
       return;
     }
     steps           = wfResp.rows[0].steps ?? [];
@@ -65,7 +65,7 @@ export async function handle(req) {
   if (!Array.isArray(steps) || steps.length === 0) {
     const msg = 'troubleshoot-workflow: step array is empty';
     if (req.source === 'http') return err(400, msg, req.correlationId);
-    if (callback) await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: msg });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
   }
 
@@ -113,7 +113,7 @@ export async function handle(req) {
 
   // ── SQS path — post summary to Slack ─────────────────────────────────────
   if (callback) {
-    await enqueueCallback(callback, { type: 'WORKFLOW_NOTIFY', traceId, message: summary });
+    await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: summary });
   }
 
   // ── autoFix — chain to FIX_WORKFLOW if issues found ───────────────────────

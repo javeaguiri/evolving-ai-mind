@@ -25,7 +25,7 @@ export async function handle(req) {
     if (req.source === 'sqs' && callback) {
       const { enqueueCallback } = await import('../shared/sqs-callback.mjs');
       await enqueueCallback(callback, {
-        type:    'WORKFLOW_NOTIFY',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
         message: 'Usage: /create-domain <description>',
       });

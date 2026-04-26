@@ -459,7 +459,7 @@ export function resolveTier3Route(intentCategory) {
     return { sqsType: 'CREATE_WORKFLOW', notifyText: null };
   }
   return {
-    sqsType:    'WORKFLOW_NOTIFY',
+    sqsType:    'HUMAN_NOTIFICATION',
     notifyText: 'I understood this but have no workflow for it yet. Use /create-workflow to build one.',
   };
 }
