@@ -110,13 +110,6 @@ Resources:
                   - logs:StartLiveTail
                   - logs:GetLogRecord
                 Resource: "*"
-              # Lambda — list and describe (no invoke, no deploy)
-              - Effect: Allow
-                Action:
-                  - lambda:ListFunctions
-                  - lambda:GetFunction
-                  - lambda:GetFunctionConfiguration
-                Resource: "*"
               # SSM — read parameters (dev scripts read API keys at runtime)
               - Effect: Allow
                 Action:
@@ -124,12 +117,98 @@ Resources:
                   - ssm:GetParameters
                   - ssm:DescribeParameters
                 Resource: "arn:aws:ssm:us-east-2:*:parameter/evolving-mind-ai/*"
-              # CloudFormation + SAM deploy — describe only (deploy from Windows)
+              # CloudFormation — full CRUD required for sam deploy
               - Effect: Allow
                 Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ListChangeSets
                   - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStackResources
                   - cloudformation:ListStacks
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              # S3 — sam build artifact upload / download
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutBucketVersioning
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                Resource: "*"
+              # Lambda — full management for sam deploy (create, update, event source mappings)
+              - Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:ListFunctions
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                  - lambda:PublishVersion
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:CreateEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:ListEventSourceMappings
+                Resource: "*"
+              # API Gateway — SAM creates/updates REST APIs on deploy
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:DELETE
+                  - apigateway:PATCH
+                Resource: "arn:aws:apigateway:*::/*"
+              # SQS — CloudFormation manages queue resources in the template
+              - Effect: Allow
+                Action:
+                  - sqs:CreateQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:SetQueueAttributes
+                  - sqs:DeleteQueue
+                  - sqs:TagQueue
+                  - sqs:ListQueues
+                  - sqs:GetQueueUrl
+                Resource: "*"
+              # IAM — PassRole to Lambda + manage roles/instance profiles defined in template
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - iam:GetRole
+                  - iam:DeleteRole
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
                 Resource: "*"
 
   BastionInstanceProfile:
