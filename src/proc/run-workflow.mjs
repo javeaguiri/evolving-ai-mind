@@ -512,7 +512,8 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // ── confirm (or any option that advances) ─────────────────────────────
   // choice gate uses option.value (HTML radio semantics); all others use option.action.
   const isChoice      = gateType === 'choice';
-  const matchedOption = (stepRef.options ?? []).find(o =>
+  const allOptions    = [...(stepRef.options ?? []), ...(stepRef.special_buttons ?? [])];
+  const matchedOption = allOptions.find(o =>
     isChoice ? o.value === userResponse : o.action === userResponse
   );
   const onSelect      = matchedOption?.on_select ?? 'next';

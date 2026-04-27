@@ -594,7 +594,6 @@ export function buildDialog(step, localState) {
         ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
         : (step.options ?? []);
       const choiceItems = rawChoiceOptions
-        .filter(o => o.value !== 'cancel')
         .map(o => ({ value: o.value, label: o.label, description: o.description ?? '' }));
       if (choiceItems.length > 0) {
         fields.push({ type: 'description_list', items: choiceItems });
@@ -617,14 +616,16 @@ export function buildDialog(step, localState) {
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
   const isChoice = step.gate_type === 'choice';
+  const resolvedSpecialButtons = step.special_buttons ?? [];
   fields.push({
     type:    'actions',
-    // o.modal is forwarded when present so callback.mjs can encode it into the
-    // button value, enabling interactive.mjs to open a modal generically.
-    buttons: resolvedOptions.map(o => ({
+    // o.modal forwarded so callback.mjs encodes it into button value for interactive.mjs.
+    // special_buttons appended after options — appear in actions block only,
+    // never in description_list or other content fields.
+    buttons: [...resolvedOptions, ...resolvedSpecialButtons].map(o => ({
       action: isChoice ? o.value : o.action,
       label:  o.label,
-      style:  (o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default',
+      style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
       ...(o.modal ? { modal: o.modal } : {}),
     })),
   });
@@ -1193,8 +1194,8 @@ function runLevel1StaticAnalysis(steps) {
       if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: `step:${s.on_truthy}` });
       if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: `step:${s.on_falsy}`  });
     }
-    for (const opt of s.options ?? []) {
-      if (opt.on_select) routingValues.push({ field: `options[${opt.action}].on_select`, value: opt.on_select });
+    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
     for (const { field, value } of routingValues) {
@@ -1235,7 +1236,8 @@ function runLevel1StaticAnalysis(steps) {
 
     // Check gate has at least one cancel option
     if (s.type === 'human_gate') {
-      const hasCancel = (s.options ?? []).some(o => o.action === 'cancel');
+      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+      const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
       if (!hasCancel) {
         issues.push({
           check:         'missing_cancel_option',

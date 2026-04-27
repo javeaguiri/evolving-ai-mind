@@ -1,214 +1,212 @@
-# evolving-mind-ai -- Session 29 Handoff
+# evolving-mind-ai — Session 29 Handoff
 
-**Git tag:** `v3.2-session28-complete`
-**Date:** 2026-04-24
-**Session 28 focus:** Dev tooling overhaul (idempotent upserts, DB→seed sync, data extraction); research prompt quality analysis and architectural fixes for create_workflow; seed file reconciliation
+**Git tag:** `v3.2-session29-complete` (pending commit)
+**Date:** 2026-04-27
+**Session 29 focus:** callback.mjs code review and consolidation; HUMAN_GATE / HUMAN_NOTIFICATION message type taxonomy; special_buttons field on human_gate steps; interactive.mjs placeholder fix; unit and integration tests; architecture document split
 
 ---
 
-## What was completed in session 28
+## What was completed in session 29
 
-### Dev tooling -- database and git sync
+### 1. callback.mjs — HUMAN_GATE / HUMAN_NOTIFICATION consolidation
 
-Four dev scripts rewritten or created. These resolve the seed-DB drift problem that caused the session 27 upsert incident and establish a clean bidirectional sync protocol.
+**Root problem:** 12 distinct SQS message types handled by 12 independent post* functions with no shared text rendering utility. Six notification handlers unprotected against Slack's 3000-char block limit. Dead code: `HELP_GATE`, `HELP_RESULT`, `CREATE_DOMAIN_RESULT` handlers for types no PROC module emits.
 
-| Script | Status | Change |
+**Outcome:** 12 handlers → 5 canonical types. Two shared renderer utilities.
+
+| Old types removed | Canonical replacement |
+|---|---|
+| `WORKFLOW_GATE` | `HUMAN_GATE` |
+| `WORKFLOW_NOTIFY`, `WORKFLOW_CANCELLED`, `SERV_NOTIFICATION` | `HUMAN_NOTIFICATION` |
+| `WORKFLOW_ERROR` | retained — named type required for EXP-layer error summarisation |
+| `HELP_GATE`, `HELP_RESULT`, `CREATE_DOMAIN_RESULT`, `DESIGN_DOMAIN_GATE`, `DESIGN_DOMAIN_ERROR` | dead code removed |
+| `PING_SQS_RESULT`, `PING_E2E_RESULT` | retained — unique hop-timing context blocks |
+
+**`textToBlocks(text, contextText)`** — new shared utility. Splits text on newlines into ≤2800-char section blocks. Every notification handler calls it — the 3000-char Slack limit is now enforced uniformly; missing it on a new handler is structurally impossible.
+
+**`dialogToBlocks(dialog, workflowRunId)`** — existing renderer, now the single path for all `HUMAN_GATE` messages. Both Step Processor and `design-domain.mjs` produce a UI-neutral dialog spec; `callback.mjs` renders identically for all gate types.
+
+**Producers updated — atomic cut-over (all old types removed):**
+- `run-workflow.mjs` — 3 patches: notify default, cancel, remove_item re-render
+- `step-executor.mjs` — SE-1, SE-2: WORKFLOW_GATE → HUMAN_GATE; static analysis checks `special_buttons`
+- `classify-intent-tiers.mjs` — `sqsType: 'WORKFLOW_NOTIFY'` → `'HUMAN_NOTIFICATION'`
+- `create-workflow.mjs`, `diagnose-prompt-schema.mjs`, `fix-workflow.mjs`, `troubleshoot-workflow.mjs` — all WORKFLOW_NOTIFY occurrences
+- `seed_PGC_StepType.json`, `seed_PGC_SystemContext.json` — notify step description updated (prevents LLM generating old type)
+- `interactive.mjs` — comment references updated
+
+**Seeded:** `node dev_scripts/upsert-step-type.mjs` ✅, `node dev_scripts/upsert-system-context.mjs` ✅
+
+### 2. special_buttons field on human_gate steps
+
+**Problem:** `choice` gates required options to serve dual roles — appear in both the `description_list` content field AND as action buttons. Any option that should only appear as a button (Cancel, Other+modal) had no clean home. Workaround was the `cancel` filter hack and option duplication (caused the two-E buttons bug).
+
+**Design:** `special_buttons` is a first-class optional array on any `human_gate` step:
+- Never appears in `description_list` — only in actions block
+- Supports `modal`, `on_select`, `style` exactly like `options` buttons
+- `resume_gate` in `run-workflow.mjs` searches both `options` and `special_buttons` for `on_select` routing
+- Static analysis in `step-executor.mjs` validates routing tokens and cancel presence across both arrays
+
+**create_workflow step 1a migrated:**
+```json
+"options": [ A, B, C, D ],
+"special_buttons": [
+  { "value": "other", "label": "Other", "on_select": "next", "modal": { ... } },
+  { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+]
+```
+
+**Files changed:** `step-executor.mjs` (4 patches), `run-workflow.mjs` (1 patch), `seed_PGC_Workflow.json` (step 1a)
+
+**Seeded:** `node dev_scripts/upsert-workflow.mjs create_workflow` ✅
+
+### 3. interactive.mjs — placeholder fix
+
+**Bug:** `placeholder: { type: 'plain_text', text: modal.placeholder ?? '' }` — Slack's Block Kit rejects `text: ''` on `plain_text` objects by silently dropping the parent `input` block. Modal shell rendered with no text field visible.
+
+**Fix:** `...(modal.placeholder ? { placeholder: { type: 'plain_text', text: modal.placeholder } } : {})` — omit key entirely when absent.
+
+**Files changed:** `interactive.mjs` (1 line, line 130)
+
+### 4. Unit tests — callback.test.mjs
+
+**48 tests, 48 passing.** Two test suites covering the two pure functions in `callback.mjs`:
+- `textToBlocks` — 11 tests: short text, context block, LIMIT boundary, chunking split, hard-truncation of lines exceeding LIMIT, context always last, all blocks have correct type/mrkdwn
+- `dialogToBlocks` — 37 tests: null/empty dialog, all 6 field types (typography, description_list, list, textbox, review_object, radio, actions), edge cases including:
+  - `[object Object]` regression guard (array of objects without `syntax`/`verb`/`command` falls back to `JSON.stringify`)
+  - `review_object` long value truncation
+  - Parent table no-accessory vs child table with Remove button
+  - `secondaryAction.confirm` optional
+  - Button `action_id` uniqueness across multiple buttons
+  - Modal descriptor encoded in button value
+  - Empty arrays produce no block
+  - Mixed-field integration test mirroring the create_domain edit_list HUMAN_GATE
+
+**File:** `tests/unit/callback.test.mjs`
+
+### 5. Integration tests — callback-slack.test.mjs
+
+**5 live Slack tests + 1 documented manual test.** Posts real messages to `TEST_SLACK_CHANNEL` and verifies Slack API accepts blocks without `invalid_blocks`.
+
+Requires env vars: `SLACK_BOT_TOKEN`, `TEST_SLACK_CHANNEL`. Skips gracefully when absent (CI-safe).
+
+Covers:
+- `HUMAN_NOTIFICATION`: short text, long text (>2800 chars, multi-block), unicode, cancel, error summary
+- `HUMAN_GATE choice`: description_list + buttons, "other" button value includes modal descriptor, modal.multiline verified
+- `HUMAN_GATE edit_list`: parent table (no Remove) + child table (Remove + confirm dialog)
+- `HUMAN_GATE review_object`: domain help data including object-array commands (bullet rendering verified, not `[object Object]`)
+- `text_input` gate: documented manual test procedure (modal flow cannot be automated)
+
+**File:** `tests/integration/callback-slack.test.mjs`
+
+### 6. Architecture document split
+
+**Problem:** `architecture.md` at ~136KB / 5,676 lines exceeds the 30K-token fetch limit. All session reads hit the first ~1,200 lines reliably; Sections 6.9 onward required multiple targeted view_range calls.
+
+**Split into four fetchable files:**
+
+| File | Content | Approx lines |
 |---|---|---|
-| `dev_scripts/upsert-prompt.mjs` | Rewritten | Content fingerprint (SHA-256 over prompt_text, model, output_schema, input_variables). No-op on re-run when content matches DB. Skips update when DB version ahead of seed. Deduplicates multi-version seed entries -- only highest version deployed. Never overwrites a newer DB row with older seed content |
-| `dev_scripts/upsert-workflow.mjs` | Rewritten | Same fingerprint approach. Version only increments when content diff detected. Eliminates spurious version bumps on re-run |
-| `dev_scripts/pull-prompt.mjs` | New | Pulls highest-version DB row per intent_category and writes directly to seed_PGC_Prompt.json in place. Removes old-version cluster entries. Encoding: JSON.stringify produces \uXXXX for non-ASCII (git-stable). Replaces stdout-only version |
-| `dev_scripts/extract-run-data.mjs` | New | CLI tool: extract all values matching a relative dot-path from any JSON file. Fans out through intermediate arrays ([] notation accepted). Multiple matches returned as array, single match unwrapped. --raw flag for piping |
+| `architecture-core.md` | Sections 1–5: stack, tiers, SQS queues, DB architecture, SERV layer, directory, dev scripts | ~650 |
+| `architecture-step-processor.md` | Sections 6.1–6.7: Intent Preprocessor, Step Processor, step types, stack, local_state, human gates, simulation, right-brain validation, safety | ~1,800 |
+| `architecture-workflows.md` | Sections 6.8–6.12: create_domain, create_workflow, L/R brain collaboration, gap taxonomy, self-repair loop | ~1,600 |
+| `architecture-reference.md` | Sections 7–16: pgvector, security, tech debt register, backlog, refactoring history, cost of ownership | ~1,400 |
 
-**Upsert incident recovery:** The first run of upsert-prompt.mjs (old version) iterated multiple seed entries per intent_category and wrote each to the DB in sequence -- the last write won. DB rows for generate_workflow_steps, analyze_workflow_gaps, design_workflow_process, design_workflow_dialogs were potentially corrupted. Recovered by pulling current DB content back into seed files via pull-prompt.mjs.
+**Status:** `architecture-core.md` produced this session. The other three files are to be produced in Session 30 from the content already read into context.
 
-### Encoding standard -- FINAL
+**Action required:** After all four files are committed, delete `architecture.md` and update `github-file-index.md` to reference the four new files.
 
-**Decision:** JSON seed files use `\uXXXX` escape form for all non-ASCII characters. Rationale: immune to JSON.stringify round-trips (the native output form), git-stable (pure ASCII), no Slack display difference (decoded identically at render time). Markdown/YAML docs remain UTF-8 rendered.
+---
 
-Two new repo-root files enforce this:
-- `.gitattributes` -- LF line endings for all text files; binary files explicitly marked
-- `.editorconfig` -- utf-8, LF, 2-space indent, final newline
+## What was NOT completed (carried to session 30)
 
-### GitHub access protocol -- ESTABLISHED
-
-| URL form | Works | Notes |
+| Item | Reason | Session 30 priority |
 |---|---|---|
-| `raw.githubusercontent.com/refs/heads/main/<path>` | **Yes** | Pure JSON/text, ~30K tokens per fetch. Use this form for all file reads |
-| `github.com/.../blob/main/...` | Yes (limited) | HTML-wrapped, truncates at ~1000 lines |
-| `github.com/commits/main/` | No | Blocked by robots.txt |
-| Individual commit URLs | Yes (when pasted) | Valid after rate limit window; paste directly in chat |
-
-**Protocol:** Raw URLs in `docs/github-file-index.md` are fetchable directly at session start -- no paste required. Files not in the index require the URL to be pasted once.
-
-### Seed file reconciliation
-
-| Prompt | Before | After | Change |
-|---|---|---|---|
-| `analyze_workflow_gaps` | v2 (stale) | v4 | DOMAIN MODE A/B/C, Type 4b interactive exemption, flat inputs array rule, model validation |
-| `design_workflow_process` | v2 | v3 | Flat loop pattern, state_map documentation |
-| `design_workflow_dialogs` | v1 | v2 | choice vs confirm/edit_list options shape distinction |
-| `generate_workflow_steps` | v6 (monolith) | v8 | Split three-input contract (process_design + state_map + dialog_designs + user_feedback + simulation_errors) |
-| `research_workflow_domain` | v1 | v2 (new) | workflow_mode input, domain_schema input, WORKFLOW MODE CONSTRAINTS section, SCHEMA CONSTRAINTS section, 4-test preference filter, 5-question ceiling |
-| `analyze_and_design_workflow` | v10 + v11 (duplicate) | v11 only | Deduped; v10 entry removed |
-| `create_workflow` | v18 (seed) | v19 (DB after upsert) | New steps 1a, 1b, 5a; N/A option on preference gates; workflow_mode and domain_schema added to step 2 input |
-
-### Research quality analysis (items 4 & 5 from session 28 agenda)
-
-Analysed question data from run 245 (3 runs) and run 220 (27 runs) using extract-run-data.mjs.
-
-**Four root cause classes identified:**
-- Class A: Schema-ignorant -- "Where should flashcards come from?" (fixed by domain_schema input + SCHEMA CONSTRAINTS section in research prompt v2)
-- Class B: Domain-semantics-ignorant -- "Should the user see the correct answer immediately or after the quiz?" (flashcard flip mechanic unknown to LLM; addressed by N/A option as safety net)
-- Class C: Workflow-purpose-ignorant -- "What format? Beginner vs intermediate?" (eliminated by workflow_mode gate step 1a before research runs)
-- Class D: Filter failure -- residual bad questions slip through (addressed by N/A option on all preference gates)
-
-**Four decisions implemented (D1-D4):**
-- D1: workflow_mode gate (step 1a) -- choice A/B/C/D/E before Phase 1 research; mode injected into research prompt; eliminates Class C entirely
-- D2: domain_schema + domain_row_count in step 2 input -- completes Class A fix
-- D3: N/A option on every preference gate in step 5 iterator
-- D4: Free-text gate (step 5a) after preference iterator -- Skip option; captures domain semantic context LLM doesn't know
-
-**AI chat / PGC_Session evaluation:** Confirmed stateless. callLlm() invocations have no memory between calls. Resumption prompt is single-shot retry, not session memory. Multi-turn design iteration requires PGC_Session + PGC_SessionEntry. Decision: implement free-text gate (D4) as stateless single input box first. Defer PGC_Session until users demonstrate need for back-and-forth.
-
-### docs/github-file-index.md
-
-Updated with raw URLs replacing blob URLs. File now covers all source files including docs added since session 27: perplexity-embeddings.yaml, perplexityLLMS.md, slack-block-kit.md, slack-messaging.md, user-intent-use-cases.md, evolving_mind_use_cases.html.
-
-### Architecture.md
-
-Section 3.4 directory tree: `seed/` corrected to `seeds/`. Header updated to session 28.
+| `architecture-step-processor.md` production | Session limit | HIGH — complete first in session 30 |
+| `architecture-workflows.md` production | Session limit | HIGH |
+| `architecture-reference.md` production | Session limit | HIGH |
+| Phase 4 `DESIGN_DOMAIN_GATE` → `HUMAN_GATE` in `design-domain.mjs` | Deferred by Javear — next session | MEDIUM |
+| End-to-end test of create_workflow "other" modal path after fixes | Not yet tested | HIGH — verify at session start |
+| `github-file-index.md` update for upsert-step-type.mjs (missing entry) | Minor | LOW |
 
 ---
 
-## What was NOT completed (carried to session 29)
+## Session 30 objectives — in priority order
 
-| Item | Reason | Session 29 priority |
-|---|---|---|
-| Phase 5-6 create_workflow validation | Session consumed by tooling/sync work | HIGH -- primary target |
-| handler.mjs monitor-prompt-quality case | Required before self-healing pipeline deploys | HIGH -- prerequisite for sam deploy |
-| callback.mjs code review | Deferred; Slack docs being completed by Javear before session 29 | HIGH -- primary feature target |
-| Unit tests for callback.mjs | Follows code review | MEDIUM |
-| Items 4 & 5 evaluation (design iteration loop, AI chat) | Analysis done; implementation deferred pending more run data post-v18 deployment | MEDIUM |
+### 1. Verify session 29 fixes end-to-end
+
+```
+/m create workflow Spanish flashcard quiz
+→ Step 1a: choice gate shows A B C D as description + buttons, plus Other and Cancel buttons only (no E in description)
+→ Click Other: modal opens with text input field (placeholder visible)
+→ Type description, submit
+→ Step 1b: text_input gate proceeds, workflow continues to step 2
+```
+
+If modal still shows no text field — check CloudWatch for `views.open` error response.
+
+### 2. Produce architecture-step-processor.md, architecture-workflows.md, architecture-reference.md
+
+All content was read into context during Session 29. The three remaining split files can be produced without re-reading architecture.md. See session-29 context for content.
+
+### 3. Phase 4 — design-domain.mjs HUMAN_GATE refactor
+
+`design-domain.mjs` currently emits a UI-neutral dialog spec for `buildGatePayload()` (done in session 29). But `buildFinalConfirmPayload()` and the PROC module itself still have stale comment references to check. Full verification against the architecture boundary rules.
+
+### 4. Add `monitor-prompt-quality` to `proc/handler.mjs`
+
+Required before `MONITOR_PROMPT_QUALITY` SQS messages work end-to-end. The http case was documented in Session 28 handoff.
 
 ---
 
-## Session 29 objectives -- in priority order
+## Session 30 startup checklist
 
-### 1. Deploy session 28 changes and validate create_workflow Phases 5-6
-
-```cmd
-set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod
-
-rem Sync seed changes to DB
-node dev_scripts/upsert-prompt.mjs research_workflow_domain
-node dev_scripts/upsert-workflow.mjs create_workflow
-
-rem Verify all prompts clean (should all print "no changes -- already current")
-node dev_scripts/upsert-prompt.mjs generate_workflow_steps
-node dev_scripts/upsert-prompt.mjs analyze_workflow_gaps
-node dev_scripts/upsert-prompt.mjs design_workflow_process
-node dev_scripts/upsert-prompt.mjs design_workflow_dialogs
-```
-
-Before sam deploy: add handler.mjs case (see Prerequisites below). Then:
-```cmd
-sam build && sam deploy
-```
-
-Run `/m create workflow spanish flashcard quiz` targeting Phase 5 (simulate) and Phase 6 (registration).
-
-### 2. callback.mjs code review
-
-Javear is completing `docs/slack-block-kit.md` before session 29 with these Block Kit elements:
-- `actions` block with multiple `button` elements (choice gate rendering)
-- Modal `views.open` payload (full shape including callback_id, submit, close)
-- `input` block inside a modal (text_input gate mapping)
-- `section` with `overflow_menu` accessory (edit_list remove action)
-- `context` block (secondary text/metadata)
-- `radio_buttons` element
-
-Review scope (from session 28 agenda item 6):
-- Evaluate whether `postX` functions can be consolidated via `dialogToBlocks()` universal renderer
-- Review all string-to-block conversions for 3000-character Slack section block hard limit
-- Identify hardcoded message formats that should be data-driven
-- Confirm `review_object` gate serialisation guard (object values must not fall through to String(value))
-
-### 3. Unit tests for callback.mjs
-
-After code review:
-- Each gate type with representative local_state fixture
-- `review_object` with array-of-step-objects input (the `[object Object]` regression)
-- `choice` gate option rendering (value vs action distinction)
-- 3000-char limit chunking
-
-### 4. Items 4 & 5 -- iterative design evaluation (after Phase 5-6 run data available)
-
-Run several create_workflow sessions post-deployment, extract question data:
-```cmd
-node dev_scripts/extract-run-data.mjs <run-state.json> preference_questions.question
-```
-Compare against pre-D1-D4 data (run 245). If question quality is materially improved, items 4 & 5 are lower priority. If questions are still poor, escalate D2 (domain_row_count) and reassess D4 free-text gate scope.
+1. Fetch `architecture-core.md` via raw GitHub URL (new file — not in old index yet)
+2. Fetch `session-handoff.md`
+3. Confirm git tag `v3.2-session29-complete`
+4. Run end-to-end Slack test (objective 1 above) before any code work
+5. No architecture.md read needed — content known from session 29
 
 ---
 
-## Session 29 prerequisites
+## Files changed in session 29
 
-**handler.mjs addition (required before sam deploy):**
-```js
-import { handle as monitorHandle } from './monitor-prompt-quality.mjs'
-// HTTP switch:
-case 'monitor-prompt-quality': return monitorHandle(req)
-// SQS switch:
-case 'MONITOR_PROMPT_QUALITY': return monitorHandle(buildReqFromSqs(message))
-```
-
-Fetch current handler.mjs:
-```
-https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/src/proc/handler.mjs
-```
-
----
-
-## Session 29 startup checklist
-
-1. Fetch `session-handoff.md` and `architecture.md` via raw GitHub URLs (no upload needed)
-2. Confirm git tag `v3.2-session28-complete`
-3. Javear shares `docs/slack-block-kit.md` status -- confirm it has the 6 element types needed for callback.mjs review
-4. Fetch `src/ui/slackbot/callback.mjs` and `src/proc/handler.mjs` for the session's primary tasks
-5. Run deployment sequence (item 1 above) before any code review
+| File | Change type |
+|---|---|
+| `src/ui/slackbot/callback.mjs` | Full replacement — 12 handlers → 5; textToBlocks + dialogToBlocks shared utils |
+| `src/ui/slackbot/interactive.mjs` | 1 line — placeholder conditional spread |
+| `src/proc/run-workflow.mjs` | 3 str_replace patches — HUMAN_GATE, HUMAN_NOTIFICATION, allOptions |
+| `src/proc/step-executor.mjs` | 4 str_replace patches — special_buttons in actions + static analysis |
+| `src/proc/classify-intent-tiers.mjs` | 1 replacement — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
+| `src/proc/create-workflow.mjs` | 2 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
+| `src/proc/diagnose-prompt-schema.mjs` | 5 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
+| `src/proc/fix-workflow.mjs` | 4 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
+| `src/proc/troubleshoot-workflow.mjs` | 4 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
+| `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` | step 1a: options → special_buttons |
+| `src/serv/templates/pgc/seeds/seed_PGC_StepType.json` | notify description updated |
+| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | step_type_contracts updated |
+| `tests/unit/callback.test.mjs` | New file — 48 unit tests |
+| `tests/integration/callback-slack.test.mjs` | New file — 5 integration tests + manual test docs |
+| `docs/architecture-core.md` | New file — split from architecture.md |
+| `docs/session-handoff.md` | This file |
 
 ---
 
-## Known open issues -- updated
+## Known open issues — updated
 
-### 1. research_workflow_domain -- domain_row_count not yet added (Low)
-D2 partially implemented (domain_schema added). Row count would further suppress "where does data come from?" questions in read-mode workflows with existing data. Deferred to session 29 evaluation.
+### 1. architecture.md split incomplete (High — session 30)
+`architecture-core.md` produced. Three remaining files (`architecture-step-processor.md`, `architecture-workflows.md`, `architecture-reference.md`) to be produced in Session 30. Until then, `architecture.md` remains the authoritative source.
 
-### 2. Phase 5-6 not yet validated (High -- session 29 primary target)
-Steps 17 (generate_workflow_mocks), 18 (generate_workflow_paths), 19 (simulate Level 2+3), 20-23 (registration) have not completed a successful run.
+### 2. design-domain.mjs DESIGN_DOMAIN_GATE → HUMAN_GATE (Medium)
+`design-domain.mjs` emits a UI-neutral `HUMAN_GATE` dialog spec (done in session 29 in the output file). The output file was not checked in yet. Verify and check in as Phase 4 in session 30.
 
-### 3. create_domain auto-embed not verified (Low)
-If a new domain is created and `embedding` is null on the `PGC_DomainHelp` row, run `backfill-embeddings.mjs`.
+### 3. monitor-prompt-quality handler.mjs case missing (Medium)
+HTTP and SQS cases not wired in `proc/handler.mjs`. Blocks the self-healing pipeline.
 
-### 4. Pass 2 keyword scan excludes domain:null workflows (Low)
+### 4. pgvector — PGC_Workflow.intent_embedding (Backlog)
+Domain resolution working. Workflow routing via vector similarity not yet implemented.
+
+### 5. Pass 2 keyword scan excludes domain:null workflows (Low)
 System workflows unreachable via Pass 2. Unnecessary Tier 2 sonar calls for known system commands.
 
-### 5. Architecture doc size (Backlog)
-At ~136KB the architecture doc exceeds the 30K-token raw fetch limit. Verbose sections (6.3 Intent Preprocessor I/O contracts, 6.5.x execution subsystems) are candidates for extraction into separate docs. Target: architecture.md under 50KB covering decisions and rationale only. Verbose reference sections move to dedicated docs fetchable on demand.
-
-### 6. seed_PGC_Prompt.json legacy entries (Low)
-`analyze_and_design_workflow` v10 removed this session. Confirm no other multi-version clusters remain after running `pull-prompt.mjs` for all categories.
-
----
-
-## Backlog (unchanged from prior sessions)
-
-- `PGC_Session` / `PGC_SessionEntry` -- conversational memory (Section 4.3.4)
-- pgvector semantic search -- Pass 2 Backlog extension (Section 6.3)
-- `backfill-embeddings.mjs` -- not yet implemented
-- `embed-client.mjs` -- not yet implemented
-- Pass 2 domain:null workflow keyword scan (system workflow reachability)
-- Alias management workflow (`/mind edit aliases for <domain>`)
-- External API Registry (`/register-api` with SSM SecureString credential storage)
-- GitHub visibility (README, architecture doc surfacing, topic tags)
-- Developer session workflow automation
+### 6. github-file-index.md — upsert-step-type.mjs missing (Low)
+`seed_PGC_StepType.mjs` listed but `upsert-step-type.mjs` is absent from the index.
