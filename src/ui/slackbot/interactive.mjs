@@ -127,7 +127,7 @@ export async function handle(req) {
                   type:        'plain_text_input',
                   action_id:   'text_input_value',
                   multiline:   modal.multiline ?? false,
-                  placeholder: { type: 'plain_text', text: modal.placeholder ?? '' },
+                  ...(modal.placeholder ? { placeholder: { type: 'plain_text', text: modal.placeholder } } : {}),
                 },
               },
             ],

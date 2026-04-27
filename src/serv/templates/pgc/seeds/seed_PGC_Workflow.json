@@ -418,19 +418,22 @@
         "description": "User declares workflow mode before research begins. Eliminates entire classes of irrelevant preference questions.",
         "message_template": "What should this workflow do with your *{{input.domain}}* data?",
         "options": [
-          { "value": "read",    "label": "A", "description": "Read, query, or display existing records",   "on_select": "step:2" },
-          { "value": "write",   "label": "B", "description": "Add or import new records into the domain",  "on_select": "step:2" },
-          { "value": "enrich",  "label": "C", "description": "Transform or update existing records",        "on_select": "step:2" },
-          { "value": "analyze", "label": "D", "description": "Aggregate, report, or summarize data",        "on_select": "step:2" },
-          { "value": "other",   "label": "E", "description": "Something else -- describe below",            "on_select": "next"   },
-          { "value": "other",   "label": "E", "description": "Something else -- describe below",            "on_select": "next",
+          { "value": "read",    "label": "A", "description": "Read, query, or display existing records",  "on_select": "step:2" },
+          { "value": "write",   "label": "B", "description": "Add or import new records into the domain", "on_select": "step:2" },
+          { "value": "enrich",  "label": "C", "description": "Transform or update existing records",      "on_select": "step:2" },
+          { "value": "analyze", "label": "D", "description": "Aggregate, report, or summarize data",      "on_select": "step:2" }
+        ],
+        "special_buttons": [
+          {
+            "value": "other", "label": "Other", "on_select": "next",
             "modal": {
-               "title": "Describe your workflow","input_label": "What should this workflow do?",
-               "placeholder": "Describe the goal, the data it works with, and any steps or decisions involved.",
-               "multiline": true
-               }
-          },       
-          { "value": "cancel",  "label": "Cancel", "description": "", "on_select": "cancel" }
+              "title": "Describe your workflow",
+              "input_label": "What should this workflow do?",
+              "placeholder": "Describe the goal, the data it works with, and any steps or decisions involved.",
+              "multiline": true
+            }
+          },
+          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
         ],
         "output_key": "workflow_mode",
         "on_success": "next",
