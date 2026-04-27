@@ -90,12 +90,16 @@ still truncated, stop and request files from Javear.
 | backfill-embeddings.mjs | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/dev_scripts/backfill-embeddings.mjs |
 | seed_PGC_StepType.mjs | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/dev_scripts/seed_PGC_StepType.mjs |
 | seed_PGC_SystemContext.mjs | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/dev_scripts/seed_PGC_SystemContext.mjs |
+| upsert-step-type.mjs | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/dev_scripts/upsert-step-type.mjs |
 
 ### docs/
 
 | File | Blob URL |
 |---|---|
-| architecture.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/architecture.md | 
+| architecture-core.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/architecture-core.md |
+| architecture-step-processor.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/architecture-step-processor.md |
+| architecture-workflows.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/architecture-workflows.md |
+| architecture-reference.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/architecture-reference.md |
 | session-handoff.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/session-handoff.md |
 | openapi.yaml | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/openapi.yaml |
 | code-review-checklist.md | https://raw.githubusercontent.com/javeaguiri/evolving-ai-mind/refs/heads/main/docs/code-review-checklist.md |

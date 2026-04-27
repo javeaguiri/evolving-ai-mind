@@ -79,7 +79,7 @@ patterns should be raised as tech debt register items.
 
 ### 3c. SQS message types are documented
 - Every new SQS message type (Category 1 or Category 2) is added to the tables
-  in architecture.md Sections 3.2 before the code is merged
+  in architecture-core.md Section 3.2 before the code is merged
 - The distinction between fire-and-forget (no workflowRunId) and workflow execution
   (always has workflowRunId) must be preserved
 
