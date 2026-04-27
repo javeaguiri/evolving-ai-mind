@@ -84,6 +84,60 @@ Resources:
                 Resource:
                   - !GetAtt WorkflowQueue.Arn
                   - !GetAtt SlackResultsQueue.Arn
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: BastionEC2Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BastionDevPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudWatch Logs — aws logs tail / filter / query
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - logs:StartLiveTail
+                  - logs:GetLogRecord
+                Resource: "*"
+              # Lambda — list and describe (no invoke, no deploy)
+              - Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource: "*"
+              # SSM — read parameters (dev scripts read API keys at runtime)
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:DescribeParameters
+                Resource: "arn:aws:ssm:us-east-2:*:parameter/evolving-mind-ai/*"
+              # CloudFormation + SAM deploy — describe only (deploy from Windows)
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:ListStacks
+                Resource: "*"
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: BastionEC2Profile
+      Roles:
+        - !Ref BastionRole
 
   # --- SQS QUEUES ---
   SlackResultsQueue:
@@ -280,15 +334,43 @@ Resources:
   BastionHost:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t3.nano # Smallest/Cheapest possible
-      ImageId: ami-0ccabb5f82d4c9af5 # Standard Amazon Linux 2023 in us-east-2
+      InstanceType: t3.micro
+      ImageId: ami-0ccabb5f82d4c9af5       # Amazon Linux 2023, us-east-2
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref BastionSecurityGroup
-      KeyName: !Ref YourKeyNameParameter # You need to create a Key Pair in EC2 Console
+      KeyName: !Ref YourKeyNameParameter
+      IamInstanceProfile: !Ref BastionInstanceProfile
       Tags:
         - Key: Name
-          Value: SYSBSTHost # This will fill in the "Name" column in the EC2 Console
+          Value: SYSBSTHost
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # One-time dev environment bootstrap — runs on first launch only
+          set -e
+          dnf update -y
+          dnf install -y git tmux unzip
+
+          # Node.js 22
+          curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+          dnf install -y nodejs
+
+          # AWS SAM CLI (x86_64)
+          curl -Lo /tmp/sam.zip https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
+          unzip -q /tmp/sam.zip -d /tmp/sam-install
+          /tmp/sam-install/install
+          rm -rf /tmp/sam.zip /tmp/sam-install
+
+          # Global npm packages useful for dev
+          npm install -g npm@latest
+
+          # Clone repo (adjust remote URL if using SSH key)
+          git clone https://github.com/javeaguiri/evolving-ai-mind.git /home/ec2-user/evolving-ai-mind
+          cd /home/ec2-user/evolving-ai-mind && npm install
+          chown -R ec2-user:ec2-user /home/ec2-user/evolving-ai-mind
+
+          echo "Bastion bootstrap complete" >> /var/log/bastion-bootstrap.log
 
   # ===========================================================================
   # LAMBDA 1 — UI / Slackbot

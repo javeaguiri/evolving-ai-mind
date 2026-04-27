@@ -1831,5 +1831,113 @@
         "type": "end"
       }
     ]
+  },
+  {
+    "name": "ping_core",
+    "domain": null,
+    "description": "Slack UI integration test workflow. Exercises all human_gate types (choice, text_input, review_object), js_transform, condition, and notify steps interactively. Self-directing — each step tells the user exactly what to click or type. Launched by /ping core.",
+    "state_strategy": "sequential",
+    "intent_keywords": [],
+    "steps":   [
+  	  {
+	    "key": "1",
+	    "type": "human_gate",
+	    "gate_type": "choice",
+	    "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do.\n\nTests: (1) Choice gate  (2) Text input  (3) Multiline input  (4) Review object  (5) Condition step  (6) Notify\n\nClick Start to begin.",
+	    "options": [  
+	  	{  
+		    "value": "start",
+		    "label": "Start",
+		    "description": "Begin the full integration test sequence.",
+		    "on_select": "next"
+	  	}
+	    ],
+	    "special_buttons": [  
+		{ "value": "cancel",   "label": "Cancel", "on_select": "cancel" }
+	    ]
+	  },
+  	  {
+	    "key": "2",
+	    "type": "human_gate",
+	    "gate_type": "choice",
+	    "message_template": "Test 1 of 5 — Choice Gate\n\nCHOICE GATE TEST: Click any of the three lettered buttons below. All options route to the next test.",
+	    "output_key": "ping_choice",
+	    "options": [  
+	  	{  
+		    "value": "a",
+		    "label": "A",
+		    "description": "Option A — click this, or B, or C. All proceed identically.",
+		    "on_select": "next"
+		  },
+	  	{  
+		    "value": "b",
+		    "label": "B",
+		    "description": "Option B — all options route to the next test.",
+		    "on_select": "next"
+		  },
+	  	{  
+		    "value": "c",
+		    "label": "C",
+		    "description": "Option C — all options route to the next test.",
+		    "on_select": "next"
+	  	}
+	    ]
+	  },
+  	  {
+	    "key": "3",
+	    "type": "human_gate",
+	    "gate_type": "text_input",
+	    "message_template": "Test 2 of 5 — Text Input (single line)\n\nTEXT INPUT TEST: A text field will open. Copy and paste the text below, then click Submit.\n\nCopy this: Hello World",
+	    "output_key": "ping_text"
+	  },
+  	  {
+	    "key": "4",
+	    "type": "human_gate",
+	    "gate_type": "text_input",
+	    "message_template": "Test 3 of 5 — Multiline Input\n\nMULTILINE TEST: A multi-line text area will open. Copy and paste the three lines below, then click Submit.\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+	    "output_key": "ping_multiline",
+	    "multiline": true
+	  },
+  	  {
+	    "key": "5",
+	    "type": "js_transform",
+	    "description": "Build review summary from collected test inputs",
+	    "input_key": "ping_text",
+	    "expression": "(function(){ return { choice_selected: local_state.ping_choice || '(none)', text_entered: items || '(none)', multiline_entered: local_state.ping_multiline || '(none)', status: 'Tests 1-3 complete' }; })()",
+	    "output_key": "ping_summary"
+	  },
+  	  {
+	    "key": "6",
+	    "type": "human_gate",
+	    "gate_type": "review_object",
+	    "message_template": "Test 4 of 5 — Review Object\n\nREVIEW OBJECT TEST: Verify the data collected in previous tests appears correctly below, then click Confirm.",
+	    "context_key": "ping_summary",
+	    "options": [  
+		{ "label": "  Confirm", "action": "confirm", "on_select": "next" }
+	    ],
+	    "special_buttons": [
+  		{ "value": "cancel", "label": "Cancel", "on_select": "cancel"   }
+	    ]
+	  },
+  	  {
+	    "key": "7",
+	    "type": "condition",
+	    "description": "Test 5 of 5 — Condition step: routes on ping_text (truthy when user entered text in step 3)",
+	    "expression": "{{ping_text}}",
+	    "on_truthy": "8",
+	    "on_falsy": "8"
+	  },
+  	  {
+	    "key": "8",
+	    "type": "notify",
+	    "message_template": "Slack UI integration tests complete.\n\nResults:\n- Choice gate: passed (selected {{ping_choice}})\n- Text input: {{ping_text}}\n- Multiline input: {{ping_multiline}}\n- Review object: passed\n- Condition step: passed (routed to notify)\n- Notify step: this message\n\nAll dialog types verified.",
+	    "notify_type": "HUMAN_NOTIFICATION",
+	    "on_success": "end"
+	  },
+  	  {
+	    "key": "9",
+	    "type": "end"
+  	  }
+    ]                                  
   }
 ]
