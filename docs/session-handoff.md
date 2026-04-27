@@ -131,7 +131,12 @@ Covers:
 ---
 
 ## Session 30 objectives — in priority order
-### 0. Verify session 29 fixes end-to-end
+
+### 1. Evaluate using Claude Code
+I think it is a bit risky to install Claude Code on my personal computer. I want to explore the feasability of installing 
+Claude Code in the AWS bastion host.
+
+### 2. Integration testing slack UI using /ping core command 
 
 Create an integration test for human task dialog boxes, /ping core. The test will consist of 
 a series of dialog-box workflow items that will contain all of the human_gate types to
@@ -144,7 +149,7 @@ Notice that the structure of the /ping is /ping <type>, not /ping-core. We will 
 step the ping commands into  a single ping command with type, /ping core, /ping e2e, /ping llm, /ping db, 
 /ping sqs and /ping api. This is to reduce clutter in slack auto-suggest drop down menu.
  
-### 1. Verify session 29 fixes end-to-end
+### 3. Verify session 29 fixes end-to-end
 
 ```
 /m create workflow Spanish flashcard quiz
@@ -156,15 +161,15 @@ step the ping commands into  a single ping command with type, /ping core, /ping 
 
 If modal still shows no text field — check CloudWatch for `views.open` error response.
 
-### 2. Produce architecture-step-processor.md, architecture-workflows.md, architecture-reference.md
+### 4. Produce architecture-step-processor.md, architecture-workflows.md, architecture-reference.md
 
 All content was read into context during Session 29. The three remaining split files can be produced without re-reading architecture.md. See session-29 context for content.
 
-### 3. Phase 4 — design-domain.mjs HUMAN_GATE refactor
+### 5. Phase 4 — design-domain.mjs HUMAN_GATE refactor
 
 `design-domain.mjs` currently emits a UI-neutral dialog spec for `buildGatePayload()` (done in session 29). But `buildFinalConfirmPayload()` and the PROC module itself still have stale comment references to check. Full verification against the architecture boundary rules.
 
-### 4. Add `monitor-prompt-quality` to `proc/handler.mjs`
+### 6. Add `monitor-prompt-quality` to `proc/handler.mjs`
 
 Required before `MONITOR_PROMPT_QUALITY` SQS messages work end-to-end. The http case was documented in Session 28 handoff.
 
