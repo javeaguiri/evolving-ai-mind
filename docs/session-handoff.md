@@ -131,7 +131,19 @@ Covers:
 ---
 
 ## Session 30 objectives — in priority order
+### 0. Verify session 29 fixes end-to-end
 
+Create an integration test for human task dialog boxes, /ping core. The test will consist of 
+a series of dialog-box workflow items that will contain all of the human_gate types to
+test all of the slack dialogs boxes and modals. All of the dialog types will be tested based on 
+an initial menu of tests, with the last menu item being, test all. The 
+dialogs and will be self-directing, It will be self-directing by placing instructions to the user
+on what to click or what text to enter (via copy/paste) into input and multi-line text boxes.
+
+Notice that the structure of the /ping is /ping <type>, not /ping-core. We will also refactor in this
+step the ping commands into  a single ping command with type, /ping core, /ping e2e, /ping llm, /ping db, 
+/ping sqs and /ping api. This is to reduce clutter in slack auto-suggest drop down menu.
+ 
 ### 1. Verify session 29 fixes end-to-end
 
 ```
