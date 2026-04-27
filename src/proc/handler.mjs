@@ -34,6 +34,7 @@ import { handle as createWorkflow }     from './create-workflow.mjs';
 import { handle as troubleshootWorkflow } from './troubleshoot-workflow.mjs';
 import { handle as fixWorkflow }        from './fix-workflow.mjs';
 import { handle as diagnosePromptSchema } from './diagnose-prompt-schema.mjs';
+import { handle as monitorPromptQuality } from './monitor-prompt-quality.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -149,6 +150,14 @@ async function processSqsBatch(records) {
         await diagnosePromptSchema(req);
         continue;
       }
+      // MONITOR_PROMPT_QUALITY — fire-and-forget right-brain quality monitor.
+      // Enqueued by review-output.mjs after 2-attempt validation failure.
+      // Also triggerable manually via POST /proc/monitor-prompt-quality.
+      if (message.type === 'MONITOR_PROMPT_QUALITY') {
+        const req = buildReqFromSqs(message);
+        await monitorPromptQuality(req);
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -209,6 +218,9 @@ async function dispatch(req) {
 
     case 'diagnose-prompt-schema':
       return diagnosePromptSchema(req);
+
+    case 'monitor-prompt-quality':
+      return monitorPromptQuality(req);
 
     case 'simulate-workflow':
       return simulateWorkflow(req);
