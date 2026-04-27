@@ -50,11 +50,11 @@ export async function handle(req) {
     step_count:         0,
   });
 
-  const workflowRunId = runResult?.rows?.[0]?.id;
-  if (!workflowRunId) {
-    console.error('ping-core: WorkflowRun insert returned no id', { traceId });
+  if (!runResult?.success) {
+    console.error('ping-core: WorkflowRun insert failed', { traceId, error: runResult?.error });
     return err(500, 'WorkflowRun creation failed', traceId);
   }
+  const workflowRunId = runResult.row.id;
 
   // Enqueue first step — Step Processor drives the rest
   await enqueueWorkflow({
