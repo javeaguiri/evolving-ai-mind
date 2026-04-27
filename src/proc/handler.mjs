@@ -18,8 +18,9 @@
 // PROC endpoint modules are transport-agnostic — no AWS SDK, no Slack SDK.
 // req.source ('http' | 'sqs') determines response path only.
 
-import { parseEvent, err, buildReqFromSqs } from '../shared/lambda-utils.mjs';
+import { parseEvent, err, ok, buildReqFromSqs } from '../shared/lambda-utils.mjs';
 import { handle as pingLlm }            from './ping-llm.mjs';
+import { handle as pingCore }           from './ping-core.mjs';
 import { handle as createDomain }       from './create-domain.mjs';
 import { handle as designDomain }       from './design-domain.mjs';
 import { handle as reviewOutput }       from './review-output.mjs';
@@ -82,6 +83,11 @@ async function processSqsBatch(records) {
         await handlePingE2e(message);
         continue;
       }
+      if (message.type === 'PING_CORE') {
+        const req = buildReqFromSqs(message);
+        await pingCore(req);
+        continue;
+      }
       if (message.type === 'HELP') {
         const req = buildReqFromSqs(message);
         await help(req);
@@ -121,7 +127,7 @@ async function processSqsBatch(records) {
       }
       // TROUBLESHOOT_WORKFLOW — Tier 1 reactive repair: Level 1 static analysis.
       // Enqueued by run-workflow.mjs on step failure or stuck-step guard fire.
-      // Also triggered manually via curl or /m troubleshoot workflow <name>.
+      // Also triggered manually via curl or /m troubleshoot workflow <n>.
       if (message.type === 'TROUBLESHOOT_WORKFLOW') {
         const req = buildReqFromSqs(message);
         await troubleshootWorkflow(req);
@@ -168,6 +174,9 @@ async function dispatch(req) {
     case 'ping-llm':
       return pingLlm(req);
 
+    case 'ping-db':
+      return pingDb(req);
+
     case 'create-domain':
       return createDomain(req);
 
@@ -212,6 +221,25 @@ async function dispatch(req) {
 }
 
 // ---------------------------------------------------------------------------
+// ping-db — inline handler: proc → serv (correct tier path for HTTP callers)
+// Callers: /ping db in ping.mjs (exp → proc HTTP → this handler → serv)
+// ---------------------------------------------------------------------------
+
+async function pingDb(req) {
+  const traceId = req.traceId ?? req.correlationId;
+  try {
+    const url = `${process.env.SERV_API_URL}/api/v1/serv/ping-db`;
+    const res = await fetch(url, { headers: { 'x-correlation-id': traceId } });
+    if (!res.ok) throw new Error(`Serv HTTP ${res.status}: ${await res.text()}`);
+    const body = await res.json();
+    return ok({ success: true, message: 'DB ping OK', ...body }, traceId);
+  } catch (error) {
+    console.error('proc: ping-db error:', error.message);
+    return err(500, `DB ping failed: ${error.message}`, traceId);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ping SQS handlers — inline, not transport-agnostic routes, removed after Step 12
 // ---------------------------------------------------------------------------
 
@@ -228,7 +256,7 @@ async function handlePingSqs(message) {
     hop:      2,
     result: {
       success:         true,
-      message:         '📬 ping-sqs complete — 2 SQS hops confirmed ✅',
+      message:         'ping-sqs complete — 2 SQS hops confirmed',
       traceId:         message.traceId,
       hop1EnqueuedAt:  message.enqueuedAt,
       hop2ProcessedAt: new Date().toISOString(),
@@ -254,7 +282,7 @@ async function handlePingE2e(message) {
     callback: message.callback,
     result: {
       success:     true,
-      message:     `🔁 ping-e2e complete — full round trip confirmed ✅\n\`${version}\``,
+      message:     `ping-e2e complete — full round trip confirmed\n\`${version}\``,
       traceId:     message.traceId,
       enqueuedAt:  message.enqueuedAt,
       completedAt: new Date().toISOString(),

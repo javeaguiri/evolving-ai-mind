@@ -860,62 +860,74 @@ components:
 paths:
 
   # ── UI / Slackbot ──────────────────────────────────────────────────────────
-
-  /api/v1/ui/slack/ping-api:
+  /api/v1/ui/slack/ping:
     post:
-      summary: Slackbot health check
-      description: Validates Slack → SlackbotFunction wiring. No DB, SQS, or LLM calls.
-      tags: [Ping]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
+      summary: Unified ping — validates the requested layer of the stack
+      description: |
+        Exempt from Slack signature verification — all types are curl-accessible.
+
+        **Usage (Slack):** `/ping [type]` — defaults to `api`
+        **Usage (curl):** `curl -X POST .../ui/slack/ping -d "text=sqs&user_id=U1&channel_id=C1"`
+
+        **Synchronous types** — response returned immediately:
+        - `api` — SlackbotFunction alive check (no downstream calls)
+        - `llm` — exp → proc (HTTP) → Perplexity → response
+        - `db`  — exp → proc (HTTP) → serv → RDS → response
+
+        **Async types** — ACK posted to Slack thread; result arrives via SQS callback:
+        - `sqs`  — validates SQS round-trip: Slackbot → SQS → Proc → SQS → Callback
+        - `e2e`  — validates full stack: Slackbot → SQS → Proc → Serv → SQS → Callback
+        - `core` — launches ping_core integration test workflow (interactive Slack dialogs)
+      tags: [ui-ping]
+      requestBody:
+        description: Slack slash command form payload (application/x-www-form-urlencoded)
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  description: Ping type — one of api, sqs, llm, e2e, db, core
+                  enum: [api, sqs, llm, e2e, db, core]
+                  default: api
+                user_id:
+                  type: string
+                  description: Slack user ID
+                channel_id:
+                  type: string
+                  description: Slack channel ID (required for async types)
       responses:
         '200':
-          description: Pong
+          description: |
+            Synchronous types (api, llm, db): JSON result body.
+            Async types (sqs, e2e, core): empty body — ACK posted to Slack, result follows in thread.
           content:
             application/json:
-              example:
-                success: true
-                message: "🤖 ping-api — slackbot alive"
-                correlationId: "abc-123"
+              schema:
+                oneOf:
+                  - description: Synchronous ping result
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                      message:
+                        type: string
+                      traceId:
+                        type: string
+                      timestamp:
+                        type: string
+                        format: date-time
+                  - description: Async ping — empty body (ACK posted to Slack)
+                    type: string
+                    example: ''
+        '405':
+          description: Method not allowed — ping-api expects POST
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
-  /api/v1/ui/slack/ping-sqs:
-    post:
-      summary: SQS round-trip ping
-      description: >
-        Validates Slack → SQS WorkflowQueue → ProcFunction
-        → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
-        ACK posted via chat.postMessage. Threaded reply arrives ~5s later.
-      tags: [Ping]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      responses:
-        '200':
-          description: ACK accepted — result delivered to Slack thread
-
-  /api/v1/ui/slack/ping-llm:
-    post:
-      summary: LLM round-trip ping
-      description: Validates Slack → SlackbotFunction → ProcFunction → Perplexity → Slack.
-      tags: [Ping]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      responses:
-        '200':
-          description: Fortune cookie from LLM returned
-
-  /api/v1/ui/slack/ping-e2e:
-    post:
-      summary: Full end-to-end ping
-      description: >
-        Validates full chain — Slack → SQS → ProcFunction
-        → ServFunction (ping-db) → SQS CallbackResults → SlackCallbackListenerFunction → Slack thread.
-        Returns RDS PostgreSQL version string in thread.
-      tags: [Ping]
-      parameters:
-        - $ref: '#/components/parameters/CorrelationId'
-      responses:
-        '200':
-          description: RDS version string delivered to Slack thread
   /api/v1/ui/slack/shutdown:
     post:
       summary: Slack /shutdown command handler
@@ -1256,6 +1268,66 @@ paths:
           description: Slack ACK post failed or SQS enqueue failed
           
   # ── PROC ───────────────────────────────────────────────────────────────────
+
+  /api/v1/proc/ping-db:
+    post:
+      summary: DB ping — proc → serv → RDS health check
+      description: |
+        Validates: ProcFunction → ServFunction (HTTP) → RDS PostgreSQL.
+        Returns the PostgreSQL version string from both PGC and PGD connections.
+
+        **curl:**
+        ```
+        curl -X POST https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/ping-db -H "Content-Type: application/json" -d "{}"
+        ```
+
+        Called by `/ping db` in ping.mjs (exp → proc → this endpoint → serv).
+        No Slack signature required — accessible directly via curl.
+      tags: [proc-ping]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: string
+                  example: slack
+                correlationId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: DB ping successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: DB ping OK
+                  pgc:
+                    type: object
+                    properties:
+                      version:
+                        type: string
+                        example: PostgreSQL 16.6 on aarch64-unknown-linux-gnu...
+                  pgd:
+                    type: object
+                    properties:
+                      version:
+                        type: string
+        '500':
+          description: DB ping failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/proc/ping-llm:
     post:

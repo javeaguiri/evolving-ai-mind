@@ -14,16 +14,13 @@
 
 import { createHmac, timingSafeEqual } from 'crypto';
 import { parseEvent, err } from '../../shared/lambda-utils.mjs';
-import { handle as pingApi  } from './ping.mjs';
-import { handle as pingSqs  } from './ping-sqs.mjs';
-import { handle as pingLlm  } from './ping-llm.mjs';
-import { handle as pingE2e  } from './ping-e2e.mjs';   
-import { handle as createDomain } from './create-domain.mjs';
+import { handle as ping          } from './ping.mjs';
+import { handle as createDomain  } from './create-domain.mjs';
 import { handle as createWorkflow } from './create-workflow.mjs';
-import { handle as interactive  } from './interactive.mjs';
-import { handle as help         } from './help.mjs';
-import { handle as shutdown     } from './shutdown.mjs';
-import { handle as mind         } from './mind.mjs';
+import { handle as interactive   } from './interactive.mjs';
+import { handle as help          } from './help.mjs';
+import { handle as shutdown      } from './shutdown.mjs';
+import { handle as mind          } from './mind.mjs';
 
 // ---------------------------------------------------------------------------
 // Slack signature verification
@@ -31,8 +28,8 @@ import { handle as mind         } from './mind.mjs';
 // ---------------------------------------------------------------------------
 
 // Routes that bypass signature verification — direct curl calls for health checks.
-// These never carry a Slack signature and pose no injection risk (read-only, no SQS).
-const EXEMPT_ROUTES = new Set(['ping-api', 'ping-sqs', 'ping-llm', 'ping-e2e']);
+// ping handles all types (api, sqs, llm, e2e, db, core) — no Slack sig required.
+const EXEMPT_ROUTES = new Set(['ping']);
 
 /**
  * Verify the Slack request signature.
@@ -101,12 +98,9 @@ export async function handler(event) {
   if (!EXEMPT_ROUTES.has(route)) {
     const authError = verifySlackSignature(event);
     if (authError) return authError;
-  } 
+  }
   switch (route) {
-    case 'ping-api': return pingApi(req);
-    case 'ping-sqs': return pingSqs(req);
-    case 'ping-llm': return pingLlm(req);
-    case 'ping-e2e': return pingE2e(req);
+    case 'ping':          return ping(req);
     case 'create-domain': return createDomain(req);
     case 'create-workflow': return createWorkflow(req);
     case 'interactive':   return interactive(req);
