@@ -20,7 +20,8 @@
 // To target a specific step type:
 //   node dev_scripts/upsert-step-type.mjs js_transform
 
-import { readFileSync } from 'fs';
+import { readFileSync }  from 'fs';
+import { createHash }    from 'crypto';
 
 const SERV_API_URL  = process.env.SERV_API_URL;
 const STEP_TYPE_ARG = process.argv[2] ?? null;
@@ -61,6 +62,32 @@ async function servPost(path, body) {
 }
 
 // ---------------------------------------------------------------------------
+// Fingerprint — stable content hash for change detection
+// ---------------------------------------------------------------------------
+// JSONB round-trips sort object keys alphabetically — sortKeys normalises both
+// seed and DB values to the same canonical form before hashing.
+
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+  }
+  return v;
+}
+
+function fingerprint(row) {
+  const canonical = [
+    row.description ?? '',
+    JSON.stringify(sortKeys(row.input_contract  ?? [])),
+    JSON.stringify(sortKeys(row.output_contract ?? null)),
+    JSON.stringify(row.on_success_options ?? []),
+    JSON.stringify(row.on_failure_options ?? []),
+    row.status ?? '',
+  ].join('\x00');
+  return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
 // Upsert each target row
 // ---------------------------------------------------------------------------
 
@@ -83,8 +110,16 @@ for (const row of targets) {
 
   if (existing.count > 0) {
     const existingRow = existing.rows[0];
-    console.log(`  Row found (id: ${existingRow.id}) — updating...`);
+    const seedFp = fingerprint(row);
+    const dbFp   = fingerprint(existingRow);
+    console.log(`  Row found (id: ${existingRow.id})  fingerprint: seed=${seedFp}  db=${dbFp}`);
 
+    if (seedFp === dbFp) {
+      console.log(`  No changes — already current\n`);
+      continue;
+    }
+
+    console.log(`  Content diff detected — updating...`);
     const result = await servPost('/api/v1/serv/table/updateRows', {
       tableName: 'PGC_StepType',
       filters:   [{ column: 'step_type', op: 'eq', value: row.step_type }],

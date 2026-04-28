@@ -1,229 +1,244 @@
-# evolving-mind-ai — Session 29 Handoff
+# evolving-mind-ai — Session 31 Handoff
 
-**Git tag:** `v3.2-session29-complete` (pending commit)
-**Date:** 2026-04-27
-**Session 29 focus:** callback.mjs code review and consolidation; HUMAN_GATE / HUMAN_NOTIFICATION message type taxonomy; special_buttons field on human_gate steps; interactive.mjs placeholder fix; unit and integration tests; architecture document split
+**Git tag:** `v3.2-session30-complete` (pending commit)
+**Date:** 2026-04-28
+**Session 30 focus:** /ping consolidation; ping_core integration test workflow;
+modal button architecture fix; text_input inline rendering; fingerprint stability;
+seed + architecture doc updates. Bastion host setup (t3.micro + swap).
 
 ---
 
-## What was completed in session 29
+## What was completed in session 30
 
-### 1. callback.mjs — HUMAN_GATE / HUMAN_NOTIFICATION consolidation
+### 1. /ping command consolidation
 
-**Root problem:** 12 distinct SQS message types handled by 12 independent post* functions with no shared text rendering utility. Six notification handlers unprotected against Slack's 3000-char block limit. Dead code: `HELP_GATE`, `HELP_RESULT`, `CREATE_DOMAIN_RESULT` handlers for types no PROC module emits.
+`/ping-api`, `/ping-sqs`, `/ping-llm`, `/ping-e2e` → single `/ping <type>`.
+Types: `api`, `sqs`, `llm`, `e2e`, `db` (new — exp→proc→serv chain), `core` (new — integration test workflow).
 
-**Outcome:** 12 handlers → 5 canonical types. Two shared renderer utilities.
+Files changed: `ping.mjs` (new unified dispatcher), `handler.mjs` (exp + proc),
+`ping-core.mjs` (new), `openapi.yaml`. Deleted: `ping-sqs.mjs`, `ping-llm.mjs`, `ping-e2e.mjs`.
 
-| Old types removed | Canonical replacement |
-|---|---|
-| `WORKFLOW_GATE` | `HUMAN_GATE` |
-| `WORKFLOW_NOTIFY`, `WORKFLOW_CANCELLED`, `SERV_NOTIFICATION` | `HUMAN_NOTIFICATION` |
-| `WORKFLOW_ERROR` | retained — named type required for EXP-layer error summarisation |
-| `HELP_GATE`, `HELP_RESULT`, `CREATE_DOMAIN_RESULT`, `DESIGN_DOMAIN_GATE`, `DESIGN_DOMAIN_ERROR` | dead code removed |
-| `PING_SQS_RESULT`, `PING_E2E_RESULT` | retained — unique hop-timing context blocks |
+**Slack App config still required (manual):** Replace 4 slash commands with single `/ping`.
 
-**`textToBlocks(text, contextText)`** — new shared utility. Splits text on newlines into ≤2800-char section blocks. Every notification handler calls it — the 3000-char Slack limit is now enforced uniformly; missing it on a new handler is structurally impossible.
+### 2. ping_core integration test workflow
 
-**`dialogToBlocks(dialog, workflowRunId)`** — existing renderer, now the single path for all `HUMAN_GATE` messages. Both Step Processor and `design-domain.mjs` produce a UI-neutral dialog spec; `callback.mjs` renders identically for all gate types.
+7-step self-directing Slack UI integration test. Each step validates user response
+before proceeding — wrong input shows error gate with Try Again.
 
-**Producers updated — atomic cut-over (all old types removed):**
-- `run-workflow.mjs` — 3 patches: notify default, cancel, remove_item re-render
-- `step-executor.mjs` — SE-1, SE-2: WORKFLOW_GATE → HUMAN_GATE; static analysis checks `special_buttons`
-- `classify-intent-tiers.mjs` — `sqsType: 'WORKFLOW_NOTIFY'` → `'HUMAN_NOTIFICATION'`
-- `create-workflow.mjs`, `diagnose-prompt-schema.mjs`, `fix-workflow.mjs`, `troubleshoot-workflow.mjs` — all WORKFLOW_NOTIFY occurrences
-- `seed_PGC_StepType.json`, `seed_PGC_SystemContext.json` — notify step description updated (prevents LLM generating old type)
-- `interactive.mjs` — comment references updated
+Steps: intro choice → choice (click B, A/C = error) → text_input single-line (validates "Hello World")
+→ text_input multiline (validates 3 lines) → modal via special_button (validates "Modal Works")
+→ review_object → condition → notify.
 
-**Seeded:** `node dev_scripts/upsert-step-type.mjs` ✅, `node dev_scripts/upsert-system-context.mjs` ✅
+Seeded: `node dev_scripts/upsert-workflow.mjs ping_core` ✅
 
-### 2. special_buttons field on human_gate steps
+**Status at session end:** Tests 1-4 passing (choice, single-line, multiline confirmed working).
+Test 4 (modal via special_button) was being debugged at session end — see open issues below.
 
-**Problem:** `choice` gates required options to serve dual roles — appear in both the `description_list` content field AND as action buttons. Any option that should only appear as a button (Cancel, Other+modal) had no clean home. Workaround was the `cancel` filter hack and option duplication (caused the two-E buttons bug).
+### 3. Modal button architecture fix
 
-**Design:** `special_buttons` is a first-class optional array on any `human_gate` step:
-- Never appears in `description_list` — only in actions block
-- Supports `modal`, `on_select`, `style` exactly like `options` buttons
-- `resume_gate` in `run-workflow.mjs` searches both `options` and `special_buttons` for `on_select` routing
-- Static analysis in `step-executor.mjs` validates routing tokens and cancel presence across both arrays
+**Root cause:** Modal button click was enqueuing `resume_gate` immediately (before user typed
+anything in the modal). Workflow advanced to the validation step with `ping_modal = 'modal_open'`.
 
-**create_workflow step 1a migrated:**
-```json
-"options": [ A, B, C, D ],
-"special_buttons": [
-  { "value": "other", "label": "Other", "on_select": "next", "modal": { ... } },
-  { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
-]
+**Fix:**
+- `interactive.mjs` — modal button click calls `views.open` and `chat.update` (disables buttons)
+  but does NOT enqueue `resume_gate`. Workflow stays suspended at the current gate.
+- `interactive.mjs` — `handleViewSubmission` now uses `modalUserResponse` from `private_metadata`
+  for routing (was hardcoded `'confirm'`). Fixes `create_domain` step 3 → 3a routing which was
+  broken by the same hardcoded value.
+- `run-workflow.mjs` — choice gate writes `responseData.inputValue` to `output_key` when present,
+  not the button value. Parallel to the existing text_input write at line 524.
+
+### 4. text_input inline rendering
+
+**Root cause:** `callback.mjs` was skipping text_input gates entirely (modal assumed already open).
+Slack Block Kit input blocks render correctly in messages — no modal needed.
+
+**Fix:**
+- `callback.mjs` — text_input gate posts: `textToBlocks(instructions)` + inline `input` block
+  (`plain_text_input`, `multiline` from step definition) + Submit/Cancel `actions` block.
+- `step-executor.mjs` — `buildDialog` text_input case now writes `multiline: step.multiline ?? false`
+  into the textbox field (was missing). Label is `'Your input'` not the full message_template.
+- `callback.mjs` — `isMultiline = message.multiline ?? textboxField.multiline ?? false`
+  (fallback chain: gatePayload → dialog field).
+- `interactive.mjs` — existing `state.values` reading already handled inline input correctly.
+  No changes needed.
+
+### 5. Fingerprint stability fix
+
+JSONB round-trips sort object keys alphabetically at all nesting levels.
+`JSON.stringify` preserves insertion order → fingerprints never matched on re-run.
+
+**Fix:** Recursive `sortKeys()` function applied to both seed and DB entry before hashing.
+- `upsert-workflow.mjs` — `sortKeys` replaces direct `JSON.stringify`
+- `upsert-prompt.mjs` — `sortKeys` replaces `sortedJson` (which only sorted top-level keys)
+
+Both files now produce stable fingerprints. Second upsert run shows "no changes — already current".
+
+### 6. Seed + architecture docs updated
+
+- `seed_PGC_StepType.json` — human_gate: added `special_buttons`, `input_label`, updated
+  `options` and `output_key` descriptions to cover modal descriptor pattern
+- `seed_PGC_SystemContext.json` — `step_type_contracts` → v6, `workflow_constraints` → v3.
+  Both now document modal button pattern, special_buttons, inline text_input.
+- `architecture-step-processor.md` — session 30 header; gate schema reference adds
+  `special_buttons` + `input_label` + `modal` descriptor; options field notes updated;
+  text_input gate-type table row updated.
+- `architecture-workflows.md` — session 30 header; create_domain step 3a modal routing note.
+
+### 7. Bastion host setup (partial)
+
+EC2 bastion configured with Node.js 22, SAM CLI, git, tmux. Claude Code installation
+in progress (npm prefix fix applied). Swap file not yet configured.
+Instance type: t3.micro recommended (upgrade from t3.nano).
+
+---
+
+## What was NOT completed (carried to session 31)
+
+| Item | Reason | Session 31 priority |
+|---|---|---|
+| ping_core test 4 (modal via special_button) end-to-end verification | Session limit — modal routing fix deployed but not confirmed | HIGH — verify first |
+| `/m create workflow Spanish flashcard quiz` end-to-end | Not started — was session 30 objective | HIGH |
+| Slack App config: replace 4 /ping commands with single /ping | Manual step not done | HIGH — before testing |
+| Bastion: configure swap file + Claude Code install | In progress | MEDIUM |
+| architecture-core.md — session 30 changes | Not needed (core arch unchanged) | LOW |
+| architecture-reference.md production | Not needed (tech debt register unchanged) | LOW |
+| design-domain.mjs Phase 4 — HUMAN_GATE refactor | Deferred | MEDIUM |
+| monitor-prompt-quality handler.mjs wiring | Deferred | MEDIUM |
+
+---
+
+## Session 31 objectives — in priority order
+
+### 1. Verify session 30 modal fix end-to-end
+
+```
+/ping core
+→ Step 5 (Test 4 of 7): click "Open Modal"
+  → Slack overlay modal opens
+  → Type "Modal Works"
+  → Click Submit in modal
+  → Dialog closes
+  → Workflow advances to step 5v (js_transform validates ping_modal === 'Modal Works')
+  → Step 6: review_object shows all 4 PASS results
+  → Step 7: condition routes to step 9
+  → Step 9: notify "All 7 dialog types verified"
 ```
 
-**Files changed:** `step-executor.mjs` (4 patches), `run-workflow.mjs` (1 patch), `seed_PGC_Workflow.json` (step 1a)
+If modal closes but workflow doesn't advance — check CloudWatch for `handleViewSubmission`
+log entry. If missing, interactive.mjs was not redeployed.
 
-**Seeded:** `node dev_scripts/upsert-workflow.mjs create_workflow` ✅
+### 2. Verify create_domain modal routing not broken
 
-### 3. interactive.mjs — placeholder fix
+```
+/create-domain
+→ LLM proposes tables
+→ Step 3 edit_list gate appears
+→ Click "Add a table"
+  → Modal opens with "Describe the table" input
+  → Type a table description
+  → Click Submit in modal
+  → Modal closes
+  → Workflow resumes at step 3a (text_input) — NOT step 3d
+```
 
-**Bug:** `placeholder: { type: 'plain_text', text: modal.placeholder ?? '' }` — Slack's Block Kit rejects `text: ''` on `plain_text` objects by silently dropping the parent `input` block. Modal shell rendered with no text field visible.
+If it routes to step 3d instead — `handleViewSubmission` routing fix not deployed.
 
-**Fix:** `...(modal.placeholder ? { placeholder: { type: 'plain_text', text: modal.placeholder } } : {})` — omit key entirely when absent.
+### 3. End-to-end: /m create workflow Spanish flashcard quiz
 
-**Files changed:** `interactive.mjs` (1 line, line 130)
-
-### 4. Unit tests — callback.test.mjs
-
-**48 tests, 48 passing.** Two test suites covering the two pure functions in `callback.mjs`:
-- `textToBlocks` — 11 tests: short text, context block, LIMIT boundary, chunking split, hard-truncation of lines exceeding LIMIT, context always last, all blocks have correct type/mrkdwn
-- `dialogToBlocks` — 37 tests: null/empty dialog, all 6 field types (typography, description_list, list, textbox, review_object, radio, actions), edge cases including:
-  - `[object Object]` regression guard (array of objects without `syntax`/`verb`/`command` falls back to `JSON.stringify`)
-  - `review_object` long value truncation
-  - Parent table no-accessory vs child table with Remove button
-  - `secondaryAction.confirm` optional
-  - Button `action_id` uniqueness across multiple buttons
-  - Modal descriptor encoded in button value
-  - Empty arrays produce no block
-  - Mixed-field integration test mirroring the create_domain edit_list HUMAN_GATE
-
-**File:** `tests/unit/callback.test.mjs`
-
-### 5. Integration tests — callback-slack.test.mjs
-
-**5 live Slack tests + 1 documented manual test.** Posts real messages to `TEST_SLACK_CHANNEL` and verifies Slack API accepts blocks without `invalid_blocks`.
-
-Requires env vars: `SLACK_BOT_TOKEN`, `TEST_SLACK_CHANNEL`. Skips gracefully when absent (CI-safe).
-
-Covers:
-- `HUMAN_NOTIFICATION`: short text, long text (>2800 chars, multi-block), unicode, cancel, error summary
-- `HUMAN_GATE choice`: description_list + buttons, "other" button value includes modal descriptor, modal.multiline verified
-- `HUMAN_GATE edit_list`: parent table (no Remove) + child table (Remove + confirm dialog)
-- `HUMAN_GATE review_object`: domain help data including object-array commands (bullet rendering verified, not `[object Object]`)
-- `text_input` gate: documented manual test procedure (modal flow cannot be automated)
-
-**File:** `tests/integration/callback-slack.test.mjs`
-
-### 6. Architecture document split
-
-**Problem:** `architecture.md` at ~136KB / 5,676 lines exceeds the 30K-token fetch limit. All session reads hit the first ~1,200 lines reliably; Sections 6.9 onward required multiple targeted view_range calls.
-
-**Split into four fetchable files:**
-
-| File | Content | Approx lines |
-|---|---|---|
-| `architecture-core.md` | Sections 1–5: stack, tiers, SQS queues, DB architecture, SERV layer, directory, dev scripts | ~650 |
-| `architecture-step-processor.md` | Sections 6.1–6.7: Intent Preprocessor, Step Processor, step types, stack, local_state, human gates, simulation, right-brain validation, safety | ~1,800 |
-| `architecture-workflows.md` | Sections 6.8–6.12: create_domain, create_workflow, L/R brain collaboration, gap taxonomy, self-repair loop | ~1,600 |
-| `architecture-reference.md` | Sections 7–16: pgvector, security, tech debt register, backlog, refactoring history, cost of ownership | ~1,400 |
-
-**Status:** `architecture-core.md` produced this session. The other three files are to be produced in Session 30 from the content already read into context.
-
-**Action required:** After all four files are committed, delete `architecture.md` and update `github-file-index.md` to reference the four new files.
-
----
-
-## What was NOT completed (carried to session 30)
-
-| Item | Reason | Session 30 priority |
-|---|---|---|
-| `architecture-step-processor.md` production | Session limit | HIGH — complete first in session 30 |
-| `architecture-workflows.md` production | Session limit | HIGH |
-| `architecture-reference.md` production | Session limit | HIGH |
-| Phase 4 `DESIGN_DOMAIN_GATE` → `HUMAN_GATE` in `design-domain.mjs` | Deferred by Javear — next session | MEDIUM |
-| End-to-end test of create_workflow "other" modal path after fixes | Not yet tested | HIGH — verify at session start |
-| `github-file-index.md` update for upsert-step-type.mjs (missing entry) | Minor | LOW |
-
----
-
-## Session 30 objectives — in priority order
-
-### 1. Evaluate using Claude Code
-I think it is a bit risky to install Claude Code on my personal computer. I want to explore the feasability of installing 
-Claude Code in the AWS bastion host.
-
-### 2. Integration testing slack UI using /ping core command 
-
-Create an integration test for human task dialog boxes, /ping core. The test will consist of 
-a series of dialog-box workflow items that will contain all of the human_gate types to
-test all of the slack dialogs boxes and modals. All of the dialog types will be tested based on 
-an initial menu of tests, with the last menu item being, test all. The 
-dialogs and will be self-directing, It will be self-directing by placing instructions to the user
-on what to click or what text to enter (via copy/paste) into input and multi-line text boxes.
-
-Notice that the structure of the /ping is /ping <type>, not /ping-core. We will also refactor in this
-step the ping commands into  a single ping command with type, /ping core, /ping e2e, /ping llm, /ping db, 
-/ping sqs and /ping api. This is to reduce clutter in slack auto-suggest drop down menu.
- 
-### 3. Verify session 29 fixes end-to-end
+This was the original session 29 end-to-end objective, deferred to session 30, now session 31.
 
 ```
 /m create workflow Spanish flashcard quiz
-→ Step 1a: choice gate shows A B C D as description + buttons, plus Other and Cancel buttons only (no E in description)
-→ Click Other: modal opens with text input field (placeholder visible)
-→ Type description, submit
-→ Step 1b: text_input gate proceeds, workflow continues to step 2
+→ Step 1a: choice gate shows A B C D as description + buttons, plus Other and Cancel in special_buttons (no E in description list)
+→ Click Other: modal opens with text input field (placeholder visible, multiline)
+→ Type description, submit modal
+→ Workflow advances to step 1b (text_input) — modal submit resumes step 1a directly
+→ Step 1b: text_input gate renders inline input block
+→ Continue through create_workflow steps
+→ Workflow registered and /m <intent> executes it
 ```
 
-If modal still shows no text field — check CloudWatch for `views.open` error response.
+Known fix to verify: step 1a `special_buttons` was seeded in session 29. The "Other" button
+has a `modal` descriptor. With session 30's modal fix, this should now work end-to-end.
 
-### 4. Produce architecture-step-processor.md, architecture-workflows.md, architecture-reference.md
+If step 1b text_input doesn't render — check callback.mjs deployment.
 
-All content was read into context during Session 29. The three remaining split files can be produced without re-reading architecture.md. See session-29 context for content.
+### 4. Seed updated step types
 
-### 5. Phase 4 — design-domain.mjs HUMAN_GATE refactor
+```cmd
+node dev_scripts/upsert-step-type.mjs
+node dev_scripts/upsert-system-context.mjs
+```
 
-`design-domain.mjs` currently emits a UI-neutral dialog spec for `buildGatePayload()` (done in session 29). But `buildFinalConfirmPayload()` and the PROC module itself still have stale comment references to check. Full verification against the architecture boundary rules.
-
-### 6. Add `monitor-prompt-quality` to `proc/handler.mjs`
-
-Required before `MONITOR_PROMPT_QUALITY` SQS messages work end-to-end. The http case was documented in Session 28 handoff.
+Both seed files were updated in session 30. Upsert before running create_workflow tests.
 
 ---
 
-## Session 30 startup checklist
+## Session 31 startup checklist
 
-1. Fetch `architecture-core.md` via raw GitHub URL (new file — not in old index yet)
+1. Fetch `architecture-step-processor.md` (session 30 version — just committed)
 2. Fetch `session-handoff.md`
-3. Confirm git tag `v3.2-session29-complete`
-4. Run end-to-end Slack test (objective 1 above) before any code work
-5. No architecture.md read needed — content known from session 29
+3. Confirm git tag `v3.2-session30-complete`
+4. Run seed upserts (step types + system context)
+5. Verify ping_core test 4 modal (objective 1)
+6. Verify create_domain modal routing (objective 2)
+7. Then proceed to /m create workflow
 
 ---
 
-## Files changed in session 29
+## Files changed in session 30
 
-| File | Change type |
-|---|---|
-| `src/ui/slackbot/callback.mjs` | Full replacement — 12 handlers → 5; textToBlocks + dialogToBlocks shared utils |
-| `src/ui/slackbot/interactive.mjs` | 1 line — placeholder conditional spread |
-| `src/proc/run-workflow.mjs` | 3 str_replace patches — HUMAN_GATE, HUMAN_NOTIFICATION, allOptions |
-| `src/proc/step-executor.mjs` | 4 str_replace patches — special_buttons in actions + static analysis |
-| `src/proc/classify-intent-tiers.mjs` | 1 replacement — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
-| `src/proc/create-workflow.mjs` | 2 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
-| `src/proc/diagnose-prompt-schema.mjs` | 5 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
-| `src/proc/fix-workflow.mjs` | 4 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
-| `src/proc/troubleshoot-workflow.mjs` | 4 replacements — WORKFLOW_NOTIFY → HUMAN_NOTIFICATION |
-| `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` | step 1a: options → special_buttons |
-| `src/serv/templates/pgc/seeds/seed_PGC_StepType.json` | notify description updated |
-| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | step_type_contracts updated |
-| `tests/unit/callback.test.mjs` | New file — 48 unit tests |
-| `tests/integration/callback-slack.test.mjs` | New file — 5 integration tests + manual test docs |
-| `docs/architecture-core.md` | New file — split from architecture.md |
-| `docs/session-handoff.md` | This file |
+| File | Change type | Notes |
+|---|---|---|
+| `src/ui/slackbot/ping.mjs` | Full replacement | Unified dispatcher replacing 3 ping files |
+| `src/ui/slackbot/handler.mjs` | Full replacement | Single ping case, collapsed EXEMPT_ROUTES |
+| `src/ui/slackbot/callback.mjs` | str_replace | text_input gate: inline input block |
+| `src/ui/slackbot/interactive.mjs` | 2× str_replace | Remove modal resume_gate enqueue; handleViewSubmission routing fix |
+| `src/proc/handler.mjs` | Full replacement | PING_CORE SQS case, ping-db HTTP route |
+| `src/proc/ping-core.mjs` | New file | PING_CORE SQS handler |
+| `src/proc/run-workflow.mjs` | str_replace | Choice gate writes inputValue over userResponse |
+| `src/proc/step-executor.mjs` | str_replace | text_input buildDialog: multiline + correct label |
+| `dev_scripts/upsert-workflow.mjs` | str_replace | Recursive sortKeys fingerprint fix |
+| `dev_scripts/upsert-prompt.mjs` | str_replace | Recursive sortKeys fingerprint fix |
+| `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` | Entry added | ping_core workflow |
+| `src/serv/templates/pgc/seeds/seed_PGC_StepType.json` | human_gate updated | special_buttons, input_label, modal descriptor |
+| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | 2 entries updated | step_type_contracts v6, workflow_constraints v3 |
+| `docs/architecture-step-processor.md` | Session 30 patches | Header, gate schema, special_buttons, modal, text_input |
+| `docs/architecture-workflows.md` | Session 30 patches | Header, create_domain modal routing note |
+| `docs/openapi.yaml` | 4 paths → 1 + new | /ui/slack/ping unified; /proc/ping-db added |
+| `docs/session-handoff.md` | This file | |
+
+Files deleted:
+- `src/ui/slackbot/ping-sqs.mjs`
+- `src/ui/slackbot/ping-llm.mjs`
+- `src/ui/slackbot/ping-e2e.mjs`
 
 ---
 
 ## Known open issues — updated
 
-### 1. architecture.md split incomplete (High — session 30)
-`architecture-core.md` produced. Three remaining files (`architecture-step-processor.md`, `architecture-workflows.md`, `architecture-reference.md`) to be produced in Session 30. Until then, `architecture.md` remains the authoritative source.
+### 1. ping_core test 4 — modal submission not yet confirmed (High)
+Session 30 deployed the modal architecture fix but testing was cut short.
+Verify in session 31 before proceeding to create_workflow.
 
-### 2. design-domain.mjs DESIGN_DOMAIN_GATE → HUMAN_GATE (Medium)
-`design-domain.mjs` emits a UI-neutral `HUMAN_GATE` dialog spec (done in session 29 in the output file). The output file was not checked in yet. Verify and check in as Phase 4 in session 30.
+### 2. Slack App /ping command consolidation (High)
+Four slash commands still registered. Single `/ping` not yet configured in Slack App dashboard.
+Required before /ping core can be invoked.
 
-### 3. monitor-prompt-quality handler.mjs case missing (Medium)
-HTTP and SQS cases not wired in `proc/handler.mjs`. Blocks the self-healing pipeline.
+### 3. create_workflow "Other" modal path (High)
+Session 29 fixed special_buttons on step 1a. Session 30 fixed modal routing.
+First end-to-end test deferred to session 31.
 
-### 4. pgvector — PGC_Workflow.intent_embedding (Backlog)
-Domain resolution working. Workflow routing via vector similarity not yet implemented.
+### 4. design-domain.mjs DESIGN_DOMAIN_GATE → HUMAN_GATE (Medium)
+Output file from session 29 not checked in. Verify and check in as Phase 4 in session 31.
 
-### 5. Pass 2 keyword scan excludes domain:null workflows (Low)
-System workflows unreachable via Pass 2. Unnecessary Tier 2 sonar calls for known system commands.
+### 5. monitor-prompt-quality handler.mjs case missing (Medium)
+HTTP and SQS cases not wired. Blocks the self-healing pipeline.
 
-### 6. github-file-index.md — upsert-step-type.mjs missing (Low)
-`seed_PGC_StepType.mjs` listed but `upsert-step-type.mjs` is absent from the index.
+### 6. Bastion host incomplete (Medium)
+Swap file not configured. Claude Code install in progress.
+`npm config set prefix ~/.npm-global` applied — Claude Code install pending.
+
+### 7. Pass 2 keyword scan excludes domain:null workflows (Low)
+System workflows unreachable via Pass 2. Unnecessary Tier 2 sonar calls.
