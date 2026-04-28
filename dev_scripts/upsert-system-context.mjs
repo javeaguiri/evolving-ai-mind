@@ -85,8 +85,14 @@ for (const row of targets) {
 
   if (existing.count > 0) {
     const existingRow = existing.rows[0];
-    console.log(`  Row found (id: ${existingRow.id}) — updating...`);
+    console.log(`  Row found (id: ${existingRow.id})  db version: v${existingRow.version}  seed version: v${row.version}`);
 
+    if (existingRow.version === row.version) {
+      console.log(`  No changes — already current (v${row.version})\n`);
+      continue;
+    }
+
+    console.log(`  Version diff detected — updating v${existingRow.version} → v${row.version}...`);
     const result = await servPost('/api/v1/serv/table/updateRows', {
       tableName: 'PGC_SystemContext',
       filters:   [{ column: 'key', op: 'eq', value: row.key }],
