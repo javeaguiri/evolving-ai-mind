@@ -1835,109 +1835,253 @@
   {
     "name": "ping_core",
     "domain": null,
-    "description": "Slack UI integration test workflow. Exercises all human_gate types (choice, text_input, review_object), js_transform, condition, and notify steps interactively. Self-directing — each step tells the user exactly what to click or type. Launched by /ping core.",
+    "description": "Slack UI integration test workflow. Exercises all human_gate types (choice, text_input, review_object), modal special_button, js_transform validation, condition routing, and notify. Self-directing — each step instructs the user exactly what to click or type, and validates the response before proceeding. Launched by /ping core.",
     "state_strategy": "sequential",
     "intent_keywords": [],
-    "steps":   [
-  	  {
-	    "key": "1",
-	    "type": "human_gate",
-	    "gate_type": "choice",
-	    "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do.\n\nTests: (1) Choice gate  (2) Text input  (3) Multiline input  (4) Review object  (5) Condition step  (6) Notify\n\nClick Start to begin.",
-	    "options": [  
-	  	{  
-		    "value": "start",
-		    "label": "Start",
-		    "description": "Begin the full integration test sequence.",
-		    "on_select": "next"
-	  	}
-	    ],
-	    "special_buttons": [  
-		{ "value": "cancel",   "label": "Cancel", "on_select": "cancel" }
-	    ]
-	  },
-  	  {
-	    "key": "2",
-	    "type": "human_gate",
-	    "gate_type": "choice",
-	    "message_template": "Test 1 of 5 — Choice Gate\n\nCHOICE GATE TEST: Click any of the three lettered buttons below. All options route to the next test.",
-	    "output_key": "ping_choice",
-	    "options": [  
-	  	{  
-		    "value": "a",
-		    "label": "A",
-		    "description": "Option A — click this, or B, or C. All proceed identically.",
-		    "on_select": "next"
-		  },
-	  	{  
-		    "value": "b",
-		    "label": "B",
-		    "description": "Option B — all options route to the next test.",
-		    "on_select": "next"
-		  },
-	  	{  
-		    "value": "c",
-		    "label": "C",
-		    "description": "Option C — all options route to the next test.",
-		    "on_select": "next"
-	  	}
-	    ]
-	  },
-  	  {
-	    "key": "3",
-	    "type": "human_gate",
-	    "gate_type": "text_input",
-	    "message_template": "Test 2 of 5 — Text Input (single line)\n\nTEXT INPUT TEST: A text field will open. Copy and paste the text below, then click Submit.\n\nCopy this: Hello World",
-	    "output_key": "ping_text"
-	  },
-  	  {
-	    "key": "4",
-	    "type": "human_gate",
-	    "gate_type": "text_input",
-	    "message_template": "Test 3 of 5 — Multiline Input\n\nMULTILINE TEST: A multi-line text area will open. Copy and paste the three lines below, then click Submit.\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
-	    "output_key": "ping_multiline",
-	    "multiline": true
-	  },
-  	  {
-	    "key": "5",
-	    "type": "js_transform",
-	    "description": "Build review summary from collected test inputs",
-	    "input_key": "ping_text",
-	    "expression": "(function(){ return { choice_selected: local_state.ping_choice || '(none)', text_entered: items || '(none)', multiline_entered: local_state.ping_multiline || '(none)', status: 'Tests 1-3 complete' }; })()",
-	    "output_key": "ping_summary"
-	  },
-  	  {
-	    "key": "6",
-	    "type": "human_gate",
-	    "gate_type": "review_object",
-	    "message_template": "Test 4 of 5 — Review Object\n\nREVIEW OBJECT TEST: Verify the data collected in previous tests appears correctly below, then click Confirm.",
-	    "context_key": "ping_summary",
-	    "options": [  
-		{ "label": "  Confirm", "action": "confirm", "on_select": "next" }
-	    ],
-	    "special_buttons": [
-  		{ "value": "cancel", "label": "Cancel", "on_select": "cancel"   }
-	    ]
-	  },
-  	  {
-	    "key": "7",
-	    "type": "condition",
-	    "description": "Test 5 of 5 — Condition step: routes on ping_text (truthy when user entered text in step 3)",
-	    "expression": "{{ping_text}}",
-	    "on_truthy": "8",
-	    "on_falsy": "8"
-	  },
-  	  {
-	    "key": "8",
-	    "type": "notify",
-	    "message_template": "Slack UI integration tests complete.\n\nResults:\n- Choice gate: passed (selected {{ping_choice}})\n- Text input: {{ping_text}}\n- Multiline input: {{ping_multiline}}\n- Review object: passed\n- Condition step: passed (routed to notify)\n- Notify step: this message\n\nAll dialog types verified.",
-	    "notify_type": "HUMAN_NOTIFICATION",
-	    "on_success": "end"
-	  },
-  	  {
-	    "key": "9",
-	    "type": "end"
-  	  }
-    ]                                  
+    "steps": [
+      {
+        "step": "1",
+        "type": "human_gate",
+        "gate_type": "choice",
+        "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do, and will verify your response before proceeding.\n\nTests:\n  1. Choice gate — click the correct button\n  2. Text input — single-line modal\n  3. Multiline input — multiline modal\n  4. Modal via button — special_button modal trigger\n  5. Review object — structured data display\n  6. Condition step — routing test\n  7. Notify — completion message\n\nClick Start to begin.",
+        "options": [
+          {
+            "value": "start",
+            "label": "Start",
+            "description": "Begin the full integration test sequence.",
+            "on_select": "next"
+          }
+        ],
+        "special_buttons": [
+          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "2",
+        "type": "human_gate",
+        "gate_type": "choice",
+        "message_template": "Test 1 of 7 — Choice Gate\n\nCHOICE GATE TEST: Three buttons are shown below. Only one is correct.\n\nClick the button labelled B.",
+        "output_key": "ping_choice",
+        "options": [
+          {
+            "value": "a",
+            "label": "A",
+            "description": "Do not click here.",
+            "on_select": "step:2e"
+          },
+          {
+            "value": "b",
+            "label": "B",
+            "description": "Click here — this is the correct button.",
+            "on_select": "next"
+          },
+          {
+            "value": "c",
+            "label": "C",
+            "description": "Do not click here.",
+            "on_select": "step:2e"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "2e",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong button — you clicked {{ping_choice}} but the correct button was B.\n\nClick Try Again to repeat the test.",
+        "options": [
+          { "label": "Try Again", "action": "confirm", "on_select": "step:2" },
+          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "step:2",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "3",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "message_template": "Test 2 of 7 — Single-Line Text Input\n\nTEXT INPUT TEST: A single-line modal will open. Type exactly the text below, then click Submit.\n\nCopy this exactly:  Hello World",
+        "output_key": "ping_text",
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "3v",
+        "type": "js_transform",
+        "description": "Validate ping_text equals 'Hello World' exactly.",
+        "input_key": "ping_text",
+        "expression": "(function(){ return (items || '').trim() === 'Hello World'; })()",
+        "output_key": "text_valid",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "3c",
+        "type": "condition",
+        "description": "Route on text validation result.",
+        "expression": "{{text_valid}}",
+        "on_truthy": "4",
+        "on_falsy": "3e"
+      },
+      {
+        "step": "3e",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong input — you entered '{{ping_text}}' but the expected value was 'Hello World'.\n\nClick Try Again to repeat the test.",
+        "options": [
+          { "label": "Try Again", "action": "confirm", "on_select": "step:3" },
+          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "step:3",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "4",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "message_template": "Test 3 of 7 — Multiline Text Input\n\nMULTILINE TEST: A multiline modal will open. Paste exactly the three lines below, then click Submit.\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "output_key": "ping_multiline",
+        "multiline": true,
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "4v",
+        "type": "js_transform",
+        "description": "Validate ping_multiline contains all three expected lines.",
+        "input_key": "ping_multiline",
+        "expression": "(function(){ var v = (items || '').trim(); return v.indexOf('Line 1: This is a test') >= 0 && v.indexOf('Line 2: Of multiline input') >= 0 && v.indexOf('Line 3: Working correctly') >= 0; })()",
+        "output_key": "multiline_valid",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "4c",
+        "type": "condition",
+        "description": "Route on multiline validation result.",
+        "expression": "{{multiline_valid}}",
+        "on_truthy": "5",
+        "on_falsy": "4e"
+      },
+      {
+        "step": "4e",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong input — the multiline text did not match expected content.\n\nYou entered:\n{{ping_multiline}}\n\nExpected all three lines:\n  Line 1: This is a test\n  Line 2: Of multiline input\n  Line 3: Working correctly\n\nClick Try Again to repeat the test.",
+        "options": [
+          { "label": "Try Again", "action": "confirm", "on_select": "step:4" },
+          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "step:4",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5",
+        "type": "human_gate",
+        "gate_type": "choice",
+        "message_template": "Test 4 of 7 — Modal via Button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
+        "output_key": "ping_modal",
+        "options": [],
+        "special_buttons": [
+          {
+            "value": "modal_open",
+            "label": "Open Modal",
+            "on_select": "next",
+            "modal": {
+              "title": "Modal Button Test",
+              "input_label": "Type the required text",
+              "placeholder": "Modal Works",
+              "multiline": true
+            }
+          },
+          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5v",
+        "type": "js_transform",
+        "description": "Validate ping_modal equals 'Modal Works' exactly.",
+        "input_key": "ping_modal",
+        "expression": "(function(){ return (items || '').trim() === 'Modal Works'; })()",
+        "output_key": "modal_valid",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5c",
+        "type": "condition",
+        "description": "Route on modal validation result.",
+        "expression": "{{modal_valid}}",
+        "on_truthy": "6",
+        "on_falsy": "5e"
+      },
+      {
+        "step": "5e",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong input — you entered '{{ping_modal}}' but the expected value was 'Modal Works'.\n\nClick Try Again to repeat the test.",
+        "options": [
+          { "label": "Try Again", "action": "confirm", "on_select": "step:5" },
+          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "step:5",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "6",
+        "type": "js_transform",
+        "description": "Build review summary from all collected test results.",
+        "input_key": "ping_text",
+        "expression": "(function(){ return { 'Test 1 - Choice': 'PASS — clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS — entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS — ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS — entered: ' + (local_state.ping_modal || ''), 'Tests 5-7': 'Pending — review object, condition, notify' }; })()",
+        "output_key": "ping_summary",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "7",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "message_template": "Test 5 of 7 — Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
+        "context_key": "ping_summary",
+        "options": [
+          { "label": "Confirm", "action": "confirm", "on_select": "next"   },
+          { "label": "Cancel",  "action": "cancel",  "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "8",
+        "type": "condition",
+        "description": "Test 6 of 7 — Condition step: routes on ping_text presence. Both paths converge on step 9.",
+        "expression": "{{ping_text}}",
+        "on_truthy": "9",
+        "on_falsy": "9"
+      },
+      {
+        "step": "9",
+        "type": "notify",
+        "message_template": "Test 7 of 7 — Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Review object: PASS\n- Condition step: PASS (routed to notify)\n- Notify step: PASS (this message)\n\nAll 7 dialog types verified.",
+        "notify_type": "HUMAN_NOTIFICATION",
+        "on_success": "end"
+      },
+      {
+        "step": "10",
+        "type": "end"
+      }
+    ]      
   }
 ]
