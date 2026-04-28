@@ -1853,7 +1853,11 @@
           }
         ],
         "special_buttons": [
-          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+          {
+            "value": "cancel",
+            "label": "Cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -1893,8 +1897,16 @@
         "gate_type": "confirm",
         "message_template": "Wrong button — you clicked {{ping_choice}} but the correct button was B.\n\nClick Try Again to repeat the test.",
         "options": [
-          { "label": "Try Again", "action": "confirm", "on_select": "step:2" },
-          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Try Again",
+            "action": "confirm",
+            "on_select": "step:2"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "step:2",
         "on_failure": "cancel"
@@ -1903,11 +1915,19 @@
         "step": "3",
         "type": "human_gate",
         "gate_type": "text_input",
-        "message_template": "Test 2 of 7 — Single-Line Text Input\n\nTEXT INPUT TEST: A single-line modal will open. Type exactly the text below, then click Submit.\n\nCopy this exactly:  Hello World",
+        "message_template": "Test 2 of 7 — Single-Line Text Input\n\nTEXT INPUT TEST: Click *Open Text Input* below. A single-line modal will open.\n\nIn the modal, type exactly:  Hello World\n\nThen click Submit in the modal.",
         "output_key": "ping_text",
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -1936,8 +1956,16 @@
         "gate_type": "confirm",
         "message_template": "Wrong input — you entered '{{ping_text}}' but the expected value was 'Hello World'.\n\nClick Try Again to repeat the test.",
         "options": [
-          { "label": "Try Again", "action": "confirm", "on_select": "step:3" },
-          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Try Again",
+            "action": "confirm",
+            "on_select": "step:3"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "step:3",
         "on_failure": "cancel"
@@ -1946,12 +1974,20 @@
         "step": "4",
         "type": "human_gate",
         "gate_type": "text_input",
-        "message_template": "Test 3 of 7 — Multiline Text Input\n\nMULTILINE TEST: A multiline modal will open. Paste exactly the three lines below, then click Submit.\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "message_template": "Test 3 of 7 — Multiline Text Input\n\nMULTILINE TEST: Click *Open Text Area* below. A multiline modal will open.\n\nPaste exactly these three lines, then click Submit:\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
         "output_key": "ping_multiline",
         "multiline": true,
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -1980,8 +2016,16 @@
         "gate_type": "confirm",
         "message_template": "Wrong input — the multiline text did not match expected content.\n\nYou entered:\n{{ping_multiline}}\n\nExpected all three lines:\n  Line 1: This is a test\n  Line 2: Of multiline input\n  Line 3: Working correctly\n\nClick Try Again to repeat the test.",
         "options": [
-          { "label": "Try Again", "action": "confirm", "on_select": "step:4" },
-          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Try Again",
+            "action": "confirm",
+            "on_select": "step:4"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "step:4",
         "on_failure": "cancel"
@@ -1990,7 +2034,7 @@
         "step": "5",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 4 of 7 — Modal via Button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
+        "message_template": "Test 4 of 7 — Modal via special_button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
         "output_key": "ping_modal",
         "options": [],
         "special_buttons": [
@@ -2005,7 +2049,11 @@
               "multiline": true
             }
           },
-          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+          {
+            "value": "cancel",
+            "label": "Cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -2034,8 +2082,16 @@
         "gate_type": "confirm",
         "message_template": "Wrong input — you entered '{{ping_modal}}' but the expected value was 'Modal Works'.\n\nClick Try Again to repeat the test.",
         "options": [
-          { "label": "Try Again", "action": "confirm", "on_select": "step:5" },
-          { "label": "Cancel",    "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Try Again",
+            "action": "confirm",
+            "on_select": "step:5"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "step:5",
         "on_failure": "cancel"
@@ -2057,8 +2113,16 @@
         "message_template": "Test 5 of 7 — Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
         "context_key": "ping_summary",
         "options": [
-          { "label": "Confirm", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel",  "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Confirm",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -2082,6 +2146,6 @@
         "step": "10",
         "type": "end"
       }
-    ]      
+    ]          
   }
 ]

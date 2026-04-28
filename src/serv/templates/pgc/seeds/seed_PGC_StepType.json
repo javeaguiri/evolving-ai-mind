@@ -99,7 +99,7 @@
   },
   {
     "step_type": "human_gate",
-    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button — output_key written when context_key also present), edit_list (review and remove items), text_input (type free text — output_key always written on submit), review_object (review key/value summary), choice (single-select with question heading, lettered buttons A/B/C, and per-option description lines — output_key written with selected value). Each option has its own on_select routing token.",
+    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button — output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in an inline Slack input block — output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines — output_key written with selected value; when a choice button opens a modal, output_key receives the typed modal text instead of the button value). Each option has its own on_select routing token. special_buttons appear as action buttons only — never in description lists — and support modal descriptors for overlay text input.",
     "input_contract": [
       {
         "type": "string",
@@ -123,13 +123,25 @@
         "type": "array",
         "field": "options",
         "required": true,
-        "description": "Array of option objects — must include at least one with action/value: \"cancel\". Shape varies by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons."
+        "description": "Array of option objects — must include at least one with action/value: \"cancel\" in either options or special_buttons. Shape varies by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key (or overridden by modal inputValue), label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } — clicking the button opens a Slack overlay modal; the typed value is written to output_key on submit."
+      },
+      {
+        "type": "array",
+        "field": "special_buttons",
+        "required": false,
+        "description": "Optional array of action buttons that appear after options buttons but are never rendered in description_list or content fields. Same shape as options per gate_type. Use for Cancel, Other, or modal-trigger buttons that should not appear in the displayed option list. Supports modal descriptor: { title, input_label, placeholder, multiline } — clicking opens a Slack overlay modal; typed value is written to output_key on submit, overriding the button value. The cancel obligation can be satisfied here instead of in options."
+      },
+      {
+        "type": "string",
+        "field": "input_label",
+        "required": false,
+        "description": "text_input gate only — short label shown above the inline Slack input element. Defaults to \"Your input\". Keep concise (2-5 words). The full instructions go in message_template."
       },
       {
         "type": "string",
         "field": "output_key",
         "required": false,
-        "description": "For text_input: local_state key where the typed value is written on submit. For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written on resolve."
+        "description": "For text_input: local_state key where the typed value is written on submit. For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written — when the option carries a modal descriptor, the modal typed text (inputValue) is written instead of the button value."
       },
       {
         "type": "string",

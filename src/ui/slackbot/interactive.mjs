@@ -154,27 +154,10 @@ export async function handle(req) {
       console.warn('interactive: chat.update failed (non-fatal)', { error: error.message, traceId });
     }
 
-    // Advance the workflow to the text_input gate step.
-    // Used by modal buttons on non-text_input gates (e.g. create_domain Add a table)
-    // where the button click advances to a text_input intermediate step.
-    try {
-      await sqs.send(new SendMessageCommand({
-        QueueUrl:    process.env.SQS_WORKFLOW_URL,
-        MessageBody: JSON.stringify({
-          type:          'WORKFLOW_STEP',
-          action:        'resume_gate',
-          workflowRunId,
-          userResponse,
-          callback:      { provider: 'slack', channel, threadId },
-          traceId,
-          enqueuedAt:    new Date().toISOString(),
-        }),
-      }));
-    } catch (error) {
-      console.error('interactive: modal resume_gate SQS enqueue failed', { error: error.message, traceId });
-      return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
-    }
-
+    // Do NOT enqueue resume_gate here — the workflow stays suspended at the current gate.
+    // handleViewSubmission enqueues resume_gate with responseData.inputValue when the
+    // user submits the modal. This prevents the premature advance that caused
+    // ping_modal to be written as 'modal_open' before the user had typed anything.
     return { statusCode: 200, body: '' };
   }
 
@@ -348,7 +331,7 @@ async function handleViewSubmission(payload, correlationId) {
         type:          'WORKFLOW_STEP',
         action:        'resume_gate',
         workflowRunId,
-        userResponse:  'confirm',
+        userResponse:  modalUserResponse ?? 'confirm',
         responseData:  { inputValue: inputValue ?? '' },
         callback,
         traceId:       metaTraceId ?? traceId,

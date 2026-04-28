@@ -90,19 +90,22 @@ async function servPost(path, body) {
 // Covers: prompt_text, model, output_schema, input_variables.
 // Excludes: was_successful, probe_input, max_output_tokens (operational metadata).
 // ---------------------------------------------------------------------------
-function sortedJson(value) {
-  if (value === null || value === undefined) return 'null';
-  if (typeof value !== 'object' || Array.isArray(value)) return JSON.stringify(value);
-  const sorted = Object.keys(value).sort().reduce((acc, k) => { acc[k] = value[k]; return acc; }, {});
-  return JSON.stringify(sorted);
+// JSONB round-trips sort object keys at every nesting level — sortedJson must
+// be recursive so fingerprints are stable for nested structures like output_schema.
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+  }
+  return v;
 }
 
 function fingerprint(entry) {
   const canonical = [
     entry.prompt_text ?? '',
     entry.model ?? '',
-    sortedJson(entry.output_schema ?? null),
-    sortedJson(entry.input_variables ?? null),
+    JSON.stringify(sortKeys(entry.output_schema ?? null)),
+    JSON.stringify(sortKeys(entry.input_variables ?? null)),
   ].join('\x00');
   return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }
