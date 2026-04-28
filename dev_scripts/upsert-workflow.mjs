@@ -62,9 +62,21 @@ async function servPost(path, body) {
 // Content fingerprint -- steps serialised canonically, plus description and
 // model_used. intent_keywords, state_strategy, domain excluded (metadata).
 // ---------------------------------------------------------------------------
+
+// JSONB round-trips sort object keys alphabetically — JSON.stringify preserves
+// insertion order. Normalise both seed and DB entries to sorted key order so
+// fingerprints are stable across insert/retrieve cycles.
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+  }
+  return v;
+}
+
 function fingerprint(entry) {
   const canonical = [
-    JSON.stringify(entry.steps ?? []),
+    JSON.stringify(sortKeys(entry.steps ?? [])),
     entry.description ?? '',
     entry.model_used ?? '',
   ].join('\x00');

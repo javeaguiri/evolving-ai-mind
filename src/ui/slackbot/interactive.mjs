@@ -155,8 +155,8 @@ export async function handle(req) {
     }
 
     // Advance the workflow to the text_input gate step.
-    // That step suspends immediately — callback.mjs skips posting for text_input.
-    // The modal submission resumes it via handleViewSubmission.
+    // Used by modal buttons on non-text_input gates (e.g. create_domain Add a table)
+    // where the button click advances to a text_input intermediate step.
     try {
       await sqs.send(new SendMessageCommand({
         QueueUrl:    process.env.SQS_WORKFLOW_URL,
