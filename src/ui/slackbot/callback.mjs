@@ -248,7 +248,7 @@ async function postHumanGate(message) {
     const textboxField = dialog?.fields?.find(f => f.type === 'textbox') ?? {};
     const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
       ?? 'Please enter your response.';
-    const isMultiline  = textboxField.multiline ?? false;
+    const isMultiline  = message.multiline ?? textboxField.multiline ?? false;
     const inputBlock   = {
       type:     'input',
       block_id: 'text_input_block',

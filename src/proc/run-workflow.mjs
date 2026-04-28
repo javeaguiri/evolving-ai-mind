@@ -532,13 +532,16 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   }
 
   // choice gate: write selected value to output_key (parallel to text_input).
+  // When responseData.inputValue is present (modal submission), prefer it over userResponse
+  // so the typed text — not the button name — is written to the state key.
   // confirm gate with context_key: write userResponse to output_key (dynamic domain selection).
   if (isChoice && stepRef.output_key) {
-    setPath(localState, stepRef.output_key, userResponse);
+    const selectionValue = responseData?.inputValue ?? userResponse;
+    setPath(localState, stepRef.output_key, selectionValue);
     frame.local_state = localState;
     console.info('run-workflow: choice gate — selection written to local_state', {
       output_key: stepRef.output_key,
-      selection:  userResponse,
+      selection:  selectionValue,
       traceId,
     });
   }

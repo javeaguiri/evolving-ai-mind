@@ -485,10 +485,14 @@ export function buildDialog(step, localState) {
     }
 
     case 'text_input': {
+      // label is the short Slack input element label — the full instructions are
+      // already in the typography field above. multiline is required by callback.mjs
+      // to set plain_text_input.multiline on the rendered Slack input block.
       fields.push({
-        type:  'textbox',
-        name:  'user_input',
-        label: resolveTemplate(step.message_template ?? '', localState),
+        type:      'textbox',
+        name:      'user_input',
+        label: step.input_label ?? 'Your input',
+        multiline: step.multiline ?? false,
       });
       break;
     }

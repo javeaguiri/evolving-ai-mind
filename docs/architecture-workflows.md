@@ -4,10 +4,12 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2
-Status: Active development — Session 29 complete
-Last updated: 2026-04-27 (session 29 — callback.mjs: HUMAN_GATE / HUMAN_NOTIFICATION consolidation;
-special_buttons field on human_gate steps; interactive.mjs placeholder fix;
-seed_PGC_Workflow.json step 1a migrated to special_buttons)
+Status: Active development — Session 30 complete
+Last updated: 2026-04-28 (session 30 — /ping unified command; ping_core integration test workflow;
+modal button architecture: button click holds gate suspended, only modal submit resumes;
+create_domain step 3 "Add a table" modal now resumes step 3 directly via handleViewSubmission;
+step 3a text_input renders inline Slack input block — modal descriptor on edit_list button retained
+for overlay UX but routing now handled correctly without intermediate resume_gate on click)
 
 **Architecture document set:**
 - `architecture-core.md` — system overview, stack, Lambda tiers, SQS queues, data architecture, SERV layer, dev scripts
@@ -38,7 +40,11 @@ Step 3  human_gate edit_list → user reviews tables, may remove child tables or
         ├── add_table → step:3a (text_input)
         └── cancel    → cancelled
 
-Step 3a human_gate text_input → new_table_description written to local_state
+Step 3a human_gate text_input → new_table_description written to local_state via inline Slack input block
+        Note: "Add a table" button on step 3 carries a modal descriptor for overlay UX.
+        Modal submission resumes step 3 (edit_list) directly — handleViewSubmission routes
+        via original button action (add_table → on_select: step:3a). Step 3a is the
+        intermediate text_input step that captures the description.
 Step 3b llm_call → new_table designed, stored at local_state["new_table"]
 Step 3c js_transform → merge new_table into proposed_scaffold.tables, loop back to step:3
 Step 3d human_gate review_object → user reviews all table column details before DDL
