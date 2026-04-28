@@ -1875,7 +1875,7 @@
             "value": "b",
             "label": "B",
             "description": "Click here — this is the correct button.",
-            "on_select": "next"
+            "on_select": "step:3"
           },
           {
             "value": "c",

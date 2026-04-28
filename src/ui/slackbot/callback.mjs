@@ -240,10 +240,52 @@ async function postWorkflowError(message) {
 async function postHumanGate(message) {
   const { callback, gate_type: gateType, dialog, workflowRunId, message_ts, traceId } = message;
 
-  // text_input gates are handled via Slack modal opened in interactive.mjs.
-  // The modal is already open at this point — nothing to post.
+  // text_input gates render an inline input block directly in the message.
+  // Slack input blocks work in messages — state.values is populated in the
+  // block_actions payload when the user clicks Submit. No modal required.
+  // block_id is fixed so interactive.mjs can read state.values by key.
   if (gateType === 'text_input') {
-    console.info('callback: HUMAN_GATE text_input skipped (modal handles this)', { workflowRunId, traceId });
+    const textboxField = dialog?.fields?.find(f => f.type === 'textbox') ?? {};
+    const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
+      ?? 'Please enter your response.';
+    const isMultiline  = textboxField.multiline ?? false;
+    const inputBlock   = {
+      type:     'input',
+      block_id: 'text_input_block',
+      element:  {
+        type:      'plain_text_input',
+        action_id: 'text_input_value',
+        multiline: isMultiline,
+        ...(textboxField.placeholder
+          ? { placeholder: { type: 'plain_text', text: textboxField.placeholder } }
+          : {}),
+      },
+      label: { type: 'plain_text', text: textboxField.label ?? 'Your input' },
+    };
+    const blocks = [
+      ...textToBlocks(fallbackText),
+      inputBlock,
+      {
+        type: 'actions',
+        elements: [
+          {
+            type:      'button',
+            style:     'primary',
+            text:      { type: 'plain_text', text: 'Submit' },
+            action_id: 'workflow_text_submit',
+            value:     JSON.stringify({ workflowRunId, action: 'confirm' }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Cancel' },
+            action_id: 'workflow_text_cancel',
+            value:     JSON.stringify({ workflowRunId, action: 'cancel' }),
+          },
+        ],
+      },
+    ];
+    await routeCallback(callback, fallbackText.slice(0, 150), blocks);
+    console.info('callback: HUMAN_GATE text_input posted', { workflowRunId, multiline: isMultiline, traceId });
     return;
   }
 
