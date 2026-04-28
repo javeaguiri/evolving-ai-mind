@@ -91,44 +91,29 @@ EC2 bastion configured with Node.js 22, SAM CLI, git, tmux. Claude Code installa
 in progress (npm prefix fix applied). Swap file not yet configured.
 Instance type: t3.micro recommended (upgrade from t3.nano).
 
+### 8. Miscellaneous
+| Item | Status | Description |
+| ping_core test 4 (modal via special_button) end-to-end verification | ✅Completed | Completed end-to-end  |
+| monitor-prompt-quality handler.mjs wiring | ✅Completed | Completed using Claude Code |
+| Slack App config: replace 4 /ping commands with single /ping | ✅Completed  | Verified Complete |
+| Bastion: configure swap file + Claude Code install | ✅Completed | Claude Code Working in EC2 |
+
 ---
 
 ## What was NOT completed (carried to session 31)
 
 | Item | Reason | Session 31 priority |
 |---|---|---|
-| ping_core test 4 (modal via special_button) end-to-end verification | Session limit — modal routing fix deployed but not confirmed | HIGH — verify first |
 | `/m create workflow Spanish flashcard quiz` end-to-end | Not started — was session 30 objective | HIGH |
-| Slack App config: replace 4 /ping commands with single /ping | Manual step not done | HIGH — before testing |
-| Bastion: configure swap file + Claude Code install | In progress | MEDIUM |
 | architecture-core.md — session 30 changes | Not needed (core arch unchanged) | LOW |
 | architecture-reference.md production | Not needed (tech debt register unchanged) | LOW |
 | design-domain.mjs Phase 4 — HUMAN_GATE refactor | Deferred | MEDIUM |
-| monitor-prompt-quality handler.mjs wiring | Deferred | MEDIUM |
 
 ---
 
 ## Session 31 objectives — in priority order
 
-### 1. Verify session 30 modal fix end-to-end
-
-```
-/ping core
-→ Step 5 (Test 4 of 7): click "Open Modal"
-  → Slack overlay modal opens
-  → Type "Modal Works"
-  → Click Submit in modal
-  → Dialog closes
-  → Workflow advances to step 5v (js_transform validates ping_modal === 'Modal Works')
-  → Step 6: review_object shows all 4 PASS results
-  → Step 7: condition routes to step 9
-  → Step 9: notify "All 7 dialog types verified"
-```
-
-If modal closes but workflow doesn't advance — check CloudWatch for `handleViewSubmission`
-log entry. If missing, interactive.mjs was not redeployed.
-
-### 2. Verify create_domain modal routing not broken
+### 1. Verify create_domain modal routing not broken
 
 ```
 /create-domain
@@ -144,7 +129,7 @@ log entry. If missing, interactive.mjs was not redeployed.
 
 If it routes to step 3d instead — `handleViewSubmission` routing fix not deployed.
 
-### 3. End-to-end: /m create workflow Spanish flashcard quiz
+### 2. End-to-end: /m create workflow Spanish flashcard quiz
 
 This was the original session 29 end-to-end objective, deferred to session 30, now session 31.
 
@@ -164,15 +149,6 @@ has a `modal` descriptor. With session 30's modal fix, this should now work end-
 
 If step 1b text_input doesn't render — check callback.mjs deployment.
 
-### 4. Seed updated step types
-
-```cmd
-node dev_scripts/upsert-step-type.mjs
-node dev_scripts/upsert-system-context.mjs
-```
-
-Both seed files were updated in session 30. Upsert before running create_workflow tests.
-
 ---
 
 ## Session 31 startup checklist
@@ -180,10 +156,8 @@ Both seed files were updated in session 30. Upsert before running create_workflo
 1. Fetch `architecture-step-processor.md` (session 30 version — just committed)
 2. Fetch `session-handoff.md`
 3. Confirm git tag `v3.2-session30-complete`
-4. Run seed upserts (step types + system context)
-5. Verify ping_core test 4 modal (objective 1)
-6. Verify create_domain modal routing (objective 2)
-7. Then proceed to /m create workflow
+4. Verify create_domain modal routing (objective 2)
+5. Then proceed to /m create workflow
 
 ---
 
@@ -218,27 +192,13 @@ Files deleted:
 
 ## Known open issues — updated
 
-### 1. ping_core test 4 — modal submission not yet confirmed (High)
-Session 30 deployed the modal architecture fix but testing was cut short.
-Verify in session 31 before proceeding to create_workflow.
 
-### 2. Slack App /ping command consolidation (High)
-Four slash commands still registered. Single `/ping` not yet configured in Slack App dashboard.
-Required before /ping core can be invoked.
-
-### 3. create_workflow "Other" modal path (High)
+### 1. create_workflow "Other" modal path (High)
 Session 29 fixed special_buttons on step 1a. Session 30 fixed modal routing.
 First end-to-end test deferred to session 31.
 
-### 4. design-domain.mjs DESIGN_DOMAIN_GATE → HUMAN_GATE (Medium)
+### 2. design-domain.mjs DESIGN_DOMAIN_GATE → HUMAN_GATE (Medium)
 Output file from session 29 not checked in. Verify and check in as Phase 4 in session 31.
 
-### 5. monitor-prompt-quality handler.mjs case missing (Medium)
-HTTP and SQS cases not wired. Blocks the self-healing pipeline.
-
-### 6. Bastion host incomplete (Medium)
-Swap file not configured. Claude Code install in progress.
-`npm config set prefix ~/.npm-global` applied — Claude Code install pending.
-
-### 7. Pass 2 keyword scan excludes domain:null workflows (Low)
+### 3. Pass 2 keyword scan excludes domain:null workflows (Low)
 System workflows unreachable via Pass 2. Unnecessary Tier 2 sonar calls.
