@@ -149,7 +149,13 @@ has a `modal` descriptor. With session 30's modal fix, this should now work end-
 
 If step 1b text_input doesn't render — check callback.mjs deployment.
 
----
+### 3. Review JSON schemas
+
+Currently JSON schemas are primarily used to specify the shape of the LLM response and is stored with the prompts in PGC_Prompts.
+Investigate if this makes sense, or should JSON schemas be stored and shared in another PGC table or some other way. Also 
+evaluate adding to review-output.mjs a validation step of the LLM response against the JSON schema and included in retry if invalid And finally,
+are we specifying workflow steps adequately especially human_gates now containing special_buttons and modals.
+--- 
 
 ## Session 31 startup checklist
 
