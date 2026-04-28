@@ -18,7 +18,7 @@ Types: `api`, `sqs`, `llm`, `e2e`, `db` (new — exp→proc→serv chain), `core
 Files changed: `ping.mjs` (new unified dispatcher), `handler.mjs` (exp + proc),
 `ping-core.mjs` (new), `openapi.yaml`. Deleted: `ping-sqs.mjs`, `ping-llm.mjs`, `ping-e2e.mjs`.
 
-**Slack App config still required (manual):** Replace 4 slash commands with single `/ping`.
+**Slack App config completed. (manual):** Replaced 4 slash commands with single `/ping`.
 
 ### 2. ping_core integration test workflow
 
@@ -85,13 +85,14 @@ Both files now produce stable fingerprints. Second upsert run shows "no changes 
   text_input gate-type table row updated.
 - `architecture-workflows.md` — session 30 header; create_domain step 3a modal routing note.
 
-### 7. Bastion host setup (partial)
+### 7. Bastion host setup
 
 EC2 bastion configured with Node.js 22, SAM CLI, git, tmux. Claude Code installation
-in progress (npm prefix fix applied). Swap file not yet configured.
+completed. (npm prefix fix applied). Swap file configured.
 Instance type: t3.micro recommended (upgrade from t3.nano).
 
-### 8. Miscellaneous
+### 8. Miscellaneous Completions
+
 | Item | Status | Description |
 | ping_core test 4 (modal via special_button) end-to-end verification | ✅Completed | Completed end-to-end  |
 | monitor-prompt-quality handler.mjs wiring | ✅Completed | Completed using Claude Code |
