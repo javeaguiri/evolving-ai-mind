@@ -36,6 +36,15 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 
 Bootstrap (install-time only, NOT on Lambda cold start): `POST /api/v1/serv/bootstrap`
 
+### Monitoring (tail all Lambda logs live)
+
+```bash
+aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short &
+aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short &
+aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short &
+aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short &
+```
+
 ---
 
 ## Architecture
