@@ -1048,7 +1048,7 @@ GROUP BY workflow_id;
 | 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
-| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at`, `session_id` added |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added (`session_id`: Backlog — not yet in DB) |
 | 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
 | 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log` added |
 | 9 | PGC_IntentMap | written at runtime by create_workflow completion |
