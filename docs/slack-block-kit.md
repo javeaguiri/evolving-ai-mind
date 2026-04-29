@@ -117,10 +117,18 @@ to retrieve the value from `state.values` in the interaction payload.
       "type": "input",
       "element": {
         "type": "plain_text_input",
-        "action_id": "plain_text_input-action"
+        "action_id": "plain_text_input-action",
+        "placeholder": {
+          "type": "plain_text",
+          "text": "Write something"
+        }
       },
-      "label": { "type": "plain_text", "text": "Label", "emoji": true },
-      "optional": false
+      "label": {
+        "type": "plain_text",
+        "text": "Label",
+        "emoji": true
+      },
+	  "optional": false
     }
   ]
 }
