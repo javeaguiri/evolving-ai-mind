@@ -198,10 +198,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ## Key Reference Files
 
-- `docs/architecture-core.md` — system overview, stack, tiers, SQS queues, data architecture, SERV layer
-- `docs/architecture-step-processor.md` — Step Processor, step types, stack, local_state, human gates, simulation, right-brain validation
-- `docs/architecture-workflows.md` — create_domain, create_workflow, L/R collaboration, gap taxonomy, self-repair
-- `docs/architecture-reference.md` — pgvector, security, tech debt register, backlog, cost of ownership
+- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows, PGC tables, tech debt register, backlog
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
