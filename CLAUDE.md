@@ -122,6 +122,27 @@ Table names are mixed-case and **must be quoted** in SQL: `"PGC_Schema"`, `"PGD_
 
 Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updated_at`.
 
+#### PGC Table Reference (13 physical tables + 1 view)
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| PGC_Schema | Registry of ALL table definitions (PGC + PGD) | table_name, target, domain, columns, foreign_keys, constraints, triggers |
+| PGC_TableMap | SERV write gatekeeper — rejects writes to unregistered tables | table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete |
+| PGC_EntitySchema | Business entities spanning multiple PGD tables (jsonb_agg queries) | entity_name, root_table, joins, aggregations, upsert_key, domain |
+| PGC_DomainHelp | User-facing aliases + help text per domain; Pass 2 alias matching | domain, aliases, description, commands, embedding |
+| PGC_Workflow | Reusable workflow definitions | name, domain, steps, intent_keywords, state_strategy, model_used, version |
+| PGC_WorkflowRun | One row per execution — stack, state, safety counters | workflow_id, trace_id, status, input, stack, state, output, callback, step_count |
+| PGC_WorkflowRunStep | Append-only step audit log; idempotency on SQS redelivery | run_id, frame_id, step_number, step_type, status, input_snapshot, output_snapshot |
+| PGC_Prompt | LLM prompts with versioning | intent_category, prompt_text, input_variables, output_schema, probe_input, model, version |
+| PGC_IntentMap | Maps patterns → workflows for Pass 1 intent classification | pattern, intent_category, workflow_id, action_type |
+| PGC_SystemContext | Runtime self-description injected into heavy-lift LLM prompts | key, section, content, format, inject_always, inject_for |
+| PGC_StepType | Catalogue of all valid step types with input/output contracts | step_type, description, input_contract, output_contract, status |
+| PGC_Capability | Registry of what the system can do — injected into generation prompts | capability_key, category, description, status, available_in |
+| PGC_WorkflowRunLock | Optimistic locking for future parallel execution (not used yet) | run_id, locked_by, version |
+| PGC_WorkflowStats | SQL view — workflow run stats (not a physical table) | workflow_id, run_count, failure_rate_pct, avg_execution_ms |
+
+> Full column definitions: `docs/architecture.md` section 4.3
+
 ---
 
 ## Tier Boundary Rules (enforced)
