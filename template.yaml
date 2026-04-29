@@ -116,7 +116,9 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                   - ssm:DescribeParameters
-                Resource: "arn:aws:ssm:us-east-2:*:parameter/evolving-mind-ai/*"
+                Resource:
+                  - "arn:aws:ssm:us-east-2:*:parameter/evolving-mind-ai/*"
+                  - "arn:aws:ssm:us-east-2:*:parameter/myapp/*"
               # CloudFormation — full CRUD required for sam deploy
               - Effect: Allow
                 Action:
