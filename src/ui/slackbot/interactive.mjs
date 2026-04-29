@@ -350,7 +350,10 @@ async function handleViewSubmission(payload, correlationId) {
 // ---------------------------------------------------------------------------
 // view_closed — modal dismissed without submitting
 // Fires only when notify_on_close: true is set on the view.
-// Enqueues resume_gate cancel so the workflow routes step 3a on_failure → cancel.
+// Sends the original action that opened the modal (from private_metadata) so that
+// resumeGate can route via on_modal_close when the option declares it — e.g. an
+// edit_list "Add a table" option loops back to the gate rather than cancelling.
+// Falls back to 'cancel' for modals opened by gates without on_modal_close.
 // ---------------------------------------------------------------------------
 
 async function handleViewClosed(payload, correlationId) {
@@ -364,14 +367,15 @@ async function handleViewClosed(payload, correlationId) {
     return { statusCode: 200, body: '' };
   }
 
-  const { workflowRunId, traceId: metaTraceId, callback } = meta;
+  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, callback } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_closed missing workflowRunId or callback', { meta, traceId });
     return { statusCode: 200, body: '' };
   }
 
-  console.info('interactive: view_closed — enqueuing cancel resume_gate', {
+  console.info('interactive: view_closed — enqueuing resume_gate', {
     workflowRunId,
+    userResponse: modalUserResponse ?? 'cancel',
     traceId: metaTraceId ?? traceId,
   });
 
@@ -382,7 +386,7 @@ async function handleViewClosed(payload, correlationId) {
         type:          'WORKFLOW_STEP',
         action:        'resume_gate',
         workflowRunId,
-        userResponse:  'cancel',
+        userResponse:  modalUserResponse ?? 'cancel',
         callback,
         traceId:       metaTraceId ?? traceId,
         enqueuedAt:    new Date().toISOString(),

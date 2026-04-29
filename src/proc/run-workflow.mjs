@@ -516,7 +516,16 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   const matchedOption = allOptions.find(o =>
     isChoice ? o.value === userResponse : o.action === userResponse
   );
-  const onSelect      = matchedOption?.on_select ?? 'next';
+  // When the modal was dismissed without submitting (no inputValue), route via
+  // on_modal_close if the option declares it — allows edit_list gates to loop back
+  // to themselves rather than falling through to on_select (which would advance
+  // with no captured value).
+  const hasModalInput = !!responseData?.inputValue;
+  const onSelect = (
+    !hasModalInput && matchedOption?.on_modal_close !== undefined
+      ? matchedOption.on_modal_close
+      : matchedOption?.on_select
+  ) ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
   // before popping the frame. The value arrives in responseData.inputValue
@@ -542,6 +551,20 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     console.info('run-workflow: choice gate — selection written to local_state', {
       output_key: stepRef.output_key,
       selection:  selectionValue,
+      traceId,
+    });
+  }
+
+  // option-level output_key: edit_list (and future gate types) options that carry a
+  // modal descriptor can declare output_key to write the modal's inputValue directly
+  // into local_state, allowing the workflow to route to an llm_call step without a
+  // redundant downstream text_input gate.
+  if (!isChoice && matchedOption?.output_key && hasModalInput) {
+    setPath(localState, matchedOption.output_key, responseData.inputValue);
+    frame.local_state = localState;
+    console.info('run-workflow: option output_key — modal inputValue written to local_state', {
+      output_key:  matchedOption.output_key,
+      valueLength: responseData.inputValue.length,
       traceId,
     });
   }
