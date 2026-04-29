@@ -4,8 +4,9 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 28 complete  
-Last updated: 2026-04-24 (session 28 — dev tooling overhaul: idempotent upsert-prompt/upsert-workflow with SHA-256 fingerprinting; pull-prompt.mjs writes directly to seed file; extract-run-data.mjs CLI; encoding standard: \uXXXX in seed JSON; GitHub raw URL access protocol; research_workflow_domain v2 with workflow_mode gate and schema constraints; create_workflow v19 with D1-D4 preference quality fixes; seed_PGC_Prompt.json reconciled to DB versions)
+Status: Active development — Session 31 complete  
+Last updated: 2026-04-29 (session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file)
+Previously: session 30 — /ping unified command; ping_core integration test workflow; text_input inline input block (no modal required); special_buttons + modal descriptor architecture; modal button fix: button click no longer advances workflow — only modal submit does; choice gate modal: output_key receives typed inputValue not button value; handleViewSubmission uses original button action for routing; step-executor text_input multiline fix; upsert-workflow/upsert-prompt fingerprint fix: recursive sortKeys for JSONB key-order stability
 
 ---
 
@@ -2761,7 +2762,7 @@ Step Processor receives resume_gate
 |---|---|---|
 | `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
 | `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
-| `text_input` | Type free text, click Submit | Value written to `local_state[output_key]` on resolve |
+| `text_input` | Type free text in an inline Slack input block, click Submit | Value written to `local_state[output_key]` on submit. Set `multiline: true` on the step for a multi-line text area. |
 | `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs |
 | `choice` | Read a question, view labelled options with descriptions, click A/B/C | Options carry `{ value, label, description, on_select }`. `value` written to `local_state[output_key]` on resolve. Mirrors HTML radio button semantics — `value` is submitted, `label` is the button text, `description` is the explanatory sentence shown above buttons |
 | `select_one` | Pick one item from a list | Backlog — `buildDialog` stub exists but `context_key` only accepts flat entity lists. Use `choice` for options with descriptions |
@@ -2795,11 +2796,21 @@ workflow definitions containing gate steps.
 
   "options": [
     { "label": "Looks good", "action": "confirm",   "on_select": "next"    },
-    { "label": "Add a table","action": "add_table", "on_select": "step:3a" },
+    { "label": "Add a table","action": "add_table", "on_select": "step:3a",
+      "modal": { "title": "Add a table", "input_label": "Describe the table",
+                 "placeholder": "What it stores and how it relates.", "multiline": true } },
     { "label": "Cancel",     "action": "cancel",    "on_select": "cancel"  }
   ],
 
-  "output_key": "key_written_to_local_state_on_resolve",
+  "special_buttons": [
+    { "value": "other", "label": "Other", "on_select": "next",
+      "modal": { "title": "Other option", "input_label": "Describe your option",
+                 "placeholder": "Describe your choice", "multiline": false } },
+    { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+  ],
+
+  "input_label":  "Short label above the Slack input element (text_input gate only)",
+  "output_key":   "key_written_to_local_state_on_resolve",
 
   "on_success": "next",
   "on_failure": "cancel"
@@ -2826,7 +2837,7 @@ button. Only `remove_item` is currently implemented; others are Backlog.
 **`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
 routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
 cancels the run. Must include at least one option with `action: "cancel"` (confirm/edit_list)
-or `value: "cancel"` (choice).
+or `value: "cancel"` (choice) — this may be in `special_buttons` instead of `options`.
 
 Two option shapes — determined by `gate_type`:
 - `confirm`, `edit_list`, `review_object` use `{ label, action, on_select }`
@@ -2835,9 +2846,27 @@ Two option shapes — determined by `gate_type`:
   `label` is the short button text (e.g. `"A"`, `"B"`);
   `description` is the explanatory sentence rendered above the buttons as a list.
 
-**`output_key`** — written on gate resolution for two gate types:
+Any option or special_button may carry a **modal descriptor**:
+`{ title, input_label, placeholder, multiline }`
+Clicking the button opens a Slack overlay modal without advancing the workflow.
+When the user submits the modal, `handleViewSubmission` enqueues `resume_gate`
+with the original button action and `responseData.inputValue` (the typed text).
+The button click itself does NOT enqueue `resume_gate` — only modal submission does.
+
+**`special_buttons`** — optional array of buttons appended after `options` in the
+actions block. Never appear in `description_list` or other content fields. Use for:
+- Cancel buttons (so they don't pollute the described option list)
+- "Other" buttons that open a modal for free-text input
+- Any action button that should not be described alongside the main options.
+
+**`input_label`** — `text_input` gate only. Short label shown above the Slack inline
+input element. Defaults to `"Your input"`. The full instructions go in `message_template`.
+
+**`output_key`** — written on gate resolution:
 - `text_input`: the typed value is written to `local_state[output_key]`
-- `choice`: the selected `option.value` is written to `local_state[output_key]`
+- `choice`: the selected `option.value` is written — if the option carried a modal descriptor,
+  the modal typed text (`inputValue`) is written instead of the button value
+- `confirm` with `context_key`: the selected action is written to `local_state[output_key]`
 
 **`on_timeout` / `timeout_seconds`** — reserved fields, not yet implemented.
 When implemented, a gate that receives no user response within `timeout_seconds`
@@ -3466,7 +3495,11 @@ Step 3  human_gate edit_list → user reviews tables, may remove child tables or
         ├── add_table → step:3a (text_input)
         └── cancel    → cancelled
 
-Step 3a human_gate text_input → new_table_description written to local_state
+Step 3a human_gate text_input → new_table_description written to local_state via inline Slack input block
+        Note: "Add a table" button on step 3 carries a modal descriptor for overlay UX.
+        Modal submission resumes step 3 (edit_list) directly — handleViewSubmission routes
+        via original button action (add_table → on_select: step:3a). Step 3a is the
+        intermediate text_input step that captures the description.
 Step 3b llm_call → new_table designed, stored at local_state["new_table"]
 Step 3c js_transform → merge new_table into proposed_scaffold.tables, loop back to step:3
 Step 3d human_gate review_object → user reviews all table column details before DDL
