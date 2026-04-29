@@ -59,13 +59,15 @@
           {
             "label": "Add a table",
             "action": "add_table",
-            "on_select": "step:3a",
+            "on_select": "step:3b",
+            "on_modal_close": "step:3",
             "modal": {
               "title": "Add a table",
               "input_label": "Describe the table",
               "placeholder": "What it stores and how it relates to the other tables.",
               "multiline": true
-            }
+            },
+            "output_key": "new_table_description"
           },
           {
             "label": "Cancel",
@@ -73,28 +75,6 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "3a",
-        "type": "human_gate",
-        "gate_type": "text_input",
-        "description": "User describes the table they want to add.",
-        "message_template": "Describe the table you want to add — what it stores and how it relates to the other tables.",
-        "options": [
-          {
-            "label": "Submit",
-            "action": "confirm",
-            "on_select": "next"
-          },
-          {
-            "label": "Cancel",
-            "action": "cancel",
-            "on_select": "cancel"
-          }
-        ],
-        "output_key": "new_table_description",
         "on_success": "next",
         "on_failure": "cancel"
       },
@@ -418,14 +398,36 @@
         "description": "User declares workflow mode before research begins. Eliminates entire classes of irrelevant preference questions.",
         "message_template": "What should this workflow do with your *{{input.domain}}* data?",
         "options": [
-          { "value": "read",    "label": "A", "description": "Read, query, or display existing records",  "on_select": "step:2" },
-          { "value": "write",   "label": "B", "description": "Add or import new records into the domain", "on_select": "step:2" },
-          { "value": "enrich",  "label": "C", "description": "Transform or update existing records",      "on_select": "step:2" },
-          { "value": "analyze", "label": "D", "description": "Aggregate, report, or summarize data",      "on_select": "step:2" }
+          {
+            "value": "read",
+            "label": "A",
+            "description": "Read, query, or display existing records",
+            "on_select": "step:2"
+          },
+          {
+            "value": "write",
+            "label": "B",
+            "description": "Add or import new records into the domain",
+            "on_select": "step:2"
+          },
+          {
+            "value": "enrich",
+            "label": "C",
+            "description": "Transform or update existing records",
+            "on_select": "step:2"
+          },
+          {
+            "value": "analyze",
+            "label": "D",
+            "description": "Aggregate, report, or summarize data",
+            "on_select": "step:2"
+          }
         ],
         "special_buttons": [
           {
-            "value": "other", "label": "Other", "on_select": "next",
+            "value": "other",
+            "label": "Other",
+            "on_select": "next",
             "modal": {
               "title": "Describe your workflow",
               "input_label": "What should this workflow do?",
@@ -433,7 +435,11 @@
               "multiline": true
             }
           },
-          { "value": "cancel", "label": "Cancel", "on_select": "cancel" }
+          {
+            "value": "cancel",
+            "label": "Cancel",
+            "on_select": "cancel"
+          }
         ],
         "output_key": "workflow_mode",
         "on_success": "next",
@@ -447,8 +453,16 @@
         "message_template": "Describe what this workflow should do:",
         "output_key": "workflow_mode_other",
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -458,11 +472,11 @@
         "type": "llm_call",
         "description": "Right brain: retrieve domain best practices and identify preference questions that affect workflow structure.",
         "input": {
-           "prompt": "research_workflow_domain",
-           "domain": "{{input.domain}}",
-           "workflow_description": "{{input.userInput}}",
-           "domain_schema": "{{domain_schema}}",
-           "workflow_mode": "{{workflow_mode}}"
+          "prompt": "research_workflow_domain",
+          "domain": "{{input.domain}}",
+          "workflow_description": "{{input.userInput}}",
+          "domain_schema": "{{domain_schema}}",
+          "workflow_mode": "{{workflow_mode}}"
         },
         "output_key": "right_brain_research",
         "on_success": "next",
@@ -541,12 +555,24 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "Optional free-text gate for user to provide design context not surfaced by the preference questions. Skip proceeds without writing anything.",
-        "message_template": "Anything else I should know about how this workflow should behave? Add context the questions above didn\u2019t cover, or press Skip.",
+        "message_template": "Anything else I should know about how this workflow should behave? Add context the questions above didn’t cover, or press Skip.",
         "output_key": "user_design_notes",
         "options": [
-          { "label": "Submit", "action": "confirm", "on_select": "next"   },
-          { "label": "Skip",   "action": "confirm", "on_select": "next"   },
-          { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Skip",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_failure": "cancel"
@@ -2146,6 +2172,6 @@
         "step": "10",
         "type": "end"
       }
-    ]          
+    ]
   }
 ]
