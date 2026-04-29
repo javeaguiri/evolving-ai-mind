@@ -427,7 +427,7 @@
           {
             "value": "other",
             "label": "Other",
-            "on_select": "next",
+            "on_select": "step:2",
             "modal": {
               "title": "Describe your workflow",
               "input_label": "What should this workflow do?",
@@ -442,28 +442,6 @@
           }
         ],
         "output_key": "workflow_mode",
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "1b",
-        "type": "human_gate",
-        "gate_type": "text_input",
-        "description": "Captures free-text description when user selected 'Something else' in step 1a.",
-        "message_template": "Describe what this workflow should do:",
-        "output_key": "workflow_mode_other",
-        "options": [
-          {
-            "label": "Submit",
-            "action": "confirm",
-            "on_select": "next"
-          },
-          {
-            "label": "Cancel",
-            "action": "cancel",
-            "on_select": "cancel"
-          }
-        ],
         "on_success": "next",
         "on_failure": "cancel"
       },
