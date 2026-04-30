@@ -262,12 +262,18 @@ async function postHumanGate(message) {
       },
       label: { type: 'plain_text', text: textboxField.label ?? 'Your input' },
     };
-    const blocks = [
-      ...textToBlocks(fallbackText),
-      inputBlock,
-      {
-        type: 'actions',
-        elements: [
+    // Use buttons from dialog.fields actions — respects Skip/Cancel defined in step.options.
+    // Falls back to hardcoded Submit + Cancel if no actions field present.
+    const actionsField = dialog?.fields?.find(f => f.type === 'actions');
+    const actionElements = actionsField
+      ? (actionsField.buttons ?? []).map((btn, i) => ({
+          type:      'button',
+          ...(btn.style === 'primary' || btn.style === 'danger' ? { style: btn.style } : {}),
+          text:      { type: 'plain_text', text: btn.label },
+          action_id: `workflow_action_${btn.action || i}_${i}`,
+          value:     JSON.stringify({ workflowRunId, action: btn.action }),
+        }))
+      : [
           {
             type:      'button',
             style:     'primary',
@@ -281,8 +287,11 @@ async function postHumanGate(message) {
             action_id: 'workflow_text_cancel',
             value:     JSON.stringify({ workflowRunId, action: 'cancel' }),
           },
-        ],
-      },
+        ];
+    const blocks = [
+      ...textToBlocks(fallbackText),
+      inputBlock,
+      { type: 'actions', elements: actionElements },
     ];
     await routeCallback(callback, fallbackText.slice(0, 150), blocks);
     console.info('callback: HUMAN_GATE text_input posted', { workflowRunId, multiline: isMultiline, traceId });

@@ -2,6 +2,49 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**CRITICAL:** Read `docs/architecture.md` at the start of every session. It contains every architectural decision, their rationale, and decisions explicitly marked final. Never suggest alternatives to decisions marked as final.
+
+---
+
+## Project Identity
+
+**evolving-mind-ai** is a standalone secondary brain for individuals and households with a low cost of ownership. It builds memory structures through a `create_domain` workflow and stores them in PostgreSQL tables with a `PGD_` prefix. Complex processing is handled by user-defined workflows that are then reused with minimal or no AI.
+
+### L/R Brain
+
+LLM prompts are divided into Left-brain (analytical, structured reasoning) and Right-brain (environmental awareness, surfacing general subject matter content) activities. Maintain this division in new prompts.
+
+### Static System vs Evolving Artifacts
+
+**This boundary is the most important architectural constraint in the codebase.**
+
+| Category | Examples |
+|----------|---------|
+| **Static system** (code) | `run-workflow.mjs`, `step-executor.mjs`, `classify-intent.mjs`, all Lambda handlers, shared utilities |
+| **Evolving artifacts** (data) | `PGC_Workflow` rows, `PGC_Prompt` rows, `PGC_SystemContext` rows, `PGC_DomainHelp` rows, `PGC_IntentMap` rows, all `PGD_*` tables |
+
+Rules:
+- Never hard-code evolving artifact content inside system code.
+- New system behaviours = new step types in `step-executor.mjs`. New business logic = updated workflow JSON in `PGC_Workflow`.
+- **When unclear whether something belongs in system code or an artifact: ask, or default to treating it as an evolving artifact.**
+
+### Bug Fix Philosophy
+
+Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
+
+---
+
+## Final Decisions (non-negotiable)
+
+Never suggest changing:
+- ESM module format (`.mjs`)
+- esbuild bundler
+- Shared `LambdaExecutionRole`
+- Lambda-outside-VPC architecture
+- SSM `String` parameters (not `SecureString`)
+
+---
+
 ## Commands
 
 ```bash
@@ -38,14 +81,10 @@ Bootstrap (install-time only, NOT on Lambda cold start): `POST /api/v1/serv/boot
 
 ### Monitoring (tail all Lambda logs live)
 
+Run as a **single command** (all four tails in one Bash call — avoids multiple permission prompts):
+
 ```bash
-# Start tailing — prefixes each line with function name, writes to /tmp/lambda-logs.txt
-aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short 2>&1 | sed "s/^/[slackbot] /" &
-aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short 2>&1 | sed "s/^/[proc] /" &
-aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short 2>&1 | sed "s/^/[serv] /" &
-aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short 2>&1 | sed "s/^/[callback] /" &
-wait
-> /tmp/lambda-logs.txt 2>&1 &
+truncate -s 0 /tmp/lambda-logs.txt 2>/dev/null || touch /tmp/lambda-logs.txt; nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short 2>&1 | sed "s/^/[slackbot] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short 2>&1 | sed "s/^/[proc] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short 2>&1 | sed "s/^/[serv] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short 2>&1 | sed "s/^/[callback] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 &
 
 # Read latest output
 tail -f /tmp/lambda-logs.txt
@@ -187,11 +226,18 @@ LLM output must always pass through `review-output.mjs` before being written to 
   // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
   // See LICENSE file in the project root for full license terms.
   ```
-- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture-core.md` for new SQS message types, step types, gate types, and PGC tables.
+- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture.md` for new SQS message types, step types, gate types, and PGC tables.
 - **Seed files** use `\uXXXX` escape sequences (native `JSON.stringify` output). `.gitattributes` enforces LF line endings.
 - **Template JSON files** in `src/serv/templates/pgc/*.json` are ES module static imports bundled by esbuild — not read via `fs` at runtime.
 - **Environment:** All secrets are in AWS SSM Parameter Store. No `.env` files at runtime. Use `.env.test.template` for local test setup.
 - **Human Gate flow:** Step Processor suspends → `HUMAN_GATE` SQS → SlackCallbackListenerFunction renders Block Kit → user clicks → `/interactive` → `resume_gate` SQS → Step Processor resumes.
+- **Seed file updates:** Never write directly to the database to update seeded values. Edit `seed_PGC_Workflow.json` or `seed_PGC_Prompt.json` then run the corresponding `dev_scripts/upsert-*.mjs` script.
+- **DB connections:** All `pg` connections use `ssl: { rejectUnauthorized: false }` — never change this. The 13 PGC system tables are bootstrapped and seeded — do not recreate them.
+- **Propose before implementing:** On complex tasks, propose the approach and wait for confirmation before writing code.
+- **No whitespace drift:** Do not add whitespace to lines or comments not affected by a change. Keeps diffs and git logs clean.
+- **No defensive code:** Do not add error handling, guards, or workarounds for problems that are symptoms of a missing architectural piece. Identify the root cause and the correct fix. Defer only usability/cosmetic items to the tech debt register.
+- **No file content inference:** Always read the actual file before modifying it. Never reconstruct contents from memory or prior session context.
+- **Reuse before adding:** Check existing patterns in the codebase before introducing new utilities or abstractions. Propose extracting common code when duplication is found.
 
 ---
 
@@ -201,3 +247,11 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
+
+---
+
+## AWS Environment
+
+- **Stack:** `evomind-infrastructure`, region `us-east-2`
+- **API base:** `https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod`
+- **Lambda functions:** `evolving-mind-ai-slackbot`, `evolving-mind-ai-proc`, `evolving-mind-ai-serv`, `evolving-mind-ai-slack-callback-listener`
