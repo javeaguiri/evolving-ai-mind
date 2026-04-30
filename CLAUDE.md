@@ -70,7 +70,8 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 
 | Script | Purpose |
 |--------|---------|
-| `node dev_scripts/upsert-workflow.mjs` | Push workflow definitions to PGC_Workflow |
+| `node dev_scripts/upsert-workflow.mjs` | Push all workflow definitions to PGC_Workflow |
+| `node dev_scripts/upsert-workflow.mjs ping_core` | Push one named workflow (any `name` from seed file) |
 | `node dev_scripts/upsert-prompt.mjs` | Push prompts to PGC_Prompt |
 | `node dev_scripts/upsert-step-type.mjs` | Push step type definitions |
 | `node dev_scripts/upsert-system-context.mjs` | Push system context |
