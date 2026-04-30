@@ -198,6 +198,11 @@ Resources:
                 Action:
                   - ec2:DescribeKeyPairs
                 Resource: "*"
+              # RDS — DescribeDBInstances required for CloudFormation to resolve !GetAtt EvoMindDB.Endpoint.Address
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                Resource: "*"
               # IAM — PassRole to Lambda + manage roles/instance profiles defined in template
               - Effect: Allow
                 Action:
