@@ -40,13 +40,12 @@ Bootstrap (install-time only, NOT on Lambda cold start): `POST /api/v1/serv/boot
 
 ```bash
 # Start tailing — prefixes each line with function name, writes to /tmp/lambda-logs.txt
-nohup bash -c '
 aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short 2>&1 | sed "s/^/[slackbot] /" &
 aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short 2>&1 | sed "s/^/[proc] /" &
 aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short 2>&1 | sed "s/^/[serv] /" &
 aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short 2>&1 | sed "s/^/[callback] /" &
 wait
-' > /tmp/lambda-logs.txt 2>&1 &
+> /tmp/lambda-logs.txt 2>&1 &
 
 # Read latest output
 tail -f /tmp/lambda-logs.txt
