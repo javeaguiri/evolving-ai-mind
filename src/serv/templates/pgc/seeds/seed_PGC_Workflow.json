@@ -1847,7 +1847,7 @@
         "step": "1",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do, and will verify your response before proceeding.\n\nTests:\n  1. Choice gate — click the correct button\n  2. Text input — single-line modal\n  3. Multiline input — multiline modal\n  4. Modal via button — special_button modal trigger\n  5. Review object — structured data display\n  6. Condition step — routing test\n  7. Notify — completion message\n\nClick Start to begin.",
+        "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do, and will verify your response before proceeding.\n\nTests:\n  1. Choice gate — click the correct button\n  2. Text input — single-line\n  3. Multiline input — multiline\n  4. Modal via button — special_button modal trigger\n  5. Text input special button — Skip routes without text\n  6. Review object — structured data display\n  7. Condition step — routing test\n  8. Notify — completion message\n\nClick Start to begin.",
         "options": [
           {
             "value": "start",
@@ -2038,7 +2038,7 @@
         "step": "5",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 4 of 7 — Modal via special_button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
+        "message_template": "Test 4 of 8 — Modal via special_button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
         "output_key": "ping_modal",
         "options": [],
         "special_buttons": [
@@ -2077,7 +2077,7 @@
         "type": "condition",
         "description": "Route on modal validation result.",
         "expression": "{{modal_valid}}",
-        "on_truthy": "6",
+        "on_truthy": "5b",
         "on_falsy": "5e"
       },
       {
@@ -2101,11 +2101,41 @@
         "on_failure": "cancel"
       },
       {
+        "step": "5b",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Test text_input with Skip special_button. Verifies that special_buttons render and route independently from Submit on text_input gate types.",
+        "message_template": "Test 5 of 8 — Text Input Special Button\n\nSPECIAL BUTTON TEST: An inline text field appears below alongside a *Skip* button.\n\nDo NOT type anything and do NOT click Submit. Click *Skip* — this verifies that a special_button on a text_input gate routes without requiring text input.",
+        "output_key": "ping_text_special",
+        "multiline": false,
+        "options": [
+          { "label": "Submit", "action": "confirm", "on_select": "step:5be" },
+          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+        ],
+        "special_buttons": [
+          { "action": "skip", "label": "Skip", "on_select": "step:6", "style": "primary" }
+        ],
+        "on_success": "step:6",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "5be",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong button — this test requires clicking *Skip*, not Submit.\n\nThe Skip special_button should appear in the actions row alongside Submit. Click Try Again.",
+        "options": [
+          { "label": "Try Again", "action": "confirm", "on_select": "step:5b" },
+          { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+        ],
+        "on_success": "step:5b",
+        "on_failure": "cancel"
+      },
+      {
         "step": "6",
         "type": "js_transform",
         "description": "Build review summary from all collected test results.",
         "input_key": "ping_text",
-        "expression": "(function(){ return { 'Test 1 - Choice': 'PASS — clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS — entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS — ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS — entered: ' + (local_state.ping_modal || ''), 'Tests 5-7': 'Pending — review object, condition, notify' }; })()",
+        "expression": "(function(){ return { 'Test 1 - Choice': 'PASS — clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS — entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS — ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS — entered: ' + (local_state.ping_modal || ''), 'Test 5 - Text input special button': 'PASS — skip routed', 'Tests 6-8': 'Pending — review object, condition, notify' }; })()",
         "output_key": "ping_summary",
         "on_success": "next",
         "on_failure": "cancel"
@@ -2114,7 +2144,7 @@
         "step": "7",
         "type": "human_gate",
         "gate_type": "review_object",
-        "message_template": "Test 5 of 7 — Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
+        "message_template": "Test 6 of 8 — Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
         "context_key": "ping_summary",
         "options": [
           {
@@ -2134,7 +2164,7 @@
       {
         "step": "8",
         "type": "condition",
-        "description": "Test 6 of 7 — Condition step: routes on ping_text presence. Both paths converge on step 9.",
+        "description": "Test 7 of 8 — Condition step: routes on ping_text presence. Both paths converge on step 9.",
         "expression": "{{ping_text}}",
         "on_truthy": "9",
         "on_falsy": "9"
@@ -2142,7 +2172,7 @@
       {
         "step": "9",
         "type": "notify",
-        "message_template": "Test 7 of 7 — Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Review object: PASS\n- Condition step: PASS (routed to notify)\n- Notify step: PASS (this message)\n\nAll 7 dialog types verified.",
+        "message_template": "Test 8 of 8 — Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Text input special button: PASS (skip routed)\n- Review object: PASS\n- Condition step: PASS (routed to notify)\n- Notify step: PASS (this message)\n\nAll 8 dialog types verified.",
         "notify_type": "HUMAN_NOTIFICATION",
         "on_success": "end"
       },

@@ -1,0 +1,605 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "evolving-mind-ai/workflow",
+  "title": "Workflow Definition",
+  "description": "Complete JSON Schema for a workflow stored in PGC_Workflow.steps. Authoritative source: docs/architecture.md sections 6.5.1–6.5.5. Used by generate_workflow_steps and design_workflow_dialogs LLM prompts to validate generated output.",
+  "type": "object",
+  "required": ["name", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "snake_case unique workflow identifier. Matches PGC_Workflow.name."
+    },
+    "domain": {
+      "type": ["string", "null"],
+      "description": "PGD domain this workflow belongs to. Null for system-level workflows."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "description": "One-sentence description for workflow authors and right-brain LLM context."
+    },
+    "version": {
+      "type": "integer",
+      "description": "Monotonically incrementing version. Managed by upsert-workflow.mjs — do not set manually."
+    },
+    "was_successful": {
+      "type": ["boolean", "null"],
+      "description": "Outcome of the last probe run. Null until first probe."
+    },
+    "state_strategy": {
+      "type": "string",
+      "enum": ["sequential", "sequential_with_confirmation"],
+      "description": "'sequential' — advance automatically. 'sequential_with_confirmation' — pause for user confirmation between steps."
+    },
+    "model_used": {
+      "type": ["string", "null"],
+      "description": "LLM model that generated this workflow. Informational only."
+    },
+    "intent_keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Natural language phrases used for Pass 2 LLM intent classification."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 2,
+      "description": "Ordered step array. Step keys are arbitrary strings ('1', '3a', '5b'). Must include at least one 'end' step. The Step Processor resolves keys by string equality — parseInt is never used.",
+      "items": { "$ref": "#/definitions/step" }
+    }
+  },
+
+  "definitions": {
+
+    "routingToken": {
+      "type": "string",
+      "pattern": "^(next|end|cancel|human_feedback|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
+      "description": "Valid routing value for on_success, on_failure, on_select. 'next' = advance to next step in array order; 'step:N' = jump to step with key N; 'cancel' = cancel run; 'end' = complete run; 'human_feedback' = suspend for human review (on_failure only)."
+    },
+
+    "bareStepKey": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_]*$",
+      "description": "Used ONLY in condition.on_truthy and condition.on_falsy. Bare step key without any prefix — the executor internally resolves it as step:N. NEVER use routing tokens (next, end, cancel) here — they will fail at runtime."
+    },
+
+    "modalDescriptor": {
+      "type": "object",
+      "description": "Attached to an option or special_button. Clicking the button opens a Slack overlay modal without advancing the workflow. The workflow stays suspended at the current gate. Only modal submission (handleViewSubmission) enqueues resume_gate.",
+      "required": ["title"],
+      "additionalProperties": false,
+      "properties": {
+        "title":       { "type": "string", "description": "Modal header text." },
+        "input_label": { "type": "string", "description": "Label above the text input in the modal." },
+        "placeholder": { "type": "string", "description": "Placeholder text in the modal input." },
+        "multiline":   { "type": "boolean", "default": false, "description": "True renders a textarea; false renders a single-line input." }
+      }
+    },
+
+    "filterItem": {
+      "type": "object",
+      "description": "Single WHERE clause condition for serv_query, serv_update, serv_delete. 'value' supports {{template}} substitution against local_state.",
+      "required": ["column", "op", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "column": { "type": "string" },
+        "op": {
+          "type": "string",
+          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in"],
+          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array)"
+        },
+        "value": {
+          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          ]
+        }
+      }
+    },
+
+    "confirmOption": {
+      "type": "object",
+      "description": "Option shape for confirm, edit_list, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
+      "required": ["label", "action", "on_select"],
+      "additionalProperties": false,
+      "properties": {
+        "label":          { "type": "string", "description": "Button text shown to the user." },
+        "action":         { "type": "string", "description": "Machine identifier matched by resume_gate. 'confirm' and 'cancel' are conventional values." },
+        "on_select":      { "$ref": "#/definitions/routingToken" },
+        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this option's modal is dismissed without submitting. Defaults to on_select." },
+        "output_key":     { "type": "string", "description": "Option-level output_key. When this option carries a modal, the modal inputValue is written to this local_state key on submit — instead of the parent step's output_key." },
+        "modal":          { "$ref": "#/definitions/modalDescriptor" }
+      }
+    },
+
+    "choiceOption": {
+      "type": "object",
+      "description": "Option shape for choice gate types. Uses 'value' (not 'action') as the machine identifier. 'value' is written to output_key on selection (or replaced by modal inputValue if a modal was submitted).",
+      "required": ["label", "value", "on_select"],
+      "additionalProperties": false,
+      "properties": {
+        "label":       { "type": "string", "description": "Short button text — typically a single letter (A, B, C) or short word." },
+        "value":       { "type": "string", "description": "Machine identifier written to output_key. Used by resume_gate to match the user's selection." },
+        "description": { "type": "string", "description": "Explanatory sentence displayed above the buttons in the Slack message." },
+        "on_select":   { "$ref": "#/definitions/routingToken" },
+        "modal":       { "$ref": "#/definitions/modalDescriptor" }
+      }
+    },
+
+    "specialButton": {
+      "type": "object",
+      "description": "Button appended AFTER options in the Slack actions block. Never appears in description_list or other content fields. Use for: Cancel (so it does not appear in the option description list), Other/Skip buttons, modal triggers. Field convention: use 'value' for choice gates; use 'action' for all other gate types (confirm, text_input, edit_list, review_object).",
+      "required": ["label", "on_select"],
+      "additionalProperties": false,
+      "properties": {
+        "label":          { "type": "string" },
+        "value":          { "type": "string", "description": "Machine identifier for choice gate special_buttons." },
+        "action":         { "type": "string", "description": "Machine identifier for non-choice gate special_buttons." },
+        "on_select":      { "$ref": "#/definitions/routingToken" },
+        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this button's modal is dismissed without submitting." },
+        "style":          { "type": "string", "enum": ["primary", "danger", "default"], "description": "Slack button style. Omitting defaults to 'default'." },
+        "output_key":     { "type": "string", "description": "Writes modal inputValue to this local_state key on modal submit." },
+        "modal":          { "$ref": "#/definitions/modalDescriptor" }
+      }
+    },
+
+    "itemAction": {
+      "type": "object",
+      "description": "Per-row action button for edit_list gates. Currently only 'remove_item' is implemented.",
+      "required": ["action", "action_data_key"],
+      "additionalProperties": false,
+      "properties": {
+        "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy do not receive the action button." },
+        "action":           { "type": "string", "enum": ["remove_item"] },
+        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName'." },
+        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in the removal confirmation dialog. Supports {{item.field}} placeholders." }
+      }
+    },
+
+    "step": {
+      "type": "object",
+      "description": "A single workflow instruction. Discriminated by 'type'. Step keys are arbitrary strings — the Step Processor resolves them by string equality.",
+      "required": ["step", "type"],
+      "oneOf": [
+        { "$ref": "#/definitions/llmCallStep" },
+        { "$ref": "#/definitions/jsTransformStep" },
+        { "$ref": "#/definitions/humanGateStep" },
+        { "$ref": "#/definitions/servSchemaStep" },
+        { "$ref": "#/definitions/servQueryStep" },
+        { "$ref": "#/definitions/servInsertStep" },
+        { "$ref": "#/definitions/servUpdateStep" },
+        { "$ref": "#/definitions/servDeleteStep" },
+        { "$ref": "#/definitions/servEntityQueryStep" },
+        { "$ref": "#/definitions/servEntityGetStep" },
+        { "$ref": "#/definitions/servEntitySchemaStep" },
+        { "$ref": "#/definitions/conditionStep" },
+        { "$ref": "#/definitions/iteratorStep" },
+        { "$ref": "#/definitions/notifyStep" },
+        { "$ref": "#/definitions/simulateStep" },
+        { "$ref": "#/definitions/endStep" }
+      ]
+    },
+
+    "llmCallStep": {
+      "type": "object",
+      "description": "Loads a prompt from PGC_Prompt by intent_category key, calls the LLM, and runs review-output.mjs validation (2-attempt correction loop). Right-brain hooks are wired in by the Step Processor — no workflow changes needed.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "llm_call" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["prompt"],
+          "additionalProperties": true,
+          "properties": {
+            "prompt": { "type": "string", "description": "PGC_Prompt.intent_category key — must match an existing row." }
+          },
+          "description": "All fields other than 'prompt' are passed as template variables into the LLM prompt text via {{variable}} substitution."
+        },
+        "output_key":  { "type": "string", "description": "local_state key where the parsed LLM JSON response is written." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "jsTransformStep": {
+      "type": "object",
+      "description": "Evaluates a synchronous JS expression in a sandboxed vm.runInNewContext context. Restricted to pure data transformation — no I/O, no async, no require. Timeout: 200ms.",
+      "required": ["step", "type", "expression", "output_key"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "js_transform" },
+        "description": { "type": "string" },
+        "input_key":   {
+          "type": "string",
+          "description": "Dot-path into local_state. Resolved value is available as 'items' in the sandbox. Required if the expression reads 'items'."
+        },
+        "expression":  {
+          "type": "string",
+          "description": "Synchronous JS value expression. Available bindings: 'items' (resolved input_key value), 'local_state' (full state object), JSON, Math, Array, Object, String, Number, Boolean, Date. No 'return' keyword at top level — expression must evaluate to a value. Wrap multi-statement logic in an IIFE: (function(){ ... })(). Forbidden: require, import, process, global, await, async, eval, fetch, new Function."
+        },
+        "output_key":  { "type": "string", "description": "Dot-path into local_state where the expression result is written." },
+        "system_key":  { "type": "string", "description": "Optional. Identifies a PGC_SystemContext key whose content is injected as 'system' binding in the sandbox." },
+        "max_rows":    { "type": "integer", "description": "Optional. Caps the number of rows returned when the expression produces an array. Applied after the expression evaluates." },
+        "root_only":   { "type": "boolean", "description": "Optional. When true, strips child arrays from entity result objects before writing to output_key." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "humanGateStep": {
+      "type": "object",
+      "description": "Suspends the workflow stack and presents a Slack dialog. Resumes when the user responds via /interactive. Gate type determines the dialog shape, option schema, and what is written to output_key. Options must include at least one cancel path.",
+      "required": ["step", "type", "gate_type", "message_template", "options", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "human_gate" },
+        "description": { "type": "string" },
+        "gate_type": {
+          "type": "string",
+          "enum": ["confirm", "edit_list", "text_input", "review_object", "choice"],
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. edit_list: scrollable list with per-row actions. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions."
+        },
+        "message_template": {
+          "type": "string",
+          "description": "Slack mrkdwn displayed above the dialog. Supports {{key}}, {{key.field}}, {{key.0.field}}, {{item.field}} (inside iterator only), {{input.field}} template substitution. Resolved at suspension time against local_state."
+        },
+        "output_key": {
+          "type": "string",
+          "description": "Required for text_input (written on Submit) and choice (written on selection or modal submit). The typed modal text (inputValue) takes precedence over the button value for choice gates with modal options."
+        },
+        "context_key": {
+          "type": "string",
+          "description": "Dot-path into local_state. Required for edit_list (must resolve to an array) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
+        },
+        "item_primary_key":    { "type": "string", "description": "edit_list / review_object: field used as the row label. Defaults to 'tableName' for arrays." },
+        "item_secondary_key":  { "type": "string", "description": "edit_list: field shown as secondary text below the row label." },
+        "item_label_template": { "type": "string", "description": "review_object array mode: template for the row label, e.g. 'step {{step}} — {{field}}'. Resolved against each array item's own properties." },
+        "item_action":         { "$ref": "#/definitions/itemAction" },
+        "input_label": {
+          "type": "string",
+          "description": "text_input only. Short label shown above the Slack input element. Defaults to 'Your input'. Full instructions go in message_template."
+        },
+        "multiline": {
+          "type": "boolean",
+          "default": false,
+          "description": "text_input only. True renders a multi-line textarea; false renders a single-line input."
+        },
+        "options": {
+          "type": "array",
+          "description": "Gate action buttons. Shape is determined by gate_type: choice gates use choiceOption (value field, not action); all other gate types use confirmOption (action field, not value). Must include at least one cancel path — either here or in special_buttons.",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/confirmOption" },
+              { "$ref": "#/definitions/choiceOption" }
+            ]
+          }
+        },
+        "special_buttons": {
+          "type": "array",
+          "description": "Appended after options in the Slack actions block. Never rendered in description_list. Field convention: choice gates use 'value'; non-choice gates use 'action'. Any button may carry a modal descriptor to open an overlay without advancing the workflow.",
+          "items": { "$ref": "#/definitions/specialButton" }
+        },
+        "on_success": { "$ref": "#/definitions/routingToken" },
+        "on_failure": { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servSchemaStep": {
+      "type": "object",
+      "description": "Creates a PGD table via SERV /schema/createTable. Typically used inside a non-suspending iterator to create tables from an array of table definition objects.",
+      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_schema" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "description": "Full table definition object (tableName, columns, etc.), or a template string resolving to one. Use '{{item}}' inside an iterator to pass each array element.",
+          "properties": {
+            "table": { "type": "string", "description": "Template resolving to a table definition object. Typically '{{item}}' inside an iterator." }
+          },
+          "additionalProperties": true
+        },
+        "output_key":  { "type": "string" },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servQueryStep": {
+      "type": "object",
+      "description": "SELECT rows from a PGD or PGC table via SERV. For domains with child tables, prefer serv_entity_query.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_query" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["tableName"],
+          "additionalProperties": false,
+          "properties": {
+            "tableName": { "type": "string", "description": "Mixed-case table name without SQL quotes — SERV adds them." },
+            "filters":   { "type": "array", "items": { "$ref": "#/definitions/filterItem" } },
+            "limit":     { "type": "integer" },
+            "orderBy": {
+              "type": "object",
+              "description": "Optional ORDER BY clause.",
+              "required": ["column"],
+              "additionalProperties": false,
+              "properties": {
+                "column":    { "type": "string" },
+                "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+              }
+            }
+          }
+        },
+        "output_key":  { "type": "string" },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servInsertStep": {
+      "type": "object",
+      "description": "INSERT one row into a PGD or PGC table via SERV. Table must be registered in PGC_TableMap with allow_insert: true. Never include id, created_at, or updated_at in the row.",
+      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_insert" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["tableName", "row"],
+          "additionalProperties": false,
+          "properties": {
+            "tableName": { "type": "string" },
+            "row": {
+              "description": "Column key/value pairs, or a {{template}} string resolving to an object at runtime (e.g. '{{generated.domainHelp}}'). Do not include id, created_at, updated_at.",
+              "oneOf": [
+                { "type": "object", "additionalProperties": true },
+                { "type": "string" }
+              ]
+            }
+          }
+        },
+        "output_key":  { "type": "string", "description": "Optional. Receives the inserted row if provided." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servUpdateStep": {
+      "type": "object",
+      "description": "UPDATE matching rows in a PGD or PGC table via SERV. Enforces non-empty filters — will refuse to update without a WHERE clause.",
+      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_update" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["tableName", "filters", "updates"],
+          "additionalProperties": false,
+          "properties": {
+            "tableName": { "type": "string" },
+            "filters":   { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/filterItem" } },
+            "updates": {
+              "description": "Column key/value pairs to SET, or a {{template}} string resolving to an object at runtime (e.g. '{{input.updates}}').",
+              "oneOf": [
+                { "type": "object", "additionalProperties": true },
+                { "type": "string" }
+              ]
+            }
+          }
+        },
+        "output_key":  { "type": "string" },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servDeleteStep": {
+      "type": "object",
+      "description": "DELETE matching rows from a PGD or PGC table via SERV. Enforces non-empty filters — will refuse to delete without a WHERE clause.",
+      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_delete" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["tableName", "filters"],
+          "additionalProperties": false,
+          "properties": {
+            "tableName": { "type": "string" },
+            "filters":   { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/filterItem" } }
+          }
+        },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servEntityQueryStep": {
+      "type": "object",
+      "description": "LIST assembled entities via SERV Entity. Returns root columns plus jsonb_agg child arrays. Use instead of serv_query for domains with child tables or when a full entity display is needed.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_entity_query" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["entityName"],
+          "additionalProperties": false,
+          "properties": {
+            "entityName": { "type": "string", "description": "PascalCase singular name from PGC_EntitySchema.entity_name (e.g. 'Recipe', not 'Recipes')." },
+            "filters":    { "type": "array", "items": { "$ref": "#/definitions/filterItem" } },
+            "limit":      { "type": "integer" }
+          }
+        },
+        "output_key":  { "type": "string" },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servEntityGetStep": {
+      "type": "object",
+      "description": "FETCH a single assembled entity by id via SERV Entity. Returns root columns plus all child arrays.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_entity_get" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["entityName", "id"],
+          "additionalProperties": false,
+          "properties": {
+            "entityName": { "type": "string", "description": "PascalCase singular name from PGC_EntitySchema.entity_name." },
+            "id":         { "type": "string", "description": "Entity id. Supports {{template}} substitution." }
+          }
+        },
+        "output_key":  { "type": "string" },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servEntitySchemaStep": {
+      "type": "object",
+      "description": "Loads a full entity schema by joining PGC_EntitySchema (topology) with PGC_Schema (live column definitions). Replaces the two-step serv_query + js_transform pattern. Use when a workflow needs to know the entity's join structure and column list at runtime.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_entity_schema" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["entityName"],
+          "additionalProperties": false,
+          "properties": {
+            "entityName": { "type": "string", "description": "PascalCase singular name. Supports {{template}} substitution." }
+          }
+        },
+        "output_key":  { "type": "string", "description": "Receives { entity_name, description, root: { table, columns }, children: [{ table, alias, fk_column, columns }] }." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "conditionStep": {
+      "type": "object",
+      "description": "Evaluates a {{template}} expression against local_state and routes to on_truthy or on_falsy. Produces no output — no output_key. Truthy: resolved value is non-empty, not 'null', not 'undefined', not '0', and contains no unresolved {{ markers.",
+      "required": ["step", "type", "expression", "on_truthy", "on_falsy"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "condition" },
+        "description": { "type": "string" },
+        "expression":  { "type": "string", "description": "{{template}} resolved against local_state. Examples: '{{input.id}}', '{{text_valid}}', '{{ping_text}}'." },
+        "on_truthy":   { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is truthy. Bare key only — do NOT prefix with 'step:'." },
+        "on_falsy":    { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is falsy. Bare key only — do NOT prefix with 'step:'." }
+      }
+    },
+
+    "iteratorStep": {
+      "type": "object",
+      "description": "Loops over an array in local_state, executing item_step for each element. Non-suspending when item_step is a service step (all items in one Lambda invocation). Suspending when item_step is human_gate (one SQS round-trip per item). execution_mode must always be 'sequential' — omitting it is a workflow defect.",
+      "required": ["step", "type", "items_key", "item_step", "execution_mode", "on_complete"],
+      "additionalProperties": false,
+      "properties": {
+        "step":           { "type": "string" },
+        "type":           { "const": "iterator" },
+        "description":    { "type": "string" },
+        "items_key":      { "type": "string", "description": "Dot-path to an array in local_state." },
+        "item_step": {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": true,
+          "description": "Step definition executed for each item. The current item is bound as '{{item}}' and '{{item.field}}' in all template strings and input fields. Results are collected at output_key."
+        },
+        "output_key":     { "type": "string", "description": "Collects each item_step result into an array written to this local_state key." },
+        "execution_mode": { "type": "string", "const": "sequential" },
+        "on_complete": {
+          "description": "Routing after all items are processed. Accepts a routingToken (next, end, step:N) or a bare step key (e.g. '5a') — the executor resolves bare keys the same way as condition.on_truthy.",
+          "anyOf": [
+            { "$ref": "#/definitions/routingToken" },
+            { "$ref": "#/definitions/bareStepKey" }
+          ]
+        },
+        "on_failure":     { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "notifyStep": {
+      "type": "object",
+      "description": "Resolves message_template from local_state and enqueues a HUMAN_NOTIFICATION message to the callback channel (Slack thread). Does not suspend the workflow.",
+      "required": ["step", "type", "message_template", "on_success"],
+      "additionalProperties": false,
+      "properties": {
+        "step":             { "type": "string" },
+        "type":             { "const": "notify" },
+        "description":      { "type": "string" },
+        "message_template": { "type": "string", "description": "Slack mrkdwn. Supports {{template}} substitution against local_state." },
+        "notify_type":      { "type": "string", "const": "HUMAN_NOTIFICATION" },
+        "on_success":       { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "simulateStep": {
+      "type": "object",
+      "description": "Dry-runs a workflow step array against named execution paths using injected mock outputs. Three validation levels: (1) static analysis — step key uniqueness, routing target existence, required fields; (2) path execution — traces each named path through the step graph; (3) skip-path analysis — detects unreachable steps. on_failure routes back to the step where the user can correct the workflow before re-simulating.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "simulate" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["steps_key"],
+          "additionalProperties": false,
+          "properties": {
+            "steps_key":        { "type": "string", "description": "Dot-path to the draft workflow steps array in local_state." },
+            "mock_outputs_key": { "type": "string", "description": "Optional. Dot-path to mock output map. If absent, only Level 1 static analysis runs." },
+            "paths_key":        { "type": "string", "description": "Optional. Dot-path to simulation paths array. If absent, only Level 1 static analysis runs." }
+          }
+        },
+        "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "endStep": {
+      "type": "object",
+      "description": "Marks the workflow run as completed and stops execution. Every workflow must include exactly one end step.",
+      "required": ["step", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "step": { "type": "string" },
+        "type": { "const": "end" }
+      }
+    }
+
+  }
+}
