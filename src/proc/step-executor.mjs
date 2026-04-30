@@ -1031,11 +1031,6 @@ async function executeServDelete({ step, localState, traceId }) {
 //     Tracks local_state transitions. Fails if a template variable is
 //     unresolvable or if the actual terminal != expected_terminal.
 //
-//   Level 3 — Skip-path analysis (advisory only)
-//     For every step with on_failure: "human_feedback", simulates what happens
-//     if the user chooses Skip at the recovery gate. Flags downstream steps
-//     that read output_key values that would be null if the step was skipped.
-//     Non-fatal — included in result but does not flip passed to false.
 //
 // simulation_mode flag: run.state.simulation_mode is set true before path
 // execution begins and cleared after. All step handlers already check this
@@ -1044,8 +1039,8 @@ async function executeServDelete({ step, localState, traceId }) {
 // or LLM. Simulation is entirely in-process.
 
 // Known valid routing token pattern — "next", "end", "cancel",
-// "human_feedback", or "step:<key>" where <key> is a non-empty string.
-const ROUTING_TOKEN_RE = /^(next|end|cancel|human_feedback|step:.+)$/;
+// or "step:<key>" where <key> is a non-empty string.
+const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+)$/;
 
 async function executeSimulate({ step, localState, run, traceId }) {
   // ── Resolve inputs from local_state ─────────────────────────────────────
@@ -1117,7 +1112,6 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
       paths_failed:    0,
       static_analysis: { passed: false, issues: staticIssues },
       path_results:    [],
-      skip_path_warnings: [],
     };
   }
 
@@ -1133,7 +1127,6 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
       paths_failed:    0,
       static_analysis: { passed: true, issues: [] },
       path_results:    [],
-      skip_path_warnings: [],
     };
   }
 
@@ -1146,11 +1139,6 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const pathsFailed  = pathResults.filter(r => !r.passed).length;
   const level2Passed = pathsFailed === 0;
 
-  // ── Level 3 — Skip-path analysis (advisory) ──────────────────────────────
-  const skipPathWarnings = level2Passed
-    ? runLevel3SkipPathAnalysis(steps, mockOutputs, runInput)
-    : [];
-
   const result = {
     passed:          level2Passed,
     paths_run:       pathResults.length,
@@ -1158,12 +1146,11 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     paths_failed:    pathsFailed,
     static_analysis: { passed: true, issues: [] },
     path_results:    pathResults,
-    skip_path_warnings: skipPathWarnings,
   };
 
   console.info('step-executor: runSimulation — complete', {
     passed: result.passed, pathsRun: result.paths_run,
-    pathsPassed, pathsFailed, warnings: skipPathWarnings.length, traceId,
+    pathsPassed, pathsFailed, traceId,
   });
 
   return result;
@@ -1208,7 +1195,7 @@ function runLevel1StaticAnalysis(steps) {
           check:         'unknown_routing_value',
           step:          stepKey,
           failure_class: 'unknown_routing_value',
-          detail:        `Step "${stepKey}" field "${field}" has unknown routing value "${value}". Valid values: next, end, cancel, human_feedback, step:<key>`,
+          detail:        `Step "${stepKey}" field "${field}" has unknown routing value "${value}". Valid values: next, end, cancel, step:<key>`,
         });
       }
       // Check dead step:N targets
@@ -1321,7 +1308,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
   while (stepsExecuted < MAX_STEPS) {
     stepsExecuted++;
 
-    if (currentKey === 'end' || currentKey === 'cancel' || currentKey === 'human_feedback') {
+    if (currentKey === 'end' || currentKey === 'cancel') {
       break;
     }
 
@@ -1424,12 +1411,11 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     // For steps with a decision entry that signals failure
     if (decision?.outcome === 'failure') {
-      const onFailure = currentStep.on_failure ?? 'next';
+      const onFailure = currentStep.on_failure ?? 'cancel';
       nextKey = resolveSimNextKey(steps, currentKey, onFailure);
-      if (onFailure === 'human_feedback') currentKey = 'human_feedback';
-      else if (onFailure === 'cancel')    currentKey = 'cancel';
-      else if (onFailure === 'end')       currentKey = 'end';
-      else                                currentKey = nextKey;
+      if (onFailure === 'cancel')    currentKey = 'cancel';
+      else if (onFailure === 'end') currentKey = 'end';
+      else                          currentKey = nextKey;
       transition.status = 'failed';
       transitions.push(transition);
       continue;
@@ -1492,7 +1478,6 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
   let terminal;
   if (currentKey === 'end' || stepMap[currentKey]?.type === 'end') terminal = 'end';
   else if (currentKey === 'cancel') terminal = 'cancelled';
-  else if (currentKey === 'human_feedback') terminal = 'human_feedback';
   else terminal = currentKey;
 
   const passed = terminal === path.expected_terminal;
@@ -1507,53 +1492,6 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     failure_reason:          passed ? undefined : `Path ended at "${terminal}" but expected "${path.expected_terminal}"`,
     local_state_transitions: transitions,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Level 3 — Skip-path analysis (advisory)
-// ---------------------------------------------------------------------------
-
-function runLevel3SkipPathAnalysis(steps, mockOutputs, runInput) {
-  const warnings = [];
-  const stepMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
-
-  for (const s of steps) {
-    if (s.on_failure !== 'human_feedback') continue;
-
-    // Simulate what happens if this step produces no output (user chose Skip)
-    // then check if any downstream step reads its output_key
-    if (!s.output_key) continue;
-
-    const skippedKey = s.output_key.split('.')[0];
-
-    for (const downstream of steps) {
-      if (String(downstream.step) <= String(s.step)) continue; // only forward references
-
-      const templatesToCheck = [];
-      if (typeof downstream.input === 'object' && downstream.input !== null) {
-        Object.values(downstream.input).forEach(v => {
-          if (typeof v === 'string') templatesToCheck.push(v);
-        });
-      }
-      if (downstream.items_key) templatesToCheck.push(`{{${downstream.items_key}}}`);
-      if (downstream.context_key) templatesToCheck.push(`{{${downstream.context_key}}}`);
-
-      for (const tmpl of templatesToCheck) {
-        const refs = extractTemplateRefs(tmpl);
-        if (refs.some(r => r.split('.')[0] === skippedKey)) {
-          warnings.push({
-            step:            String(s.step),
-            downstream_step: String(downstream.step),
-            missing_key:     s.output_key,
-            detail:          `Step "${downstream.step}" reads "{{${s.output_key}}}" but step "${s.step}" is skippable via human_feedback. If step "${s.step}" is skipped, "${skippedKey}" will be null.`,
-          });
-          break; // one warning per downstream step is enough
-        }
-      }
-    }
-  }
-
-  return warnings;
 }
 
 // ---------------------------------------------------------------------------
@@ -1587,7 +1525,6 @@ function resolveSimNextKey(steps, currentKey, nextAction) {
   }
   if (nextAction === 'end')                  return 'end';
   if (nextAction === 'cancel')               return 'cancel';
-  if (nextAction === 'human_feedback')       return 'human_feedback';
   if (nextAction.startsWith('step:'))        return nextAction.slice(5);
   return 'end';
 }

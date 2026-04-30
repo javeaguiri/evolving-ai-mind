@@ -55,8 +55,8 @@
 
     "routingToken": {
       "type": "string",
-      "pattern": "^(next|end|cancel|human_feedback|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
-      "description": "Valid routing value for on_success, on_failure, on_select. 'next' = advance to next step in array order; 'step:N' = jump to step with key N; 'cancel' = cancel run; 'end' = complete run; 'human_feedback' = suspend for human review (on_failure only)."
+      "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
+      "description": "Valid routing value for on_success, on_failure, on_select. 'next' = advance to next step in array order; 'step:N' = jump to step with key N (e.g. 'step:8', never bare '8'); 'cancel' = cancel run; 'end' = complete run."
     },
 
     "bareStepKey": {

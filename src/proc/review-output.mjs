@@ -305,8 +305,8 @@ function runSemanticRules(scaffold) {
 function runRoutingValueRules(steps) {
   const errors = [];
 
-  // Valid routing token: next, end, cancel, human_feedback, or step:<key>
-  const ROUTING_TOKEN_RE = /^(next|end|cancel|human_feedback|step:.+)$/;
+  // Valid routing token: next, end, cancel, or step:<key>
+  const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+)$/;
   const stepKeys = new Set(steps.map(s => String(s.step)));
 
   function checkToken(stepKey, fieldName, value) {
@@ -317,7 +317,7 @@ function runRoutingValueRules(steps) {
         type:    'semantic',
         rule:    'unknown_routing_value',
         message: `Step "${stepKey}" field "${fieldName}" has unknown routing value "${v}". ` +
-                 `Valid values: next, end, cancel, human_feedback, step:<key>`,
+                 `Valid values: next, end, cancel, step:<key>`,
         step:    stepKey,
       });
       return;

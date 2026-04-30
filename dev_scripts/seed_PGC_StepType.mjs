@@ -35,7 +35,7 @@ if (!PGC_DATABASE_URL) {
 // on_select_options applies only to human_gate — one entry per option button.
 
 const STANDARD_ON_SUCCESS = ['next', 'end', 'step:N'];
-const STANDARD_ON_FAILURE = ['human_feedback', 'cancel', 'step:N'];
+const STANDARD_ON_FAILURE = ['cancel', 'step:N'];
 const GATE_ON_SUCCESS      = ['next', 'end', 'step:N'];
 const GATE_ON_FAILURE      = ['cancel', 'step:N'];
 const GATE_ON_SELECT       = ['next', 'end', 'cancel', 'step:N'];
@@ -52,7 +52,7 @@ const STEP_TYPES = [
       { field: 'input.prompt',    type: 'string',  required: true,  description: 'intent_category key into PGC_Prompt — identifies which prompt to use' },
       { field: 'output_key',      type: 'string',  required: true,  description: 'local_state key where the validated LLM output object is written' },
       { field: 'on_success',      type: 'string',  required: false, description: 'Routing token — defaults to "next"' },
-      { field: 'on_failure',      type: 'string',  required: false, description: 'Routing token — use "human_feedback" for recoverable failures' },
+      { field: 'on_failure',      type: 'string',  required: false, description: 'Routing token — use "cancel" for unrecoverable failures' },
     ],
     output_contract: [
       { field: 'output_key', type: 'object', description: 'The validated LLM output object written to local_state[output_key]' },

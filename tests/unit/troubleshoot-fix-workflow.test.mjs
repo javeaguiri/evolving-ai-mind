@@ -85,7 +85,7 @@ function resolveFixInputs(body) {
 // ---------------------------------------------------------------------------
 
 const BROKEN_CONDITION_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'human_feedback' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
   { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_failure: 'next' },
   { step: '3', type: 'js_transform', input_key: 'right_brain_research', output_key: 'preference_gates', expression: '(function(){ return []; })()', on_success: 'next' },
   // BUG: on_truthy uses routing token, on_falsy is pre-prefixed
@@ -95,7 +95,7 @@ const BROKEN_CONDITION_STEPS = [
 ];
 
 const FIXED_CONDITION_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'human_feedback' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
   { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_failure: 'next' },
   { step: '3', type: 'js_transform', input_key: 'right_brain_research', output_key: 'preference_gates', expression: '(function(){ return []; })()', on_success: 'next' },
   // FIXED: bare step keys
@@ -107,7 +107,7 @@ const FIXED_CONDITION_STEPS = [
 // All four condition bugs from create_workflow v4
 const ALL_FOUR_CONDITION_BUGS = [
   ...BROKEN_CONDITION_STEPS,
-  { step: '7', type: 'serv_query', input: { tableName: 'PGC_StepType', filters: [] }, output_key: 'step_type_contracts', on_success: 'next', on_failure: 'human_feedback' },
+  { step: '7', type: 'serv_query', input: { tableName: 'PGC_StepType', filters: [] }, output_key: 'step_type_contracts', on_success: 'next', on_failure: 'cancel' },
   { step: '8', type: 'js_transform', input_key: 'step_type_contracts', output_key: 'routing_flags', expression: '(function(){ return { is_blocked: false, needs_schema: false }; })()', on_success: 'next' },
   { step: '9',  type: 'condition', expression: '{{routing_flags.is_blocked}}',  on_truthy: 'step:9a', on_falsy: 'next' },
   { step: '9a', type: 'notify', message_template: 'Blocked', on_success: 'end' },
@@ -117,7 +117,7 @@ const ALL_FOUR_CONDITION_BUGS = [
 ];
 
 const HEALTHY_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'human_feedback' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
   { step: '2', type: 'condition', expression: '{{domain_schema.length}}', on_truthy: '3', on_falsy: '4' },
   { step: '3', type: 'notify', message_template: 'Found schema', on_success: 'end' },
   { step: '4', type: 'notify', message_template: 'No schema', on_success: 'end' },
@@ -180,7 +180,7 @@ describe('Level 1 static analysis — other failure classes', () => {
 
   test('detects dead routing target', () => {
     const steps = [
-      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'step:99', on_failure: 'human_feedback' },
+      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'step:99', on_failure: 'cancel' },
       { step: '2', type: 'end' },
     ];
     const issue = runSimulation({ steps }).static_analysis.issues.find(i => i.failure_class === 'dead_routing_target');
@@ -190,7 +190,7 @@ describe('Level 1 static analysis — other failure classes', () => {
 
   test('detects unresolved template variable', () => {
     const steps = [
-      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'next', on_failure: 'human_feedback' },
+      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'next', on_failure: 'cancel' },
       { step: '2', type: 'notify', message_template: '{{nonexistent_key}}', on_success: 'end' },
       { step: '3', type: 'end' },
     ];
@@ -445,9 +445,9 @@ describe('fix_workflow workflow definition — structural validity', () => {
         `Step ${s.step} on_truthy "${s.on_truthy}" is not a valid step key`);
       assert.ok(stepKeys.has(String(s.on_falsy)),
         `Step ${s.step} on_falsy "${s.on_falsy}" is not a valid step key`);
-      assert.doesNotMatch(String(s.on_truthy), /^(next|end|cancel|human_feedback)$/,
+      assert.doesNotMatch(String(s.on_truthy), /^(next|end|cancel)$/,
         `Step ${s.step} on_truthy must be a bare step key, not a routing token`);
-      assert.doesNotMatch(String(s.on_falsy), /^(next|end|cancel|human_feedback)$/,
+      assert.doesNotMatch(String(s.on_falsy), /^(next|end|cancel)$/,
         `Step ${s.step} on_falsy must be a bare step key, not a routing token`);
       assert.doesNotMatch(String(s.on_truthy), /^step:/,
         `Step ${s.step} on_truthy must not be pre-prefixed with step:`);
