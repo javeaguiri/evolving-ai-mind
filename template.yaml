@@ -193,6 +193,11 @@ Resources:
                   - sqs:ListQueues
                   - sqs:GetQueueUrl
                 Resource: "*"
+              # EC2 — DescribeKeyPairs required for CloudFormation to validate AWS::EC2::KeyPair::KeyName parameter
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeKeyPairs
+                Resource: "*"
               # IAM — PassRole to Lambda + manage roles/instance profiles defined in template
               - Effect: Allow
                 Action:
