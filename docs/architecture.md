@@ -2068,7 +2068,7 @@ Every step follows this shape:
   "input":            {},
   "output_key":       "key_in_local_state",
   "on_success":       "next | end | step:3a",
-  "on_failure":       "human_feedback | cancel"
+  "on_failure":       "cancel | step:<key>"
 }
 ```
 
@@ -2152,7 +2152,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
   },
   "output_key": "proposed_scaffold",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 `input.prompt` is the `intent_category` key into `PGC_Prompt`. All other `input`
@@ -2198,7 +2198,7 @@ Wrap multi-statement logic in an IIFE: `(function() { ... })()`
   "output_key": "proposed_scaffold.tables",
   "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) { return tables.map(function(t) { if (!t.columns) return t; var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain }); }); } return enrich(items, local_state.proposed_scaffold.domain); })()",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 
@@ -2329,7 +2329,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 
@@ -2345,7 +2345,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 `entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`, not `Recipes`.
@@ -2359,7 +2359,7 @@ Use instead of `serv_query` for domains with child tables or when full entity di
   "input": { "entityName": "Recipe", "id": "{{input.id}}" },
   "output_key": "result",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 
@@ -2487,7 +2487,7 @@ Any of the following causes an immediate throw:
   "input": { "entityName": "{{input.entity_name}}" },
   "output_key": "full_entity_schema",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 Loads a full entity schema by combining `PGC_EntitySchema` (join topology) with `PGC_Schema`
@@ -3081,7 +3081,7 @@ list of decisions — one entry per branch point (gate step, failure point, iter
 outcome). Human gates are simulated by injecting `user_response` and `on_select`
 as if the user clicked that option. LLM steps, SERV steps, and `js_transform` steps
 are simulated using their mock output. The path terminates when it reaches `end`,
-`cancel`, or `human_feedback`.
+or `cancel`.
 
 ```json
 {
@@ -3110,7 +3110,7 @@ are simulated using their mock output. The path terminates when it reaches `end`
       "decisions": [
         { "step": "1", "outcome": "failure", "error": "LLM returned invalid JSON" }
       ],
-      "expected_terminal": "human_feedback"
+      "expected_terminal": "cancelled"
     }
   ]
 }
@@ -3161,14 +3161,9 @@ or decision instead of calling the real service or LLM. Records the `local_state
 transition log. Fails the path if any template variable is unresolvable or if the
 terminal step does not match `expected_terminal`.
 
-**Level 3 — Skip-path analysis (failure recovery, advisory)**
+**Level 3 — Skip-path analysis**
 
-For every step with `on_failure: "human_feedback"`, the simulator runs an additional
-micro-path: what happens if the user chooses Skip at the recovery gate? If skipping
-the step leaves a `null` at an `output_key` that a downstream step reads, the
-simulator flags this as a latent data flow risk. This is advisory — it does not
-fail the simulation — but it is included in the failure report and shown to the
-user in the review gate.
+Removed. Previously flagged data flow risks for skipped failure-path steps.
 
 #### Simulation result structure
 
@@ -3271,7 +3266,7 @@ output shape includes a steps array). Does not run on `create_domain` output.
 Rules enforced on every step in the array:
 
 - Every `on_success`, `on_failure`, and `on_complete` value must be a known routing
-  token: `next`, `end`, `cancel`, `human_feedback`, or `step:<key>`
+  token: `next`, `end`, `cancel`, or `step:<key>`
 - Every `step:N` target must exist as a step key in the same array -- dead targets
   are caught here before the workflow is ever registered or simulated
 - Every `human_gate` must have at least one option with `action: "cancel"`
@@ -3317,8 +3312,7 @@ Attempt 2 (callLlmWithCorrection -- Ajv/semantic errors only):
               --> step throws
 
 Step throws --> run-workflow.mjs catch block:
-  on_failure === "human_feedback" --> push recovery gate (Retry / Skip / Cancel)
-  on_failure !== "human_feedback" --> mark run failed --> WORKFLOW_ERROR to Slack
+  mark run failed --> WORKFLOW_ERROR to Slack
 ```
 
 **Key distinction between correction and resumption:** The correction loop sends the
@@ -5581,7 +5575,7 @@ Auth credentials are stored in SSM, never in the database.
   "params": { "symbol": "{{state.ticker}}" },
   "output_key": "current_price",
   "on_success": "next",
-  "on_failure": "human_feedback"
+  "on_failure": "cancel"
 }
 ```
 

@@ -491,8 +491,7 @@ components:
           type: string
           description: >
             The step key or terminal state the path should reach.
-            Use "end" for normal completion, "cancelled" for cancel paths,
-            "human_feedback" for failure paths where on_failure routes to recovery.
+            Use "end" for normal completion, "cancelled" for cancel paths.
           example: end
 
     SimulationStepTransition:
@@ -606,13 +605,11 @@ components:
     SkipPathWarning:
       type: object
       description: >
-        Advisory warning from Level 3 skip-path analysis.
-        Identifies data flow risks if a user chooses Skip at a human_feedback recovery gate.
-        Does not fail the simulation — shown to user in the review gate.
+        Reserved schema — Level 3 skip-path analysis has been removed.
       properties:
         step:
           type: string
-          description: The step with on_failure=human_feedback whose skip path has a risk
+          description: Reserved — no longer populated
           example: "6"
         downstream_step:
           type: string
@@ -2255,12 +2252,6 @@ paths:
         variable is unresolvable or if the actual terminal step does not match
         expected_terminal.
 
-        **Level 3 — Skip-path analysis (advisory, runs after Level 2 passes)**
-
-        For every step with on_failure=human_feedback, runs a micro-path where
-        the user chooses Skip at the recovery gate. Flags any downstream step that
-        reads the null output_key as a latent data flow risk. Advisory only —
-        does not fail the simulation. Results appear in skipPathWarnings.
 
         This endpoint is called:
           - Directly by developers testing a workflow definition before registration
@@ -2283,8 +2274,8 @@ paths:
                 summary: Level 1 only — validate step array structure without mocks
                 value:
                   steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
-                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "human_feedback" }
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "cancel" }
+                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "cancel" }
                   simulationPaths:
                     - path_name: happy_path
                       decisions:
@@ -2295,7 +2286,7 @@ paths:
                 summary: Full simulation — all three levels
                 value:
                   steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "human_feedback" }
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "cancel" }
                     - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_failure: "cancel" }
                     - { step: "3", type: "end" }
                   mockOutputs:
@@ -2373,34 +2364,13 @@ paths:
                         terminal: end
                         expected_terminal: end
                       - path_name: llm_step_fails
-                        passed: false
+                        passed: true
                         steps_executed: 1
-                        terminal: failed
-                        expected_terminal: human_feedback
-                        failure_step: "1"
-                        failure_reason: "on_failure routing value 'human_feedback' is not implemented. Run terminated with status=failed."
+                        terminal: cancelled
+                        expected_terminal: cancelled
                     skipPathWarnings: []
                     traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
-                skip_path_warnings:
-                  summary: All paths passed but skip-path warnings present
-                  value:
-                    passed: true
-                    pathsRun: 3
-                    pathsPassed: 3
-                    pathsFailed: 0
-                    staticAnalysis: { passed: true, issues: [] }
-                    pathResults:
-                      - path_name: happy_path
-                        passed: true
-                        steps_executed: 11
-                        terminal: end
-                        expected_terminal: end
-                    skipPathWarnings:
-                      - step: "6"
-                        downstream_step: "8"
-                        missing_key: generated
-                        detail: "Step 8 reads {{generated.domainHelp}} but step 6 has on_failure=human_feedback. If step 6 is skipped, 'generated' will be null at step 8."
-                    traceId: "ae9a8899-94a5-4a16-8dc1-803764d373d7"
+
         '400':
           description: >
             Missing required fields, empty steps array, or empty simulationPaths.
