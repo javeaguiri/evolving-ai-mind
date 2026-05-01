@@ -5,7 +5,7 @@
 
 Version: 3.2  
 Status: Active development — Session 32 complete  
-Last updated: 2026-05-01 (session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, removed {{step_type_contracts}} template variable from prompt, moved Rules 4/5a/5b/5c into SystemContext homes; probe_input added to upsert-prompt.mjs fingerprint)
+Last updated: 2026-05-01 (session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, removed {{step_type_contracts}} template variable from prompt, moved Rules 4/5a/5b/5c into SystemContext homes; probe_input added to upsert-prompt.mjs fingerprint; PGC_SystemContext 4.3.3 updated: content→jsonb schema defined, format column drop, section-level inject tags, DDL + migration checklist)
 Previously: session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file
 
 ---
@@ -868,33 +868,133 @@ None of them affect workflow execution — they are read-only from the execution
 engine's perspective.
 
 ##### PGC_SystemContext
-Compact runtime self-description of the system. Injected into every heavy-lift LLM
-prompt so the model knows what it is operating inside, what it can do, and what the
-rules are. Replaces `architecture.md` at runtime. Seeded on bootstrap.
+Named context blocks injected into heavy-lift LLM prompts by `executeLlmCall` in
+`step-executor.mjs`. Each matching row's `key` becomes a `{{key}}` substitution
+variable in the prompt text. Managed via `dev_scripts/upsert-system-context.mjs`.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
-| key | text UNIQUE | Logical name — e.g. `system_overview`, `naming_conventions`, `allowed_column_types`, `serv_endpoints`, `guardrail_defaults` |
-| section | text | Groups related keys — e.g. `architecture`, `rules`, `endpoints`, `schema` |
-| content | text | The actual context text — plain prose or compact JSON. Injected verbatim into prompts |
-| format | text | `prose` or `json` — tells the prompt builder how to format this block |
-| inject_always | boolean | If true, always injected into heavy-lift prompts regardless of intent. Default false |
-| inject_for | jsonb | Array of `intent_category` values this context is injected for. NULL = use `inject_always` only |
-| version | integer | Incremented when content is updated by LLM or operator |
+| key | text UNIQUE | Substitution variable name in prompt text — e.g. `routing_value_rules`, `step_type_contracts` |
+| section | text | Groups related keys — `rules`, `examples`, `schema` |
+| content | jsonb | Structured context object — see Content JSON Schema below |
+| inject_always | boolean | If true, injected into every heavy-lift prompt regardless of intent. Default false |
+| inject_for | jsonb | Array of `intent_category` values this row is injected for |
+| version | integer | Incremented on every content update |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-**Bootstrap seed rows:**
+> **Pending DDL:** `content` column is currently `text`. Migration to `jsonb` and drop of
+> the `format` column are pending seed file rewrite. See DDL statement below.
 
-| key | section | format | inject_always | content summary |
-|---|---|---|---|---|
-| `system_overview` | `architecture` | `prose` | true | What this system is and how it works |
-| `naming_conventions` | `rules` | `prose` | true | PGC_/PGD_ prefixes, quoting rules, snake_case domains |
-| `allowed_column_types` | `rules` | `json` | false | Whitelist of valid column types for createTable |
-| `serv_endpoints` | `endpoints` | `json` | false | All SERV endpoints with request/response shapes |
-| `sqs_message_format` | `schema` | `json` | false | SQS message envelope — type, traceId, callback, action |
-| `guardrail_defaults` | `rules` | `json` | true | `{ "max_steps_per_window": 20, "window_seconds": 10, "max_execution_ms": 300000, "extension_minutes": 5 }` |
+**Live seed rows** (from `seed_PGC_SystemContext.json`):
+
+| key | section | inject_for |
+|---|---|---|
+| `step_type_contracts` | `rules` | create_workflow, generate_workflow_steps, analyze_and_design_workflow, fix_workflow_steps |
+| `routing_value_rules` | `rules` | create_workflow, generate_workflow_steps, generate_workflow_paths, fix_workflow_steps |
+| `create_domain_example` | `examples` | create_workflow, analyze_and_design_workflow |
+| `step_usage_patterns` | `rules` | analyze_and_design_workflow, fix_workflow_steps |
+| `runtime_bindings` | `rules` | generate_workflow_steps, analyze_and_design_workflow |
+| `template_syntax` | `rules` | generate_workflow_steps, analyze_and_design_workflow |
+| `workflow_constraints` | `rules` | generate_workflow_steps, analyze_and_design_workflow, fix_workflow_steps |
+
+**Content JSON Schema:**
+
+Every `content` value must conform to this structure. The injection code serializes it
+with `JSON.stringify` before substituting into prompt text — LLMs read structured JSON
+natively, and this form is more concise than formatted prose.
+
+```
+{
+  "title": "<optional top-level heading>",
+  "sections": [
+    {
+      "id":        "<machine key — unique within this entry>",
+      "heading":   "<display label>",
+      "tags":      ["<step-type or context tag>"],
+      "rules":     ["<rule or constraint string>"],
+      "mistakes":  [{ "wrong": "<bad form>", "right": "<correct form>" }],
+      "reference": [{ "key": "<term>", "value": "<definition>", "example": "<opt>" }],
+      "data":      <free-form JSON — contracts array, taxonomy object, example>
+    }
+  ]
+}
+```
+
+| Field | Required | Purpose |
+|---|---|---|
+| `sections` | yes | Array of addressable content sections |
+| `sections[].id` | yes | Machine key — unique within the entry |
+| `sections[].heading` | no | Human-readable label |
+| `sections[].tags` | no | Inject-filter tags. Absent or empty = always inject |
+| `sections[].rules` | no | Ordered list of rule/constraint strings |
+| `sections[].mistakes` | no | Common error / correct-form pairs |
+| `sections[].reference` | no | Key-value lookup table — tokens, bindings, syntax forms |
+| `sections[].data` | no | Free-form structured data — contracts, taxonomy, examples |
+
+A section may use any combination of the four body fields. At least one must be present.
+
+**Section injection tags (Phase 2 design):**
+
+Each section carries an optional `tags` array whose values are workflow step type names
+or other context identifiers. When the injection code is updated to support tag-based
+filtering, only sections whose `tags` overlap with the current prompt's `step_types_used`
+will be included. Sections with absent or empty `tags` are always included.
+
+- **Phase 1 (current):** all sections of every injected row are included regardless of tags.
+- **Phase 2:** `step-executor.mjs executeLlmCall` receives `step_types_used` from the
+  design step output and filters sections before serializing for prompt substitution.
+
+Example — `workflow_constraints` with granular tags:
+
+| Section id | tags | Included for serv_query+notify workflow |
+|---|---|---|
+| `step_array_structure` | (always) | ✓ |
+| `notify` | `["notify"]` | ✓ |
+| `condition` | `["condition"]` | — |
+| `end` | (always) | ✓ |
+| `human_gate` | `["human_gate"]` | — |
+| `iterator` | `["iterator"]` | — |
+| `serv_mutations` | `["serv_delete","serv_update"]` | — |
+| `guard_3` | (always) | ✓ |
+| `guard_1` | (always) | ✓ |
+
+A simple `serv_query → notify → end` workflow receives 5 of 9 sections.
+A complex workflow using all step types receives all 9.
+
+**DDL migration — execute after all seed files are rewritten to JSONB format:**
+
+```sql
+-- 0. Verify every content value is valid JSON before running steps 1-2.
+--    Any row returning 'invalid' must be fixed in the seed file and re-pushed first.
+SELECT key,
+       pg_typeof(content) AS current_type,
+       CASE WHEN content::jsonb IS NOT NULL THEN 'valid' ELSE 'invalid' END AS json_check
+FROM "PGC_SystemContext";
+
+-- 1. Change content column from text to jsonb.
+ALTER TABLE "PGC_SystemContext"
+  ALTER COLUMN content TYPE jsonb USING content::jsonb;
+
+-- 2. Drop the format column — no longer needed; content structure is self-describing.
+--    Run after step 1 succeeds.
+ALTER TABLE "PGC_SystemContext"
+  DROP COLUMN format;
+
+-- 3. Drop the check constraint that enforced format values (may already be gone with the column).
+--    Run only if the constraint still exists after step 2.
+ALTER TABLE "PGC_SystemContext"
+  DROP CONSTRAINT IF EXISTS chk_format;
+```
+
+**Files to update before running the DDL:**
+
+| File | Change |
+|---|---|
+| `src/serv/templates/pgc/PGC_SystemContext.json` | Change content type to jsonb, remove format column and chk_format constraint |
+| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | Rewrite all 7 content fields as JSONB objects per the schema above |
+| `dev_scripts/upsert-system-context.mjs` | Remove format from upsert payload and log output |
 
 ##### PGC_StepType
 Canonical catalogue of all valid workflow step types with their input/output contracts.
