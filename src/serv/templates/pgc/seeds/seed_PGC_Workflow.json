@@ -738,7 +738,7 @@
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
           "user_feedback": "{{user_workflow_feedback}}",
-          "simulation_errors": "{{simulation_error_summary}}"
+          "simulation_errors": "{{static_analysis_result}}"
         },
         "output_key": "draft_workflow",
         "on_success": "next",
