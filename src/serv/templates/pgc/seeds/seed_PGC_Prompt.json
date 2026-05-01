@@ -1569,29 +1569,8 @@
             },
             "additionalProperties": false
           }
-        },
-        "mode": {
-          "type": "string",
-          "enum": [
-            "A",
-            "B",
-            "C"
-          ],
-          "description": "Domain mode determined before gap classification: A=existing schema, B=no schema yet, C=standalone"
-        },
-        "summary": {
-          "type": "string",
-          "description": "Brief plain-text summary of the gap analysis findings"
-        },
-        "user_preferences_needed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Preference questions still unresolved \u2014 informational only, downstream steps handle resolution"
         }
-      },
-      "additionalProperties": false
+      }
     },
     "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns \u2014 empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE \u2014 determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows \u2014 quizzes, approval loops, step-by-step forms \u2014 are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform \u2014 for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved \u2014 do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved \u2014 do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n  CRITICAL: inputs must be a flat array of plain strings \u2014 variable names only, NOT objects.\n  Correct:   \"inputs\": [\"domain\", \"table_schema\", \"user_input\"]\n  WRONG:     \"inputs\": [{\"name\":\"domain\",\"type\":\"string\"}, ...]  \u2190 NEVER do this\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b \u2014 use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        \u2014 no blocking gaps; workflow can be built as requested\n- 'needs_schema'    \u2014 at least one Type 3b blocking schema gap exists\n- 'blocked'         \u2014 a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object \u2014 no markdown, no explanation, no backticks.",
     "probe_input": null,
