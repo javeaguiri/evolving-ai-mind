@@ -4818,6 +4818,73 @@ When errors are systematic (same wrong field names on every attempt, correction 
 increase not decrease), the correct fix is the prompt + `response_format`, not more
 correction attempts.
 
+### 6.15 Simulation Error Correction — Retry Methodology (Session 32)
+
+When `create_workflow` simulation fails (Level 1 static analysis at step 16, or Level 2 path execution at step 19), the system loops back to the `generate_workflow_steps` LLM call (step 14) with structured correction context. This section documents the design and the two failure classes fixed in Session 32.
+
+#### Two recurring failure classes
+
+**1. Unsupported Handlebars syntax in `message_template`**
+
+The `design_workflow_dialogs` prompt (step 13) can generate Handlebars-style loop syntax
+(`{{#each array}}...{{this.prop}}...{{/each}}`) in `message_template`. Step 14 copies
+these templates faithfully. The template resolver only supports `{{key.path}}` dot-notation
+— Handlebars control tokens are not valid.
+
+Prior to Session 32, `extractTemplateRefs` extracted `#each available_sets`, `this.set_name`,
+and `/each` as if they were ordinary variable references, producing misleading errors like
+_"base key '#each available_sets' has not been written by any prior step"_. The correction
+signal did not tell the LLM that the syntax itself was illegal, so each correction attempt
+re-copied the same template from `dialog_designs` and produced the same errors.
+
+**2. `condition` step `on_truthy`/`on_falsy` double `step:` prefix**
+
+Translation Rule 4 in the prompt instructs the LLM to use `step:<key>` format for all
+routing targets. The LLM applied this uniformly, including to `on_truthy`/`on_falsy` on
+`condition` steps. The engine's `executeCondition` and the static analysis both expected
+bare keys and unconditionally prepended `step:`, producing `step:step:8` — a dead routing
+target that does not exist in the step array.
+
+#### Engine fixes (step-executor.mjs)
+
+| Fix | Location | Change |
+|---|---|---|
+| Handlebars detection | `runLevel1StaticAnalysis` | Refs starting with `#`, `/`, or equal to `this`/`this.*` emit `unsupported_handlebars_syntax` with an explicit "use indexed dot-notation" message instead of a misleading unresolved-variable error |
+| `on_truthy`/`on_falsy` normalisation — static analysis | `runLevel1StaticAnalysis` | Strip existing `step:` prefix before wrapping, so both bare keys and `step:N` values produce correct dead-target checks |
+| `on_truthy`/`on_falsy` normalisation — runtime | `executeCondition` | Strip existing `step:` prefix before constructing `nextAction`, so `"step:8"` and `"8"` are both valid values at execution time |
+
+#### Prompt fixes (generate_workflow_steps v9)
+
+Two rules added to TRANSLATION RULES:
+
+- **Rule 5a** — `message_template` supports ONLY `{{key.path}}` dot-notation. Handlebars syntax is explicitly prohibited. When copying from `dialog_designs`, the LLM must transform any `{{#each array}}...{{this.prop}}...{{/each}}` blocks to indexed access: `{{array.0.prop}}`, `{{array.1.prop}}`, etc.
+- **Rule 5b** — `on_truthy` and `on_falsy` on `condition` steps take **bare step keys** (e.g., `"8"`) — not `step:N` routing tokens. The engine adds the prefix at runtime.
+
+#### Correction mode — `callLlmWithCorrection` analogue
+
+`callLlmWithCorrection` (in `llm-client.mjs`) is effective because it provides the model
+with its previous output alongside specific errors, instructing it to fix only flagged
+issues rather than regenerating from scratch. The same principle is now applied to the
+`generate_workflow_steps` correction loop:
+
+- Step 14 receives `previous_draft_steps` (`{{draft_workflow.steps}}`) — its last output.
+- Step 14 receives `path_errors` (`{{path_error_summary}}`) — Level 2 path failures (distinct from Level 1 `simulation_errors`).
+- The prompt enters **CORRECTION MODE** when either error field is non-empty: fix only flagged steps; copy all others unchanged.
+
+Without `previous_draft_steps`, the model regenerated the entire workflow from the design
+spec on each retry and made the same transliteration errors. With it, the model has
+structural context to make targeted fixes, mirroring the behaviour of `callLlmWithCorrection`.
+
+#### Workflow changes (create_workflow v27)
+
+| Step | Change |
+|---|---|
+| 14 | Added `previous_draft_steps` and `path_errors` inputs |
+| 16a | Fixed `js_transform` expression: `i.message \|\| i.type` → `i.detail \|\| i.check` — user now sees actual error text in 16b instead of "validation issue" × N |
+| 19 | `on_failure` changed from `step:15` to `step:19a` |
+| 19a (new) | `js_transform` — formats Level 2 `simulation_result.path_results` failures into `path_error_summary` |
+| 19b (new) | `human_gate` (confirm) — displays `path_error_summary`, offers Regenerate with feedback → 15a, Regenerate automatically → 14, Cancel; mirrors the 16/16a/16b Level 1 retry pattern |
+
 ## 7. Tech Debt Register
 
 | Item | Priority | Notes |
