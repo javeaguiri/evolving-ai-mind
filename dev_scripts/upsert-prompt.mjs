@@ -11,7 +11,7 @@
 //      highest-version entry is processed. Old versions in the seed file are
 //      historical noise and must never be deployed over a newer DB row.
 //   2. Computes a content fingerprint over prompt_text, model, output_schema,
-//      input_variables before every write.
+//      input_variables, probe_input before every write.
 //   3. Fingerprints match --> no-op. "Already current."
 //   4. Fingerprints differ AND seed version >= DB version --> update DB row.
 //   5. Fingerprints differ AND DB version > seed version --> SKIP. The DB is
@@ -106,6 +106,7 @@ function fingerprint(entry) {
     entry.model ?? '',
     JSON.stringify(sortKeys(entry.output_schema ?? null)),
     JSON.stringify(sortKeys(entry.input_variables ?? null)),
+    JSON.stringify(sortKeys(entry.probe_input ?? null)),
   ].join('\x00');
   return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }

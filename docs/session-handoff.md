@@ -1,70 +1,60 @@
-# evolving-mind-ai — Session 32 Handoff
+# evolving-mind-ai — Session 33 Handoff
 
-**Git tag:** `v3.2-session31-complete` (pending commit)
-**Date:** 2026-04-29
-**Session 31 focus:** create_domain modal routing verification; create_workflow Other button fix;
-architecture-*.md consolidation into architecture.md; PGC table reference added to CLAUDE.md;
-BastionEC2Role SSM permissions fix for sam deploy.
+**Git tag:** `v3.2-session32-complete` (pending commit)
+**Date:** 2026-05-01
+**Session 32 focus:** generate_workflow_steps context reduction — removed ~14KB of noise from injected SystemContext; moved routing/template rules out of prompt text and into SystemContext homes.
 
 ---
 
-## What was completed in session 31
+## What was completed in session 32
 
-### 1. Verify create_domain modal routing (Objective 1) ✅
+### 1. create_workflow Other button retest (Objective 1) — DEFERRED AGAIN
 
-Tested `/m create domain stock portfolio` end-to-end:
-- LLM proposed 5 tables (PGD_Portfolios, PGD_Holdings, PGD_Transactions, PGD_StockPrices, PGD_CompanyDetails)
-- Step 3 edit_list gate appeared correctly
-- "Add a table" modal opened, user described PGD_CompanyDetails
-- Modal closed, workflow resumed at step 3a — NOT step 3d ✅
-- Domain created. WorkflowRun 273. Log trace clean, no errors.
+Retest of `/m create workflow Spanish flashcard quiz` was not completed. Session work pivoted to Objective 2 (context reduction) per prior analysis already done.
 
-### 2. create_workflow Other button fix ✅
+**Status:** Still pending. create_workflow v22 with step 1b removed and Other → step:2 is deployed. Needs end-to-end Slack test.
 
-**Root cause:** Step 1a "Other" special_button had `on_select: "next"` → rendered orphaned
-step 1b text_input after modal submit, asking the same question a second time.
+### 2. generate_workflow_steps context reduction ✅
 
-**Fix:**
-- `seed_PGC_Workflow.json` — step 1a Other `on_select` changed from `"next"` to `"step:2"`
-- Step 1b (`text_input`, `workflow_mode_other`) deleted — orphaned, unreachable
-- Deployed as create_workflow v22
+**Problem:** `generate_workflow_steps` was receiving ~55KB of injected context with significant duplication:
+- `step_type_contracts` injected via both SystemContext (~30KB) AND `{{step_type_contracts}}` template variable
+- `create_domain_example` (~6KB) is designer-level context — wrong audience for a code generator
+- `step_usage_patterns` (~8KB) mostly duplicated by step_type_contracts + prompt rules
+- Rules 4, 5a, 5b, 5c in the prompt duplicated content already in SystemContext
 
-**Status:** Fix deployed to DB. End-to-end retest NOT yet completed — deferred to session 32.
+**Changes made:**
 
-### 3. BastionEC2Role SSM permissions ✅
+`seed_PGC_SystemContext.json` — 4 entries updated, pushed to DB:
+- `create_domain_example` v6→v7: removed `generate_workflow_steps` from inject_for
+- `step_usage_patterns` v3→v4: removed `generate_workflow_steps` from inject_for
+- `routing_value_rules` v4→v5: added condition exception (Rule 5b — bare keys, not step: prefix)
+- `template_syntax` v1→v2: added message_template restrictions (Rule 5a — Handlebars prohibition)
 
-`template.yaml` — added `arn:aws:ssm:us-east-2:*:parameter/myapp/*` to BastionEC2Role
-SSM resource list. CloudFormation was blocked resolving `SlackWebhookParam` at changeset
-creation. Sam deploy now works from bastion host (after admin deployed the fix via console first).
+`seed_PGC_Prompt.json` (`generate_workflow_steps` v10→v11) — pushed to DB:
+- Removed `{{step_type_contracts}}` block from prompt_text (SystemContext injection already covers this)
+- Removed `step_type_contracts` from input_variables
+- Removed Rules 4, 5a, 5b, 5c from TRANSLATION RULES (now live in SystemContext)
+- Renumbered old Rule 5 → Rule 4 (js_transform IIFE requirement)
+- Removed `step_type_contracts` from probe_input (note: probe_input not in fingerprint — seed and DB are out of sync for this field only; not production-critical)
 
-### 4. architecture-*.md consolidation ✅
+**Result:** Injected context for generate_workflow_steps reduced from ~55KB to ~41KB. More importantly, the model receives non-redundant, correctly-targeted context.
 
-- Merged all session 29–30 changes from `architecture-step-processor.md` and
-  `architecture-workflows.md` into `architecture.md`
-- Deleted: `architecture-core.md`, `architecture-reference.md`,
-  `architecture-step-processor.md`, `architecture-workflows.md`
-- `architecture.md` is now the single authoritative architecture document
-- `CLAUDE.md` Key Reference Files updated to point to `architecture.md`
-
-### 5. CLAUDE.md improvements ✅
-
-- PGC table reference table added under Data Layer (all 13 tables + view)
-- Lambda monitoring commands updated to nohup persistent form
-- Key Reference Files consolidated to single architecture.md pointer
+**Note:** The DB prompt row stays at version 8 (upsert-prompt.mjs updates content in-place). Version field in seed is tracking-only.
 
 ---
 
-## What was NOT completed (carried to session 32)
+## What was NOT completed (carried to session 33)
 
-| Item | Reason | Session 32 priority |
+| Item | Reason | Session 33 priority |
 |---|---|---|
-| `/m create workflow Spanish flashcard quiz` end-to-end | Fix deployed but retest not done | HIGH |
+| `/m create workflow Spanish flashcard quiz` end-to-end | Deferred again — session pivoted to context reduction | HIGH |
 | Review JSON schemas (Objective 3) | Not started | MEDIUM |
-| design-domain.mjs Phase 4 — HUMAN_GATE refactor | Deferred from session 30 | LOW |
+| design-domain.mjs Phase 4 — HUMAN_GATE refactor | Deferred from session 29 | LOW |
+| create_workflow Other button retest | Pending since session 31 | HIGH (same as above) |
 
 ---
 
-## Session 32 objectives — in priority order
+## Session 33 objectives — in priority order
 
 ### 1. End-to-end retest: `/m create workflow Spanish flashcard quiz`
 
@@ -94,7 +84,7 @@ Evaluate:
 
 ---
 
-## Session 32 startup checklist
+## Session 33 startup checklist
 
 1. `git pull` — confirm on latest main
 2. Read `docs/session-handoff.md` (this file)
@@ -105,18 +95,13 @@ Evaluate:
 
 ---
 
-## Files changed in session 31
+## Files changed in session 32
 
 | File | Change type | Notes |
 |---|---|---|
-| `template.yaml` | str_replace | BastionEC2Role: added `/myapp/*` to SSM resource list |
-| `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json` | str_replace + delete | create_workflow step 1a Other on_select → step:2; step 1b deleted |
-| `docs/architecture.md` | Multiple patches | Session 30–31 header; text_input gate desc; gate schema: modal descriptor, special_buttons, input_label; output_key docs; create_domain step 3a note |
-| `docs/architecture-core.md` | Deleted | Consolidated into architecture.md |
-| `docs/architecture-reference.md` | Deleted | Consolidated into architecture.md |
-| `docs/architecture-step-processor.md` | Deleted | Consolidated into architecture.md |
-| `docs/architecture-workflows.md` | Deleted | Consolidated into architecture.md |
-| `CLAUDE.md` | Multiple patches | PGC table reference; monitoring nohup command; Key Reference Files → architecture.md |
+| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | Multiple edits | create_domain_example v7: removed from generate_workflow_steps inject_for; step_usage_patterns v4: removed from generate_workflow_steps inject_for; routing_value_rules v5: added condition bare-key exception; template_syntax v2: added Handlebars prohibition |
+| `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json` | Multiple edits | generate_workflow_steps v11: removed {{step_type_contracts}} block + input_variable; removed Rules 4/5a/5b/5c from prompt; renumbered Rule 5→4; probe_input cleanup |
+| `dev_scripts/upsert-prompt.mjs` | Edit | Added probe_input to content fingerprint |
 | `docs/session-handoff.md` | This file | |
 
 ---
@@ -124,7 +109,7 @@ Evaluate:
 ## Known open issues
 
 ### 1. create_workflow Other path — retest pending (High)
-Step 1b removed, Other routes to step:2. First successful end-to-end test pending session 32.
+Step 1b removed, Other routes to step:2. First successful end-to-end test pending session 33.
 
 ### 2. Review JSON schemas (Medium)
 output_schema in PGC_Prompt — evaluate storage, sharing, and validation in review-output.mjs.
@@ -134,3 +119,6 @@ Output file from session 29 not checked in. Carry forward.
 
 ### 4. Pass 2 keyword scan excludes domain:null workflows (Low)
 System workflows unreachable via Pass 2. Unnecessary Tier 2 sonar calls.
+
+### 5. ~~probe_input out-of-sync~~ RESOLVED
+probe_input added to fingerprint in upsert-prompt.mjs — all prompts re-synced in session 32.
