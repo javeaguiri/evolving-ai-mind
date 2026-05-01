@@ -4,9 +4,9 @@
 <!-- See LICENSE file in the project root for full license terms. -->
 
 Version: 3.2  
-Status: Active development — Session 31 complete  
-Last updated: 2026-04-29 (session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file)
-Previously: session 30 — /ping unified command; ping_core integration test workflow; text_input inline input block (no modal required); special_buttons + modal descriptor architecture; modal button fix: button click no longer advances workflow — only modal submit does; choice gate modal: output_key receives typed inputValue not button value; handleViewSubmission uses original button action for routing; step-executor text_input multiline fix; upsert-workflow/upsert-prompt fingerprint fix: recursive sortKeys for JSONB key-order stability
+Status: Active development — Session 32 complete  
+Last updated: 2026-05-01 (session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, removed {{step_type_contracts}} template variable from prompt, moved Rules 4/5a/5b/5c into SystemContext homes; probe_input added to upsert-prompt.mjs fingerprint)
+Previously: session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file
 
 ---
 
