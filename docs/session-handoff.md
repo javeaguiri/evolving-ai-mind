@@ -56,6 +56,22 @@ Retest of `/m create workflow Spanish flashcard quiz` was not completed. Session
 
 ## Session 33 objectives — in priority order
 
+### 0. PGC_SystemContext.content → JSONB migration (carry-forward design work)
+
+Architecture.md section 4.3.3 updated with:
+- Column change: `content text` → `content jsonb`, drop `format` column
+- Content JSON schema: `{sections:[{id, heading, tags, rules, mistakes, reference, data}]}`
+- Section `tags` for Phase 2 granular injection (currently inject all, filter in Phase 2)
+- DDL statement ready to execute
+
+**Implementation required before running DDL:**
+
+1. Rewrite all 7 content fields in `seed_PGC_SystemContext.json` to the new JSONB schema
+2. Update `src/serv/templates/pgc/PGC_SystemContext.json` — change content type, remove format column + chk_format constraint
+3. Update `dev_scripts/upsert-system-context.mjs` — remove format field from upsert payload
+4. Push via `upsert-system-context.mjs`
+5. Execute the DDL (3 statements in architecture.md 4.3.3)
+
 ### 1. End-to-end retest: `/m create workflow Spanish flashcard quiz`
 
 create_workflow v22 deployed with step 1b removed and Other routing to step:2.
@@ -102,6 +118,7 @@ Evaluate:
 | `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | Multiple edits | create_domain_example v7: removed from generate_workflow_steps inject_for; step_usage_patterns v4: removed from generate_workflow_steps inject_for; routing_value_rules v5: added condition bare-key exception; template_syntax v2: added Handlebars prohibition |
 | `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json` | Multiple edits | generate_workflow_steps v11: removed {{step_type_contracts}} block + input_variable; removed Rules 4/5a/5b/5c from prompt; renumbered Rule 5→4; probe_input cleanup |
 | `dev_scripts/upsert-prompt.mjs` | Edit | Added probe_input to content fingerprint |
+| `docs/architecture.md` | Section 4.3.3 rewrite | PGC_SystemContext column table updated (content→jsonb, format dropped); content JSON schema defined; section tags + Phase 2 design; DDL migration statements; files-to-update checklist |
 | `docs/session-handoff.md` | This file | |
 
 ---
