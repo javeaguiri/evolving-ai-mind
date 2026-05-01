@@ -1181,9 +1181,16 @@ function runLevel1StaticAnalysis(steps) {
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
     if (s.type === 'condition') {
-      // on_truthy/on_falsy are bare step keys — normalise to step:N for ROUTING_TOKEN_RE validation
-      if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: `step:${s.on_truthy}` });
-      if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: `step:${s.on_falsy}`  });
+      // on_truthy/on_falsy may be bare keys ("8") or already prefixed ("step:8") — normalise to bare
+      // before wrapping so both formats pass validation without double-prefixing.
+      if (s.on_truthy) {
+        const bare = String(s.on_truthy).startsWith('step:') ? String(s.on_truthy).slice(5) : s.on_truthy;
+        routingValues.push({ field: 'on_truthy', value: `step:${bare}` });
+      }
+      if (s.on_falsy) {
+        const bare = String(s.on_falsy).startsWith('step:') ? String(s.on_falsy).slice(5) : s.on_falsy;
+        routingValues.push({ field: 'on_falsy', value: `step:${bare}` });
+      }
     }
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
@@ -1264,6 +1271,19 @@ function runLevel1StaticAnalysis(steps) {
     for (const template of templatesToCheck) {
       const refs = extractTemplateRefs(template);
       for (const ref of refs) {
+        // Detect unsupported Handlebars syntax before the standard unresolved-key check.
+        // {{#each}}, {{/each}}, {{this}} are not valid tokens — the template resolver
+        // only supports {{key.path}} dot-notation.
+        const trimmed = ref.trim();
+        if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed === 'this' || trimmed.startsWith('this.')) {
+          issues.push({
+            check:         'unsupported_handlebars_syntax',
+            step:          stepKey,
+            failure_class: 'unsupported_handlebars_syntax',
+            detail:        `Step "${stepKey}" uses unsupported Handlebars syntax "{{${ref}}}" in a template. Only {{key.path}} dot-notation is supported. Replace {{#each array}}...{{this.prop}}...{{/each}} with indexed access: {{array.0.prop}}, {{array.1.prop}}, etc.`,
+          });
+          continue;
+        }
         const baseKey = ref.split('.')[0];
         if (baseKey !== 'item' && baseKey !== 'input' && !outputKeysSoFar.has(baseKey)) {
           issues.push({
@@ -1572,17 +1592,19 @@ function executeCondition({ step, localState, traceId }) {
     && resolved !== 'false'
     && !resolved.includes('{{');
 
-  const nextStep = isTruthy ? step.on_truthy : step.on_falsy;
+  const rawNext  = isTruthy ? step.on_truthy : step.on_falsy;
+  // Accept both bare keys ("8") and already-prefixed values ("step:8") — normalise to bare.
+  const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
 
   console.info('step-executor: condition', {
     expression: step.expression,
     resolved,
     isTruthy,
-    nextStep,
+    nextStep: bareNext,
     traceId,
   });
 
-  return { outputValue: null, nextAction: `step:${nextStep}` };
+  return { outputValue: null, nextAction: `step:${bareNext}` };
 }
 
 async function executeNotify({ step, localState, traceId }) {
