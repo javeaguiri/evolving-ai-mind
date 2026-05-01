@@ -783,8 +783,8 @@
         ],
         "on_success": "step:16",
         "on_failure": "cancel",
-        "item_label_template": "Step {{step}} ({{type}})",
-        "item_secondary_key": "description"
+        "item_label_template": "Step {{step}} ({{type}}): {{description}}",
+        "item_secondary_key": "on_success"
       },
       {
         "step": "15a",
