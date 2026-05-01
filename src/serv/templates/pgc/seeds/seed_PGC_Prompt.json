@@ -1818,7 +1818,8 @@
             "type": "object",
             "required": [
               "step",
-              "type"
+              "type",
+              "description"
             ],
             "properties": {
               "step": {
@@ -1845,6 +1846,11 @@
                   "iterator"
                 ],
                 "type": "string"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 5,
+                "description": "One sentence describing what this step does and why \u2014 shown to the user at review time"
               }
             },
             "additionalProperties": true,
