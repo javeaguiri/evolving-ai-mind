@@ -156,16 +156,16 @@ export async function callLlmWithResumption(model, instructions, userMessage, ou
  * @returns {Promise<object>}    Parsed JSON response
  */
 export async function callLlmWithCorrection(model, instructions, userMessage, outputSchema, errors, attempt1Output, traceId, maxOutputTokens) {
-  const errorText  = JSON.stringify(errors, null, 2);
+  const errorLines = errors.map(e => `- ${e.message}`).join('\n');
   const outputText = JSON.stringify(attempt1Output, null, 2);
 
-  const correctionMessage = `Your previous response had these validation errors:
-${errorText}
+  const correctionMessage = `Your previous response had these specific issues that must be fixed:
+${errorLines}
 
 Your previous response was:
 ${outputText}
 
-Return the corrected JSON only. Do not change any fields that were not flagged.`;
+Fix ONLY the issues listed above. Return the complete corrected JSON object — no explanation, no preamble, no markdown fences.`;
 
   console.info('llm-client: sending correction prompt', { errorCount: errors.length, traceId });
 
