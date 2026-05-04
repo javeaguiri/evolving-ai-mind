@@ -1181,15 +1181,14 @@ function runLevel1StaticAnalysis(steps) {
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
     if (s.type === 'condition') {
-      // on_truthy/on_falsy may be bare keys ("8") or already prefixed ("step:8") — normalise to bare
-      // before wrapping so both formats pass validation without double-prefixing.
+      // on_truthy/on_falsy must be bare step keys ("8", "8a") — wrap unconditionally to step:N.
+      // A pre-prefixed value like "step:8" is an authoring error; "step:step:8" will not exist
+      // as a step key and is caught by the dead-target check below.
       if (s.on_truthy) {
-        const bare = String(s.on_truthy).startsWith('step:') ? String(s.on_truthy).slice(5) : s.on_truthy;
-        routingValues.push({ field: 'on_truthy', value: `step:${bare}` });
+        routingValues.push({ field: 'on_truthy', value: `step:${s.on_truthy}` });
       }
       if (s.on_falsy) {
-        const bare = String(s.on_falsy).startsWith('step:') ? String(s.on_falsy).slice(5) : s.on_falsy;
-        routingValues.push({ field: 'on_falsy', value: `step:${bare}` });
+        routingValues.push({ field: 'on_falsy', value: `step:${s.on_falsy}` });
       }
     }
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
