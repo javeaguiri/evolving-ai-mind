@@ -247,6 +247,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows, tech debt register, backlog
 - `docs/data-architecture.md` — PGC/PGD database schema, all 15 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts
 - `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
+- `docs/security-architecture.md` — threat model, Slack signing secret, PROC/SERV API key enforcement, implementation status
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
