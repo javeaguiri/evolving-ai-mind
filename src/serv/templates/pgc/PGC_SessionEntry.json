@@ -1,0 +1,27 @@
+{
+  "table_name": "PGC_SessionEntry",
+  "target": "pgc",
+  "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only — never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction.",
+  "columns": [
+    { "name": "id",              "type": "serial",      "primaryKey": true },
+    { "name": "session_id",      "type": "integer",     "nullable": false },
+    { "name": "sequence_number", "type": "integer",     "nullable": false },
+    { "name": "role",            "type": "varchar(15)", "nullable": false },
+    { "name": "content",         "type": "text",        "nullable": false },
+    { "name": "reasoning",       "type": "text",        "nullable": true },
+    { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_pgc_sessionentry_session_id",
+      "column": "session_id",
+      "references": { "table": "PGC_Session", "column": "id" },
+      "onDelete": "CASCADE"
+    }
+  ],
+  "constraints": [
+    { "type": "unique", "name": "uq_pgc_sessionentry_session_seq", "columns": ["session_id", "sequence_number"] },
+    { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant')" }
+  ],
+  "triggers": []
+}

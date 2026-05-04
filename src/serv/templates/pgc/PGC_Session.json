@@ -1,0 +1,22 @@
+{
+  "table_name": "PGC_Session",
+  "target": "pgc",
+  "description": "One row per LLM session. Tracks general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain.",
+  "columns": [
+    { "name": "id",              "type": "serial",        "primaryKey": true },
+    { "name": "session_type",    "type": "varchar(30)",   "nullable": false },
+    { "name": "query_id",        "type": "uuid",          "nullable": false, "unique": true, "default": "gen_random_uuid()" },
+    { "name": "slack_thread_ts", "type": "varchar(50)",   "nullable": true },
+    { "name": "workflow_name",   "type": "varchar(100)",  "nullable": true },
+    { "name": "run_id",          "type": "integer",       "nullable": true },
+    { "name": "trace_id",        "type": "varchar(100)",  "nullable": true },
+    { "name": "step_id",         "type": "varchar(50)",   "nullable": true },
+    { "name": "intent_category", "type": "varchar(100)",  "nullable": true },
+    { "name": "created_at",      "type": "timestamptz",   "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [],
+  "constraints": [
+    { "type": "check", "name": "chk_pgc_session_type", "expression": "session_type IN ('general_chat', 'llm_call_diagnostic')" }
+  ],
+  "triggers": []
+}

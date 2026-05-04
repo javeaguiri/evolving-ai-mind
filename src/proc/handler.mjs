@@ -35,6 +35,8 @@ import { handle as troubleshootWorkflow } from './troubleshoot-workflow.mjs';
 import { handle as fixWorkflow }        from './fix-workflow.mjs';
 import { handle as diagnosePromptSchema } from './diagnose-prompt-schema.mjs';
 import { handle as monitorPromptQuality } from './monitor-prompt-quality.mjs';
+import { handle as chat }               from './chat.mjs';
+import { handle as explain }            from './explain.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -158,6 +160,18 @@ async function processSqsBatch(records) {
         await monitorPromptQuality(req);
         continue;
       }
+      // CHAT_MESSAGE — general-purpose LLM conversation started by /chat Slack command.
+      if (message.type === 'CHAT_MESSAGE') {
+        const req = buildReqFromSqs(message);
+        await chat(req);
+        continue;
+      }
+      // EXPLAIN_QUERY — diagnostic conversation anchored to a specific llm_call step.
+      if (message.type === 'EXPLAIN_QUERY') {
+        const req = buildReqFromSqs(message);
+        await explain(req);
+        continue;
+      }
 
       const req = buildReqFromSqs(message);
       await dispatch(req);
@@ -225,7 +239,11 @@ async function dispatch(req) {
     case 'simulate-workflow':
       return simulateWorkflow(req);
 
-    // Routes added here as refactor progresses:
+    case 'chat':
+      return chat(req);
+
+    case 'explain':
+      return explain(req);
 
     default:
       return err(404, `PROC route "${req.route}" not found`, req.correlationId);
