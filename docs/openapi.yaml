@@ -2482,6 +2482,144 @@ paths:
           description: No PGC_Prompt row found for intentCategory
         '500':
           description: Validation infrastructure error (Ajv compile, vm sandbox, DB write)
+
+  /api/v1/proc/chat:
+    post:
+      summary: Start a general-purpose LLM conversation session
+      description: >
+        HTTP test path for the CHAT_MESSAGE SQS message type.
+        Creates a new PGC_Session (general_chat), stores the system prompt and user turn
+        as PGC_SessionEntry rows, calls the LLM (perplexity/sonar), and returns the
+        response. In production the /chat Slack command enqueues CHAT_MESSAGE to SQS
+        which routes here asynchronously. The response is delivered to Slack via
+        HUMAN_NOTIFICATION on the SlackResultsQueue.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt:
+                  type: string
+                  description: User message text
+                slackUser:
+                  type: string
+                  description: Slack user ID (optional — logged only)
+            examples:
+              basic_chat:
+                summary: Simple conversational message
+                value:
+                  prompt: "What can you help me with?"
+                  slackUser: "U012AB3CD"
+      responses:
+        '200':
+          description: LLM response with session metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: integer
+                  queryId:
+                    type: string
+                    format: uuid
+                  response:
+                    type: string
+              examples:
+                chat_response:
+                  summary: Successful chat response
+                  value:
+                    success: true
+                    sessionId: 42
+                    queryId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+                    response: "I can help you manage your cognitive automation workflows..."
+        '400':
+          description: Missing prompt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: LLM call or DB write failed
+
+  /api/v1/proc/explain:
+    post:
+      summary: Continue a diagnostic conversation anchored to a specific llm_call step
+      description: >
+        HTTP test path for the EXPLAIN_QUERY SQS message type.
+        Looks up the PGC_Session by query_id, appends the user turn as a PGC_SessionEntry,
+        reconstructs the full messages array, and calls the LLM (anthropic/claude-sonnet-4-5).
+        On first invocation (seq=3), the LLM reasoning from the original step (seq=2) is
+        surfaced in the reply if present. Subsequent invocations continue the conversation.
+        In production the /explain Slack command enqueues EXPLAIN_QUERY to SQS.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [queryId, prompt]
+              properties:
+                queryId:
+                  type: string
+                  format: uuid
+                  description: PGC_Session.query_id — obtained from LLM_DIAGNOSTIC Slack notification
+                prompt:
+                  type: string
+                  description: User question about the LLM output
+            examples:
+              explain_output:
+                summary: Ask about a specific LLM step output
+                value:
+                  queryId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
+                  prompt: "Why did you choose those column names for the recipes table?"
+      responses:
+        '200':
+          description: LLM explanation response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: integer
+                  response:
+                    type: string
+              examples:
+                explain_response:
+                  summary: Explanation of LLM output
+                  value:
+                    success: true
+                    sessionId: 17
+                    response: "I chose those column names because..."
+        '400':
+          description: Missing queryId or prompt, or queryId not a valid UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No PGC_Session found for the given query_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: LLM call or DB write failed
+
   # ── SERV ───────────────────────────────────────────────────────────────────
 
   /api/v1/serv/ping-db:
