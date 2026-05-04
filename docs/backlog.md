@@ -1,0 +1,203 @@
+# evolving-mind-ai — Backlog
+
+Active tech debt register, tangential feature designs, and build history. Items in architecture.md §7 and §15 were moved here to keep architecture.md focused on active decisions.
+
+---
+
+## 1. Tech Debt — Active
+
+Items are unresolved unless otherwise noted. ✅ items were resolved mid-session and are archived in git.
+
+### High Priority
+
+| Item | Notes |
+|---|---|
+| Workflow safety guards (velocity detector, execution accumulator, cycle detector) | Required before production. Right-brain can monitor `PGC_WorkflowStats` for anomalous run patterns and flag suspect workflows proactively |
+| Duplicate domain detection — LLM runs every time | `/create-domain recipes` re-runs the LLM even if the domain already exists. Fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` |
+| Tier 1 post-write validation — dead routing targets | After any `PGC_Workflow` write (fix_workflow step 8, create_workflow step 19), run Level 1 simulation on the written step array and fail immediately if dead routing targets are found |
+| `analyze_and_design_workflow` persistent schema mismatch | Prompt id 25. LLM produces wrong field names on every attempt. `response_format` + prompt rewrite deployed Session 23 — not yet validated. See `docs/prompt-issues.md` Issue 2 |
+| Guard 3 cycle detector — backward reference handling | Guard 3 must distinguish gate-bounded loops from tight computational loops. Rule: a backward reference is safe if the path from target back to source contains at least one `human_gate` step |
+
+### Medium Priority
+
+| Item | Notes |
+|---|---|
+| `domain: null` on `create_workflow` runs | `input.domain` is null throughout — intent preprocessor passes only `userInput`. Fix: resolve domain before CREATE_WORKFLOW SQS dispatch and inject `domain_schema` into `research_workflow_domain` input |
+| `research_workflow_domain` receives no domain schema | Prompt only receives `workflow_description` and `domain` (the latter is null). Without schema context the right brain cannot surface domain-specific preference questions. Fix: add `domain_schema` as an input variable |
+| `fix_workflow_steps` prompt text says "complete array" | Prompt still instructs LLM to return the full corrected step array. Should say "return only the steps you changed". Reduces output tokens, eliminates risk of unrequested steps |
+| `createTable` DDL + PGC_Schema insert not in a transaction | Physical table can exist without registry row on partial failure |
+| `updateTable` ALTER TABLE | Currently metadata only — does not execute ALTER TABLE |
+| `iterator` cannot express multi-step per-item sequences | Requires `sub_workflow` step type (MVP) or flat loop pattern (Option B) |
+| `delete-domain.mjs` missing `PGC_Workflow` + `PGC_IntentMap` cleanup | When a domain is deleted, its 4 CRUD workflows + 4 IntentMap rows are not removed. Fix: query workflow IDs by `domain`, delete IntentMap where `workflow_id IN [ids]`, delete Workflow rows. Requires `allow_delete: true` on both tables |
+| `PGC_WorkflowRun.session_id` FK column | Add `session_id integer FK → PGC_Session.id nullable` to `PGC_WorkflowRun`. Migration script needed — column did not exist at bootstrap |
+| Live prompt export back to seed files | When the right-brain improves a prompt, the improvement lives only in DB. Fix: `dev_scripts/export-prompts.mjs` reads live rows and overwrites `seed_PGC_Prompt.json`. Required before right-brain improvement loop is useful at scale |
+| Dependency injection for DB clients | Needed for unit testability — clients currently instantiated at module level |
+| `add_<domain>` workflows already in DB from v2/v3 are thin stubs | Existing domains (e.g. recipes) have the old 2-step workflow. Delete and recreate domain to get the v4 LLM-parse-first workflow, or manually upsert via `upsert-workflow.mjs` |
+| `init-brain.mjs` shared DDL utilities | `buildCreateTableSQL` and `getClient` imported by `schema.mjs` from `init-brain.mjs`. Refactor: extract to `src/shared/serv-utils.mjs` |
+| `PGC_Schema` not updated when `ALTER TABLE` adds a column | Every `ALTER TABLE` on a PGC table must be paired with an `UPDATE PGC_Schema SET columns = columns \|\| '[{"name":...}]'` |
+
+### Low Priority
+
+| Item | Notes |
+|---|---|
+| `design-domain.mjs` dead code | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
+| Orphan table cleanup tooling | Failed partial runs leave orphan tables — `delete-domain` covers full domains; per-table cleanup is manual |
+| AWS infrastructure cost — Bastion Host public IPv4 | EC2 Bastion accrues ~$2.82/month. Replace with AWS SSM Session Manager when promotional credits near exhaustion |
+| W3C `traceparent` format for `traceId` | Adopt `{version}-{traceId}-{parentId}-{flags}` when observability tooling added |
+| Option B name-based delete/update | Allow `/m delete recipes SWEET POTATO` to find by name then confirm by resolved id. Requires `serv_entity_query` pre-step |
+| `update_entity` missing field values instructive error | `/m update recipes id=3` with no field=value pairs should post instructive error without creating a WorkflowRun |
+| Run/trace id missing from Slack gate acknowledgements | Human gate dialogs do not surface `workflowRunId` or `traceId` — impossible to correlate with CloudWatch without querying DB |
+| `generate_crud_workflows` prompt description length | `PGC_DomainHelp.description` used in help button labels. Add prompt rule: description ≤ 50 chars |
+| `add_entity` child iterator timeout ceiling | Sequential iterator bounded by Lambda timeout. At 60s / ~400ms per insert, safe ceiling ~120 child rows. Document in runbook |
+| Integration tests | Defer until intent pipeline complete — use `testcontainers` + PostgreSQL |
+| CI/CD GitHub Actions | Deliberately deferred until `template.yaml` stabilises |
+| `callback` routing pattern not enforced at compile time | Every PROC endpoint must use `req.callback ?? req.body?.callback ?? null`. Currently convention only |
+| Terraform state — legacy infrastructure | Terraform config in `terraform-aws/` predates SAM migration. Check for orphaned AWS resources before decommissioning |
+| Azure MSAL token utility (`src/lib/getAccessToken.js`) | Vercel-era artifact. Assess for Teams Experience tier or decommission |
+| `upsert-workflow.mjs` required on fresh deploys | `init-brain` uses `ON CONFLICT DO NOTHING` — must run `upsert-workflow.mjs <name>` after any workflow step changes |
+| `output_key` on non-`text_input` gates is misleading | `review_object` and `confirm` gates do not write to `local_state[output_key]` on confirm |
+| `PGC_SystemContext.step_type_contracts` can become stale | Re-run `seed_PGC_StepType.mjs` then `seed_PGC_SystemContext.mjs` when a new step type goes live |
+| `toEntityName()` in `classify-intent.mjs` is dead code (fallback only) | Remove once all domains are recreated with `domain` column populated |
+| `orderBy` field in entity queries not driven by `PGC_EntitySchema` | Add optional `display_order_column` to `PGC_EntitySchema` — `list_entity` reads it when present |
+| `formatRecordList` renders id-only for tables where label column is not `name` | Add `display_column` hint in `PGC_TableMap` |
+| `parse_entity_input` generic prompt — domain-specific refinement | For domains where column semantics are non-obvious, parse quality degrades. Fix: `PGC_Prompt.error_log` + right-brain refinement |
+| `generate_crud_workflows` v2 `input_variables` stale | Seed row still lists `domain_help` as required; create_domain step 6 no longer passes it. Renders as empty string — not breaking |
+| CHECK constraint `output_schema` validation | Tighten schema to require `expression` and disallow `columns` on check type constraints |
+| `output_key` on `review_object` gate should warn if set | Executor has no guard; only `text_input` gates write to `local_state[output_key]` |
+| Session context window size configurable | `chat_defaults` key in `PGC_SystemContext` should define `session_context_limit` (default 20). Currently not implemented |
+| Alias management workflow `/mind edit aliases for <domain>` | View and update `PGC_DomainHelp.aliases` from Slack without touching the DB |
+| Pass 2 keyword scan excludes `domain: null` workflows | System workflows unreachable via Pass 2 — causes unnecessary Tier 2 sonar LLM calls |
+| `list_recipes` notify shows "Found recipes record(s)" without count | `{{results.length}}` not resolving on one run. Right-brain fix — prompt variance. Do not patch template resolver |
+
+---
+
+## 2. Tangential Features
+
+Features designed but deferred — require the Step Processor to exist first, or represent meaningful scope expansion.
+
+### 2.1 External API Registry — capability_call Step Type
+
+#### The problem
+
+`js_transform` is restricted to pure synchronous data transformations. External data enrichment from third-party APIs cannot be done safely in LLM-generated JS:
+- `vm.runInNewContext` timeout does not apply to async operations
+- LLM-generated fetch calls are an exfiltration vector — a prompt injection attack or hallucinated URL could send workflow state to an attacker's endpoint
+- API keys embedded in generated code are exposed in `PGC_Workflow` rows
+- No rate limiting, retry logic, or circuit breaking on arbitrary fetch
+
+#### The design
+
+The system maintains a **capability registry** of approved external integrations. Each registered capability defines what can be called, how to authenticate, and what parameters are allowed. The LLM generates workflow steps that reference capability keys — it never constructs URLs, never sees API keys, and cannot call anything outside the registry.
+
+**PGC_Capability schema extension:**
+
+| Column | Type | Notes |
+|---|---|---|
+| base_url | text | Root URL for the API |
+| endpoints | jsonb | Named endpoint templates |
+| auth | jsonb | Auth config — `{ type: "query_param", key: "token", ssm_path: "..." }` |
+| allowed_params | jsonb | Whitelist of parameter names the LLM may supply |
+| rate_limit | text | Human-readable limit — e.g. "60/minute" |
+| timeout_ms | integer | Per-call timeout. Default 5000ms |
+
+Auth credentials are stored in SSM, never in the database.
+
+**New step type: capability_call**
+
+```json
+{
+  "step": "3",
+  "type": "capability_call",
+  "capability_key": "finnhub_quote",
+  "endpoint": "quote",
+  "params": { "symbol": "{{state.ticker}}" },
+  "output_key": "current_price",
+  "on_success": "next",
+  "on_failure": "cancel"
+}
+```
+
+#### Finnhub integration — first planned capability
+
+```json
+{
+  "capability_key": "finnhub",
+  "category": "external_api",
+  "description": "Finnhub stock market data — quotes, candles, company profiles",
+  "status": "planned",
+  "base_url": "https://finnhub.io/api/v1",
+  "endpoints": {
+    "quote":        "/quote?symbol={{symbol}}",
+    "candles":      "/stock/candle?symbol={{symbol}}&resolution={{resolution}}&from={{from}}&to={{to}}",
+    "company_info": "/stock/profile2?symbol={{symbol}}"
+  },
+  "auth": {
+    "type": "query_param",
+    "key": "token",
+    "ssm_path": "/evolving-mind-ai/finnhub-api-key"
+  },
+  "allowed_params": ["symbol", "resolution", "from", "to"],
+  "rate_limit": "60/minute",
+  "timeout_ms": 5000
+}
+```
+
+#### What needs to be built
+
+1. PGC_Capability schema extension — add the API Registry columns listed above
+2. SSM parameter for Finnhub API key
+3. New `capability_call` row in `PGC_StepType` seed data
+4. Step Processor handler for `capability_call`
+5. Finnhub seed row in `PGC_Capability`
+6. Rate limiting — token bucket in `PGC_WorkflowRun` state or a dedicated table
+
+### 2.2 js_transform Safety Analysis — Synchronous Constraint
+
+`vm.runInNewContext({ timeout: N })` in Node.js reliably kills synchronous infinite loops. It does NOT apply to async operations. The chosen approach — prohibit async in `js_transform`, use `capability_call` for I/O — is correct for this system. External data enrichment is a `capability_call` concern. The distinction between "transform data I already have" and "fetch data I don't have" is architecturally meaningful and enforced.
+
+---
+
+## 3. Build History
+
+Session tags and what was completed. Authoritative source is `git log --oneline`.
+
+| Tag | What was completed |
+|---|---|
+| `v3.2-scaffolding-complete` | All 5 pings pass (ping-api, ping-llm, ping-sqs, ping-db, ping-e2e) |
+| `v3.2-ping-complete` | ping-sqs threading fixed, ping-e2e full round trip with RDS version string |
+| `v3.2-serv-schema-complete` | SERV-Schema all CRUD endpoints, init-brain bootstrap, 4 PGC system tables |
+| `v3.2-pgc-workflow-tables-complete` | 10 PGC system tables bootstrapped and seeded |
+| `v3.2-callback-abstraction-complete` | Generic callback object, SYSSQSCallbackResults queue rename |
+| `v3.2-serv-table-partial` | SERV-Table getRows + insertRow, wired into serv handler |
+| `v3.2-create-domain-scaffold` | /create-domain end to end with hardcoded recipes scaffold |
+| `v3.2-create-domain-live-llm` | /create-domain live LLM via Perplexity Agent API + json_schema output |
+| `v3.2-r14-r15-complete` | FK/constraint normalisation moved to SERV layer; response_format restored on LLM call |
+| `v3.2-slack-signing-complete` | Slack signing secret verification added to SlackbotFunction handler |
+| `v3.2-template-cleanup` | SchemaQueue + DLQ removed, LambdaInvokePolicy removed, stale env vars cleaned |
+| `v3.2-clean-baseline` | All pings passing, Lambda invoke pattern fully gone, clean foundation for Phase 2 |
+| `v3.2-interactive-complete` | /interactive endpoint live, /help command proves full interactive loop end-to-end |
+| `v3.2-serv-table-complete` | SERV-Table updateRows + deleteRows complete. openapi.yaml v3.3.2 |
+| `v3.2-shutdown-complete` | /shutdown command — SlackbotFunction + ProcFunction, ephemeral Slack response |
+| `v3.2-serv-entity-complete` | SERV-Entity all six routes complete. PGC_EntitySchema upsert_key added. openapi.yaml v3.3.3 |
+| `v3.2-bootstrap-clean` | init-brain installs set_updated_at() on PGD. seed_PGC_Schema upsert_key synced |
+| `v3.2-design-domain-foundation` | shared/llm-client + shared/serv-client extracted. proc/review-output. proc/design-domain first pass. openapi.yaml v3.3.4 |
+| `v3.2-design-domain-e2e` | callback routing fix. callback.mjs DESIGN_DOMAIN_RESULT + ERROR handlers. Full Slack flow confirmed |
+| `v3.2-refactor-complete` | Phase 1 refactoring closed out. All pings passing |
+| `v3.2-design-domain-gate-complete` | proc/design-domain Block Kit review gate + in-place remove. human_gate suspend/resume wired |
+| `v3.2-step-processor-complete` | Step Processor fully operational. First successful create_domain end-to-end (WorkflowRun 12) |
+| `v3.2-tangential-features` | /create-domain + /help fully wired to Step Processor. dev_scripts/upsert-workflow.mjs |
+| `v3.2-intent-preprocessor-complete` | Intent Preprocessor fully operational. mind.mjs + classify-intent.mjs + classify-intent-tiers.mjs |
+| `v3.2-crud-adhoc-complete` | Ad_hoc CRUD execution from /mind fully operational. All four CRUD verbs working |
+| `v3.2-create-domain-with-crud` | First complete create_domain end-to-end: 5 human gates, 4 PGD tables, CRUD registered |
+| `v3.2-create-workflow-complete` | create_workflow fully implemented. on_failure human_feedback. simulate step type. Pass 2b routing rules |
+| `v3.2-create-domain-complete-w-help` | Gap 4 (entity schema) + Gap 1 (interactive help). create_domain v5 (17 steps). help workflow v2 |
+| `v3.2-gap3-add-workflow` | Gap 3 rich ingestion. parse_entity_input v1. generate_crud_workflows v4. executeTop completed guard |
+| `v3.2-generic-crud-complete` | Generic *_entity workflows. create_domain step 9 inserts IntentMap directly. Recipes full CRUD |
+| `v3.2-intent-preprocessor-phase-b-complete` | Phase B pre-pass + 50 unit tests passing |
+| `v3.2-js-transform-sandbox-serv-entity-schema` | condition step type. js_transform generic expression sandbox (acorn + vm). serv_entity_schema |
+| `v3.2-option-c-domain-registration` | Deterministic domain registration |
+| `v3.2-local-state-sandbox-builtins-removed` | local_state in js_transform sandbox. All transform_type built-ins replaced by self-contained expressions |
+| `v3.2-troubleshoot-fix-workflow-complete` | Tier 1 reactive self-repair loop. troubleshoot-workflow.mjs + fix-workflow.mjs |
+| `v3.2-response-format-max-tokens` | response_format restored on Perplexity. max_output_tokens per-prompt. diagnose-prompt-schema.mjs Tier 1b |
+| `v3.2-session24-complete` | Iterator gate resume fix. diagnose_prompt_schema R1–R6 validated. pgvector promoted to Active |
+| `v3.2-session25-complete` | isSonar guard in llm-client. fence extraction regex. diagnose_prompt_schema v4. PGC_Prompt probe_input + max_output_tokens |

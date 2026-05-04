@@ -129,9 +129,9 @@ Never branch business logic on `req.source`.
 ### SQS Queues
 
 - **WorkflowQueue** — async workflow execution. Two categories:
-  1. Fire-and-forget (no workflowRunId): `PING_SQS`, `CLASSIFY_INTENT`, `CREATE_DOMAIN`, `HELP`, `CREATE_WORKFLOW`, `DELETE_DOMAIN`, `TROUBLESHOOT_WORKFLOW`, `FIX_WORKFLOW`
+  1. Fire-and-forget (no workflowRunId): `PING_SQS`, `CLASSIFY_INTENT`, `CREATE_DOMAIN`, `HELP`, `CREATE_WORKFLOW`, `DELETE_DOMAIN`, `TROUBLESHOOT_WORKFLOW`, `FIX_WORKFLOW`, `CHAT_MESSAGE`, `EXPLAIN_QUERY`
   2. Workflow execution (always has workflowRunId): `WORKFLOW_STEP` (actions: `execute_top`, `resume_gate`, `cancel`)
-- **SlackResultsQueue** — results back to EXP. Types: `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `PING_SQS_RESULT`, `PING_E2E_RESULT`
+- **SlackResultsQueue** — results back to EXP. Types: `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `PING_SQS_RESULT`, `PING_E2E_RESULT`, `LLM_DIAGNOSTIC`
 
 ### Step Processor (Workflow Execution Engine)
 
@@ -211,7 +211,7 @@ Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updat
 | `src/shared/lambda-utils.mjs` | `parseEvent`, `ok`, `err`, `buildReqFromSqs` |
 | `src/shared/sqs-callback.mjs` | `enqueueCallback`, `enqueueWorkflow` — **sole** SQS SDK location in PROC |
 | `src/shared/serv-client.mjs` | `getRows`, `insertRow`, `updateRows`, `servPost` — all SERV HTTP calls |
-| `src/shared/llm-client.mjs` | `callLlm`, `callLlmWithCorrection` — all LLM calls |
+| `src/shared/llm-client.mjs` | `callLlm`, `callLlmWithCorrection`, `callLlmWithMessages` — all LLM calls |
 | `src/proc/template-resolver.mjs` | `resolveTemplate` — resolves `{{key.path}}` tokens against `local_state` |
 | `src/proc/review-output.mjs` | Ajv schema + semantic + routing validation pipeline for all LLM output |
 
@@ -242,12 +242,50 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ---
 
+## Current State
+
+### Recently Completed
+
+**Session 33 (2026-05-04):**
+- `/chat` and `/explain` endpoints — `src/proc/chat.mjs`, `src/proc/explain.mjs`, `src/ui/slackbot/chat.mjs`, `src/ui/slackbot/explain.mjs`
+- `PGC_Session` + `PGC_SessionEntry` tables bootstrapped and seeded via `POST /api/v1/serv/bootstrap`
+- `callLlmWithMessages` added to `src/shared/llm-client.mjs` for multi-turn chat
+- `LLM_DIAGNOSTIC` SQS result type: step-executor writes diagnostics non-blocking, run-workflow enqueues, callback.mjs posts to channel root (no thread)
+- API key security: `INTERNAL_API_KEY` env var on ProcFunction + ServFunction; `ApiKeyRequired: true` on ProcProxy + ServProxy events; `InternalApiKey` + `InternalApiUsagePlan` in `template.yaml`; `x-api-key` header in `serv-client.mjs`
+- `docs/security-architecture.md` extracted from architecture.md §12
+
+**Session 32 (2026-05-01):**
+- `generate_workflow_steps` context reduction (~55KB → ~41KB)
+- `probe_input` fingerprint fix in `dev_scripts/upsert-prompt.mjs`
+- `PGC_SystemContext.content` → JSONB schema designed — see `docs/architecture.md` §4.3.3
+
+### Immediate Open Work
+
+1. **End-to-end retest** `/m create workflow Spanish flashcard quiz` — `create_workflow` v22 is deployed (step 1b removed, Other → `step:2`). Verify no second text_input box on Other click. If step 2 LLM fails, check `workflow_mode` in `local_state`.
+2. **PGC_SystemContext.content → JSONB** — design complete (§4.3.3); DDL not yet run. Steps: rewrite 7 seed entries → update `PGC_SystemContext.json` template → update `upsert-system-context.mjs` → run upsert script → execute 3 DDL statements.
+
+### Medium Priority
+
+- Review `PGC_Prompt.output_schema`: evaluate separate table, cross-prompt sharing, `review-output.mjs` validation integration
+- `PGC_WorkflowRun.session_id` FK column (nullable integer FK → `PGC_Session.id`): migration script needed, column did not exist at bootstrap
+- Active bug: `analyze_and_design_workflow` (prompt id 25) produces wrong field names — `response_format` + v10 deployed session 23, not yet validated
+
+### Deferred
+
+- `design-domain.mjs` Phase 4 — HUMAN_GATE refactor (deferred since session 29)
+- Pass 2 keyword scan excludes `domain: null` workflows (causes unnecessary Tier 2 LLM calls)
+
+> Full tech debt register and tangential feature designs: `docs/backlog.md`
+
+---
+
 ## Key Reference Files
 
-- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows, tech debt register, backlog
+- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows
 - `docs/data-architecture.md` — PGC/PGD database schema, all 15 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts
 - `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
 - `docs/security-architecture.md` — threat model, Slack signing secret, PROC/SERV API key enforcement, implementation status
+- `docs/backlog.md` — tech debt register (active + unresolved), tangential feature designs, build history
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
