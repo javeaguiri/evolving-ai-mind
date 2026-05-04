@@ -20,7 +20,10 @@ export async function servPost(path, body) {
   const url  = `${process.env.SERV_API_URL}${path}`;
   const resp = await fetch(url, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key':    process.env.INTERNAL_API_KEY ?? '',
+    },
     body:    JSON.stringify(body),
   });
   const parsed      = await resp.json();
@@ -38,7 +41,10 @@ export async function servGet(path) {
   const url  = `${process.env.SERV_API_URL}${path}`;
   const resp = await fetch(url, {
     method:  'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key':    process.env.INTERNAL_API_KEY ?? '',
+    },
   });
   const parsed      = await resp.json();
   parsed.statusCode = resp.status;

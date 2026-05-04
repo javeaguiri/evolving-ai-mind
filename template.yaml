@@ -525,12 +525,15 @@ Resources:
           LLM_AGENT_URL:        'https://api.perplexity.ai/v1/agent'
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
       Events:
         ProcProxy:
           Type: Api
           Properties:
             Path: /api/v1/proc/{proxy+}
             Method: ANY
+            Auth:
+              ApiKeyRequired: true
         WorkflowTrigger:
           Type: SQS
           Properties:
@@ -572,12 +575,15 @@ Resources:
           PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
           EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
           EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
       Events:
         ServProxy:
           Type: Api
           Properties:
             Path: /api/v1/serv/{proxy+}
             Method: ANY
+            Auth:
+              ApiKeyRequired: true
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -625,6 +631,37 @@ Resources:
           - js=import { createRequire } from 'module'; const require = createRequire(import.meta.url);
         EntryPoints:
           - src/ui/slackbot/callback.mjs
+
+# -----------------------------------------------------------------------------
+# API Gateway API Key + Usage Plan — protects /proc/* and /serv/* routes.
+# Key value sourced from SSM so it matches INTERNAL_API_KEY env var on Lambdas.
+# ping-db is exempt at the route level (ApiKeyRequired not set on SlackbotProxy).
+# -----------------------------------------------------------------------------
+  InternalApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: ServerlessRestApiProdStage
+    Properties:
+      Name: evolving-mind-ai-internal-key
+      Description: 'Internal API key for PROC and SERV endpoints'
+      Enabled: true
+      Value: '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+
+  InternalApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ServerlessRestApiProdStage
+    Properties:
+      UsagePlanName: evolving-mind-ai-usage-plan
+      Description: 'Usage plan for evolving-mind-ai internal API key'
+      ApiStages:
+        - ApiId: !Ref ServerlessRestApi
+          Stage: !Ref ServerlessRestApiProdStage
+
+  InternalApiUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref InternalApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref InternalApiUsagePlan
 
 # -----------------------------------------------------------------------------
 # Outputs — merged into single block             FIX 2: duplicate Outputs removed

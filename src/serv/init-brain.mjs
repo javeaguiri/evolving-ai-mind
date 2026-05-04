@@ -30,6 +30,8 @@ import PGC_WorkflowRunLock from './templates/pgc/PGC_WorkflowRunLock.json' with 
 import PGC_SystemContext   from './templates/pgc/PGC_SystemContext.json'   with { type: 'json' };
 import PGC_StepType        from './templates/pgc/PGC_StepType.json'        with { type: 'json' };
 import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with { type: 'json' };
+import PGC_Session         from './templates/pgc/PGC_Session.json'         with { type: 'json' };
+import PGC_SessionEntry    from './templates/pgc/PGC_SessionEntry.json'    with { type: 'json' };
 import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
 import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
 import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
@@ -78,6 +80,8 @@ const PGC_TEMPLATES = [
   PGC_SystemContext,
   PGC_StepType,
   PGC_Capability,
+  PGC_Session,
+  PGC_SessionEntry,
 ];
 
 // ---------------------------------------------------------------------------

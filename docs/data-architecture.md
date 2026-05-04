@@ -1,0 +1,855 @@
+# Data Architecture — evolving-mind-ai
+
+### 4.1 One PostgreSQL Instances, two login URLs
+
+| Login URL | Purpose | Primary Use |
+|---|---|---|
+| PGC | Config / system tables | PGC_* tables — system metadata, workflow definitions, prompts |
+| PGD | Domain / user data | PGD_* tables — user-created domain tables |
+
+### 4.2 Naming Conventions and Bootstrap
+
+**Naming:**
+- System config tables: `PGC_*` (live in PGC database)
+- User domain tables: `PGD_*` (live in PGD database)
+- Table names are mixed case and MUST be quoted in SQL: `"PGC_Schema"`
+
+**Bootstrap — `init-brain.mjs`**
+
+`bootstrap()` is an **install-time HTTP handler**, not a cold-start routine.
+It is called once during installation via `POST /api/v1/serv/bootstrap` and is
+idempotent — safe to call again if needed. It is NOT called automatically on
+Lambda cold start. Running bootstrap on cold start caused PostgreSQL
+`tuple concurrently updated` errors when multiple Lambda containers initialised
+simultaneously and raced to seed the same rows.
+
+`serv/handler.mjs` routes `case 'bootstrap': return bootstrap(req)` — the
+same one-line delegation pattern as all other SERV routes. `bootstrap(req)`
+returns `ok()`/`err()` directly, following the established SERV handler pattern.
+
+Bootstrap steps:
+1. Install `set_updated_at()` trigger function on PGC and PGD
+2. `CREATE TABLE IF NOT EXISTS` for all PGC system tables (from imported JSON templates)
+3. Seed self-referential rows into `PGC_Schema` (`ON CONFLICT DO NOTHING`)
+4. Seed gatekeeper rows into `PGC_TableMap` (`ON CONFLICT DO NOTHING`)
+5. Seed `PGC_Workflow` rows for system workflows (`WHERE NOT EXISTS`)
+6. Seed `PGC_IntentMap` rows (`WHERE NOT EXISTS ON intent_category`)
+7. Seed `PGC_Prompt` rows for system workflows (`WHERE NOT EXISTS ON intent_category + version`)
+8. Set `bootstrapComplete = true` — returns cached result on subsequent calls within same container
+
+All seed operations use `WHERE NOT EXISTS` or `ON CONFLICT DO NOTHING` — never `DO UPDATE`.
+
+Bootstrap template files live in `src/serv/templates/pgc/` and are imported as ES module
+static imports — NOT read via `fs.readFile` at runtime.
+
+### 4.3 PGC System Tables
+#### 4.3.1 PGC Schema Registry Tables
+##### PGC_Schema
+Registry of ALL table definitions — both system (PGC) and user domain (PGD).
+Every table in the system has a row here including the system tables themselves (self-referential).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| table_name | text UNIQUE | Quoted in SQL |
+| target | text | `pgc` or `pgd` |
+| domain | text | ✦ Domain this table belongs to — e.g. `recipes`, `stock_portfolio`. NULL for system tables |
+| description | text | |
+| columns | jsonb | Array of ColumnDefinition |
+| foreign_keys | jsonb | Array of ForeignKeyDefinition |
+| constraints | jsonb | Array of ConstraintDefinition |
+| triggers | jsonb | Array of TriggerDefinition |
+| created_at | timestamptz | |
+| updated_at | timestamptz | Auto-updated by trigger |
+
+##### PGC_TableMap
+SERV-Table security gatekeeper. SERV-Table rejects writes to any table not registered here.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| table_name | text UNIQUE | |
+| target | text | `pgc` or `pgd` |
+| domain | text | ✦ Mirrors `PGC_Schema.domain` — denormalised for gatekeeper queries without join |
+| schema_id | integer FK | → PGC_Schema.id, ON DELETE RESTRICT |
+| allow_insert | boolean | Default true |
+| allow_update | boolean | Default true |
+| allow_delete | boolean | Default false |
+| views | jsonb | SQL view definitions |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+##### PGC_EntitySchema
+Defines business entities that span multiple PGD tables.
+SERV-Entity reads this to build `jsonb_agg` queries and execute entity-level DML.
+Populated at runtime by `/create-domain`. Empty on fresh bootstrap.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| entity_name | text UNIQUE | e.g. "Recipe" |
+| description | text | |
+| root_table | text | Primary PGD table for the entity — e.g. `PGD_Recipes` |
+| joins | jsonb | Array of EntityJoin — related tables to LEFT/INNER JOIN for read operations |
+| aggregations | jsonb | Array of EntityAggregation — jsonb_agg columns to assemble in read results |
+| filters | jsonb | Default row-level filters always applied to this entity |
+| upsert_key | jsonb | ✦ Array of column names forming the natural unique key — e.g. `["ticker"]`. Empty array means upsert not supported. Must match an existing UNIQUE constraint on root_table |
+| created_at | timestamptz | |
+| updated_at | timestamptz | Auto-updated by trigger |
+
+##### PGC_DomainHelp
+User-facing command aliases and help text per domain.
+Powers `/help {domain}` responses and Pass 2 domain alias matching in the Intent Preprocessor.
+Populated at runtime by PROC when a domain is created. The `aliases` array is
+human-reviewed and confirmed via a gate step in the `create_domain` workflow before
+being written — aliases are not assumed from LLM output alone.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| domain | text UNIQUE | e.g. "recipes" |
+| aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
+| description | text | |
+| commands | jsonb | Array of command definitions with examples |
+| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. NULL until backfill script runs. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. ⬜ Column added via addColumn endpoint in Session 26 |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+---
+
+#### 4.3.2 PGC Workflow Tables
+
+These six tables support the PROC layer workflow execution engine.
+
+##### PGC_Workflow
+Stores reusable workflow definitions generated by LLM or created manually.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| name | text UNIQUE | e.g. `deduct_inventory` |
+| domain | text | Domain this workflow belongs to. NULL for system/cross-domain workflows |
+| description | text | |
+| intent_keywords | jsonb | Authoritative verb vocabulary for Pass 2 domain-workflow lookup — token-based scan in `matchWorkflowByKeywords()`. Data-driven: adding a verb here requires no code change. e.g. `["get","find","show","fetch","lookup"]` for `get_<domain>` workflows |
+| intent_embedding | vector | For pgvector similarity matching (Backlog) |
+| steps | jsonb | Array of StepDefinition (see Section 6.2) |
+| state_strategy | text | `fire_and_forget`, `sequential`, `sequential_with_confirmation` |
+| confirmation_required_at | jsonb | Step indices requiring human gate |
+| js_extensions | jsonb | Optional sandboxed JS for complex steps (Option C) |
+| model_used | text | Which LLM generated this workflow |
+| quality_score | numeric | Human or auto-rated |
+| max_execution_ms | integer | Guard 2 ceiling. NULL = use system default from PGC_SystemContext `guardrail_defaults` |
+| max_steps_per_window | integer | Guard 1 threshold. NULL = use system default |
+| window_seconds | integer | Guard 1 window duration. NULL = use system default |
+| version | integer | |
+| parent_workflow_id | integer FK | Self-referential — workflow evolution history |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+##### PGC_WorkflowRun
+One row per workflow execution. Holds the execution stack, accumulated state,
+callback routing, and runtime safety counters.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| workflow_id | integer FK | → PGC_Workflow.id |
+| trace_id | text | Correlation ID carried end-to-end from Slack message through all hops. Replaces `workflowId` in SQS payloads |
+| triggered_by | text | `slack`, `api`, `workflow`, `system` — who initiated this run |
+| status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `completed`, `failed`, `cancelled` |
+| input | jsonb | Original user intent + parameters |
+| stack | jsonb | Execution stack — array of FrameDefinition (see Section 6.3). Controls frame flow only |
+| state | jsonb | Accumulated cross-step data bag. Steps write `output_key` values here; subsequent steps read from here. Copied to `output` at run completion |
+| output | jsonb | Final workflow output — copied from `state` at completion |
+| callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }` |
+| total_execution_ms | integer | Running sum of all step `duration_ms` values. Incremented in same UPDATE as stack write. Used by Guard 2 |
+| step_count | integer | Total steps executed this run. Incremented in same UPDATE as stack write |
+| steps_in_window | integer | Steps executed since last `human_gate` completion. Reset to 0 when a human_gate step completes. Used by Guard 1 |
+| window_started_at | timestamptz | Timestamp when current velocity window started. Reset with `steps_in_window`. Used by Guard 1 |
+| error | jsonb | Last error details |
+| started_at | timestamptz | |
+| completed_at | timestamptz | |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+##### PGC_WorkflowRunStep
+Append-only audit log — one row per step execution attempt. Never updated after insert.
+Used for idempotency checks on SQS redelivery and debugging.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| run_id | integer FK | → PGC_WorkflowRun.id |
+| frame_id | text | UUID of the frame that executed |
+| step_number | integer | |
+| step_type | text | |
+| capability_key | text | → PGC_Capability.capability_key — which capability was exercised. NULL for built-in step types |
+| status | text | `completed`, `failed`, `skipped` |
+| retry_count | integer | Attempts before this final status. Default 0. Supports idempotency debugging |
+| input_snapshot | jsonb | What was passed in |
+| output_snapshot | jsonb | What came out |
+| error | jsonb | Error details if failed |
+| duration_ms | integer | |
+| executed_at | timestamptz | |
+
+##### PGC_Prompt
+Stores LLM prompts with versioning and quality tracking for self-improvement.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| intent_category | text | e.g. `create_domain`, `design_table`, `create_workflow` |
+| prompt_text | text | Actual prompt sent to LLM |
+| input_variables | jsonb | Variables this prompt expects — `[{ name, description, required }]`. Documents contract for prompt improvement |
+| output_schema | jsonb | Expected JSON shape of the LLM response. Used to validate output and guard downstream steps |
+| output_sample | jsonb | Representative successful output stored on first clean run. Used for regression checking when prompt is evolved |
+| probe_input | jsonb | ✦ Minimal substitution map for integration testing — mirrors the `input_variables` contract. Used by `llm-prompt-schema.test.mjs` to substitute template vars before firing the live LLM call |
+| model | text | Which LLM was used |
+| max_output_tokens | integer | ✦ Per-prompt output token ceiling forwarded to `callLlm`. NULL = use LLM default |
+| version | integer | |
+| parent_prompt_id | integer FK | Self-referential — prompt evolution history |
+| was_successful | boolean | |
+| quality_score | numeric | |
+| error_log | jsonb | Structured: `{ attempts: [{ at, error_type, error_message, llm_raw_output, recovery_action }] }` |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+##### PGC_IntentMap
+Maps user input patterns to workflows or action types for the Intent Preprocessor.
+Rows are seeded at bootstrap for system-level intents, and written at runtime by
+`create_workflow` completion for user-defined workflows.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| pattern | text | Regex or keyword pattern — e.g. `create.domain\|new.domain\|build.domain` |
+| intent_category | text | |
+| workflow_id | integer FK | → PGC_Workflow.id (nullable — some intents are ad-hoc) |
+| action_type | text | `crud`, `workflow`, `heavy_lift` |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+**How PGC_IntentMap and PGC_DomainHelp divide the work:**
+
+These two tables answer different questions and are consulted in a strict order by the Intent Preprocessor (see Section 6.3).
+
+`PGC_IntentMap` answers: "Is this a known system-level or registered workflow intent?" — create domain, create workflow, help, or any user-defined workflow. Its patterns are written by developers (bootstrap seed) or by the brain itself when a new domain is created. It has no FK to `PGC_Workflow` — routing uses `action_type` + `intent_category` name lookup in `handoff()`. Pass 1 in the pipeline — always runs first.
+
+`PGC_DomainHelp` answers: "Does the user's input mention something in their personal data?" — stocks, recipes, meals, budget. It has no FK to `PGC_Workflow` and no awareness of workflows. It only knows that "stocks", "portfolio", and "holdings" all mean `stock_portfolio`. Pass 2 in the pipeline — only consulted when no `PGC_IntentMap` pattern matched. Once a domain is resolved from `PGC_DomainHelp`, the preprocessor runs a workflow keyword scan against `PGC_Workflow.intent_keywords` for that domain, then falls back to CRUD detection or Tier 2.
+
+The handoff is one-way and ordered: `PGC_IntentMap` always runs first. A match short-circuits — `PGC_DomainHelp` is never read.
+
+**Intent Preprocessor tuning surface:**
+
+When classification misbehaves, most fixes are now data changes — no code deploys required:
+
+| Symptom | Which pass | Fix |
+|---|---|---|
+| System-level intent misrouted or missed | Pass 1 | Update `PGC_IntentMap.pattern` regex |
+| Domain not recognised from user input | Pass 2 | Update `PGC_DomainHelp.aliases` for that domain |
+| Domain workflow not triggered by natural phrasing | Pass 2 | Add verb to `PGC_Workflow.intent_keywords` for that workflow — no code change |
+| Novel verb not recognised for any domain workflow | Pass 2 | Add verb to `PGC_Workflow.intent_keywords` — no code change |
+| Structured `field=value` CRUD not detected | Pass 2 CRUD fallback | Update `matchCrudVerb()` in `classify-intent-tiers.mjs` |
+| Domain resolved but correct workflow not matched | Pass 2 | Enrich `intent_keywords` across that domain's workflows |
+| Novel phrasing reaches Tier 2 too often | Pass 2 (Backlog) | Populate `PGC_Workflow.intent_embedding` via pgvector — semantic match supersedes keyword scan |
+| Aliases outdated after domain changes | Pass 2 | Phase 2 item 4c — `/mind edit aliases for <domain>` management workflow |
+
+The alias management workflow (`/mind edit aliases for recipes`) is a Phase 2 item.
+Until it exists, aliases can be updated directly in `PGC_DomainHelp` via the SERV table endpoint.
+
+##### PGC_WorkflowRunLock
+Reserved for future parallel execution — optimistic locking. NOT used in sequential mode.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| run_id | integer FK UNIQUE | → PGC_WorkflowRun.id, CASCADE |
+| locked_by | text | Lambda request ID |
+| locked_at | timestamptz | |
+| version | integer | Incremented on every stack update |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+---
+
+#### 4.3.3 PGC Intelligence Tables — LLM Runtime Context
+
+These three tables exist solely to make the LLM effective at runtime.
+They are injected into heavy-lift prompts by PROC before calling the LLM.
+None of them affect workflow execution — they are read-only from the execution
+engine's perspective.
+
+##### PGC_SystemContext
+Named context blocks injected into heavy-lift LLM prompts by `executeLlmCall` in
+`step-executor.mjs`. Each matching row's `key` becomes a `{{key}}` substitution
+variable in the prompt text. Managed via `dev_scripts/upsert-system-context.mjs`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| key | text UNIQUE | Substitution variable name in prompt text — e.g. `routing_value_rules`, `step_type_contracts` |
+| section | text | Groups related keys — `rules`, `examples`, `schema` |
+| content | jsonb | Structured context object — see Content JSON Schema below |
+| inject_always | boolean | If true, injected into every heavy-lift prompt regardless of intent. Default false |
+| inject_for | jsonb | Array of `intent_category` values this row is injected for |
+| version | integer | Incremented on every content update |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+> **Pending DDL:** `content` column is currently `text`. Migration to `jsonb` and drop of
+> the `format` column are pending seed file rewrite. See DDL statement below.
+
+**Live seed rows** (from `seed_PGC_SystemContext.json`):
+
+| key | section | inject_for |
+|---|---|---|
+| `step_type_contracts` | `rules` | create_workflow, generate_workflow_steps, analyze_and_design_workflow, fix_workflow_steps |
+| `routing_value_rules` | `rules` | create_workflow, generate_workflow_steps, generate_workflow_paths, fix_workflow_steps |
+| `create_domain_example` | `examples` | create_workflow, analyze_and_design_workflow |
+| `step_usage_patterns` | `rules` | analyze_and_design_workflow, fix_workflow_steps |
+| `runtime_bindings` | `rules` | generate_workflow_steps, analyze_and_design_workflow |
+| `template_syntax` | `rules` | generate_workflow_steps, analyze_and_design_workflow |
+| `workflow_constraints` | `rules` | generate_workflow_steps, analyze_and_design_workflow, fix_workflow_steps |
+
+**Content JSON Schema:**
+
+Every `content` value must conform to this structure. The injection code serializes it
+with `JSON.stringify` before substituting into prompt text — LLMs read structured JSON
+natively, and this form is more concise than formatted prose.
+
+```
+{
+  "title": "<optional top-level heading>",
+  "sections": [
+    {
+      "id":        "<machine key — unique within this entry>",
+      "heading":   "<display label>",
+      "tags":      ["<step-type or context tag>"],
+      "rules":     ["<rule or constraint string>"],
+      "mistakes":  [{ "wrong": "<bad form>", "right": "<correct form>" }],
+      "reference": [{ "key": "<term>", "value": "<definition>", "example": "<opt>" }],
+      "data":      <free-form JSON — contracts array, taxonomy object, example>
+    }
+  ]
+}
+```
+
+| Field | Required | Purpose |
+|---|---|---|
+| `sections` | yes | Array of addressable content sections |
+| `sections[].id` | yes | Machine key — unique within the entry |
+| `sections[].heading` | no | Human-readable label |
+| `sections[].tags` | no | Inject-filter tags. Absent or empty = always inject |
+| `sections[].rules` | no | Ordered list of rule/constraint strings |
+| `sections[].mistakes` | no | Common error / correct-form pairs |
+| `sections[].reference` | no | Key-value lookup table — tokens, bindings, syntax forms |
+| `sections[].data` | no | Free-form structured data — contracts, taxonomy, examples |
+
+A section may use any combination of the four body fields. At least one must be present.
+
+**Section injection tags (Phase 2 design):**
+
+Each section carries an optional `tags` array whose values are workflow step type names
+or other context identifiers. When the injection code is updated to support tag-based
+filtering, only sections whose `tags` overlap with the current prompt's `step_types_used`
+will be included. Sections with absent or empty `tags` are always included.
+
+- **Phase 1 (current):** all sections of every injected row are included regardless of tags.
+- **Phase 2:** `step-executor.mjs executeLlmCall` receives `step_types_used` from the
+  design step output and filters sections before serializing for prompt substitution.
+
+Example — `workflow_constraints` with granular tags:
+
+| Section id | tags | Included for serv_query+notify workflow |
+|---|---|---|
+| `step_array_structure` | (always) | ✓ |
+| `notify` | `["notify"]` | ✓ |
+| `condition` | `["condition"]` | — |
+| `end` | (always) | ✓ |
+| `human_gate` | `["human_gate"]` | — |
+| `iterator` | `["iterator"]` | — |
+| `serv_mutations` | `["serv_delete","serv_update"]` | — |
+| `guard_3` | (always) | ✓ |
+| `guard_1` | (always) | ✓ |
+
+A simple `serv_query → notify → end` workflow receives 5 of 9 sections.
+A complex workflow using all step types receives all 9.
+
+**DDL migration — execute after all seed files are rewritten to JSONB format:**
+
+```sql
+-- 0. Verify every content value is valid JSON before running steps 1-2.
+--    Any row returning 'invalid' must be fixed in the seed file and re-pushed first.
+SELECT key,
+       pg_typeof(content) AS current_type,
+       CASE WHEN content::jsonb IS NOT NULL THEN 'valid' ELSE 'invalid' END AS json_check
+FROM "PGC_SystemContext";
+
+-- 1. Change content column from text to jsonb.
+ALTER TABLE "PGC_SystemContext"
+  ALTER COLUMN content TYPE jsonb USING content::jsonb;
+
+-- 2. Drop the format column — no longer needed; content structure is self-describing.
+--    Run after step 1 succeeds.
+ALTER TABLE "PGC_SystemContext"
+  DROP COLUMN format;
+
+-- 3. Drop the check constraint that enforced format values (may already be gone with the column).
+--    Run only if the constraint still exists after step 2.
+ALTER TABLE "PGC_SystemContext"
+  DROP CONSTRAINT IF EXISTS chk_format;
+```
+
+**Files to update before running the DDL:**
+
+| File | Change |
+|---|---|
+| `src/serv/templates/pgc/PGC_SystemContext.json` | Change content type to jsonb, remove format column and chk_format constraint |
+| `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json` | Rewrite all 7 content fields as JSONB objects per the schema above |
+| `dev_scripts/upsert-system-context.mjs` | Remove format from upsert payload and log output |
+
+##### PGC_StepType
+Canonical catalogue of all valid workflow step types with their input/output contracts.
+Seeded on bootstrap. Injected into workflow generation and improvement prompts so the
+LLM produces valid step definitions.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| step_type | text UNIQUE | e.g. `serv_query`, `llm_call`, `human_gate`, `js_transform`, `notify`, `end` |
+| description | text | Human and LLM readable explanation of what this step does |
+| input_contract | jsonb | Required and optional fields — `[{ field, type, required, description }]` |
+| output_contract | jsonb | Fields produced — `[{ field, type, description }]`. NULL for steps with no output (e.g. `notify`) |
+| on_success_options | jsonb | Valid values for `on_success` — e.g. `["next", "end", "step:N"]` |
+| on_failure_options | jsonb | Valid values for `on_failure` |
+| requires_capability | text | → PGC_Capability.capability_key — NULL if always available |
+| status | text | `live`, `planned`, `deprecated` |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+##### PGC_Capability
+Registry of what this system can currently do. Injected into heavy-lift prompts so the
+LLM proposes only feasible workflows and gives honest answers when asked for something
+not yet supported.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| capability_key | text UNIQUE | e.g. `serv_table_insert`, `slack_notify`, `llm_agent_call`, `human_gate`, `js_transform` |
+| category | text | `serv`, `notify`, `llm`, `ui`, `execution` |
+| description | text | What this capability does — LLM readable |
+| status | text | `live`, `planned`, `not_supported` |
+| available_in | jsonb | Which Lambda functions expose this — e.g. `["proc", "serv"]` |
+| notes | text | Constraints, limits, or caveats — e.g. `"js_transform requires security gate approval"` |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+---
+
+#### 4.3.4 PGC Session Tables
+
+Two tables supporting persistent LLM session context for general chat and LLM
+call diagnostics. Full design, DDL, messages array reconstruction, and Slack command
+flows are specified in `docs/session-chat-design.md`.
+
+##### PGC_Session
+One row per session, regardless of session type. Created at the start of any `/chat`
+or `/explain` command, or by the `llm_call` step handler when diagnostics are enabled
+for the current workflow.
+
+```sql
+CREATE TABLE "PGC_Session" (
+  id              SERIAL PRIMARY KEY,
+  session_type    VARCHAR(30)   NOT NULL,          -- 'general_chat' | 'llm_call_diagnostic'
+  query_id        UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+  slack_thread_ts VARCHAR(50)   NULL,              -- general_chat lookup key (Slack thread_ts)
+  workflow_name   VARCHAR(100)  NULL,              -- llm_call_diagnostic: PGC_Workflow.name
+  run_id          UUID          NULL,              -- llm_call_diagnostic
+  trace_id        VARCHAR(100)  NULL,              -- llm_call_diagnostic; matches Slack trace
+  step_id         VARCHAR(50)   NULL,              -- llm_call_diagnostic: workflow step ID
+  intent_category VARCHAR(100)  NULL,              -- llm_call_diagnostic
+  created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
+);
+```
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| session_type | varchar(30) NOT NULL | `general_chat` \| `llm_call_diagnostic` |
+| query_id | uuid UNIQUE NOT NULL | User-facing reference; appears in Slack diagnostic notifications and is the `/explain` argument |
+| slack_thread_ts | varchar(50) NULL | `general_chat` follow-up lookup key; `llm_call_diagnostic` sessions also populate this when a Slack reply is posted |
+| workflow_name | varchar(100) NULL | `llm_call_diagnostic` only: `PGC_Workflow.name` — stored without ID join for readability |
+| run_id | uuid NULL | `llm_call_diagnostic` only |
+| trace_id | varchar(100) NULL | `llm_call_diagnostic` only; consistent with trace shown in Slack replies |
+| step_id | varchar(50) NULL | `llm_call_diagnostic` only |
+| intent_category | varchar(100) NULL | `llm_call_diagnostic` only |
+| created_at | timestamp | |
+
+Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`
+
+**Field rules:** All `llm_call_diagnostic` fields are NULL for `general_chat` sessions and vice versa.
+
+##### PGC_SessionEntry
+One row per turn in the conversation. Reconstructs the LLM messages array by ordering
+on `sequence_number`. Append-only — never updated after insert.
+
+```sql
+CREATE TABLE "PGC_SessionEntry" (
+  id              SERIAL PRIMARY KEY,
+  session_id      INTEGER       NOT NULL REFERENCES "PGC_Session"(id),
+  sequence_number INTEGER       NOT NULL,          -- 1-based; preserves messages array order
+  role            VARCHAR(15)   NOT NULL,          -- 'system' | 'user' | 'assistant'
+  content         TEXT          NOT NULL,          -- raw message content sent/received
+  reasoning       TEXT          NULL,              -- populated on 'assistant' rows only for diagnostic sessions
+  created_at      TIMESTAMP     NOT NULL DEFAULT NOW(),
+  UNIQUE (session_id, sequence_number)
+);
+```
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| session_id | integer FK NOT NULL | → PGC_Session.id |
+| sequence_number | integer NOT NULL | 1-based; UNIQUE per session; drives messages array order |
+| role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` — mirrors LLM API convention |
+| content | text NOT NULL | Raw message content sent to or received from the LLM |
+| reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows when `diagnostics_config` enables the workflow; **never** included in the reconstructed messages array |
+| created_at | timestamp | |
+
+**Messages array reconstruction:**
+```sql
+SELECT role, content
+FROM "PGC_SessionEntry"
+WHERE session_id = $1
+ORDER BY sequence_number ASC;
+```
+`reasoning` is excluded — it is diagnostic metadata, not conversation context.
+
+**Sequence conventions:**
+- `general_chat`: seq 1 = `system` (system prompt from `PGC_SystemContext.general_chat_system_prompt`), seq 2 = first `user` turn, seq 3 = `assistant` reply; subsequent turns append
+- `llm_call_diagnostic`: seq 1 = `user` (filled-in prompt), seq 2 = `assistant` (raw LLM response); follow-up `/explain` turns append from seq 3
+
+---
+
+#### 4.3.5 PGC_WorkflowStats — SQL View
+
+Not a physical table. Queried by PROC only when building LLM prompts for workflow
+evaluation or improvement. Not on the execution hot path — guards operate on
+`PGC_WorkflowRun` columns updated in-transaction with the stack write.
+Registered in `PGC_TableMap.views` on the `PGC_WorkflowRun` row.
+```sql
+CREATE OR REPLACE VIEW "PGC_WorkflowStats" AS
+SELECT
+  workflow_id,
+  COUNT(*)                                             AS run_count,
+  COUNT(*) FILTER (WHERE status = 'failed')            AS failure_count,
+  COUNT(*) FILTER (WHERE status = 'completed')         AS success_count,
+  COUNT(*) FILTER (WHERE status = 'cancelled')         AS cancelled_count,
+  ROUND(
+    COUNT(*) FILTER (WHERE status = 'failed')::numeric
+    / NULLIF(COUNT(*), 0) * 100, 1
+  )                                                    AS failure_rate_pct,
+  MAX(created_at)                                      AS last_run_at,
+  (ARRAY_AGG(status ORDER BY created_at DESC))[1]      AS last_status,
+  AVG(total_execution_ms)
+    FILTER (WHERE status = 'completed')                AS avg_execution_ms
+FROM "PGC_WorkflowRun"
+GROUP BY workflow_id;
+```
+
+---
+
+#### 4.3.6 Updated PGC Table Count
+
+| # | Table | Status |
+|---|---|---|
+| 1 | PGC_Schema | `domain` column added |
+| 2 | PGC_TableMap | `domain` column added |
+| 3 | PGC_EntitySchema | `upsert_key` column added |
+| 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
+| 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added (`session_id`: Backlog — not yet in DB) |
+| 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
+| 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log` added |
+| 9 | PGC_IntentMap | written at runtime by create_workflow completion |
+| 10 | PGC_WorkflowRunLock | unchanged |
+| 11 | PGC_SystemContext | new |
+| 12 | PGC_StepType | new |
+| 13 | PGC_Capability | new |
+| 14 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/session-chat-design.md` |
+| 15 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
+| — | PGC_WorkflowStats | SQL view — not a physical table |
+
+**Total: 15 physical PGC tables (13 bootstrapped + 2 session added in v3.2) + 1 view**
+
+
+---
+
+#### 4.3.7 Dev Scripts — PGC Data Management
+
+These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
+intelligence at runtime. They are not part of the Lambda deployment — they run locally
+against the live PGC database to push, update, or export seed data.
+
+All upsert scripts communicate via the SERV API — no direct DB connection required.
+Set `SERV_API_URL` before running:
+
+```cmd
+set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node dev_scripts/<script>.mjs
+```
+
+All upsert scripts accept an optional name argument to target a single row:
+
+```cmd
+node dev_scripts/upsert-prompt.mjs generate_workflow_steps
+node dev_scripts/upsert-workflow.mjs create_workflow
+node dev_scripts/upsert-step-type.mjs js_transform
+node dev_scripts/upsert-system-context.mjs create_domain_example
+```
+
+---
+
+##### `upsert-prompt.mjs`
+
+Pushes prompt definitions from `src/serv/templates/pgc/seeds/seed_PGC_Prompt.json`
+into `PGC_Prompt`.
+
+**When to run:** After any change to `seed_PGC_Prompt.json` — new prompts, version
+bumps, output schema changes. Must be run before the new prompt version is active at
+runtime, since the Step Processor loads prompts from the DB at execution time
+(`ORDER BY version DESC LIMIT 1` per `intent_category`).
+
+**Idempotency:** Computes a SHA-256 content fingerprint over `prompt_text`, `model`,
+`output_schema`, and `input_variables` before every write. If the fingerprint matches
+the highest-version DB row — no-op, prints "already current". If the DB version is
+ahead of the seed version and content differs — skips the update and prints a pull
+instruction; never overwrites a newer DB row with older seed content. Only the
+highest-version seed entry per `intent_category` is deployed; older version entries
+in the seed file are skipped with a warning to clean them up.
+
+**When DB is ahead of seed:** run `pull-prompt.mjs <intent_category>` to pull the DB
+content into the seed file, then verify with `git diff` before committing.
+
+**Key behaviour:**
+- Writes `prompt_text`, `output_schema`, `input_variables`, `model`, `version`
+- `error_log` and `output_sample` are never written by this script — those are
+  populated by the right-brain improvement loop (Backlog)
+
+**Argument:** `intent_category` name — e.g. `upsert-prompt.mjs generate_workflow_steps`.
+Omit to push all prompts in the seed file.
+
+---
+
+##### `upsert-workflow.mjs`
+
+Pushes workflow definitions from `src/serv/templates/pgc/seeds/seed_PGC_Workflow.json`
+into `PGC_Workflow`.
+
+**When to run:** After any change to `seed_PGC_Workflow.json` — new workflows, step
+changes, version bumps. Required on every fresh brain instance after `bootstrap` since
+`init-brain.mjs` seeds with `ON CONFLICT DO NOTHING` and will not overwrite step
+arrays that were already seeded.
+
+**Argument:** A workflow `name` argument is **required** when targeting a specific
+workflow — e.g. `upsert-workflow.mjs create_workflow`. Without an argument the script
+upserts all workflows in the seed file. Prefer the targeted form on live systems to
+avoid touching workflows that have active runs.
+
+**Idempotency:** Computes a SHA-256 content fingerprint over `steps`, `description`,
+and `model_used` before every write. If the fingerprint matches the current DB row —
+no-op, prints "already current". Version is only incremented when a real content diff
+is detected. Safe to re-run indefinitely without spurious version bumps.
+
+**Key behaviour:**
+- Writes `name`, `domain`, `description`, `intent_keywords`, `steps`, `state_strategy`,
+  `model_used`, `version`
+- Domain-generated workflows are written at runtime by `create_domain` — this script
+  only manages system workflows (`create_domain`, `help`, `create_workflow`, and the
+  five generic `*_entity` workflows)
+
+---
+
+##### `upsert-step-type.mjs`
+
+Pushes step type definitions from `src/serv/templates/pgc/seeds/seed_PGC_StepType.json`
+into `PGC_StepType`.
+
+**When to run:** When a step type's contract changes — new input fields, corrected
+description, status change from `planned` to `live`. Run before `upsert-system-context.mjs`
+when adding a new step type, so the injected `step_type_contracts` context is current.
+
+**Idempotency:** Update if exists, insert if not. Matches on `step_type`. Unlike prompts,
+step type contracts are authoritative in the seed file and always overwrite live rows —
+there is no right-brain improvement loop for step type contracts.
+
+**What it seeds:** 16 live step types, each with `description`, `input_contract`,
+`output_contract`, `on_success_options`, `on_failure_options`, and `status`. These
+contracts are injected by `executeLlmCall` into `generate_workflow_steps` and
+`analyze_and_design_workflow` so the LLM knows exactly what each step type accepts
+and produces.
+
+**Argument:** `step_type` name — e.g. `upsert-step-type.mjs js_transform`.
+Omit to push all step types in the seed file.
+
+---
+
+##### `upsert-system-context.mjs`
+
+Pushes key-value context rows from `src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json`
+into `PGC_SystemContext`. These rows are injected by `executeLlmCall` into LLM prompts
+at runtime based on the `inject_for` array on each row.
+
+**When to run:** After any change to `seed_PGC_SystemContext.json` — updated worked
+examples, new usage pattern rows, routing rule changes. Also run after adding a new
+step type so `step_type_contracts` is regenerated.
+
+**Idempotency:** `WHERE NOT EXISTS ON key` at bootstrap; update if exists at upsert time.
+`init-brain.mjs` preserves live rows on fresh installs to protect right-brain improvements.
+`upsert-system-context.mjs` always overwrites — use it to force content updates.
+
+**Rows it manages:**
+
+| Key | inject_for | Purpose |
+|---|---|---|
+| `step_type_contracts` | `generate_workflow_steps`, `analyze_and_design_workflow`, `create_workflow`, `fix_workflow_steps` | Full step type catalogue — injected so LLM knows the instruction set |
+| `routing_value_rules` | `generate_workflow_steps`, `analyze_and_design_workflow`, `generate_workflow_paths`, `create_workflow`, `fix_workflow_steps` | Valid routing tokens and Guard 3 backward reference rule |
+| `create_domain_example` | `generate_workflow_steps`, `analyze_and_design_workflow`, `create_workflow` | Annotated `create_domain` + flat loop quiz example — reference for correct step structure |
+| `step_usage_patterns` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Concrete correct step definitions per type with common mistake notes |
+| `runtime_bindings` | `generate_workflow_steps`, `analyze_and_design_workflow` | What the Step Processor injects automatically: `input.*`, `item`, `output_key` lifecycle per gate type, `local_state` in expressions |
+| `template_syntax` | `generate_workflow_steps`, `analyze_and_design_workflow` | `{{key}}`, `{{key.field}}`, `{{key.0.field}}`, `{{input.field}}` — resolution rules and silent-empty-on-miss behaviour |
+| `workflow_constraints` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Structural rules: `end` required, `notify` no on_failure, Guard 3, Guard 1 stuck-step detection |
+
+**Argument:** `key` name — e.g. `upsert-system-context.mjs create_domain_example`.
+Omit to push all rows in the seed file.
+
+**Run order when adding a new step type:**
+```cmd
+node dev_scripts/upsert-step-type.mjs <new_step_type>
+node dev_scripts/upsert-system-context.mjs step_type_contracts
+```
+
+---
+
+##### `pull-prompt.mjs`
+
+Pulls the highest-version `PGC_Prompt` row for one or more `intent_category` values
+from the DB and writes the result directly into `seed_PGC_Prompt.json`, replacing all
+existing entries for that category with the single authoritative DB row.
+
+**When to run:** When the DB is ahead of the seed file — after a prompt is improved
+by the self-healing pipeline or manually patched in the DB without updating the seed.
+This is the reverse of `upsert-prompt.mjs` — it syncs DB → seed.
+
+**Workflow:**
+```cmd
+node dev_scripts/pull-prompt.mjs <intent_category>
+git diff src/serv/templates/pgc/seeds/seed_PGC_Prompt.json
+node dev_scripts/upsert-prompt.mjs <intent_category>
+git commit
+```
+
+**Encoding:** `JSON.stringify` produces `\uXXXX` for all non-ASCII characters.
+This is the project-standard encoding for seed JSON files — git-stable, immune to
+round-trip drift, no Slack display difference (decoded identically at render time).
+
+**Argument:** `intent_category` name. Omit to pull all categories found in the seed file.
+
+---
+
+##### `extract-run-data.mjs`
+
+CLI tool for inspecting JSON data files — particularly `PGC_WorkflowRun` state
+snapshots saved from curl responses or the run analysis workflow.
+
+**Usage:**
+```cmd
+node dev_scripts/extract-run-data.mjs <file> <dot.path> [--raw]
+node dev_scripts/extract-run-data.mjs run-245.json right_brain_research
+node dev_scripts/extract-run-data.mjs run-245.json preference_questions.question
+node dev_scripts/extract-run-data.mjs run-245.json confidence --raw
+```
+
+Path matching is **relative and depth-first** — the document is searched recursively
+for every node where the path applies. Intermediate arrays are fanned out automatically;
+`[]` bracket notation is accepted but not required. Multiple matches return as a JSON
+array; a single match returns unwrapped. `--raw` suppresses formatting for pipe use.
+
+Save analysis files to `dev_scripts/data/` (gitignored). Primary use: inspect Phase 1
+research outputs to evaluate `research_workflow_domain` question quality across runs.
+
+--- â€” SERV
+
+### 5.1 SERV-Schema (complete)
+DDL executor and PGC metadata registry.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/serv/schema/createTable` | POST | Execute DDL + register in PGC_Schema + PGC_TableMap |
+| `/api/v1/serv/schema/listTables` | POST | List entries from PGC_Schema, optional target filter |
+| `/api/v1/serv/schema/getTable` | POST | Get one entry by tableName |
+| `/api/v1/serv/schema/updateTable` | POST | Update metadata in PGC_Schema (NOT ALTER TABLE) |
+| `/api/v1/serv/schema/deleteTable` | POST | DROP TABLE + remove from PGC_Schema + PGC_TableMap |
+
+Security gate on `createTable`:
+- Column types validated against whitelist (serial, text, integer, jsonb, timestamptz, etc.)
+- Table names must match `^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$`
+- Protected system tables (`PGC_Schema`, `PGC_TableMap`, `PGC_EntitySchema`, `PGC_DomainHelp`) cannot be dropped
+
+### 5.2 SERV-Table (complete)
+DML executor gated by `PGC_TableMap`. All four operations live.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit |
+| `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
+| `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
+| `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
+
+Security gate on all operations:
+- Table must be registered in `PGC_TableMap`
+- Column names validated against `PGC_Schema.columns` for that table
+- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`)
+- `updateRows` and `deleteRows` require non-empty `filters` — unfiltered mass writes rejected at 400
+- `allow_insert`, `allow_update`, `allow_delete` checked per-table from `PGC_TableMap`
+
+**PGC_TableMap defaults:**
+- PGC system tables: `allow_insert` varies, `allow_update: true`, `allow_delete: false`
+- PGD domain tables: `allow_insert: true`, `allow_update: true`, `allow_delete: true`
+
+`SERV-Table` is used by PROC for all **system config** operations (e.g. `PGC_WorkflowRun`, `PGC_Prompt`).
+User domain data operations go through `SERV-Entity` instead.
+
+### 5.3 SERV-Entity (complete)
+User-facing domain data layer. Callers use entity names (`Recipe`, `Stock`) — never table names.
+`PGC_EntitySchema` defines the `root_table`, `joins`, `aggregations`, `upsert_key`, and default `filters` for each entity.
+Used by PROC when executing workflow steps that read or write user domain data.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/serv/entity/getEntity` | POST | Fetch one entity by id — with configured joins and jsonb_agg aggregations |
+| `/api/v1/serv/entity/listEntities` | POST | List entities — filters, orderBy, limit — entity default filters always applied |
+| `/api/v1/serv/entity/createEntity` | POST | INSERT root row — system cols (id, created_at, updated_at) stripped automatically |
+| `/api/v1/serv/entity/updateEntity` | POST | UPDATE root row — `patch` (default) or `replace` mode — children unaffected |
+| `/api/v1/serv/entity/upsertEntity` | POST | INSERT ... ON CONFLICT DO UPDATE — requires `upsert_key` defined in PGC_EntitySchema |
+| `/api/v1/serv/entity/deleteEntity` | POST | DELETE root row — CASCADE handles children via FK — gated by `allow_delete` |
+
+**Design decisions:**
+- Entity operations only touch the root table. Child rows (e.g. `RecipeIngredient`) are managed
+  via their own `createEntity` / `deleteEntity` calls with the parent `id` provided explicitly.
+- `updateEntity patch` — sets only provided fields, leaves all others unchanged.
+- `updateEntity replace` — sets ALL non-system fields from provided data, resetting omitted fields to null.
+  Use when replacing an entire entity (e.g. new recipe version) while preserving `id` and child FK relationships.
+- `upsertEntity` uses `xmax = 0` to detect true INSERT vs UPDATE without a second DB round-trip.
+  `wasInserted: true/false` returned in response.
+- `upsert_key` must correspond to an existing `UNIQUE` constraint on the physical root table.
+  `/create-domain` is responsible for setting both the DDL constraint and the `upsert_key` together.
+
+**Tier separation:**
+- `SERV/table` — system config operations on PGC tables. Used by PROC for workflow state, prompts, etc.
+- `SERV/entity` — user domain data operations on PGD tables. Used by PROC for workflow step execution.
+
+### 5.4 SERV services — not yet built
+- **SERV-Query** — cross-entity parameterised SELECT with pagination (Backlog)
+
+---
+

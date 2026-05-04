@@ -98,8 +98,9 @@ async function processRecord(record) {
         await postWorkflowError(message);
         break;
 
-      // Future result types added here:
-      // case 'FLOW_RESULT': await postFlowResult(message); break;
+      case 'LLM_DIAGNOSTIC':
+        await postLlmDiagnostic(message);
+        break;
 
       default:
         console.warn('callback: unknown message type', message.type);
@@ -332,6 +333,30 @@ async function postHumanGate(message) {
 // @param {number} workflowRunId    Encoded into button values
 // @returns {Array}                 Slack Block Kit blocks array
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// LLM_DIAGNOSTIC — posts a channel-level (no thread) diagnostic notification.
+// Tells the user an llm_call step ran and supplies the query_id for /explain.
+// Must NOT use routeCallback (which threads under callback.threadId) — diagnostics
+// are always posted to the channel root so they're visible and easy to find.
+// ---------------------------------------------------------------------------
+
+async function postLlmDiagnostic(message) {
+  const { callback, queryId, intentCategory, step, workflowRunId, traceId } = message;
+  if (!callback?.channel) {
+    console.warn('callback: LLM_DIAGNOSTIC — no channel, skipping', { traceId });
+    return;
+  }
+  const text = `🔍 *LLM step recorded* (\`${intentCategory}\`, step ${step})\n` +
+    `Use \`/explain ${queryId} <your question>\` to ask about this output.\n` +
+    `_runId: ${workflowRunId} | traceId: ${traceId}_`;
+  await slack.chat.postMessage({
+    channel: callback.channel,
+    text,
+    blocks:  textToBlocks(text),
+  });
+  console.info('callback: LLM_DIAGNOSTIC posted', { channel: callback.channel, queryId, traceId });
+}
 
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];

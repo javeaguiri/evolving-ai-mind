@@ -392,6 +392,19 @@ async function executeTop({ workflowRunId, traceId, source }) {
     });
   }
 
+  // ── Handle llm_call diagnostics ────────────────────────────────────────
+  if (result.diagnosticPayload && run.callback) {
+    const { queryId, intentCategory } = result.diagnosticPayload;
+    await enqueueCallback(run.callback, {
+      type:      'LLM_DIAGNOSTIC',
+      traceId,
+      queryId,
+      intentCategory,
+      workflowRunId: run.id,
+      step:          step.step,
+    });
+  }
+
   // ── Handle end ─────────────────────────────────────────────────────────
   if (result.nextAction === 'end' || step.type === 'end') {
     await updateRows('PGC_WorkflowRun',
