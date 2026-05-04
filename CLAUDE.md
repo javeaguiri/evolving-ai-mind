@@ -180,7 +180,7 @@ Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updat
 | PGC_WorkflowRunLock | Optimistic locking for future parallel execution (not used yet) | run_id, locked_by, version |
 | PGC_WorkflowStats | SQL view — workflow run stats (not a physical table) | workflow_id, run_count, failure_rate_pct, avg_execution_ms |
 
-> Full column definitions: `docs/architecture.md` section 4.3
+> Full column definitions: `docs/data-architecture.md` section 4.3
 
 ---
 
@@ -227,7 +227,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
   // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
   // See LICENSE file in the project root for full license terms.
   ```
-- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture.md` for new SQS message types, step types, gate types, and PGC tables.
+- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture.md` for new SQS message types, step types, and gate types. Update `docs/data-architecture.md` for new or modified PGC tables.
 - **Seed files** use `\uXXXX` escape sequences (native `JSON.stringify` output). `.gitattributes` enforces LF line endings.
 - **Template JSON files** in `src/serv/templates/pgc/*.json` are ES module static imports bundled by esbuild — not read via `fs` at runtime.
 - **Environment:** All secrets are in AWS SSM Parameter Store. No `.env` files at runtime. Use `.env.test.template` for local test setup.
@@ -244,7 +244,9 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ## Key Reference Files
 
-- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows, PGC tables, tech debt register, backlog
+- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows, tech debt register, backlog
+- `docs/data-architecture.md` — PGC/PGD database schema, all 15 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts
+- `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
