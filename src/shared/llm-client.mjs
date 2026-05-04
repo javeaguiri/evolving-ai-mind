@@ -119,6 +119,85 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 }
 
 /**
+ * Call Perplexity Agent API with a full messages array for multi-turn chat.
+ * Returns raw text — no JSON.parse. Designed for /chat and /explain endpoints.
+ *
+ * Mapping from OpenAI-style messages array to Agent API fields:
+ *   system message → instructions
+ *   last user message → input
+ *   remaining messages → messages history array
+ *
+ * @param {string} model     LLM model name
+ * @param {Array}  messages  [{role, content}] — system, user, assistant turns
+ * @param {string} traceId
+ * @returns {Promise<string>} Raw LLM text response
+ */
+export async function callLlmWithMessages(model, messages, traceId) {
+  const llmKey = process.env.LLM_API_KEY;
+  if (!llmKey) throw new Error('LLM_API_KEY env var not set');
+
+  const systemMsg    = messages.find(m => m.role === 'system');
+  const instructions = systemMsg?.content ?? '';
+
+  const lastUserIdx = messages.findLastIndex(m => m.role === 'user');
+  const input       = lastUserIdx !== -1 ? messages[lastUserIdx].content : '';
+
+  const history = messages.filter((m, i) => m.role !== 'system' && i !== lastUserIdx);
+
+  const body = {
+    model,
+    input,
+    temperature: 0.2,
+    ...(instructions             ? { instructions }          : {}),
+    ...(history.length > 0       ? { messages: history }     : {}),
+  };
+
+  const controller = new AbortController();
+  const timeoutId  = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(process.env.LLM_AGENT_URL, {
+      method:  'POST',
+      headers: {
+        'Authorization': `Bearer ${llmKey}`,
+        'Content-Type':  'application/json',
+      },
+      body:   JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (fetchErr) {
+    if (fetchErr.name === 'AbortError') {
+      throw new Error(`LLM call timed out after ${LLM_TIMEOUT_MS / 1000}s`);
+    }
+    throw fetchErr;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Agent API error ${response.status}: ${text}`);
+  }
+
+  const data = await response.json();
+
+  console.info('llm-client: callLlmWithMessages response', {
+    model,
+    outputLen: data.output?.length,
+    usage:     data.usage,
+    traceId,
+  });
+
+  const messageBlock = data.output?.find(o => o.type === 'message');
+  const rawText      = messageBlock?.content?.[0]?.text ?? '';
+
+  if (!rawText) throw new Error('LLM returned empty response');
+
+  return rawText;
+}
+
+/**
  * Call LLM with a resumption prompt — used when the previous attempt was truncated
  * at the token ceiling. Regenerates the full response from scratch with a doubled
  * token budget. Unlike the correction loop, no partial output is included — a

@@ -229,10 +229,46 @@ async function executeLlmCall({ step, localState, run, traceId }) {
 
   const finalOutput = validationResult.correctedOutput ?? rawOutput;
 
+  // Diagnostics — write llm_call_diagnostic session entries if this workflow is enabled.
+  // Non-blocking: failure is logged but does not fail the step.
+  let diagnosticPayload = null;
+  try {
+    const diagnosticsRow    = contextResp.rows?.find(r => r.key === 'diagnostics_config');
+    const diagnosticsConfig = diagnosticsRow ? JSON.parse(diagnosticsRow.content) : null;
+    const enabledWorkflows  = diagnosticsConfig?.enabled_workflows ?? [];
+
+    if (run?.workflow_name && enabledWorkflows.includes(run.workflow_name)) {
+      const sessionResp = await insertRow('PGC_Session', {
+        session_type:    'llm_call_diagnostic',
+        workflow_name:   run.workflow_name,
+        run_id:          run.id,
+        trace_id:        traceId,
+        step_id:         step.step,
+        intent_category: intentCategory,
+      });
+      if (sessionResp.success) {
+        const sessionId = sessionResp.row.id;
+        const queryId   = sessionResp.row.query_id;
+        await insertRow('PGC_SessionEntry', {
+          session_id: sessionId, sequence_number: 1, role: 'system', content: instructions,
+        });
+        await insertRow('PGC_SessionEntry', {
+          session_id: sessionId, sequence_number: 2, role: 'assistant',
+          content: typeof finalOutput === 'object' ? JSON.stringify(finalOutput) : String(finalOutput),
+        });
+        diagnosticPayload = { queryId, sessionId, intentCategory, traceId };
+        console.info('step-executor: diagnostics session created', { sessionId, queryId, traceId });
+      }
+    }
+  } catch (diagErr) {
+    console.warn('step-executor: diagnostics write failed (non-fatal)', diagErr.message);
+  }
+
   return {
-    outputValue: finalOutput,
-    nextAction:  resolveNextAction(step.on_success, null),
-    meta:        { llmMs, attempt: validationResult.attempt },
+    outputValue:      finalOutput,
+    nextAction:       resolveNextAction(step.on_success, null),
+    meta:             { llmMs, attempt: validationResult.attempt },
+    diagnosticPayload,
   };
 }
 

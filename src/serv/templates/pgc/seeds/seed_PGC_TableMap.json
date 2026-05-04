@@ -120,5 +120,23 @@
     "allow_update": true,
     "allow_delete": false,
     "views": []
+  },
+  {
+    "table_name": "PGC_Session",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": false,
+    "views": []
+  },
+  {
+    "table_name": "PGC_SessionEntry",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": false,
+    "allow_delete": false,
+    "views": []
   }
 ]
