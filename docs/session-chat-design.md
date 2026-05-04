@@ -37,10 +37,10 @@ CREATE TABLE "PGC_Session" (
   query_id        UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   slack_thread_ts VARCHAR(50)   NULL,              -- general_chat lookup key (Slack thread_ts)
   workflow_name   VARCHAR(100)  NULL,              -- llm_call_diagnostic: PGC_Workflow.name
-  run_id          UUID          NULL,              -- llm_call_diagnostic
+  run_id          UUID          NULL,              -- llm_call_diagnostic: FK ref to PGC_WorkflowRun.id
   trace_id        VARCHAR(100)  NULL,              -- llm_call_diagnostic; matches Slack trace
   step_id         VARCHAR(50)   NULL,              -- llm_call_diagnostic: workflow step ID
-  intent_category VARCHAR(100)  NULL,              -- llm_call_diagnostic
+  intent_category VARCHAR(100)  NULL,              -- llm_call_diagnostic: PGC_Prompt.intent_category
   created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
