@@ -2229,15 +2229,62 @@
       {
         "step": "8",
         "type": "condition",
-        "description": "Test 7 of 8 \u2014 Condition step: routes on ping_text presence. Both paths converge on step 9.",
+        "description": "Test 7 of 9 \u2014 Condition step: routes on ping_text presence. Both paths converge on step 9f.",
         "expression": "{{ping_text}}",
+        "on_truthy": "9f",
+        "on_falsy": "9f"
+      },
+      {
+        "step": "9f",
+        "type": "human_gate",
+        "gate_type": "followup_prompt",
+        "message_template": "Test 8 of 9 \u2014 Follow-up Button\n\nFOLLOW-UP BUTTON TEST: Click *Ask follow-up* below \u2014 a modal will open.\n\nIn the modal, type exactly:  follow-up works\n\nThen click Ask in the modal.",
+        "output_key": "ping_followup",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "9fv",
+        "type": "js_transform",
+        "description": "Validate ping_followup equals 'follow-up works' exactly.",
+        "input_key": "ping_followup",
+        "expression": "(function(){ return (items || '').trim() === 'follow-up works'; })()",
+        "output_key": "followup_valid",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "9fc",
+        "type": "condition",
+        "description": "Route on follow-up validation result.",
+        "expression": "{{followup_valid}}",
         "on_truthy": "9",
-        "on_falsy": "9"
+        "on_falsy": "9fe"
+      },
+      {
+        "step": "9fe",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "message_template": "Wrong input \u2014 you entered '{{ping_followup}}' but the expected value was 'follow-up works'.\n\nClick Try Again to repeat the test.",
+        "options": [
+          {
+            "label": "Try Again",
+            "action": "confirm",
+            "on_select": "step:9f"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "step:9f",
+        "on_failure": "cancel"
       },
       {
         "step": "9",
         "type": "notify",
-        "message_template": "Test 8 of 8 \u2014 Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Text input special button: PASS (skip routed)\n- Review object: PASS\n- Condition step: PASS (routed to notify)\n- Notify step: PASS (this message)\n\nAll 8 dialog types verified.",
+        "message_template": "Test 9 of 9 \u2014 Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Text input special button: PASS (skip routed)\n- Review object: PASS\n- Condition step: PASS (routed to follow-up test)\n- Follow-up button: PASS (entered {{ping_followup}})\n- Notify step: PASS (this message)\n\nAll 9 dialog types verified.",
         "notify_type": "HUMAN_NOTIFICATION",
         "on_success": "end"
       },

@@ -53,13 +53,17 @@ export async function handle(req) {
   }
   const session = sessionResp.rows[0];
 
-  // Store slack_thread_ts on first /explain invocation
+  // Establish thread on first invocation; use stored thread on subsequent calls
+  // so all explain responses for a session always land in the same thread.
+  let effectiveThreadId = session.slack_thread_ts ?? threadTs ?? null;
   if (!session.slack_thread_ts && threadTs) {
     await updateRows('PGC_Session',
       [{ column: 'id', op: 'eq', value: session.id }],
       { slack_thread_ts: threadTs }
     );
+    effectiveThreadId = threadTs;
   }
+  const responseCallback = callback ? { ...callback, threadId: effectiveThreadId } : null;
 
   // Load existing entries ordered by sequence_number
   const entriesResp = await getRows('PGC_SessionEntry',
@@ -104,20 +108,22 @@ export async function handle(req) {
 
   console.info('proc/explain: response ready', { sessionId: session.id, traceId });
 
-  // Enqueue Slack response — surface reasoning if present on first explain turn
-  if (callback) {
+  // Enqueue Slack response — thread to established session thread.
+  // Include queryId so callback.mjs renders the "Ask follow-up" button.
+  if (responseCallback) {
     let replyText = responseText;
     if (reasoning && nextSeq === 3) {
       replyText = `*LLM reasoning for this output:*\n>${reasoning.replace(/\n/g, '\n>')}\n\n${responseText}`;
     }
-    await enqueueCallback(callback, {
+    await enqueueCallback(responseCallback, {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: replyText,
+      queryId,
     });
   }
 
   if (req.source === 'http') {
-    return ok({ success: true, sessionId: session.id, response: responseText }, req.correlationId);
+    return ok({ success: true, sessionId: session.id, queryId, response: responseText }, req.correlationId);
   }
 }
