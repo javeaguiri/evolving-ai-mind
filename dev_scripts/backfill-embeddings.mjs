@@ -28,7 +28,7 @@ if (!SERV_API_URL) {
 async function servPost(path, body) {
   const resp = await fetch(`${SERV_API_URL}/api/v1${path}`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
     body:    JSON.stringify(body),
   });
   if (!resp.ok) {

@@ -553,6 +553,12 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
+  // followup_prompt gate: write modal inputValue to output_key — same semantics as text_input.
+  if (gateType === 'followup_prompt' && responseData?.inputValue && stepRef.output_key) {
+    setPath(localState, stepRef.output_key, responseData.inputValue);
+    frame.local_state = localState;
+  }
+
   // choice gate: write selected value to output_key (parallel to text_input).
   // When responseData.inputValue is present (modal submission), prefer it over userResponse
   // so the typed text — not the button name — is written to the state key.

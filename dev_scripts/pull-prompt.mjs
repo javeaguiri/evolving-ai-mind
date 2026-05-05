@@ -60,7 +60,7 @@ if (INTENT_CATEGORY && !allCategories.includes(INTENT_CATEGORY)) {
 async function servPost(path, body) {
   const resp = await fetch(`${SERV_API_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
     body: JSON.stringify(body),
   });
   return resp.json();

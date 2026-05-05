@@ -642,6 +642,11 @@ export function buildDialog(step, localState) {
       break;
     }
 
+    case 'followup_prompt':
+      // Typography field (always added above) is the only content needed.
+      // callback.mjs adds the "Ask follow-up" button based on gate_type.
+      break;
+
     default:
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }

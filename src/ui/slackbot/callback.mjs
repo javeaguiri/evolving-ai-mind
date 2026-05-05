@@ -190,12 +190,23 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId } = message;
+  const { callback, traceId, workflowRunId, queryId } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
   const blocks = textToBlocks(text, contextText);
+  if (queryId) {
+    blocks.push({
+      type:     'actions',
+      elements: [{
+        type:      'button',
+        text:      { type: 'plain_text', text: 'Ask follow-up' },
+        action_id: 'explain_followup',
+        value:     JSON.stringify({ action: 'explain_followup', queryId }),
+      }],
+    });
+  }
   await routeCallback(callback, text.slice(0, 150), blocks);
   console.info('callback: HUMAN_NOTIFICATION posted', {
     channel:    callback.channel,
@@ -299,6 +310,32 @@ async function postHumanGate(message) {
     return;
   }
 
+  // followup_prompt \u2014 notification-style message with an "Ask follow-up" modal button.
+  // Uses the existing buttonValue.modal \u2192 views.open \u2192 resume_gate path in interactive.mjs.
+  if (gateType === 'followup_prompt') {
+    const promptText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'LLM output recorded.';
+    const blocks = [
+      ...textToBlocks(promptText),
+      {
+        type:     'actions',
+        elements: [{
+          type:      'button',
+          style:     'primary',
+          text:      { type: 'plain_text', text: 'Ask follow-up' },
+          action_id: 'workflow_followup_modal_0',
+          value:     JSON.stringify({
+            workflowRunId,
+            action: 'confirm',
+            modal:  { title: 'Your question', input_label: 'Type your follow-up question', multiline: true },
+          }),
+        }],
+      },
+    ];
+    await routeCallback(callback, promptText.slice(0, 150), blocks);
+    console.info('callback: HUMAN_GATE followup_prompt posted', { workflowRunId, traceId });
+    return;
+  }
+
   const blocks = dialogToBlocks(dialog, workflowRunId);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate \u2014 please review and respond.';
@@ -349,12 +386,20 @@ async function postLlmDiagnostic(message) {
   }
   const text = `🔍 *LLM step recorded* (\`${intentCategory}\`, step ${step})\n` +
     `Use \`/explain ${queryId} <your question>\` to ask about this output.\n` +
-    `_runId: ${workflowRunId} | traceId: ${traceId}_`;
-  await slack.chat.postMessage({
-    channel: callback.channel,
-    text,
-    blocks:  textToBlocks(text),
-  });
+    `_runId: ${workflowRunId} | queryId: ${queryId} | traceId: ${traceId}_`;
+  const blocks = [
+    ...textToBlocks(text),
+    {
+      type:     'actions',
+      elements: [{
+        type:      'button',
+        text:      { type: 'plain_text', text: 'Ask follow-up' },
+        action_id: 'explain_followup',
+        value:     JSON.stringify({ action: 'explain_followup', queryId }),
+      }],
+    },
+  ];
+  await slack.chat.postMessage({ channel: callback.channel, text, blocks });
   console.info('callback: LLM_DIAGNOSTIC posted', { channel: callback.channel, queryId, traceId });
 }
 

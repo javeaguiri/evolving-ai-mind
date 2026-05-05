@@ -85,6 +85,12 @@ export async function handle(req) {
     return err(400, 'Invalid button value encoding', req.correlationId);
   }
 
+  // explain_followup — button on LLM_DIAGNOSTIC or explain HUMAN_NOTIFICATION.
+  // No workflowRunId; routes to EXPLAIN_QUERY, not resume_gate.
+  if (buttonValue.action === 'explain_followup') {
+    return handleExplainFollowupButton(buttonValue, payload, req.correlationId);
+  }
+
   const { workflowRunId, action: userResponse, responseData } = buttonValue;
   if (!workflowRunId || !userResponse) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
@@ -290,8 +296,68 @@ export async function handle(req) {
 // private_metadata carries { workflowRunId, traceId, callback } set at modal open time.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// handleExplainFollowupButton — "Ask follow-up" clicked on a LLM_DIAGNOSTIC
+// or explain HUMAN_NOTIFICATION. Opens a modal whose submission routes to
+// EXPLAIN_QUERY (not resume_gate). No workflowRunId involved.
+// ---------------------------------------------------------------------------
+
+async function handleExplainFollowupButton(buttonValue, payload, correlationId) {
+  const { queryId } = buttonValue;
+  const triggerId   = payload.trigger_id;
+  const channel     = payload.channel?.id;
+  const threadTs    = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId     = correlationId || randomUUID();
+
+  if (!queryId) {
+    console.warn('interactive: explain_followup missing queryId', { traceId });
+    return err(400, 'explain_followup button value missing queryId', correlationId);
+  }
+
+  if (triggerId) {
+    try {
+      await slack.views.open({
+        trigger_id: triggerId,
+        view: {
+          type:             'modal',
+          callback_id:      'explain_followup_modal',
+          notify_on_close:  false,
+          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId }),
+          title:  { type: 'plain_text', text: 'Ask a follow-up' },
+          submit: { type: 'plain_text', text: 'Ask' },
+          close:  { type: 'plain_text', text: 'Cancel' },
+          blocks: [{
+            type:     'input',
+            block_id: 'followup_input_block',
+            label:    { type: 'plain_text', text: 'Your question' },
+            element: {
+              type:        'plain_text_input',
+              action_id:   'followup_input_value',
+              multiline:   true,
+              placeholder: { type: 'plain_text', text: 'What would you like to know about this output?' },
+            },
+          }],
+        },
+      });
+      console.info('interactive: explain_followup modal opened', { queryId, traceId });
+    } catch (error) {
+      console.error('interactive: explain_followup views.open failed', { error: error.message, traceId });
+      return err(500, `views.open failed: ${error.message}`, correlationId);
+    }
+  } else {
+    console.warn('interactive: explain_followup missing trigger_id', { queryId, traceId });
+  }
+
+  return { statusCode: 200, body: '' };
+}
+
 async function handleViewSubmission(payload, correlationId) {
   const traceId = correlationId || randomUUID();
+
+  // explain_followup_modal — routes to EXPLAIN_QUERY, not resume_gate
+  if (payload.view?.callback_id === 'explain_followup_modal') {
+    return handleExplainViewSubmission(payload, traceId);
+  }
 
   let meta;
   try {
@@ -344,6 +410,66 @@ async function handleViewSubmission(payload, correlationId) {
   }
 
   // Returning null body with 200 closes the modal — Slack interprets empty response as success.
+  return { statusCode: 200, body: '' };
+}
+
+// ---------------------------------------------------------------------------
+// handleExplainViewSubmission — explain_followup_modal submitted.
+// Enqueues EXPLAIN_QUERY with the submitted text and the original thread context.
+// ---------------------------------------------------------------------------
+
+async function handleExplainViewSubmission(payload, traceId) {
+  let meta;
+  try {
+    meta = JSON.parse(payload.view?.private_metadata ?? '{}');
+  } catch {
+    console.warn('interactive: explain_followup_modal private_metadata parse failed', { traceId });
+    return err(400, 'Invalid private_metadata', traceId);
+  }
+
+  const { queryId, channel, threadTs, traceId: metaTraceId } = meta;
+  if (!queryId || !channel) {
+    console.warn('interactive: explain_followup_modal missing queryId or channel', { meta, traceId });
+    return err(400, 'explain_followup_modal private_metadata must contain queryId and channel', traceId);
+  }
+
+  const stateValues = payload.view?.state?.values ?? {};
+  let inputValue = null;
+  for (const blockValues of Object.values(stateValues)) {
+    for (const actionValue of Object.values(blockValues)) {
+      const text = actionValue?.value?.trim();
+      if (text && !inputValue) inputValue = text;
+    }
+  }
+
+  if (!inputValue) {
+    console.warn('interactive: explain_followup_modal empty submission', { queryId, traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  const effectiveTrace = metaTraceId ?? traceId;
+  console.info('interactive: explain_followup_modal — enqueuing EXPLAIN_QUERY', {
+    queryId, traceId: effectiveTrace,
+  });
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:      'EXPLAIN_QUERY',
+        traceId:   effectiveTrace,
+        queryId,
+        prompt:    inputValue,
+        slackUser: payload.user?.id,
+        callback:  { provider: 'slack', channel, threadId: threadTs },
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: explain_followup_modal SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, traceId);
+  }
+
   return { statusCode: 200, body: '' };
 }
 
