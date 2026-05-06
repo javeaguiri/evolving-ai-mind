@@ -81,11 +81,11 @@ export async function handle(req) {
 
   // Enqueue Slack response
   if (callback) {
-    const replyText = `${responseText}\n\n_Reply in this thread to continue the conversation._`;
     await enqueueCallback(callback, {
       type:    'HUMAN_NOTIFICATION',
       traceId,
-      message: replyText,
+      message: responseText,
+      queryId: sessionResp.row.query_id,
     });
   }
 

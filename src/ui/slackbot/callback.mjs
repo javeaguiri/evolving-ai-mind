@@ -385,7 +385,7 @@ async function postLlmDiagnostic(message) {
     return;
   }
   const text = `🔍 *LLM step recorded* (\`${intentCategory}\`, step ${step})\n` +
-    `Use \`/explain ${queryId} <your question>\` to ask about this output.\n` +
+    `Use /explain ${queryId} <your question> to ask about this output.\n` +
     `_runId: ${workflowRunId} | queryId: ${queryId} | traceId: ${traceId}_`;
   const blocks = [
     ...textToBlocks(text),

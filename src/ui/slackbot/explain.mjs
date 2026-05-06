@@ -47,7 +47,7 @@ export async function handle(req) {
   try {
     const ack = await slack.chat.postMessage({
       channel: slackChannel,
-      text:    `🔍 Explaining \`${queryId.slice(0, 8)}…\``,
+      text:    `❓ ${prompt}`,
     });
     ackTs = ack.ts;
   } catch (error) {
