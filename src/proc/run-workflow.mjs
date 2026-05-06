@@ -317,6 +317,23 @@ async function executeTop({ workflowRunId, traceId, source }) {
         error: stepError.message, traceId,
       });
     }
+    // Send LLM_DIAGNOSTIC even on failure — diagnostics were written before the throw
+    // and the payload is attached to the error by executeLlmCall.
+    if (stepError.diagnosticPayload && run.callback) {
+      const { queryId, intentCategory: diagCategory } = stepError.diagnosticPayload;
+      try {
+        await enqueueCallback(run.callback, {
+          type:          'LLM_DIAGNOSTIC',
+          traceId,
+          queryId,
+          intentCategory: diagCategory,
+          workflowRunId:  run.id,
+          step:           frame.current_step,
+        });
+      } catch (diagErr) {
+        console.warn('run-workflow: LLM_DIAGNOSTIC on error enqueue failed (non-fatal)', diagErr.message);
+      }
+    }
     throw stepError;
   }
 

@@ -155,11 +155,12 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
     .catch(e => console.error('review-output: monitor fire-and-forget failed', { error: e.message, traceId }));
 
   return {
-    valid:       false,
+    valid:           false,
     intentCategory,
-    attempt:     2,
-    errors:      attempt2Errors,
-    errorLogged: true,
+    attempt:         2,
+    errors:          attempt2Errors,
+    correctedOutput, // expose attempt 2 output for diagnostic recording even on failure
+    errorLogged:     true,
     traceId,
   };
 }
