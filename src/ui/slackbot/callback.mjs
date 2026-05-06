@@ -387,19 +387,7 @@ async function postLlmDiagnostic(message) {
   const text = `🔍 *LLM step recorded* (\`${intentCategory}\`, step ${step})\n` +
     `Use /explain ${queryId} <your question> to ask about this output.\n` +
     `_runId: ${workflowRunId} | queryId: ${queryId} | traceId: ${traceId}_`;
-  const blocks = [
-    ...textToBlocks(text),
-    {
-      type:     'actions',
-      elements: [{
-        type:      'button',
-        text:      { type: 'plain_text', text: 'Ask follow-up' },
-        action_id: 'explain_followup',
-        value:     JSON.stringify({ action: 'explain_followup', queryId }),
-      }],
-    },
-  ];
-  await slack.chat.postMessage({ channel: callback.channel, text, blocks });
+  await slack.chat.postMessage({ channel: callback.channel, text });
   console.info('callback: LLM_DIAGNOSTIC posted', { channel: callback.channel, queryId, traceId });
 }
 
