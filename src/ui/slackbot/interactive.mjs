@@ -447,6 +447,17 @@ async function handleExplainViewSubmission(payload, traceId) {
     return { statusCode: 200, body: '' };
   }
 
+  // Echo the user's question to the thread so the full conversation is visible.
+  try {
+    await slack.chat.postMessage({
+      channel,
+      thread_ts: threadTs || undefined,
+      text:      `❓ ${inputValue}`,
+    });
+  } catch (error) {
+    console.warn('interactive: explain_followup echo failed (non-fatal)', { error: error.message });
+  }
+
   const effectiveTrace = metaTraceId ?? traceId;
   console.info('interactive: explain_followup_modal — enqueuing EXPLAIN_QUERY', {
     queryId, traceId: effectiveTrace,

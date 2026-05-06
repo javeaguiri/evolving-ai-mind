@@ -236,7 +236,7 @@
     "humanGateStep": {
       "type": "object",
       "description": "Suspends the workflow stack and presents a Slack dialog. Resumes when the user responds via /interactive. Gate type determines the dialog shape, option schema, and what is written to output_key. Options must include at least one cancel path.",
-      "required": ["step", "type", "gate_type", "message_template", "options", "on_success", "on_failure"],
+      "required": ["step", "type", "gate_type", "message_template", "on_success", "on_failure"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -244,8 +244,8 @@
         "description": { "type": "string" },
         "gate_type": {
           "type": "string",
-          "enum": ["confirm", "edit_list", "text_input", "review_object", "choice"],
-          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. edit_list: scrollable list with per-row actions. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions."
+          "enum": ["confirm", "edit_list", "text_input", "review_object", "choice", "followup_prompt"],
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. edit_list: scrollable list with per-row actions. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
         },
         "message_template": {
           "type": "string",
