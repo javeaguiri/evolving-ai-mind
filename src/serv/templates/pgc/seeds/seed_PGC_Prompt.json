@@ -4,25 +4,22 @@
     "version": 4,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
-    "prompt_text": "You are a PostgreSQL schema designer for a system called evolving-mind-ai.\n\nThe user wants to create a new data domain. Their description is: \"{{userInput}}\"\n\nFrom this description, infer a short, lowercase, snake_case domain name (e.g. \"stock_portfolio\", \"recipes\", \"fitness\").\nUse that inferred name as the \"domain\" field in your response.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"domain\": \"<inferred short snake_case domain name>\",\n  \"tables\": [\n    {\n      \"tableName\": \"<PGD_TableName>\",\n      \"target\": \"pgd\",\n      \"description\": \"<what this table stores>\",\n      \"columns\": [\n        { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n        { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n        { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n      ],\n      \"foreignKeys\": [\n        {\n          \"name\": \"fk_<child_table_lower>_<parent_table_lower>\",\n          \"column\": \"<foreign_key_column_name>\",\n          \"references\": { \"table\": \"PGD_ParentTable\", \"column\": \"id\" },\n          \"onDelete\": \"CASCADE\"\n        }\n      ],\n      \"constraints\": [\n        { \"type\": \"unique\", \"name\": \"uq_<table>_<columns>\", \"columns\": [\"<column_name>\"] }\n      ],\n      \"triggers\": [\n        { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n      ]\n    }\n  ]\n}\n\nRules:\n- \"domain\" must be a short, lowercase, snake_case name inferred from the user description\n- Table names must start with PGD_ followed by PascalCase (e.g. PGD_Recipes, PGD_StockPrices)\n- Column types must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger with timing BEFORE UPDATE\n- Foreign key \"column\" field is REQUIRED and must be an actual column name in the child table\n- Foreign key \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- Foreign key \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- Constraint \"name\" field is REQUIRED\n- Constraint \"columns\" must be an array of real column names that exist in the table\n- Generate 2-4 tables appropriate for the domain\n- Tables with no foreign keys must have an empty foreignKeys array: []\n- Tables with no constraints must have an empty constraints array: []\n- Every domain is self-contained. Never add columns that reference entities outside this domain's own table list. Do not add user_id, tenant_id, owner_id, account_id, or any FK to tables not defined in the tables array above. This is a single-user system with no authentication, no multi-tenancy, and no user accounts. Only add cross-table FKs between tables within this domain, unless otherwise specified in user input.\n- Return ONLY the JSON object, nothing else",
+    "input_variables": null,
     "output_schema": {
       "type": "object",
       "required": [
         "domain",
         "tables"
       ],
-      "additionalProperties": false,
       "properties": {
         "domain": {
           "type": "string",
-          "minLength": 1,
           "pattern": "^[a-z][a-z0-9_]*$",
+          "minLength": 1,
           "description": "Short lowercase snake_case domain name"
         },
         "tables": {
           "type": "array",
-          "minItems": 2,
-          "maxItems": 6,
           "items": {
             "type": "object",
             "required": [
@@ -34,24 +31,13 @@
               "constraints",
               "triggers"
             ],
-            "additionalProperties": false,
             "properties": {
-              "tableName": {
-                "type": "string",
-                "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$",
-                "description": "Must start with PGD_ followed by PascalCase"
-              },
               "target": {
                 "type": "string",
                 "const": "pgd"
               },
-              "description": {
-                "type": "string",
-                "minLength": 1
-              },
               "columns": {
                 "type": "array",
-                "minItems": 3,
                 "items": {
                   "type": "object",
                   "required": [
@@ -64,7 +50,6 @@
                       "minLength": 1
                     },
                     "type": {
-                      "type": "string",
                       "enum": [
                         "serial",
                         "bigserial",
@@ -82,23 +67,102 @@
                         "timestamp",
                         "date",
                         "uuid"
-                      ]
-                    },
-                    "primaryKey": {
-                      "type": "boolean"
-                    },
-                    "nullable": {
-                      "type": "boolean"
+                      ],
+                      "type": "string"
                     },
                     "unique": {
                       "type": "boolean"
                     },
                     "default": {
                       "type": "string"
+                    },
+                    "nullable": {
+                      "type": "boolean"
+                    },
+                    "primaryKey": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 3
+              },
+              "triggers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "timing",
+                    "function"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "timing": {
+                      "enum": [
+                        "BEFORE UPDATE",
+                        "AFTER UPDATE",
+                        "BEFORE INSERT",
+                        "AFTER INSERT"
+                      ],
+                      "type": "string"
+                    },
+                    "function": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              },
+              "tableName": {
+                "type": "string",
+                "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$",
+                "description": "Must start with PGD_ followed by PascalCase"
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "name",
+                    "columns"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "type": {
+                      "enum": [
+                        "unique",
+                        "check"
+                      ],
+                      "type": "string"
+                    },
+                    "columns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 1
+                    },
+                    "expression": {
+                      "type": "string"
                     }
                   },
                   "additionalProperties": false
                 }
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
               },
               "foreignKeys": {
                 "type": "array",
@@ -110,7 +174,6 @@
                     "references",
                     "onDelete"
                   ],
-                  "additionalProperties": false,
                   "properties": {
                     "name": {
                       "type": "string",
@@ -121,110 +184,48 @@
                       "minLength": 1,
                       "description": "Must be an actual column name in this table"
                     },
+                    "onDelete": {
+                      "enum": [
+                        "CASCADE",
+                        "RESTRICT",
+                        "SET NULL",
+                        "NO ACTION"
+                      ],
+                      "type": "string"
+                    },
                     "references": {
                       "type": "object",
                       "required": [
                         "table",
                         "column"
                       ],
-                      "additionalProperties": false,
                       "properties": {
                         "table": {
                           "type": "string",
-                          "minLength": 1,
-                          "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$"
+                          "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$",
+                          "minLength": 1
                         },
                         "column": {
                           "type": "string",
                           "minLength": 1
                         }
-                      }
-                    },
-                    "onDelete": {
-                      "type": "string",
-                      "enum": [
-                        "CASCADE",
-                        "RESTRICT",
-                        "SET NULL",
-                        "NO ACTION"
-                      ]
+                      },
+                      "additionalProperties": false
                     }
-                  }
-                }
-              },
-              "constraints": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "type",
-                    "name",
-                    "columns"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "type": {
-                      "type": "string",
-                      "enum": [
-                        "unique",
-                        "check"
-                      ]
-                    },
-                    "name": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "columns": {
-                      "type": "array",
-                      "minItems": 1,
-                      "items": {
-                        "type": "string",
-                        "minLength": 1
-                      }
-                    },
-                    "expression": {
-                      "type": "string"
-                    }
-                  }
-                }
-              },
-              "triggers": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "name",
-                    "timing",
-                    "function"
-                  ],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "timing": {
-                      "type": "string",
-                      "enum": [
-                        "BEFORE UPDATE",
-                        "AFTER UPDATE",
-                        "BEFORE INSERT",
-                        "AFTER INSERT"
-                      ]
-                    },
-                    "function": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  }
+                  },
+                  "additionalProperties": false
                 }
               }
-            }
-          }
+            },
+            "additionalProperties": false
+          },
+          "maxItems": 6,
+          "minItems": 2
         }
-      }
+      },
+      "additionalProperties": false
     },
+    "prompt_text": "You are a PostgreSQL schema designer for a system called evolving-mind-ai.\n\nThe user wants to create a new data domain. Their description is: \"{{userInput}}\"\n\nFrom this description, infer a short, lowercase, snake_case domain name (e.g. \"stock_portfolio\", \"recipes\", \"fitness\").\nUse that inferred name as the \"domain\" field in your response.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"domain\": \"<inferred short snake_case domain name>\",\n  \"tables\": [\n    {\n      \"tableName\": \"<PGD_TableName>\",\n      \"target\": \"pgd\",\n      \"description\": \"<what this table stores>\",\n      \"columns\": [\n        { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n        { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n        { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n      ],\n      \"foreignKeys\": [\n        {\n          \"name\": \"fk_<child_table_lower>_<parent_table_lower>\",\n          \"column\": \"<foreign_key_column_name>\",\n          \"references\": { \"table\": \"PGD_ParentTable\", \"column\": \"id\" },\n          \"onDelete\": \"CASCADE\"\n        }\n      ],\n      \"constraints\": [\n        { \"type\": \"unique\", \"name\": \"uq_<table>_<columns>\", \"columns\": [\"<column_name>\"] }\n      ],\n      \"triggers\": [\n        { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n      ]\n    }\n  ]\n}\n\nRules:\n- \"domain\" must be a short, lowercase, snake_case name inferred from the user description\n- Table names must start with PGD_ followed by PascalCase (e.g. PGD_Recipes, PGD_StockPrices)\n- Column types must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger with timing BEFORE UPDATE\n- Foreign key \"column\" field is REQUIRED and must be an actual column name in the child table\n- Foreign key \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- Foreign key \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- Constraint \"name\" field is REQUIRED\n- Constraint \"columns\" must be an array of real column names that exist in the table\n- Generate 2-4 tables appropriate for the domain\n- Tables with no foreign keys must have an empty foreignKeys array: []\n- Tables with no constraints must have an empty constraints array: []\n- Every domain is self-contained. Never add columns that reference entities outside this domain's own table list. Do not add user_id, tenant_id, owner_id, account_id, or any FK to tables not defined in the tables array above. This is a single-user system with no authentication, no multi-tenancy, and no user accounts. Only add cross-table FKs between tables within this domain, unless otherwise specified in user input.\n- Return ONLY the JSON object, nothing else",
     "probe_input": {
       "userInput": "golf scores"
     },
@@ -238,18 +239,18 @@
     "input_variables": [
       {
         "name": "domain",
-        "description": "Snake_case domain name the new table belongs to",
-        "required": true
+        "required": true,
+        "description": "Snake_case domain name the new table belongs to"
       },
       {
         "name": "existing_tables",
-        "description": "JSON array of existing table objects in the domain — for FK context",
-        "required": true
+        "required": true,
+        "description": "JSON array of existing table objects in the domain — for FK context"
       },
       {
         "name": "userInput",
-        "description": "Free-text description of the table to design",
-        "required": true
+        "required": true,
+        "description": "Free-text description of the table to design"
       }
     ],
     "output_schema": {
@@ -265,31 +266,31 @@
       ],
       "properties": {
         "target": {
-          "type": "string",
           "enum": [
             "pgd"
-          ]
-        },
-        "tableName": {
-          "type": "string",
-          "pattern": "^PGD_[A-Za-z][A-Za-z0-9_]*$"
-        },
-        "description": {
+          ],
           "type": "string"
         },
         "columns": {
           "type": "array",
           "minItems": 3
         },
-        "foreignKeys": {
-          "type": "array"
+        "triggers": {
+          "type": "array",
+          "minItems": 1
+        },
+        "tableName": {
+          "type": "string",
+          "pattern": "^PGD_[A-Za-z][A-Za-z0-9_]*$"
         },
         "constraints": {
           "type": "array"
         },
-        "triggers": {
-          "type": "array",
-          "minItems": 1
+        "description": {
+          "type": "string"
+        },
+        "foreignKeys": {
+          "type": "array"
         },
         "existing_table_modifications": {
           "type": "array",
@@ -317,9 +318,10 @@
     "prompt_text": "You are a PostgreSQL schema designer for a system called evolving-mind-ai.\n\nYou are adding a single new table to an existing domain.\n\nDomain: {{domain}}\nExisting tables in this domain: {{existing_tables}}\nUser description of the new table: \"{{userInput}}\"\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"tableName\": \"<PGD_TableName>\",\n  \"target\": \"pgd\",\n  \"description\": \"<what this table stores>\",\n  \"columns\": [\n    { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n    { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n    { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n  ],\n  \"foreignKeys\": [\n    {\n      \"name\": \"fk_<child_table>_<parent_table>\",\n      \"column\": \"<foreign_key_column>\",\n      \"references\": { \"table\": \"<PGD_ParentTable>\", \"column\": \"id\" },\n      \"onDelete\": \"CASCADE\"\n    }\n  ],\n  \"constraints\": [],\n  \"triggers\": [\n    { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n  ],\n  \"existing_table_modifications\": [\n    {\n      \"tableName\": \"<PGD_ExistingTable>\",\n      \"add_columns\": [\n        { \"name\": \"<column_name>\", \"type\": \"<type>\", \"nullable\": true }\n      ],\n      \"add_foreign_keys\": [\n        {\n          \"name\": \"fk_<child_table>_<parent_table>\",\n          \"column\": \"<column_name>\",\n          \"references\": { \"table\": \"<PGD_NewTable>\", \"column\": \"id\" },\n          \"onDelete\": \"SET NULL\"\n        }\n      ]\n    }\n  ]\n}\n\nRules:\n- Table name must start with PGD_ followed by PascalCase\n- Table name must be unique — do not reuse any existing table name\n- Every column type must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger\n- Foreign keys MUST use the nested object format: \"references\": { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Foreign key \"name\" field is required — use format: fk_<childtable_lower>_<parenttable_lower>\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- FK direction: place the foreign key column on whichever table is the dependent/child.\n  If the new table is a grouping or parent concept (e.g. a Set that contains existing rows),\n  put the FK column on the existing table and declare it in existing_table_modifications.\n  If the new table is the child/detail (e.g. a log, item, or join table), put the FK on the new table.\n- existing_table_modifications: include ONLY when an existing table needs a new FK column pointing\n  to the new table. Each entry names the existing table plus the columns and FKs to add.\n  Use onDelete: SET NULL (not CASCADE) for FK columns added to existing tables — do not\n  cascade-delete existing rows when a grouping table row is deleted.\n- If no existing table modifications are needed, omit existing_table_modifications or set it to []\n- Return ONLY the single JSON object, not an array",
     "probe_input": {
       "domain": "recipes",
-      "existing_tables": "[{\"tableName\":\"PGD_Recipes\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\",\"primaryKey\":true},{\"name\":\"name\",\"type\":\"text\",\"nullable\":false}],\"foreignKeys\":[],\"triggers\":[{\"name\":\"trg_pgd_recipes_updated_at\",\"timing\":\"BEFORE UPDATE\",\"function\":\"set_updated_at()\"}]}]",
-      "userInput": "store ingredients with quantity and unit"
-    }
+      "userInput": "store ingredients with quantity and unit",
+      "existing_tables": "[{\"tableName\":\"PGD_Recipes\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\",\"primaryKey\":true},{\"name\":\"name\",\"type\":\"text\",\"nullable\":false}],\"foreignKeys\":[],\"triggers\":[{\"name\":\"trg_pgd_recipes_updated_at\",\"timing\":\"BEFORE UPDATE\",\"function\":\"set_updated_at()\"}]}]"
+    },
+    "max_output_tokens": null
   },
   {
     "intent_category": "classify_intent_tier2",
@@ -329,13 +331,13 @@
     "input_variables": [
       {
         "name": "knownWorkflows",
-        "description": "Comma-separated list of registered PGC_Workflow names, or a message stating none exist",
-        "required": true
+        "required": true,
+        "description": "Comma-separated list of registered PGC_Workflow names, or a message stating none exist"
       },
       {
         "name": "domainContext",
-        "description": "A sentence naming the resolved domain if Pass 1b matched, or empty string",
-        "required": false
+        "required": false,
+        "description": "A sentence naming the resolved domain if Pass 1b matched, or empty string"
       }
     ],
     "output_schema": {
@@ -345,7 +347,12 @@
         "action_type"
       ],
       "properties": {
-        "intent_category": {
+        "action_type": {
+          "enum": [
+            "crud",
+            "workflow",
+            "heavy_lift"
+          ],
           "type": "string"
         },
         "workflow_name": {
@@ -354,21 +361,17 @@
             "null"
           ]
         },
-        "action_type": {
-          "type": "string",
-          "enum": [
-            "crud",
-            "workflow",
-            "heavy_lift"
-          ]
+        "intent_category": {
+          "type": "string"
         }
       }
     },
     "prompt_text": "You are an intent classifier for a personal automation system.\nClassify the user input and return JSON only — no prose, no markdown fences.\n{{knownWorkflows}}\n{{domainContext}}\n\nReturn exactly this shape:\n{\n  \"intent_category\": \"<short snake_case label e.g. list_recipes, meal_planner, create_domain>\",\n  \"workflow_name\": \"<workflow name from the known list, or null>\",\n  \"action_type\": \"crud\" | \"workflow\" | \"heavy_lift\"\n}\n\nRules:\n- If the input matches a known workflow name, set action_type = \"workflow\" and workflow_name = that name.\n- If the input is a data operation (list, add, update, delete, find) on a personal domain, set action_type = \"crud\".\n- If the input requires building something new (new domain, new workflow, new capability), set action_type = \"heavy_lift\".\n- intent_category should be a short snake_case label.\n- workflow_name must be null unless it exactly matches a name from the known workflows list.",
     "probe_input": {
-      "knownWorkflows": "list_recipes,add_recipes,get_recipes",
-      "domainContext": "domain: recipes"
-    }
+      "domainContext": "domain: recipes",
+      "knownWorkflows": "list_recipes,add_recipes,get_recipes"
+    },
+    "max_output_tokens": null
   },
   {
     "intent_category": "generate_crud_workflows",
@@ -425,44 +428,8 @@
             }
           }
         },
-        "intentMapRows": {
-          "type": "array",
-          "minItems": 5,
-          "maxItems": 5,
-          "items": {
-            "type": "object",
-            "required": [
-              "pattern",
-              "intent_category",
-              "action_type"
-            ],
-            "properties": {
-              "pattern": {
-                "type": "string"
-              },
-              "intent_category": {
-                "type": "string",
-                "enum": [
-                  "list_entity",
-                  "get_entity",
-                  "add_entity",
-                  "update_entity",
-                  "delete_entity"
-                ],
-                "description": "Must be one of the five generic entity intent categories"
-              },
-              "action_type": {
-                "type": "string",
-                "enum": [
-                  "workflow"
-                ]
-              }
-            }
-          }
-        },
         "entitySchemas": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "type": "object",
             "required": [
@@ -472,21 +439,7 @@
               "joins",
               "aggregations"
             ],
-            "additionalProperties": false,
             "properties": {
-              "entity_name": {
-                "type": "string",
-                "pattern": "^[A-Z][A-Za-z0-9]+$",
-                "description": "PascalCase singular noun"
-              },
-              "description": {
-                "type": "string",
-                "minLength": 5
-              },
-              "root_table": {
-                "type": "string",
-                "pattern": "^PGD_[A-Z][A-Za-z0-9]+$"
-              },
               "joins": {
                 "type": "array",
                 "items": {
@@ -497,26 +450,39 @@
                     "alias",
                     "on"
                   ],
-                  "additionalProperties": false,
                   "properties": {
+                    "on": {
+                      "type": "string"
+                    },
                     "type": {
-                      "type": "string",
                       "enum": [
                         "LEFT",
                         "INNER"
-                      ]
-                    },
-                    "table": {
+                      ],
                       "type": "string"
                     },
                     "alias": {
                       "type": "string"
                     },
-                    "on": {
+                    "table": {
                       "type": "string"
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 }
+              },
+              "root_table": {
+                "type": "string",
+                "pattern": "^PGD_[A-Z][A-Za-z0-9]+$"
+              },
+              "description": {
+                "type": "string",
+                "minLength": 5
+              },
+              "entity_name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]+$",
+                "description": "PascalCase singular noun"
               },
               "aggregations": {
                 "type": "array",
@@ -527,7 +493,6 @@
                     "columns",
                     "outputKey"
                   ],
-                  "additionalProperties": false,
                   "properties": {
                     "alias": {
                       "type": "string"
@@ -542,11 +507,49 @@
                     "outputKey": {
                       "type": "string"
                     }
-                  }
+                  },
+                  "additionalProperties": false
                 }
               }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "intentMapRows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "intent_category",
+              "action_type"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "action_type": {
+                "enum": [
+                  "workflow"
+                ],
+                "type": "string"
+              },
+              "intent_category": {
+                "enum": [
+                  "list_entity",
+                  "get_entity",
+                  "add_entity",
+                  "update_entity",
+                  "delete_entity"
+                ],
+                "type": "string",
+                "description": "Must be one of the five generic entity intent categories"
+              }
             }
-          }
+          },
+          "maxItems": 5,
+          "minItems": 5
         }
       }
     },
@@ -565,13 +568,13 @@
     "input_variables": [
       {
         "name": "userIntent",
-        "description": "The raw natural language description of what the workflow should do",
-        "required": true
+        "required": true,
+        "description": "The raw natural language description of what the workflow should do"
       },
       {
         "name": "domain",
-        "description": "Optional domain name hint — snake_case, from Tier 1/2 classification",
-        "required": false
+        "required": false,
+        "description": "Optional domain name hint — snake_case, from Tier 1/2 classification"
       }
     ],
     "output_schema": {
@@ -582,43 +585,44 @@
         "target_tables",
         "description"
       ],
-      "additionalProperties": false,
       "properties": {
         "domain": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$",
           "description": "Snake_case domain name this workflow operates on"
         },
-        "operation_type": {
+        "description": {
           "type": "string",
+          "minLength": 10,
+          "description": "One sentence describing what the workflow does"
+        },
+        "target_tables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "PGD_ table names this workflow will read from or write to"
+        },
+        "operation_type": {
           "enum": [
             "query",
             "mutate",
             "notify",
             "mixed"
           ],
-          "description": "Primary operation type"
-        },
-        "target_tables": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "string"
-          },
-          "description": "PGD_ table names this workflow will read from or write to"
-        },
-        "description": {
           "type": "string",
-          "minLength": 10,
-          "description": "One sentence describing what the workflow does"
+          "description": "Primary operation type"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are classifying a workflow intent for a personal automation system called evolving-mind-ai.\n\nThe user wants to create a new workflow. Their description is: \"{{userIntent}}\"\n{{domain}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"domain\": \"<snake_case domain name this workflow operates on>\",\n  \"operation_type\": \"query\" | \"mutate\" | \"notify\" | \"mixed\",\n  \"target_tables\": [\"<PGD_TableName>\", ...],\n  \"description\": \"<one sentence describing what the workflow does>\"\n}\n\nRules:\n- domain must be snake_case and match an existing domain (e.g. recipes, stock_portfolio)\n- If a domain hint was provided above, use it unless the user intent clearly refers to a different domain\n- operation_type: use \"query\" for read-only workflows, \"mutate\" for writes/inserts/deletes, \"notify\" for alert/summary workflows, \"mixed\" for workflows that both read and write\n- target_tables must name the actual PGD_ tables involved — infer from the domain and operation described\n- description must be a single clear sentence starting with a verb (e.g. \"Sends a weekly summary of portfolio performance to Slack\")\n- Return ONLY the JSON object, nothing else",
     "probe_input": {
-      "userIntent": "send a weekly summary of my recipes to Slack",
-      "domain": "recipes"
-    }
+      "domain": "recipes",
+      "userIntent": "send a weekly summary of my recipes to Slack"
+    },
+    "max_output_tokens": null
   },
   {
     "intent_category": "generate_workflow_mocks",
@@ -628,8 +632,8 @@
     "input_variables": [
       {
         "name": "steps",
-        "description": "The confirmed workflow steps array from generate_workflow_steps",
-        "required": true
+        "required": true,
+        "description": "The confirmed workflow steps array from generate_workflow_steps"
       }
     ],
     "output_schema": {
@@ -637,20 +641,19 @@
       "required": [
         "mock_outputs"
       ],
-      "additionalProperties": false,
       "properties": {
         "mock_outputs": {
           "type": "object",
           "description": "Object keyed by step number string. Only steps that produce output need mocks: llm_call, serv_query, serv_insert, serv_update, serv_delete, js_transform.",
-          "additionalProperties": true,
-          "minProperties": 1
+          "minProperties": 1,
+          "additionalProperties": true
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are generating mock outputs for workflow simulation in evolving-mind-ai.\n\nThe confirmed workflow steps are:\n{{steps}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"mock_outputs\": {\n    \"<step_key>\": <representative output object>,\n    ...\n  }\n}\n\nRules:\n- Only include entries for steps that produce output: llm_call, serv_query, serv_insert, serv_update, serv_delete, js_transform\n- For llm_call steps: produce a representative JSON object that the prompt would realistically return\n- For serv_query steps: produce a representative rows array, e.g. [{\"id\": 1, \"name\": \"example\", ...}]\n- For serv_insert steps: produce a representative inserted row object with id populated, e.g. {\"id\": 42, \"name\": \"example\"}\n- For serv_update steps: produce {\"tableName\": \"<table>\", \"updatedCount\": 1, \"rows\": [...]}\n- For serv_delete steps: produce {\"tableName\": \"<table>\", \"deletedCount\": 1}\n- For js_transform steps: produce the enriched version of the input array\n- Mock shapes must be realistic — downstream steps use these values in template resolution during simulation\n- Keys must be the string step key exactly as it appears in the steps array (e.g. \"1\", \"3b\")\n- Do NOT include entries for: human_gate, notify, end, iterator, simulate\n- Return ONLY the JSON object, nothing else",
-    "probe_input": {
-      "steps": "[{\"step\":\"1\",\"type\":\"serv_query\",\"input\":{\"tableName\":\"PGD_Recipes\"},\"output_key\":\"results\",\"on_success\":\"next\",\"on_failure\":\"cancel\"},{\"step\":\"2\",\"type\":\"notify\",\"message_template\":\"Found {{results.length}} recipes\",\"on_success\":\"end\"},{\"step\":\"3\",\"type\":\"end\"}]"
-    }
+    "probe_input": null,
+    "max_output_tokens": null
   },
   {
     "intent_category": "generate_workflow_paths",
@@ -660,13 +663,13 @@
     "input_variables": [
       {
         "name": "steps",
-        "description": "The confirmed workflow steps array",
-        "required": true
+        "required": true,
+        "description": "The confirmed workflow steps array"
       },
       {
         "name": "mock_outputs",
-        "description": "The mock_outputs object from generate_workflow_mocks",
-        "required": true
+        "required": true,
+        "description": "The mock_outputs object from generate_workflow_mocks"
       }
     ],
     "output_schema": {
@@ -674,11 +677,9 @@
       "required": [
         "simulation_paths"
       ],
-      "additionalProperties": false,
       "properties": {
         "simulation_paths": {
           "type": "array",
-          "minItems": 2,
           "items": {
             "type": "object",
             "required": [
@@ -686,63 +687,63 @@
               "decisions",
               "expected_terminal"
             ],
-            "additionalProperties": false,
             "properties": {
-              "path_name": {
-                "type": "string",
-                "minLength": 1
-              },
               "decisions": {
                 "type": "array",
-                "minItems": 1,
                 "items": {
                   "type": "object",
                   "required": [
                     "step",
                     "outcome"
                   ],
-                  "additionalProperties": true,
                   "properties": {
                     "step": {
                       "type": "string"
                     },
+                    "error": {
+                      "type": "string"
+                    },
                     "outcome": {
-                      "type": "string",
                       "enum": [
                         "success",
                         "failure",
                         "gate"
-                      ]
-                    },
-                    "user_response": {
+                      ],
                       "type": "string"
                     },
                     "on_select": {
                       "type": "string"
                     },
-                    "error": {
+                    "user_response": {
                       "type": "string"
                     }
-                  }
-                }
+                  },
+                  "additionalProperties": true
+                },
+                "minItems": 1
+              },
+              "path_name": {
+                "type": "string",
+                "minLength": 1
               },
               "expected_terminal": {
-                "type": "string",
                 "enum": [
                   "end",
                   "cancelled"
-                ]
+                ],
+                "type": "string"
               }
-            }
-          }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 2
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are generating simulation paths for workflow validation in evolving-mind-ai.\n\nThe confirmed workflow steps are:\n{{steps}}\n\nThe mock outputs for each step are:\n{{mock_outputs}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"simulation_paths\": [\n    {\n      \"path_name\": \"happy_path\",\n      \"decisions\": [\n        { \"step\": \"1\", \"outcome\": \"success\" },\n        { \"step\": \"3\", \"outcome\": \"gate\", \"user_response\": \"confirm\", \"on_select\": \"next\" }\n      ],\n      \"expected_terminal\": \"end\"\n    },\n    ...\n  ]\n}\n\nRules:\n- You MUST include at minimum:\n    1. One happy_path that reaches expected_terminal \"end\"\n    2. One cancel path per human_gate step (expected_terminal: \"cancelled\")\n    3. One failure path per llm_call or serv_* step (expected_terminal: \"cancelled\")\n- decisions entries are required only for branch points: human_gate steps, and steps where you are simulating a failure\n- For outcome \"success\": include only { step, outcome } — the mock output is injected automatically\n- For outcome \"gate\": include step, outcome, user_response (matching one of the gate option actions), and on_select (the matching on_select value from that option)\n- For outcome \"failure\": include step, outcome, and error (short error description)\n- For text_input gates on a gate path: also include output_key and value fields\n- every on_select value in decisions must match one of the option.on_select values defined on that step\n- every step key in decisions must exist in the steps array\n- expected_terminal must be exactly: \"end\" or \"cancelled\"\n- Return ONLY the JSON object, nothing else",
-    "probe_input": {
-      "steps": "[{\"step\":\"1\",\"type\":\"serv_query\",\"input\":{\"tableName\":\"PGD_Recipes\"},\"output_key\":\"results\",\"on_success\":\"next\",\"on_failure\":\"cancel\"},{\"step\":\"2\",\"type\":\"notify\",\"message_template\":\"Done\",\"on_success\":\"end\"},{\"step\":\"3\",\"type\":\"end\"}]",
-      "mock_outputs": "{\"1\":[{\"id\":1,\"name\":\"Carbonara\"},{\"id\":2,\"name\":\"Risotto\"}]}"
-    }
+    "probe_input": null,
+    "max_output_tokens": null
   },
   {
     "intent_category": "parse_entity_input",
@@ -752,13 +753,13 @@
     "input_variables": [
       {
         "name": "userInput",
-        "description": "The user's natural language description of the entity to create",
-        "required": true
+        "required": true,
+        "description": "The user's natural language description of the entity to create"
       },
       {
         "name": "full_entity_schema",
-        "description": "The assembled entity schema from buildEntitySchema js_transform — contains entity_name, description, root.{ table, columns: [{ name, type }] }, children.[{ table, alias, fk_column, output_key, columns: [{ name, type }] }]. Column type is included so the LLM can produce correctly-typed values.",
-        "required": true
+        "required": true,
+        "description": "The assembled entity schema from buildEntitySchema js_transform — contains entity_name, description, root.{ table, columns: [{ name, type }] }, children.[{ table, alias, fk_column, output_key, columns: [{ name, type }] }]. Column type is included so the LLM can produce correctly-typed values."
       }
     ],
     "output_schema": {
@@ -766,7 +767,6 @@
       "required": [
         "root"
       ],
-      "additionalProperties": false,
       "properties": {
         "root": {
           "type": "object",
@@ -786,13 +786,15 @@
             }
           }
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are parsing a natural language description into structured data for a personal automation system called evolving-mind-ai.\n\nFull entity schema:\n{{full_entity_schema}}\n\nUser input:\n\"{{userInput}}\"\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\nThe JSON must match this exact shape:\n\n{\n  \"root\": {\n    \"<root_column_1>\": \"<value>\",\n    \"<root_column_2>\": \"<value>\"\n  },\n  \"children\": {\n    \"<output_key_1>\": [\n      { \"<child_column_1>\": \"<value>\", \"<child_column_2>\": \"<value>\" }\n    ],\n    \"<output_key_2>\": [\n      { \"<child_column_1>\": \"<value>\" }\n    ]\n  }\n}\n\nRules:\n- full_entity_schema.root.columns lists the exact column names for the root table row. Use ONLY these names in the root object. Do not invent column names.\n- full_entity_schema.children lists each child table with its output_key and columns. Each child entry in the children object must use the output_key as the key and only include the columns listed in full_entity_schema.children[].columns. Do not include fk_column — the workflow injects the parent id.\n- Omit columns that cannot be inferred from the user input — leave them out rather than guessing.\n- Infer reasonable values from context. Use your best judgement based on the entity description and column names.\n- If the user provides no data for a child table, use an empty array [] for that output_key.\n- If the entity has no children (full_entity_schema.children is empty), omit the children key entirely.\n- Column types are provided in full_entity_schema as { name, type } objects. Use the type field to produce correctly-typed values:\n  - jsonb columns: always produce a valid JSON array [] or object {}. Never produce a bare string for a jsonb column. For list-like columns (tags, labels, categories) use a JSON array of strings e.g. [\"vegan\", \"gluten-free\"]. For structured columns use a JSON object {}. If you have no data for a jsonb column, use [] for arrays or {} for objects.\n  - integer/numeric columns: produce a number, not a string.\n  - All other column types: produce a string or appropriate scalar.\n- full_entity_schema.root.columns and full_entity_schema.children[].columns are now arrays of { name, type } objects. Use column.name when populating field names, and column.type when deciding the value format.\n- Return ONLY the JSON object, nothing else.",
     "probe_input": {
       "userInput": "pasta carbonara with bacon, eggs, and pecorino romano cheese",
       "full_entity_schema": "{\"entity_name\":\"Recipe\",\"description\":\"A recipe with ingredients\",\"root\":{\"table\":\"PGD_Recipes\",\"columns\":[{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"description\",\"type\":\"text\"},{\"name\":\"servings\",\"type\":\"integer\"}]},\"children\":[{\"table\":\"PGD_Ingredients\",\"alias\":\"i\",\"fk_column\":\"recipe_id\",\"output_key\":\"ingredients\",\"columns\":[{\"name\":\"ingredient\",\"type\":\"text\"},{\"name\":\"quantity\",\"type\":\"text\"},{\"name\":\"unit\",\"type\":\"text\"}]}]}"
-    }
+    },
+    "max_output_tokens": null
   },
   {
     "intent_category": "research_workflow_domain",
@@ -802,23 +804,23 @@
     "input_variables": [
       {
         "name": "domain",
-        "description": "Snake_case domain name the workflow will operate on",
-        "required": true
+        "required": true,
+        "description": "Snake_case domain name the workflow will operate on"
       },
       {
         "name": "workflow_description",
-        "description": "User's natural language description of what the workflow should do",
-        "required": true
+        "required": true,
+        "description": "User's natural language description of what the workflow should do"
       },
       {
         "name": "domain_schema",
-        "description": "JSON array of PGC_Schema rows -- table names, column names and types already defined for this domain",
-        "required": true
+        "required": true,
+        "description": "JSON array of PGC_Schema rows -- table names, column names and types already defined for this domain"
       },
       {
         "name": "workflow_mode",
-        "description": "Declared intent mode: read | write | enrich | analyze | other",
-        "required": true
+        "required": true,
+        "description": "Declared intent mode: read | write | enrich | analyze | other"
       }
     ],
     "output_schema": {
@@ -827,11 +829,9 @@
         "findings",
         "preference_questions"
       ],
-      "additionalProperties": false,
       "properties": {
         "findings": {
           "type": "array",
-          "description": "Autonomous design decisions resolved by research -- topics where best practice is clear and no user preference is needed",
           "items": {
             "type": "object",
             "required": [
@@ -841,12 +841,8 @@
               "recommendation",
               "rationale"
             ],
-            "additionalProperties": false,
             "properties": {
               "topic": {
-                "type": "string"
-              },
-              "what_is_known": {
                 "type": "string"
               },
               "options": {
@@ -862,27 +858,31 @@
                     "label": {
                       "type": "string"
                     },
-                    "description": {
+                    "tradeoffs": {
                       "type": "string"
                     },
-                    "tradeoffs": {
+                    "description": {
                       "type": "string"
                     }
                   }
                 }
               },
-              "recommendation": {
-                "type": "string"
-              },
               "rationale": {
                 "type": "string"
+              },
+              "what_is_known": {
+                "type": "string"
+              },
+              "recommendation": {
+                "type": "string"
               }
-            }
-          }
+            },
+            "additionalProperties": false
+          },
+          "description": "Autonomous design decisions resolved by research -- topics where best practice is clear and no user preference is needed"
         },
         "preference_questions": {
           "type": "array",
-          "description": "Genuine design decisions the user must make -- only ask when the answer cannot be inferred from the schema or workflow mode",
           "items": {
             "type": "object",
             "required": [
@@ -892,14 +892,10 @@
               "default",
               "options"
             ],
-            "additionalProperties": false,
             "properties": {
               "id": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$"
-              },
-              "question": {
-                "type": "string"
               },
               "affects": {
                 "type": "string"
@@ -909,7 +905,6 @@
               },
               "options": {
                 "type": "array",
-                "minItems": 2,
                 "items": {
                   "type": "object",
                   "required": [
@@ -928,19 +923,26 @@
                       "type": "string"
                     }
                   }
-                }
+                },
+                "minItems": 2
+              },
+              "question": {
+                "type": "string"
               }
-            }
-          }
+            },
+            "additionalProperties": false
+          },
+          "description": "Genuine design decisions the user must make -- only ask when the answer cannot be inferred from the schema or workflow mode"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are the right brain of evolving-mind-ai -- a research agent that surfaces domain best practices and identifies genuine user preference decisions before a workflow is designed.\n\nYou will be given:\n- The domain name and its existing schema (tables and columns already in the database)\n- A description of what the workflow should do\n- The workflow mode declared by the user\n\nYour job is to:\n1. Research best practices for this type of workflow in this domain\n2. Resolve decisions where best practice is clear (put these in findings)\n3. Identify the small number of genuine preference decisions the user must make (put these in preference_questions)\n\nReturn ONLY a valid JSON object -- no markdown, no explanation, no backticks.\n\n---\n\nDOMAIN: {{domain}}\n\nWORKFLOW DESCRIPTION: {{workflow_description}}\n\nEXISTING DOMAIN SCHEMA:\n{{domain_schema}}\n\nWORKFLOW MODE: {{workflow_mode}}\n\n---\n\nWORKFLOW MODE CONSTRAINTS -- apply strictly:\n\n- read: The workflow reads and displays data that ALREADY EXISTS in the schema above. NEVER ask where data comes from, what format it is in, what content to create, or how to populate the domain. Ask only about filtering preferences, sort order, result limits, and output presentation.\n\n- write: The workflow adds new records. You MAY ask about required vs optional fields, validation strictness, and confirmation behaviour. Do NOT ask about display or reporting preferences.\n\n- enrich: The workflow transforms or updates existing records. Ask about transformation rules, match criteria, and conflict handling. Do NOT ask about initial data setup.\n\n- analyze: The workflow aggregates or summarizes existing data. Ask about grouping dimensions, time ranges, output format, and threshold values. NEVER ask about data content, creation, or source.\n\n- other: Read the workflow_description carefully to infer which constraints apply.\n\n---\n\nSCHEMA CONSTRAINTS -- always apply regardless of mode:\n\nThe domain_schema above shows the tables and columns that already exist. This is authoritative.\n- Do NOT ask where the data comes from -- it comes from these tables.\n- Do NOT ask what columns or fields are available -- the schema defines them.\n- Do NOT ask about data types or formats -- the column types define them.\n- Do NOT suggest creating data sets or seeding test data -- this is a production domain.\n- Any question about data structure is answerable from the schema. Do not ask it.\n\n---\n\nPREFERENCE QUESTION RULES:\n\nBefore adding a question to preference_questions, apply this test:\n1. Can this be answered by reading the schema? If yes -- do NOT ask it.\n2. Is this question relevant to the declared workflow_mode? If no -- do NOT ask it.\n3. Is this a genuine behavioral choice (not a technical implementation detail)? If no -- do NOT ask it.\n4. Would different answers produce meaningfully different workflow step structures? If no -- do NOT ask it.\n\nOnly ask questions that PASS ALL FOUR tests.\n\nMAX 5 preference_questions. Fewer is better. Zero is valid if the schema and mode answer everything.\n\nEach question must have exactly 2-4 options. Do not use open-ended questions -- every question must be answerable by selecting one of the provided options.\n\nNever ask:\n- What data format to use (the schema defines this)\n- Where the data comes from (the schema defines this)\n- What difficulty level (this is a content decision, not a workflow structure decision)\n- Whether to use a preset list vs user-entered data (the schema already defines what is stored)\n- What the domain stores or represents (the schema shows this)\n\n---\n\nFINDINGS RULES:\n\nFor each topic where best practice is unambiguous given the mode and schema, record it as a finding with your recommendation. This removes it from the preference gate queue. Good finding topics include:\n- Ordering and pagination defaults for read/analyze modes\n- Error handling patterns\n- Confirmation behaviour for write/enrich modes\n- Idiomatic patterns for this type of workflow\n\n---\n\nReturn ONLY this JSON shape:\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<short topic label>\",\n      \"what_is_known\": \"<one sentence of relevant domain knowledge>\",\n      \"options\": [\n        { \"label\": \"<option_key>\", \"description\": \"<what this option does>\", \"tradeoffs\": \"<tradeoffs>\" }\n      ],\n      \"recommendation\": \"<chosen option label>\",\n      \"rationale\": \"<one sentence why this is the right default>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_id>\",\n      \"question\": \"<one clear question the user can answer by selecting an option>\",\n      \"affects\": \"<what workflow behaviour this controls>\",\n      \"default\": \"<default option value>\",\n      \"options\": [\n        { \"label\": \"<button_label>\", \"value\": \"<stored_value>\", \"description\": \"<what selecting this means>\" }\n      ]\n    }\n  ]\n}",
     "probe_input": {
       "domain": "spanish_flashcards",
-      "workflow_description": "run a spanish flashcard quiz",
       "domain_schema": "[{\"table_name\":\"PGD_SpanishFlashcards\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"spanish_word\",\"type\":\"text\"},{\"name\":\"english_translation\",\"type\":\"text\"},{\"name\":\"difficulty\",\"type\":\"integer\"},{\"name\":\"created_at\",\"type\":\"timestamptz\"},{\"name\":\"updated_at\",\"type\":\"timestamptz\"}]}]",
-      "workflow_mode": "read"
+      "workflow_mode": "read",
+      "workflow_description": "run a spanish flashcard quiz"
     },
     "max_output_tokens": 2500
   },
@@ -1305,7 +1307,6 @@
         "context_updates",
         "prompt_text_change"
       ],
-      "additionalProperties": false,
       "properties": {
         "diagnosis": {
           "type": "string",
@@ -1322,9 +1323,11 @@
               "after",
               "reason"
             ],
-            "additionalProperties": false,
             "properties": {
               "step": {
+                "type": "string"
+              },
+              "after": {
                 "type": "string"
               },
               "field": {
@@ -1333,33 +1336,11 @@
               "before": {
                 "type": "string"
               },
-              "after": {
-                "type": "string"
-              },
               "reason": {
                 "type": "string"
               }
-            }
-          }
-        },
-        "corrected_steps": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "type": "object",
-            "required": [
-              "step",
-              "type"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "step": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string"
-              }
-            }
+            },
+            "additionalProperties": false
           }
         },
         "context_updates": {
@@ -1371,19 +1352,39 @@
               "updated_content",
               "reason"
             ],
-            "additionalProperties": false,
             "properties": {
               "key": {
                 "type": "string"
               },
-              "updated_content": {
-                "type": "string"
-              },
               "reason": {
                 "type": "string"
+              },
+              "updated_content": {
+                "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
+        },
+        "corrected_steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "step",
+              "type"
+            ],
+            "properties": {
+              "step": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
         },
         "prompt_text_change": {
           "type": "object",
@@ -1391,26 +1392,22 @@
             "intent_category",
             "recommendation"
           ],
-          "additionalProperties": false,
           "properties": {
-            "intent_category": {
-              "type": "string"
-            },
             "recommendation": {
               "type": "string"
+            },
+            "intent_category": {
+              "type": "string"
             }
-          }
+          },
+          "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
     "prompt_text": "You are the right-brain repair module for evolving-mind-ai. Your job is to fix structural errors in a registered workflow step array.\n\nYou have been given:\n- The workflow name: {{workflow_name}}\n- The broken step array: {{broken_steps}}\n- The static analysis issues found: {{issues}}\n- The live step type contracts: {{step_type_contracts}}\n- The routing value rules: {{routing_value_rules}}\n- Step usage patterns with common mistakes: {{step_usage_patterns}}\n- Structural constraints: {{workflow_constraints}}\n- An optional runtime stack trace: {{stack_trace}}\n\nCRITICAL RULE — condition steps:\nThe executeCondition handler ALWAYS prepends 'step:' to on_truthy and on_falsy before resolving them. Therefore:\n- on_truthy and on_falsy MUST be bare step keys only (e.g. '5', '9a', '12')\n- NEVER use routing tokens (next, end, cancel) in on_truthy/on_falsy\n- NEVER pre-prefix with step: — 'step:9a' becomes 'step:step:9a' at runtime which fails\n- If on_truthy should advance sequentially, find the next step's key and use it directly\n\nSYSTEM CONTEXT GAPS:\nIf the issues indicate the LLM that generated these steps violated a step type contract, consider whether a PGC_SystemContext row should be updated to prevent recurrence. The four context rows injected into fix_workflow_steps are also injected into generate_workflow_steps and analyze_and_design_workflow — updating them here prevents the same error class from being generated again.\n\nPROMPT TEXT CHANGES:\nIf context updates alone cannot prevent recurrence and you believe a PGC_Prompt.prompt_text change is needed, include a prompt_text_change recommendation. This will be logged for human review — it will NOT be applied automatically. Only include this if context updates are genuinely insufficient.\n\nYOUR TASK:\n1. Analyse the broken steps and static analysis issues\n2. Identify the root cause — not just the symptom. Ask: why did the step generator produce these values? Is a context row missing the correct rule?\n3. Produce a fully corrected step array (complete array — not a diff)\n4. List every individual change: step key, field name, before value, after value, plain-language reason\n5. Write a concise diagnosis explaining what was wrong and why\n6. If a PGC_SystemContext row should be updated to prevent recurrence, include context_updates\n7. If a PGC_Prompt.prompt_text change would be the correct fix but context updates are insufficient, include prompt_text_change\n\nRespond ONLY with a valid JSON object — no markdown fences, no preamble.\n\n{\n  \"diagnosis\": \"Plain-language root cause explanation\",\n  \"changes_applied\": [\n    { \"step\": \"4\", \"field\": \"on_truthy\", \"before\": \"next\", \"after\": \"5\", \"reason\": \"on_truthy must be a bare step key — routing token 'next' is invalid because executeCondition adds step: prefix internally\" }\n  ],\n  \"corrected_steps\": [ /* complete fixed step array */ ],\n  \"context_updates\": [\n    { \"key\": \"routing_value_rules\", \"updated_content\": \"<full updated content>\", \"reason\": \"Missing explicit rule about condition on_truthy/on_falsy\" }\n  ],\n  \"prompt_text_change\": {\n    \"intent_category\": \"generate_workflow_steps\",\n    \"recommendation\": \"<recommendation text>\"\n  }\n}",
-    "probe_input": {
-      "workflow_name": "list_recipes",
-      "broken_steps": "[{\"step\":\"1\",\"type\":\"condition\",\"expression\":\"{{results.length}}\",\"on_truthy\":\"next\",\"on_falsy\":\"end\"},{\"step\":\"2\",\"type\":\"end\"}]",
-      "issues": "[{\"check\":\"condition_routing\",\"step\":\"1\",\"failure_class\":\"unknown_routing_value\",\"detail\":\"on_truthy must be a bare step key like \\\"2\\\", not the routing token \\\"next\\\"\",\"suggestion\":\"Change on_truthy to \\\"2\\\"\"}]",
-      "stack_trace": ""
-    },
-    "max_output_tokens": 2000
+    "probe_input": null,
+    "max_output_tokens": null
   },
   {
     "intent_category": "analyze_workflow_gaps",
@@ -1571,7 +1568,7 @@
         }
       }
     },
-    "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns — empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE — determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows — quizzes, approval loops, step-by-step forms — are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform — for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved — do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved — do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n  CRITICAL: inputs must be a flat array of plain strings — variable names only, NOT objects.\n  Correct:   \"inputs\": [\"domain\", \"table_schema\", \"user_input\"]\n  WRONG:     \"inputs\": [{\"name\":\"domain\",\"type\":\"string\"}, ...]  ← NEVER do this\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b — use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        — no blocking gaps; workflow can be built as requested\n- 'needs_schema'    — at least one Type 3b blocking schema gap exists\n- 'blocked'         — a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
+    "prompt_text": "You are the gap analyst for evolving-mind-ai. Your only job is to classify all gaps that would prevent this workflow from being built correctly. You do NOT design steps, dialogs, or state. You classify and report.\n\nUser request: \"{{userInput}}\"\nDomain: {{domain}}\n\nDomain schema (live tables and columns — empty array means no existing domain data):\n{{domain_schema}}\n\nDomain research findings (from right brain):\n{{right_brain_research}}\n\nUser preferences already confirmed (array of { id, selected_value }):\n{{user_preferences}}\n\nAvailable step types:\n{{step_type_contracts}}\n\nDOMAIN MODE — determine the mode before classifying any gap:\n- Mode A (domain_schema non-empty): Domain tables already exist. Data storage is fully in place. Evaluate capability only against step_type_contracts. Interactive workflows — quizzes, approval loops, step-by-step forms — are ALWAYS fully supported: human_gate choice presents per-item selections with lettered buttons; js_transform manages loop state (index, score, shuffled deck, done flag); condition routes on the done flag; serv_update persists results back to PGD tables. NEVER set confidence=blocked for an interactive data workflow. Only block (Type 4b) when the workflow requires an operation that NO combination of available step types can perform — for example: sending email, calling an external HTTP API, or scheduling a future task.\n- Mode B (domain set, domain_schema empty): Domain has no tables yet. Flag any required tables as Type 3b blocking schema gaps.\n- Mode C (domain null): Standalone workflow. No domain tables required.\n\nCLASSIFY ALL GAPS using this taxonomy:\n- Type 2 (knowledge): resolved by right_brain_research.findings. Mark as resolved — do not report.\n- Type 1 (preference): resolved by user_preferences. Mark as resolved — do not report.\n- Type 3a (schema non-blocking): table or column would improve quality but workflow is buildable without it.\n  Add to schema_changes with blocking=false.\n- Type 3b (schema blocking): table or column is required for the workflow to function at all.\n  Add to schema_changes with blocking=true. Set confidence=needs_schema.\n- Type 4a (missing prompt): a required LLM call uses a prompt not yet in PGC_Prompt.\n  Add to prompts_needed with exists=false and write the full prompt_text.\n  model must be exactly 'anthropic/claude-sonnet-4-5' (analytical/generative) or 'perplexity/sonar' (live web search only). No other model names are valid.\n  CRITICAL: inputs must be a flat array of plain strings — variable names only, NOT objects.\n  Correct:   \"inputs\": [\"domain\", \"table_schema\", \"user_input\"]\n  WRONG:     \"inputs\": [{\"name\":\"domain\",\"type\":\"string\"}, ...]  ← NEVER do this\n- Type 4b (missing step type): the workflow requires a capability that NO combination of available step types can implement. Examples of genuine Type 4b gaps: sending email, calling external HTTP APIs, scheduling future execution. Interactive patterns (quiz, approval loop, form wizard) are NOT Type 4b — use human_gate + js_transform + condition. Set confidence=blocked and write blocked_reason as a plain string. Do not embed double-quote characters in blocked_reason; use apostrophes or rephrase instead.\n\nSet confidence:\n- 'complete'        — no blocking gaps; workflow can be built as requested\n- 'needs_schema'    — at least one Type 3b blocking schema gap exists\n- 'blocked'         — a capability genuinely absent from step_type_contracts (Type 4b only)\n\ndeferred: record genuine enhancements that would improve the workflow but are out of scope for this request. Each item must have exactly three fields: \"what\" (the enhancement description), \"why\" (value it would add), \"how_to_add\" (instruction for adding it later). Do not add items that are simply not needed.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.",
     "probe_input": null,
     "max_output_tokens": 2500
   },
@@ -1847,14 +1844,14 @@
                 "description": "One sentence describing what this step does and why — shown to the user at review time"
               }
             },
-            "additionalProperties": true,
             "patternProperties": {
               "^(on_success|on_failure|on_select)$": {
                 "type": "string",
                 "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
                 "description": "Routing token. Bare step keys (e.g. \"8\") are invalid — always use step:<key> (e.g. \"step:8\")."
               }
-            }
+            },
+            "additionalProperties": true
           },
           "minItems": 2
         },
@@ -1873,12 +1870,7 @@
       "additionalProperties": false
     },
     "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nUser feedback for this generation attempt (apply these instructions if non-empty — add, remove, or modify specific steps exactly as described):\n{{user_feedback}}\n\nSimulation errors from the previous attempt to fix (fix each listed issue exactly — do not change steps that were not flagged):\n{{simulation_errors}}\n\nLevel 2 path simulation failures from the previous attempt to fix (fix routing or state issues that caused paths to fail):\n{{path_errors}}\n\nPrevious draft steps — your last generation (present when simulation_errors or path_errors is non-empty):\n{{previous_draft_steps}}\n\nTRANSLATION RULES:\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key ('1', '2', '3', ...).\n2. For steps where step_type is 'human_gate': find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key. If no dialog_designs entry exists for a human_gate step, use a sensible default confirm gate.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n\nCORRECTION MODE — applies when simulation_errors or path_errors is non-empty:\n- Your previous draft steps are provided above as reference.\n- Fix ONLY the steps flagged in simulation_errors or path_errors. Copy all other steps unchanged.\n- Do not redesign unflagged steps. Do not change their structure, routing, or content.\n\nFlat loop pattern — when a collection requires human interaction per item:\n- Loop state (index, accumulators) lives in local_state, written by js_transform\n- Backward reference is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\" }\n  ]\n}",
-    "probe_input": {
-      "example": "{\"name\":\"list_items\",\"description\":\"List all items\",\"intent_keywords\":[\"list\",\"show\"],\"steps\":[{\"step\":\"1\",\"type\":\"serv_query\",\"input\":{\"tableName\":\"PGD_Items\"},\"output_key\":\"results\",\"on_success\":\"next\",\"on_failure\":\"cancel\"},{\"step\":\"2\",\"type\":\"notify\",\"message_template\":\"Found {{results.length}} items\",\"on_success\":\"end\"},{\"step\":\"3\",\"type\":\"end\"}]}",
-      "design_spec": "{\"process_design\":[{\"step_label\":\"load_recipes\",\"step_type\":\"serv_query\",\"description\":\"Load all recipes\",\"inputs\":{},\"outputs\":{\"results\":\"array of recipe rows\"}},{\"step_label\":\"notify_results\",\"step_type\":\"notify\",\"description\":\"Show results to user\",\"inputs\":{\"results\":\"array\"},\"outputs\":{}}],\"state_map\":{\"results\":{\"type\":\"array\",\"written_by\":\"load_recipes\",\"read_by\":[\"notify_results\"]}},\"dialog_designs\":[],\"prompts_needed\":[],\"schema_changes\":[],\"deferred\":[],\"confidence\":\"complete\",\"blocked_reason\":\"\"}",
-      "domain_schema": "[{\"table_name\":\"PGD_Recipes\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"description\",\"type\":\"text\"}]}]",
-      "user_preferences": "[]"
-    },
+    "probe_input": null,
     "max_output_tokens": null
   }
 ]
