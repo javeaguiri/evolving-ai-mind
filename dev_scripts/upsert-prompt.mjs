@@ -106,7 +106,6 @@ function fingerprint(entry) {
     entry.model ?? '',
     JSON.stringify(sortKeys(entry.output_schema ?? null)),
     JSON.stringify(sortKeys(entry.input_variables ?? null)),
-    JSON.stringify(sortKeys(entry.probe_input ?? null)),
   ].join('\x00');
   return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }
@@ -195,14 +194,10 @@ for (const prompt of targets) {
       { column: 'version', op: 'eq', value: targetVersion },
     ],
     updates: {
-      prompt_text: prompt.prompt_text,
-      model: prompt.model ?? null,
+      prompt_text:     prompt.prompt_text,
+      model:           prompt.model ?? null,
       input_variables: prompt.input_variables ?? null,
-      output_schema: prompt.output_schema ?? null,
-      output_sample: prompt.output_sample ?? null,
-      was_successful: prompt.was_successful ?? null,
-      probe_input: prompt.probe_input ?? null,
-      max_output_tokens: prompt.max_output_tokens ?? null,
+      output_schema:   prompt.output_schema ?? null,
     },
   });
 

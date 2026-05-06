@@ -220,16 +220,12 @@ async function executeLlmCall({ step, localState, run, traceId }) {
     priorErrorType,
   });
 
-  if (!validationResult.valid) {
-    throw new Error(
-      `llm_call validation failed after ${validationResult.attempt} attempt(s): ` +
-      JSON.stringify(validationResult.errors)
-    );
-  }
-
   const finalOutput = validationResult.correctedOutput ?? rawOutput;
 
-  // Diagnostics — write llm_call_diagnostic session entries if this workflow is enabled.
+  // Diagnostics — written before the validation throw so they are recorded even on failure.
+  // seq 1: system prompt used for this step.
+  // seq 2: first LLM response (rawOutput — before any validation correction).
+  // seq 3: validation correction attempt output (if validate() made a second LLM call).
   // Non-blocking: failure is logged but does not fail the step.
   let diagnosticPayload = null;
   try {
@@ -249,19 +245,38 @@ async function executeLlmCall({ step, localState, run, traceId }) {
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;
         const queryId   = sessionResp.row.query_id;
+        let seq = 1;
         await insertRow('PGC_SessionEntry', {
-          session_id: sessionId, sequence_number: 1, role: 'system', content: instructions,
+          session_id: sessionId, sequence_number: seq++, role: 'system', content: instructions,
         });
         await insertRow('PGC_SessionEntry', {
-          session_id: sessionId, sequence_number: 2, role: 'assistant',
-          content: typeof finalOutput === 'object' ? JSON.stringify(finalOutput) : String(finalOutput),
+          session_id: sessionId, sequence_number: seq++, role: 'assistant',
+          content: typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : String(rawOutput),
         });
+        // Record correction output if validate() made a second attempt (success or failure).
+        if (validationResult.correctedOutput !== undefined) {
+          const corrected = validationResult.correctedOutput;
+          await insertRow('PGC_SessionEntry', {
+            session_id: sessionId, sequence_number: seq++, role: 'assistant',
+            content: typeof corrected === 'object' ? JSON.stringify(corrected) : String(corrected),
+          });
+        }
         diagnosticPayload = { queryId, sessionId, intentCategory, traceId };
         console.info('step-executor: diagnostics session created', { sessionId, queryId, traceId });
       }
     }
   } catch (diagErr) {
     console.warn('step-executor: diagnostics write failed (non-fatal)', diagErr.message);
+  }
+
+  if (!validationResult.valid) {
+    const validationError = new Error(
+      `llm_call validation failed after ${validationResult.attempt} attempt(s): ` +
+      JSON.stringify(validationResult.errors)
+    );
+    // Attach so run-workflow.mjs can send LLM_DIAGNOSTIC even on failure.
+    if (diagnosticPayload) validationError.diagnosticPayload = diagnosticPayload;
+    throw validationError;
   }
 
   return {

@@ -1453,7 +1453,6 @@
       "type": "object",
       "required": [
         "confidence",
-        "blocked_reason",
         "schema_changes",
         "prompts_needed",
         "deferred"
