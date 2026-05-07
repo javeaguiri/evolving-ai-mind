@@ -130,6 +130,7 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
       intentCategory,
       attempt:          2,
       correctedOutput,
+      attempt1Errors,
       traceId,
     };
   }
@@ -159,6 +160,7 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
     intentCategory,
     attempt:         2,
     errors:          attempt2Errors,
+    attempt1Errors,
     correctedOutput, // expose attempt 2 output for diagnostic recording even on failure
     errorLogged:     true,
     traceId,
