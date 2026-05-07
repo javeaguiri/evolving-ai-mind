@@ -27,6 +27,7 @@ Rules:
 - Never hard-code evolving artifact content inside system code.
 - New system behaviours = new step types in `step-executor.mjs`. New business logic = updated workflow JSON in `PGC_Workflow`.
 - **When unclear whether something belongs in system code or an artifact: ask, or default to treating it as an evolving artifact.**
+- **User domain data must never appear in system artifacts.** Labels, placeholders, examples, and descriptions in system-level workflows (`create_workflow`, `create_domain`, `ping_core`), prompts, and seed files must be generic. References to specific user domains, table names, entity types, or workflow subjects (e.g. "Spanish flashcard", "Holdings", "Recipes") belong only in `PGD_*` tables and user-created `PGC_Workflow` rows — never in the system's own seed data or code.
 
 ### Bug Fix Philosophy
 

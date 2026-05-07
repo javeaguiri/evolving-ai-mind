@@ -767,7 +767,7 @@
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
               "multiline": true,
-              "placeholder": "Add, remove, or modify specific steps. Examples: \"add a step to notify the user after each card\", \"remove the session tracking steps\", \"change the loop to show the Spanish term first\"."
+              "placeholder": "Add, remove, or modify specific steps. Examples: \"add a step to notify the user after each card\", \"remove the session tracking steps\"."
             }
           },
           {
@@ -844,7 +844,7 @@
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
               "multiline": true,
-              "placeholder": "Add, remove, or modify specific steps. Examples: \"add a step to notify the user after each card\", \"remove the session tracking steps\", \"change the loop to show the Spanish term first\"."
+              "placeholder": "Add, remove, or modify specific steps. Examples: \"add a step to notify the user after each card\", \"remove the session tracking steps\"."
             }
           },
           {
@@ -892,8 +892,8 @@
         "description": "Level 2 + Level 3 full path simulation with mocks.",
         "input": {
           "steps_key": "draft_workflow.steps",
-          "mock_outputs_key": "mock_outputs",
-          "paths_key": "simulation_paths"
+          "mock_outputs_key": "mock_outputs.mock_outputs",
+          "paths_key": "simulation_paths.simulation_paths"
         },
         "output_key": "simulation_result",
         "on_success": "next",
