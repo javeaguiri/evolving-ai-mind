@@ -1331,6 +1331,7 @@ function runLevel1StaticAnalysis(steps) {
     if (s.input_key) templatesToCheck.push(`{{${s.input_key}}}`);
     if (s.items_key) templatesToCheck.push(`{{${s.items_key}}}`);
 
+    const seenTemplateIssues = new Set();
     for (const template of templatesToCheck) {
       const refs = extractTemplateRefs(template);
       for (const ref of refs) {
@@ -1339,23 +1340,31 @@ function runLevel1StaticAnalysis(steps) {
         // only supports {{key.path}} dot-notation.
         const trimmed = ref.trim();
         if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed === 'this' || trimmed.startsWith('this.')) {
-          issues.push({
-            check:         'unsupported_handlebars_syntax',
-            step:          stepKey,
-            failure_class: 'unsupported_handlebars_syntax',
-            detail:        `Step "${stepKey}" uses unsupported Handlebars syntax "{{${ref}}}" in a template. Only {{key.path}} dot-notation is supported. Replace {{#each array}}...{{this.prop}}...{{/each}} with indexed access: {{array.0.prop}}, {{array.1.prop}}, etc.`,
-          });
+          const key = `handlebars::${trimmed}`;
+          if (!seenTemplateIssues.has(key)) {
+            seenTemplateIssues.add(key);
+            issues.push({
+              check:         'unsupported_handlebars_syntax',
+              step:          stepKey,
+              failure_class: 'unsupported_handlebars_syntax',
+              detail:        `Step "${stepKey}" uses unsupported Handlebars syntax "{{${ref}}}" in a template. Only {{key.path}} dot-notation is supported. Replace {{#each array}}...{{this.prop}}...{{/each}} with indexed access: {{array.0.prop}}, {{array.1.prop}}, etc.`,
+            });
+          }
           continue;
         }
         const baseKey = ref.split('.')[0];
         if (baseKey !== 'item' && baseKey !== 'input' && !outputKeysSoFar.has(baseKey)) {
-          issues.push({
-            check:         'unresolved_template_variable',
-            step:          stepKey,
-            failure_class: 'unresolved_template_variable',
-            detail:        `Step "${stepKey}" references "{{${ref}}}" but base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
-            suggestion:    findClosestKey([...outputKeysSoFar], baseKey),
-          });
+          const key = `unresolved::${baseKey}`;
+          if (!seenTemplateIssues.has(key)) {
+            seenTemplateIssues.add(key);
+            issues.push({
+              check:         'unresolved_template_variable',
+              step:          stepKey,
+              failure_class: 'unresolved_template_variable',
+              detail:        `Step "${stepKey}" references "{{${ref}}}" but base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
+              suggestion:    findClosestKey([...outputKeysSoFar], baseKey),
+            });
+          }
         }
       }
     }
