@@ -738,7 +738,7 @@
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
           "user_feedback": "{{user_workflow_feedback}}",
-          "simulation_errors": "{{static_analysis_result}}",
+          "simulation_errors": "{{simulation_error_summary}}",
           "previous_draft_steps": "{{draft_workflow.steps}}",
           "path_errors": "{{path_error_summary}}"
         },
@@ -905,7 +905,7 @@
         "description": "Format Level 2 path simulation failures into a readable summary for display.",
         "input_key": "simulation_result",
         "output_key": "path_error_summary",
-        "expression": "(function(){var r=items&&items.path_results;if(!Array.isArray(r)||r.length===0)return\"Level 2 simulation failed - no path results reported.\";var lines=r.filter(function(p){return!p.passed;}).slice(0,6).map(function(p){return\"- Path \\\"\"+p.path_name+\"\\\": failed at step \"+p.failure_step+\" \u2014 \"+p.failure_reason;});if(lines.length===0)return\"Level 2 simulation failed - no specific path failures reported.\";var extra=r.filter(function(p){return!p.passed;}).length-6;if(extra>0)lines.push(\"...and \"+extra+\" more paths\");return lines.join(\"\\n\");})()",
+        "expression": "(function(){var r=items&&items.path_results;if(!Array.isArray(r)||r.length===0)return\"Level 2 simulation failed - no path results reported.\";var paths=(local_state.simulation_paths&&local_state.simulation_paths.simulation_paths)||[];var failed=r.filter(function(p){return!p.passed;});if(failed.length===0)return\"Level 2 simulation failed - no specific path failures reported.\";var lines=failed.slice(0,6).map(function(p){var base=\"- Path \\\"\"+p.path_name+\"\\\": \"+p.failure_reason;if(p.failure_step!==\"end\"&&p.failure_step!==\"cancel\")return base;var pathDef=paths.find(function(pd){return pd.path_name===p.path_name;})||{};var decisions=pathDef.decisions||[];var cancelDec=decisions.find(function(d){return d.on_select===\"cancel\";});if(cancelDec)return base+\" \u2014 step \"+cancelDec.step+\" has on_select:\\\"cancel\\\"; verify the cancel option routes to cancel termination and not a named step\";var ts=p.local_state_transitions||[];var prev=ts.length>=2?ts[ts.length-2]:null;if(prev)return base+\" (preceding step: \"+prev.step+\", type=\"+prev.type+\")\";return base;});var extra=failed.length-6;if(extra>0)lines.push(\"...and \"+extra+\" more paths\");return lines.join(\"\\n\");})()",
         "on_success": "step:19b",
         "on_failure": "cancel"
       },
@@ -930,7 +930,7 @@
           {
             "label": "Regenerate automatically",
             "action": "regenerate",
-            "on_select": "step:14"
+            "on_select": "step:19c"
           },
           {
             "label": "Cancel",
@@ -939,6 +939,16 @@
           }
         ],
         "on_success": "step:15a",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "19c",
+        "type": "js_transform",
+        "description": "Clear stale Level 1 error summary before Level 2 automatic regeneration.",
+        "input_key": "simulation_result",
+        "output_key": "simulation_error_summary",
+        "expression": "(function(){ return ''; })()",
+        "on_success": "step:14",
         "on_failure": "cancel"
       },
       {
