@@ -253,7 +253,15 @@ async function executeLlmCall({ step, localState, run, traceId }) {
           session_id: sessionId, sequence_number: seq++, role: 'assistant',
           content: typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : String(rawOutput),
         });
-        // Record correction output if validate() made a second attempt (success or failure).
+        // Record correction prompt + output if validate() made a second attempt.
+        if (validationResult.attempt === 2 && Array.isArray(validationResult.attempt1Errors)) {
+          const errorLines  = validationResult.attempt1Errors.map(e => `- ${e.message}`).join('\n');
+          const attempt1Txt = typeof rawOutput === 'object' ? JSON.stringify(rawOutput, null, 2) : String(rawOutput);
+          await insertRow('PGC_SessionEntry', {
+            session_id: sessionId, sequence_number: seq++, role: 'user',
+            content: `Your previous response had these specific issues that must be fixed:\n${errorLines}\n\nYour previous response was:\n${attempt1Txt}\n\nFix ONLY the issues listed above. Return the complete corrected JSON object — no explanation, no preamble, no markdown fences.`,
+          });
+        }
         if (validationResult.correctedOutput !== undefined) {
           const corrected = validationResult.correctedOutput;
           await insertRow('PGC_SessionEntry', {

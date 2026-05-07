@@ -81,13 +81,19 @@ export async function handle(req) {
     ? Math.max(...existingEntries.map(e => e.sequence_number)) + 1
     : 1;
 
-  // INSERT new user turn
-  await insertRow('PGC_SessionEntry', {
-    session_id:      session.id,
-    sequence_number: nextSeq,
-    role:            'user',
-    content:         prompt.trim(),
-  });
+  // INSERT new user turn — skip if the last entry is already this same user prompt
+  // (guards against SQS at-least-once redelivery after a partial failure).
+  const lastEntry       = existingEntries[existingEntries.length - 1];
+  const alreadyInserted = lastEntry?.role === 'user' && lastEntry?.content === prompt.trim();
+  const userSeq         = alreadyInserted ? lastEntry.sequence_number : nextSeq;
+  if (!alreadyInserted) {
+    await insertRow('PGC_SessionEntry', {
+      session_id:      session.id,
+      sequence_number: userSeq,
+      role:            'user',
+      content:         prompt.trim(),
+    });
+  }
 
   // Reconstruct messages array (role + content only — reasoning excluded)
   const messages = [
@@ -101,7 +107,7 @@ export async function handle(req) {
   // INSERT assistant response
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
-    sequence_number: nextSeq + 1,
+    sequence_number: userSeq + 1,
     role:            'assistant',
     content:         responseText,
   });
