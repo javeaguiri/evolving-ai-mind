@@ -1163,19 +1163,24 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   });
 
   // ── Level 1 — Static analysis ────────────────────────────────────────────
-  const staticIssues = runLevel1StaticAnalysis(steps);
+  const level1Result  = runLevel1StaticAnalysis(steps);
+  const staticIssues  = level1Result.issues;
+  const stateFlow     = level1Result.state_flow;
+  const unrefWrites   = level1Result.unreferenced_writes;
 
   if (staticIssues.length > 0) {
     console.info('step-executor: runSimulation — Level 1 failed', {
       issueCount: staticIssues.length, traceId,
     });
     return {
-      passed:          false,
-      paths_run:       0,
-      paths_passed:    0,
-      paths_failed:    0,
-      static_analysis: { passed: false, issues: staticIssues },
-      path_results:    [],
+      passed:              false,
+      paths_run:           0,
+      paths_passed:        0,
+      paths_failed:        0,
+      static_analysis:     { passed: false, issues: staticIssues },
+      state_flow:          stateFlow,
+      unreferenced_writes: unrefWrites,
+      path_results:        [],
     };
   }
 
@@ -1185,12 +1190,14 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   if (!Array.isArray(simulationPaths) || simulationPaths.length === 0) {
     console.info('step-executor: runSimulation — Level 1 only (no paths provided)', { traceId });
     return {
-      passed:          true,
-      paths_run:       0,
-      paths_passed:    0,
-      paths_failed:    0,
-      static_analysis: { passed: true, issues: [] },
-      path_results:    [],
+      passed:              true,
+      paths_run:           0,
+      paths_passed:        0,
+      paths_failed:        0,
+      static_analysis:     { passed: true, issues: [] },
+      state_flow:          stateFlow,
+      unreferenced_writes: unrefWrites,
+      path_results:        [],
     };
   }
 
@@ -1204,12 +1211,14 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const level2Passed = pathsFailed === 0;
 
   const result = {
-    passed:          level2Passed,
-    paths_run:       pathResults.length,
-    paths_passed:    pathsPassed,
-    paths_failed:    pathsFailed,
-    static_analysis: { passed: true, issues: [] },
-    path_results:    pathResults,
+    passed:              level2Passed,
+    paths_run:           pathResults.length,
+    paths_passed:        pathsPassed,
+    paths_failed:        pathsFailed,
+    static_analysis:     { passed: true, issues: [] },
+    state_flow:          stateFlow,
+    unreferenced_writes: unrefWrites,
+    path_results:        pathResults,
   };
 
   console.info('step-executor: runSimulation — complete', {
@@ -1229,6 +1238,13 @@ function runLevel1StaticAnalysis(steps) {
 
   // Build a set of all step keys for dead-target checking
   const stepKeys = new Set(steps.map(s => String(s.step)));
+
+  // State flow tracking — per-step reads/writes, and global write registry.
+  // 'reads'  = base keys this step references via template tokens or input_key/items_key.
+  // 'writes' = base keys this step writes to local_state via output_key (step or option level).
+  const stateFlow     = {};   // { [step_key]: { reads: string[], writes: string[] } }
+  const writtenByStep = {};   // { [key]: first_step_key_that_wrote_it }
+  const allReadsEver  = new Set(); // union of all reads across all steps
 
   // Build the set of output_key values written by each step at each point
   // in the canonical (top-to-bottom) execution order. This is a conservative
@@ -1319,7 +1335,8 @@ function runLevel1StaticAnalysis(steps) {
       }
     }
 
-    // Check template variables in message_template and input values
+    // Check template variables in message_template and input values.
+    // condition expressions also use {{}} tokens and are validated here.
     const templatesToCheck = [];
     if (s.message_template) templatesToCheck.push(s.message_template);
     if (s.context_key)      templatesToCheck.push(`{{${s.context_key}}}`);
@@ -1328,9 +1345,11 @@ function runLevel1StaticAnalysis(steps) {
         if (typeof v === 'string') templatesToCheck.push(v);
       });
     }
-    if (s.input_key) templatesToCheck.push(`{{${s.input_key}}}`);
-    if (s.items_key) templatesToCheck.push(`{{${s.items_key}}}`);
+    if (s.input_key)  templatesToCheck.push(`{{${s.input_key}}}`);
+    if (s.items_key)  templatesToCheck.push(`{{${s.items_key}}}`);
+    if (s.type === 'condition' && s.expression) templatesToCheck.push(s.expression);
 
+    const stepReads          = new Set();
     const seenTemplateIssues = new Set();
     for (const template of templatesToCheck) {
       const refs = extractTemplateRefs(template);
@@ -1353,6 +1372,11 @@ function runLevel1StaticAnalysis(steps) {
           continue;
         }
         const baseKey = ref.split('.')[0];
+        // Collect read for state_flow tracking (all base keys except iterator-scoped 'item')
+        if (baseKey !== 'item') {
+          stepReads.add(baseKey);
+          allReadsEver.add(baseKey);
+        }
         if (baseKey !== 'item' && baseKey !== 'input' && !outputKeysSoFar.has(baseKey)) {
           const key = `unresolved::${baseKey}`;
           if (!seenTemplateIssues.has(key)) {
@@ -1369,14 +1393,38 @@ function runLevel1StaticAnalysis(steps) {
       }
     }
 
-    // Register this step's output_key for downstream steps
+    // Collect writes — step-level output_key
+    const stepWrites = new Set();
     if (s.output_key) {
       const baseOut = s.output_key.split('.')[0];
       outputKeysSoFar.add(baseOut);
+      stepWrites.add(baseOut);
+      if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
     }
+    // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
+    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      if (opt.output_key) {
+        const baseOut = opt.output_key.split('.')[0];
+        outputKeysSoFar.add(baseOut);
+        stepWrites.add(baseOut);
+        if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
+      }
+    }
+
+    stateFlow[stepKey] = { reads: [...stepReads].sort(), writes: [...stepWrites].sort() };
   }
 
-  return issues;
+  // Keys written by any step but never referenced in any step's declared inputs.
+  // These are advisory warnings — they do not affect the passed/failed result.
+  const unreferencedWrites = Object.entries(writtenByStep)
+    .filter(([key]) => !allReadsEver.has(key))
+    .map(([key, writtenBy]) => ({
+      key,
+      written_by:  writtenBy,
+      note:        `"${key}" is written by step ${writtenBy} but not referenced in any step's declared inputs`,
+    }));
+
+  return { issues, state_flow: stateFlow, unreferenced_writes: unreferencedWrites };
 }
 
 // ---------------------------------------------------------------------------
