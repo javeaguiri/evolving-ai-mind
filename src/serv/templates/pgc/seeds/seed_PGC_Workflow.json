@@ -371,7 +371,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 17,
+    "version": 18,
     "steps": [
       {
         "step": "1",
@@ -762,7 +762,8 @@
           {
             "label": "Regenerate with feedback",
             "action": "request_changes",
-            "on_select": "step:15a",
+            "on_select": "step:14",
+            "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
@@ -785,28 +786,6 @@
         "on_failure": "cancel",
         "item_label_template": "Step {{step}} ({{type}}): {{description}}",
         "item_secondary_key": "on_success"
-      },
-      {
-        "step": "15a",
-        "type": "human_gate",
-        "gate_type": "text_input",
-        "description": "Capture user feedback to guide the next generation attempt. Submitted text is passed to generate_workflow_steps as user_feedback.",
-        "message_template": "Describe the changes you want \u2014 add, remove, or modify specific steps, change routing logic, adjust how data is stored or displayed:",
-        "output_key": "user_workflow_feedback",
-        "options": [
-          {
-            "label": "Submit",
-            "action": "confirm",
-            "on_select": "step:14"
-          },
-          {
-            "label": "Cancel",
-            "action": "cancel",
-            "on_select": "step:14"
-          }
-        ],
-        "on_success": "step:14",
-        "on_failure": "cancel"
       },
       {
         "step": "16",
@@ -839,7 +818,8 @@
           {
             "label": "Regenerate with feedback",
             "action": "confirm",
-            "on_select": "step:15a",
+            "on_select": "step:14",
+            "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
@@ -858,7 +838,7 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "step:15a",
+        "on_success": "step:14",
         "on_failure": "cancel"
       },
       {
@@ -919,7 +899,8 @@
           {
             "label": "Regenerate with feedback",
             "action": "confirm",
-            "on_select": "step:15a",
+            "on_select": "step:14",
+            "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
@@ -938,7 +919,7 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "step:15a",
+        "on_success": "step:14",
         "on_failure": "cancel"
       },
       {
