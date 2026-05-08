@@ -646,6 +646,7 @@ programmer's intent.
 | 6.8 | create_domain Workflow — full annotated example |
 | 6.9 | create_workflow Workflow (see `docs/create-workflow-design.md`) |
 | 6.10 | Session Architecture — chat and diagnostics (see `docs/session-chat-design.md`) |
+| 6.16 | Workflow State Flow Analysis — design decision and backlog |
 
 ---
 
@@ -3618,6 +3619,96 @@ structural context to make targeted fixes, mirroring the behaviour of `callLlmWi
 | 19 | `on_failure` changed from `step:15` to `step:19a` |
 | 19a (new) | `js_transform` — formats Level 2 `simulation_result.path_results` failures into `path_error_summary` |
 | 19b (new) | `human_gate` (confirm) — displays `path_error_summary`, offers Regenerate with feedback → 15a, Regenerate automatically → 14, Cancel; mirrors the 16/16a/16b Level 1 retry pattern |
+
+---
+
+### 6.16 Workflow State Flow Analysis — Design Decision
+
+#### Problem
+
+Manual inspection of `create_workflow`'s step array revealed a silent data loss bug:
+`user_design_notes` was being written to `local_state` at step 5a but never referenced
+by any downstream step. The bug was only visible by reading the full workflow JSON and
+tracing the data flow table step by step — it produced no runtime error, no simulation
+failure, and no output anomaly. The same class of bug (key written, key never read)
+can exist in any user-generated workflow registered by `create_workflow`.
+
+This motivates a systematic approach: a programmatic analysis that reconstructs the
+"Data Used / Data Added" table for any workflow automatically and surfaces silent bugs
+before or after registration.
+
+#### Evaluation: programmatic state flow analysis
+
+**Option A — Extend Level 1 `simulate` to output a `state_flow` section.**
+
+Level 1 static analysis in `step-executor.mjs` already walks every step and builds a
+`known_keys` set tracking what has been written. Extending this pass to also track
+`read_keys` and `written_keys` per step produces a complete state flow map at zero
+additional LLM cost. The extension is non-breaking: `static_analysis_result` gains a
+`state_flow` field that existing consumers ignore.
+
+Detection rules that become trivially derivable:
+- **Unreferenced write**: a key is in `written_keys` but never in any step's `read_keys`.
+- **Overwrite chain**: a key appears in `written_keys` for more than one step.
+- **Read-before-write**: a template variable is in `read_keys` before any step has written it
+  (Level 1 already detects this as a hard error; state_flow makes it explicit in output).
+
+This option requires only a `step-executor.mjs` change. It is available to every workflow
+that runs a `simulate` step — not just `create_workflow`.
+
+**Option B — Standalone `/proc` endpoint or new SQS message type.**
+
+A `ANALYZE_WORKFLOW` message type would let any user or process request a state flow
+table for any registered workflow on demand. The output would be a structured report
+suitable for display in Slack or consumed by another workflow step.
+
+**Decision: Option A is correct; Option B is unnecessary given Option A.**
+
+A standalone endpoint would duplicate infrastructure (new SQS message type, new Lambda
+handler code, new Slack command routing) and produce output only on explicit request.
+Option A produces the same analysis automatically whenever simulation runs — which in
+`create_workflow` is every time a workflow is validated, and in `troubleshoot_workflow`
+could expose state flow issues for debugging. The `simulate` step type is already the
+right locus for all static workflow validation.
+
+**Option B becomes relevant only for analysing already-registered workflows that are
+not being regenerated.** If that diagnostic use case is needed, a minimal implementation
+is: a new `serv_query PGC_Workflow` step + a `js_transform` that calls the Level 1
+analysis function on the stored `steps` array, piped through a notify or LLM_DIAGNOSTIC
+message. This requires no new PROC handler and no new SQS type.
+
+#### Integration with `create_workflow` gap detection
+
+`analyze_workflow_gaps` (step 7) runs pre-generation and classifies capability gaps.
+State flow analysis runs post-generation (step 16, Level 1) and classifies data flow
+gaps in the *generated* step array. These are complementary, not competing:
+
+| Phase | Tool | Question answered |
+|---|---|---|
+| Pre-generation (step 7) | `analyze_workflow_gaps` | Can this workflow be built? What is missing in schema, prompts, or capabilities? |
+| Post-generation (step 16) | `simulate` Level 1 + state_flow | Is the generated step array internally consistent? Are any written keys never read? |
+| Post-generation (step 19) | `simulate` Level 2 | Does every execution path reach a valid terminal state with correct data? |
+
+Additionally, the designed `state_map` from `design_workflow_process` (step 12) is the
+*declared* state flow. Cross-validating the generated workflow's *actual* state flow
+against `state_map` — checking that `output_key` values match the declared `written_by`
+keys — closes the loop between design intent and generated output.
+
+#### Implementation — shipped
+
+**Items 1 and 2 are complete** (`step-executor.mjs` — `runLevel1StaticAnalysis`):
+
+- `runLevel1StaticAnalysis` now returns `{ issues, state_flow, unreferenced_writes }` instead of bare `issues[]`.
+- `state_flow`: `{ [step_key]: { reads: string[], writes: string[] } }` — per-step map of all base keys read (from template refs, `input_key`, `items_key`, and `condition` expressions) and written (`output_key` at step and option level).
+- `unreferenced_writes`: advisory array `[{ key, written_by, note }]` — keys written by any step but never referenced in any step's declared inputs. Does NOT affect `passed`.
+- `condition` expression `{{}}` tokens are now validated by Level 1 (previously skipped).
+- Option-level `output_key` (modal writes on `confirm`/`review_object` gates) are now tracked as writes in `state_flow`.
+- All `runSimulation` return shapes (`Level 1 fail`, `Level 1 only`, `Level 2 complete`) now include `state_flow` and `unreferenced_writes`.
+- 74 unit tests pass (26 step-executor + 48 troubleshoot-fix-workflow).
+
+**Items 3 and 4 — Backlog** (surface warnings in workflow UI and retry loop):
+- Step 16a `js_transform` could be extended to extract `unreferenced_writes` from `static_analysis_result` and include them as a warnings block alongside hard errors.
+- The step generator (step 14) could receive `unreferenced_writes` as advisory context on retry, instructing it to either wire the orphaned key or remove the write.
 
 ## 7. Tech Debt Register
 

@@ -371,7 +371,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 18,
+    "version": 19,
     "steps": [
       {
         "step": "1",
@@ -584,6 +584,7 @@
           "domain_schema": "{{domain_schema}}",
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
+          "user_design_notes": "{{user_design_notes}}",
           "step_type_contracts": "{{step_type_contracts}}"
         },
         "output_key": "gap_analysis",
@@ -707,6 +708,7 @@
           "gap_analysis": "{{gap_analysis}}",
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
+          "user_design_notes": "{{user_design_notes}}",
           "step_type_contracts": "{{step_type_contracts}}"
         },
         "output_key": "process_spec",
