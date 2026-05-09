@@ -1267,17 +1267,8 @@ function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    if (s.type === 'condition') {
-      // on_truthy/on_falsy must be bare step keys ("8", "8a") — wrap unconditionally to step:N.
-      // A pre-prefixed value like "step:8" is an authoring error; "step:step:8" will not exist
-      // as a step key and is caught by the dead-target check below.
-      if (s.on_truthy) {
-        routingValues.push({ field: 'on_truthy', value: `step:${s.on_truthy}` });
-      }
-      if (s.on_falsy) {
-        routingValues.push({ field: 'on_falsy', value: `step:${s.on_falsy}` });
-      }
-    }
+    if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: s.on_truthy });
+    if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: s.on_falsy });
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
@@ -1542,11 +1533,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     if (currentStep.type === 'notify') {
       // notify is a side-effect — advance to next, no output_key
-      // condition steps have no on_success — follow on_truthy (happy path) for simulation
-    const simNextAction = currentStep.type === 'condition'
-      ? (currentStep.on_truthy ? `step:${currentStep.on_truthy}` : 'next')
-      : (currentStep.on_success ?? 'next');
-    nextKey = resolveSimNextKey(steps, currentKey, simNextAction);
+      nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_success ?? 'next');
       transitions.push(transition);
       currentKey = nextKey;
       continue;
@@ -1709,7 +1696,8 @@ function findClosestKey(keys, search) {
  * and routes to on_truthy or on_falsy without performing any I/O.
  *
  * Truthy: resolved value is non-empty string, not "null", not "undefined", not "0".
- * on_truthy / on_falsy must be bare step keys (e.g. "2", "3") — returned as "step:N".
+ * on_truthy / on_falsy use step:N format (e.g. "step:2", "step:3"). Bare keys are
+ * also accepted for legacy compatibility — both normalise to "step:N" on return.
  *
  * No output_key is written — condition steps produce no state output.
  */
@@ -1730,7 +1718,7 @@ function executeCondition({ step, localState, traceId }) {
     && !resolved.includes('{{');
 
   const rawNext  = isTruthy ? step.on_truthy : step.on_falsy;
-  // Accept both bare keys ("8") and already-prefixed values ("step:8") — normalise to bare.
+  // Normalise to bare key — handles both step:N (canonical) and bare keys (legacy).
   const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
 
   console.info('step-executor: condition', {
