@@ -1750,7 +1750,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 11,
+    "version": 12,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1785,19 +1785,19 @@
         "description": "Free-text user instructions for this generation attempt — add, remove, or modify steps. Empty on first run."
       },
       {
-        "name": "simulation_errors",
-        "required": false,
-        "description": "Formatted Level 1 static analysis issues from the previous simulate attempt. Empty on first run."
-      },
-      {
         "name": "previous_draft_steps",
         "required": false,
         "description": "The step array from the last generation attempt — non-empty when simulation_errors or path_errors is non-empty. Used in correction mode: fix only flagged steps."
       },
       {
-        "name": "path_errors",
+        "name": "static_analysis",
         "required": false,
-        "description": "Formatted Level 2 path simulation failures from the previous simulate attempt. Empty on first run."
+        "description": "Level 1 static analysis result object (JSON) from the previous simulate attempt. Correction mode active when passed === false and issues[] is non-empty. Empty on first run."
+      },
+      {
+        "name": "path_simulation",
+        "required": false,
+        "description": "Level 2 path simulation result object (JSON) from the previous simulate attempt. Correction mode active when paths_failed > 0. Empty on first run."
       }
     ],
     "output_schema": {
@@ -1879,7 +1879,7 @@
       },
       "additionalProperties": false
     },
-    "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nUser feedback for this generation attempt (apply these instructions if non-empty — add, remove, or modify specific steps exactly as described):\n{{user_feedback}}\n\nSimulation errors from the previous attempt to fix (fix each listed issue exactly — do not change steps that were not flagged):\n{{simulation_errors}}\n\nLevel 2 path simulation failures from the previous attempt to fix (fix routing or state issues that caused paths to fail):\n{{path_errors}}\n\nPrevious draft steps — your last generation (present when simulation_errors or path_errors is non-empty):\n{{previous_draft_steps}}\n\nTRANSLATION RULES:\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key ('1', '2', '3', ...).\n2. For steps where step_type is 'human_gate': find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key. If no dialog_designs entry exists for a human_gate step, use a sensible default confirm gate.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n\nCORRECTION MODE — applies when simulation_errors or path_errors is non-empty:\n- Your previous draft steps are provided above as reference.\n- Fix ONLY the steps flagged in simulation_errors or path_errors. Copy all other steps unchanged.\n- Do not redesign unflagged steps. Do not change their structure, routing, or content.\n\nFlat loop pattern — when a collection requires human interaction per item:\n- Loop state (index, accumulators) lives in local_state, written by js_transform\n- Backward reference is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\nTRANSLATION RULE 5 — description is required on every step:\nCopy the description verbatim from the corresponding process_design item. For end steps use \"Workflow complete.\"\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", \"description\": \"<one sentence — copy from process_design.description>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\", \"description\": \"Workflow complete.\" }\n  ]\n}",
+    "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nUser feedback for this generation attempt (apply these instructions if non-empty — add, remove, or modify specific steps exactly as described):\n{{user_feedback}}\n\nLevel 1 static analysis result from the previous attempt (JSON — correction mode active when passed === false):\n{{static_analysis}}\n\nLevel 2 path simulation result from the previous attempt (JSON — correction mode active when paths_failed > 0):\n{{path_simulation}}\n\nPrevious draft steps — your last generation (present when static_analysis or path_simulation indicates errors):\n{{previous_draft_steps}}\n\nTRANSLATION RULES:\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key ('1', '2', '3', ...).\n2. For steps where step_type is 'human_gate': find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key. If no dialog_designs entry exists for a human_gate step, use a sensible default confirm gate.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n\nCORRECTION MODE — applies when static_analysis.passed === false, or path_simulation.paths_failed > 0:\n- Your previous draft steps are provided above as reference.\n- For static_analysis failures: fix ONLY the steps listed in static_analysis.issues[]. Copy all other steps unchanged.\n- For path_simulation failures: fix ONLY the routing/state issues in path_simulation.path_results[] where passed === false. Copy all other steps unchanged.\n- Do not redesign unflagged steps. Do not change their structure, routing, or content.\n\nFlat loop pattern — when a collection requires human interaction per item:\n- Loop state (index, accumulators) lives in local_state, written by js_transform\n- Backward reference is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\nTRANSLATION RULE 5 — description is required on every step:\nCopy the description verbatim from the corresponding process_design item. For end steps use \"Workflow complete.\"\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", \"description\": \"<one sentence — copy from process_design.description>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\", \"description\": \"Workflow complete.\" }\n  ]\n}",
     "probe_input": null,
     "max_output_tokens": null
   }

@@ -1202,7 +1202,14 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   }
 
   // ── Level 2 — Path execution ─────────────────────────────────────────────
-  const pathResults = simulationPaths.map(
+  // Deduplicate paths by path_name — the LLM may generate duplicate entries.
+  const seenPathNames = new Set();
+  const uniquePaths   = simulationPaths.filter(path => {
+    if (seenPathNames.has(path.path_name)) return false;
+    seenPathNames.add(path.path_name);
+    return true;
+  });
+  const pathResults = uniquePaths.map(
     path => executeSimPath(steps, path, mockOutputs, runInput)
   );
 
@@ -1424,7 +1431,17 @@ function runLevel1StaticAnalysis(steps) {
       note:        `"${key}" is written by step ${writtenBy} but not referenced in any step's declared inputs`,
     }));
 
-  return { issues, state_flow: stateFlow, unreferenced_writes: unreferencedWrites };
+  // Deduplicate issues by (check + step + detail) — multiple routing fields
+  // pointing to the same dead target generate one issue per field; deduplicate here.
+  const seenIssueKeys = new Set();
+  const uniqueIssues  = issues.filter(issue => {
+    const key = `${issue.check}::${issue.step}::${issue.detail ?? ''}`;
+    if (seenIssueKeys.has(key)) return false;
+    seenIssueKeys.add(key);
+    return true;
+  });
+
+  return { issues: uniqueIssues, state_flow: stateFlow, unreferenced_writes: unreferencedWrites };
 }
 
 // ---------------------------------------------------------------------------

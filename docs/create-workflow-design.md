@@ -228,18 +228,18 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 21 | `llm_call design_workflow_process` (Sonnet) — LEFT BRAIN PASS 2: design step sequence and state map. No dialogs — those are designed separately. Input: `{ userInput, domain, domain_schema, gap_analysis, right_brain_research, user_preferences, user_design_notes, step_type_contracts }`. Output: `process_spec { process_design[], state_map }`. `process_design` items exactly: `{ step_label, step_type, description, inputs{}, outputs{} }`. NO `dialog` field. `state_map`: `{ key: { type, written_by, read_by[] } }` | **`input.userInput`**, **`input.domain`**, **`domain_schema`**, **`gap_analysis`**, **`right_brain_research`**, **`user_preferences`**, **`user_design_notes`**, **`step_type_contracts`** | `…`, `seeded_prompts`<br>**`process_spec`** ←Added<br>(exposes `process_spec.process_design`, `process_spec.state_map`) |
 | 22 | `llm_call design_workflow_dialogs` (Sonnet) — LEFT BRAIN PASS 3: design Slack dialogs for every `human_gate` step. Joined to `process_spec` by `step_label`. Input: `{ process_design: "{{process_spec.process_design}}", domain_schema, user_preferences }`. Output: `dialog_spec { dialog_designs[] }`. Each item: `{ step_label, gate_type, message_template, options[], output_key?, context_key? }`. Options shape is gate_type-specific. | **`process_spec.process_design`**, **`domain_schema`**, **`user_preferences`** | `…`, `process_spec`<br>**`dialog_spec`** ←Added<br>(exposes `dialog_spec.dialog_designs`) |
 | **PHASE 4 — STEP GENERATION** | | | |
-| 23 | `llm_call generate_workflow_steps` (Sonnet) — Translation task only; all design decisions already made. The step generator joins `process_design` + `dialog_designs` by `step_label`. Input: `{ process_design, state_map, dialog_designs, domain_schema, user_feedback (←user_workflow_feedback), simulation_errors (←simulation_error_summary), previous_draft_steps (←draft_workflow.steps), path_errors (←path_error_summary) }`. Plus PGC_SystemContext injections: `step_type_contracts`, `routing_value_rules`, `create_domain_example`. Output: `draft_workflow { name, description, intent_keywords, steps[] }` | **`process_spec.process_design`**, **`process_spec.state_map`**, **`dialog_spec.dialog_designs`**, **`domain_schema`**; `user_workflow_feedback`, `simulation_error_summary`, `draft_workflow.steps`, `path_error_summary` (all null on first run; populated on retry loops) | `…`, `dialog_spec`<br>**`draft_workflow`** ←Added<br>(or ←Updated on retry; exposes `draft_workflow.name`, `.description`, `.intent_keywords`, `.steps`) |
-| 24 | `llm_call generate_workflow_mocks` (Sonnet) — Generate representative mock outputs for each step. Input: `{ steps: "{{draft_workflow.steps}}" }`. Output: `mock_outputs { mock_outputs: { [step_key]: value } }`. Runs on every correction loop iteration — mocks are always fresh against the current `draft_workflow.steps`. | **`draft_workflow.steps`** | `…`, `draft_workflow`<br>**`mock_outputs`** ←Added (←Updated on retry) |
-| 25 | `llm_call generate_workflow_paths` (Sonnet) — Generate named simulation paths (happy path, cancel path, failure path). Input: `{ steps: "{{draft_workflow.steps}}", mock_outputs: "{{mock_outputs}}" }`. Output: `simulation_paths { simulation_paths: [{ path_name, decisions[] }] }`. Runs on every correction loop iteration — paths are always fresh against the current `draft_workflow.steps`. | **`draft_workflow.steps`**, **`mock_outputs`** | `…`, `mock_outputs`<br>**`simulation_paths`** ←Added (←Updated on retry) |
+| 23 | `llm_call generate_workflow_steps` (Sonnet) — Translation task only; all design decisions already made. The step generator joins `process_design` + `dialog_designs` by `step_label`. Input: `{ process_design, state_map, dialog_designs, domain_schema, user_feedback (←user_workflow_feedback), static_analysis (←static_analysis_result), previous_draft_steps (←draft_workflow.steps), path_simulation (←simulation_result) }`. Plus PGC_SystemContext injections: `step_type_contracts`, `routing_value_rules`, `create_domain_example`. Output: `draft_workflow { name, description, intent_keywords, steps[] }`. Correction mode: active when `static_analysis.passed === false` (fix L1 issues[]) or `path_simulation.paths_failed > 0` (fix failing path_results[]). | **`process_spec.process_design`**, **`process_spec.state_map`**, **`dialog_spec.dialog_designs`**, **`domain_schema`**; `user_workflow_feedback`, `static_analysis_result`, `draft_workflow.steps`, `simulation_result` (all null on first run; populated on retry loops) | `…`, `dialog_spec`<br>**`draft_workflow`** ←Added<br>(or ←Updated on retry; exposes `draft_workflow.name`, `.description`, `.intent_keywords`, `.steps`) |
 | **PHASE 5 — VALIDATION** | | | |
-| 26 | `human_gate review_object` — User reviews the proposed step array before simulation. `context_key: draft_workflow.steps`. `item_label_template: "Step {{step}} ({{type}}): {{description}}"`. Options: "Looks good" → step:27; "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:27`. Re-entering this gate after regeneration always shows fresh mocks/paths generated at steps 24–25. | **`draft_workflow.steps`**, **`draft_workflow.name`** | `…`, `simulation_paths`<br>**`user_workflow_feedback`** ←Added (via modal; only written when feedback option is selected) |
-| 27 | `simulate` Level 1 — Static analysis: routing integrity, dead step targets, missing template keys, gate structure. Input: `steps_key: draft_workflow.steps`. `on_success: step:30`. `on_failure: step:28` | **`draft_workflow.steps`** | `…`, `user_workflow_feedback`<br>**`static_analysis_result`** ←Added |
-| 28 | `js_transform` — Format Level 1 static analysis issues into a readable summary (max 6 issues). Reads `static_analysis_result.static_analysis.issues[]`. `output_key: simulation_error_summary`. `on_success: step:29` | **`static_analysis_result`** | `…`, `static_analysis_result`<br>**`simulation_error_summary`** ←Added |
-| 29 | `human_gate confirm` — Notify user that Level 1 simulation failed; offer to regenerate or cancel. Message: `{{simulation_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:23` | **`simulation_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
+| 24 | `human_gate review_object` — User reviews the proposed step array before mocks and simulation are generated. `context_key: draft_workflow.steps`. `item_label_template: "Step {{step}} ({{type}}): {{description}}"`. Options: "Looks good" → step:25; "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:25`. Placed before mocks/paths so a rejected draft avoids 2 unnecessary LLM calls per rejection cycle. | **`draft_workflow.steps`**, **`draft_workflow.name`** | `…`, `draft_workflow`<br>**`user_workflow_feedback`** ←Added (via modal; only written when feedback option is selected) |
+| 25 | `llm_call generate_workflow_mocks` (Sonnet) — Generate representative mock outputs for each step. Input: `{ steps: "{{draft_workflow.steps}}" }`. Output: `mock_outputs { mock_outputs: { [step_key]: value } }`. Only runs after user confirms draft at step 24; regenerates on every correction loop that returns through step 23. | **`draft_workflow.steps`** | `…`, `user_workflow_feedback`<br>**`mock_outputs`** ←Added (←Updated on retry) |
+| 26 | `llm_call generate_workflow_paths` (Sonnet) — Generate named simulation paths (happy path, cancel path, failure path). Input: `{ steps: "{{draft_workflow.steps}}", mock_outputs: "{{mock_outputs}}" }`. Output: `simulation_paths { simulation_paths: [{ path_name, decisions[] }] }`. Paths are deduplicated by `path_name` in `runSimulation` before Level 2 execution. | **`draft_workflow.steps`**, **`mock_outputs`** | `…`, `mock_outputs`<br>**`simulation_paths`** ←Added (←Updated on retry) |
+| 27 | `simulate` Level 1 — Static analysis: routing integrity, dead step targets, missing template keys, gate structure. Input: `steps_key: draft_workflow.steps`. `on_success: step:30`. `on_failure: step:28` | **`draft_workflow.steps`** | `…`, `simulation_paths`<br>**`static_analysis_result`** ←Added |
+| 28 | `js_transform` — Format Level 1 static analysis issues into a readable summary (max 6 issues) for the human gate message. Reads `static_analysis_result.static_analysis.issues[]`. `output_key: simulation_error_summary`. `on_success: step:29` | **`static_analysis_result`** | `…`, `static_analysis_result`<br>**`simulation_error_summary`** ←Added |
+| 29 | `human_gate confirm` — Notify user that Level 1 simulation failed; offer to regenerate or cancel. Message: `{{simulation_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:23`. Step 23 receives the full `static_analysis_result` object for correction — not the truncated summary. | **`simulation_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
 | 30 | `simulate` Level 2 + Level 3 — Full path execution with mocks; Level 3 skip-path analysis (advisory). Input: `steps_key: draft_workflow.steps`, `mock_outputs_key: mock_outputs.mock_outputs`, `paths_key: simulation_paths.simulation_paths`. `on_success: step:34`. `on_failure: step:31` | **`draft_workflow.steps`**, **`mock_outputs.mock_outputs`**, **`simulation_paths.simulation_paths`** | `…`, `simulation_paths`<br>**`simulation_result`** ←Added |
-| 31 | `js_transform` — Format Level 2 path simulation failures into a readable summary (max 6 failed paths). Reads `simulation_result.path_results[]` and `simulation_paths` (accessed directly in expression as `local_state.simulation_paths`). `output_key: path_error_summary`. `on_success: step:32` | **`simulation_result`**, `simulation_paths` | `…`, `simulation_result`<br>**`path_error_summary`** ←Added |
-| 32 | `human_gate confirm` — Notify user that Level 2 path simulation failed; offer to regenerate or cancel. Message: `{{path_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:33; Cancel → cancel. `on_success: step:23` | **`path_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
-| 33 | `js_transform` — Clear stale Level 1 error summary before Level 2 automatic regeneration so step 23 does not pass stale context to the LLM. `input_key: simulation_result` (content unused). `output_key: simulation_error_summary`. Expression returns `''`. `on_success: step:23` | `simulation_result` (input_key; content unused) | `simulation_error_summary` ←Updated (reset to `''`) |
+| 31 | `js_transform` — Format Level 2 path simulation failures into a readable summary (max 6 failed paths) for the human gate message. Reads `simulation_result.path_results[]` and `simulation_paths` (accessed directly in expression as `local_state.simulation_paths`). `output_key: path_error_summary`. `on_success: step:32` | **`simulation_result`**, `simulation_paths` | `…`, `simulation_result`<br>**`path_error_summary`** ←Added |
+| 32 | `js_transform` — Clear stale Level 1 analysis result before the Level 2 error gate so the step generator does not receive stale L1 context on the next iteration. `input_key: simulation_result` (content unused). `output_key: static_analysis_result`. Expression returns `''`. `on_success: step:33`. Runs unconditionally before step 33 regardless of which regenerate option the user picks. | `simulation_result` (input_key; content unused) | `static_analysis_result` ←Updated (reset to `''`) |
+| 33 | `human_gate confirm` — Notify user that Level 2 path simulation failed; offer to regenerate or cancel. Message: `{{path_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:23`. Step 23 receives the full `simulation_result` object for correction — not the truncated summary. | **`path_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
 | **PHASE 6 — REGISTRATION** | | | |
 | 34 | `human_gate confirm` — Show simulation results; ask user to confirm registration. Message: "Simulation passed `{{simulation_result.paths_passed}}` of `{{simulation_result.paths_run}}` paths. Ready to register `{{draft_workflow.name}}`?" Options: Register → next; Cancel → cancel | **`simulation_result.paths_passed`**, **`simulation_result.paths_run`**, **`draft_workflow.name`** | (no new keys) |
 | 35 | `serv_insert PGC_Workflow` — Write the new workflow. Row: `{ name, domain, description, intent_keywords, steps, version: 1, state_strategy: "sequential_with_confirmation" }` | **`draft_workflow.name`**, **`input.domain`**, **`draft_workflow.description`**, **`draft_workflow.intent_keywords`**, **`draft_workflow.steps`** | `…`, `path_error_summary`<br>**`registered_workflow`** ←Added |
@@ -331,27 +331,35 @@ state keys not in `state_map`. It translates — it does not design.
 
 ## Gate-bounded correction loops
 
-Steps 26–27 and 26–30 form gate-bounded correction loops. Every backward jump — from
-step 28→29→step:23, or step 31→32→step:23 (or via 33→step:23) — is safe because the
-correction path always passes through a `human_gate` (29 or 32) before re-running
-the step generator. This satisfies Guard 3's cycle-safety rule.
+Steps 24–27 and 24–30 form gate-bounded correction loops. Every backward jump — from
+step 28→29→step:23, or step 31→32→33→step:23 — is safe because the correction path
+always passes through a `human_gate` (29 or 33) before re-running the step generator.
+This satisfies Guard 3's cycle-safety rule.
 
-If simulation repeatedly fails, the user cancels at step 29 or step 32. There is no
+If simulation repeatedly fails, the user cancels at step 29 or step 33. There is no
 automated retry limit on human-gate-bounded loops.
 
-**Mocks and paths regenerate on every correction loop iteration.** When any correction
-path returns to step 23 (generate steps), the sequential flow continues through step 24
-(generate mocks) and step 25 (generate paths) before reaching step 26 (human review).
-This ensures `mock_outputs` and `simulation_paths` are always current against
-`draft_workflow.steps` — eliminating the stale-mocks/paths bounce that occurred when
-steps 24–25 ran only once after the first successful Level 1 pass.
+**Review gate placement (step 24).** The review gate runs immediately after step 23
+(generate steps), before mocks and paths are generated. This saves 2 LLM calls per
+rejection cycle: if the user regenerates at step 24, the new draft is shown before
+paying for mocks and paths. Mocks and paths only run after the user confirms the draft
+looks structurally correct.
 
-If the user requests changes at step 26 (review gate), or if simulation fails at 27
-(Level 1) or 30 (Level 2), the backward reference to step 23 re-runs the step
-generator and immediately regenerates mocks and paths. The three-part specification
-(`process_design`, `state_map`, `dialog_designs`) persists in `local_state` and is
-reused. The user's change request is captured via modal on the `review_object` or
-failure gate and written to `user_workflow_feedback` before step 23 runs.
+**Mocks and paths regenerate on every confirmed iteration.** When any correction path
+returns to step 23 (generate steps), the user reviews the draft at step 24 before
+steps 25 (mocks) and 26 (paths) run. This ensures `mock_outputs` and
+`simulation_paths` are always current against the confirmed `draft_workflow.steps`.
+
+**L2 clearing step (step 32).** Step 32 clears `static_analysis_result` before
+step 33 (the L2 human gate) runs. This ensures step 23 does not receive a stale
+L1 failure result on the next iteration. Step 32 always runs — both the "Regenerate
+with feedback" and "Regenerate automatically" options in step 33 flow through it
+unconditionally.
+
+**Step 23 correction inputs.** Step 23 receives `static_analysis_result` (full L1
+result object) and `simulation_result` (full L2 result object) directly — not the
+truncated formatted summaries used in the human gate messages. This gives the LLM
+the complete issue detail needed for accurate corrections.
 
 ---
 
@@ -364,8 +372,8 @@ failure gate and written to `user_workflow_feedback` before step 23 runs.
 | 21 | `design_workflow_process` | `anthropic/claude-sonnet-4-5` | `process_spec` |
 | 22 | `design_workflow_dialogs` | `anthropic/claude-sonnet-4-5` | `dialog_spec` |
 | 23 | `generate_workflow_steps` | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
-| 24 | `generate_workflow_mocks` | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
-| 25 | `generate_workflow_paths` | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
+| 25 | `generate_workflow_mocks` | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
+| 26 | `generate_workflow_paths` | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
 
 PGC_SystemContext rows injected via `executeLlmCall`:
 - `step_type_contracts` — injected into steps 11, 21, 22, 23
@@ -393,16 +401,20 @@ PGC_SystemContext rows injected via `executeLlmCall`:
   If no gate steps exist the output is an empty `dialog_designs: []` array. Conditional
   skipping when there are no gate steps is a future optimisation.
 - `generate_workflow_steps` (step 23) input variables: `process_design`, `state_map`,
-  `dialog_designs`, `domain_schema`, plus `step_type_contracts`, `routing_value_rules`,
-  and `example` injected from `PGC_SystemContext`. The step generator joins `process_design`
-  and `dialog_designs` by `step_label`.
-- The `generate_workflow_steps` prompt is at v7 for the v4 input contract. The `output_schema`
-  is unchanged — `{ name, description, intent_keywords, steps[] }`.
-- Step 26 (`human_gate review_object`) — "Regenerate with feedback" uses a modal with
-  `output_key: user_workflow_feedback` that writes directly to `local_state` and routes
-  to step 23. There is no intermediate text_input gate. "Regenerate automatically" also
-  routes to step 23 without capturing feedback. Both options cause steps 24 and 25
-  to regenerate mocks and paths before returning to step 26.
+  `dialog_designs`, `domain_schema`, `user_feedback`, `static_analysis`, `path_simulation`,
+  `previous_draft_steps`, plus `step_type_contracts`, `routing_value_rules`, and `example`
+  injected from `PGC_SystemContext`. The step generator joins `process_design` and
+  `dialog_designs` by `step_label`. Correction mode activates on `static_analysis.passed === false`
+  or `path_simulation.paths_failed > 0` — the full result objects are passed, not truncated summaries.
+- The `generate_workflow_steps` prompt is at v12. The `output_schema` is unchanged —
+  `{ name, description, intent_keywords, steps[] }`.
+- Step 24 (`human_gate review_object`) — placed before mocks/paths (steps 25–26) to avoid
+  generating 2 LLM outputs for a draft the user will reject. "Regenerate with feedback" uses a modal
+  with `output_key: user_workflow_feedback`. "Regenerate automatically" routes directly to step 23.
+  Both options skip mocks/paths until the user confirms.
+- Step 32 (`js_transform`) — clears `static_analysis_result` unconditionally before step 33 (L2
+  failure gate). Both regenerate options in step 33 route to step 23 directly; no separate clearing
+  branch needed.
 - **`user_design_notes`** (step 9) is passed to step 11 (`analyze_workflow_gaps`) and
   step 21 (`design_workflow_process`) so the left brain can incorporate user intent that
   was not captured by preference questions. Both prompts accept it as an optional variable.
@@ -413,3 +425,8 @@ PGC_SystemContext rows injected via `executeLlmCall`:
   iteration. Additionally, step 30 (`simulate` Level 2) `on_success` was corrected from
   `"next"` (which erroneously routed to the error formatter at step 31) to `"step:34"`
   (the registration gate).
+- **Structural fix (v22+):** Review gate moved before mocks/paths (step 24 ← old step 26);
+  mocks (step 25 ← old step 24) and paths (step 26 ← old step 25) only generate after user
+  confirms draft. Clearing step moved before L2 gate (step 32 ← old step 33); L2 gate is
+  now step 33 (← old step 32). Step 23 now receives `static_analysis_result` and
+  `simulation_result` directly instead of truncated formatted summaries.
