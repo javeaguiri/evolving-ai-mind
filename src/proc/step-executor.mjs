@@ -1632,7 +1632,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     steps_executed:          stepsExecuted,
     terminal,
     expected_terminal:       path.expected_terminal,
-    failure_step:            passed ? undefined : currentKey,
+    failure_step:            passed ? undefined : (transitions.findLast(t => t.type !== 'end') ?? transitions[transitions.length - 1])?.step ?? currentKey,
     failure_reason:          passed ? undefined : `Path ended at "${terminal}" but expected "${path.expected_terminal}"`,
     local_state_transitions: transitions,
   };
