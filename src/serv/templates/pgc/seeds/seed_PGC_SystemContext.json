@@ -105,5 +105,16 @@
     "inject_for": [],
     "version": 1,
     "content": "You are a helpful assistant integrated into evolving-mind-ai, a personal cognitive automation system. Answer clearly and concisely."
+  },
+  {
+    "key": "flat_loop_example",
+    "section": "examples",
+    "format": "prose",
+    "inject_always": false,
+    "inject_for": [
+      "generate_workflow_steps",
+      "fix_workflow_steps"
+    ],
+    "content": "FLAT LOOP PATTERN — use when the workflow must iterate a step sequence with human interaction per item. Do NOT use the iterator step type for human-interactive loops.\n\nA flat loop consists of: (1) a guard condition, (2) the loop body steps, (3) the last body step routing back to the guard.\n\nExample — quiz card loop (guard at step 9, body at steps 10–13, post-loop at step 14):\n\n{ \"step\": \"9\",  \"type\": \"condition\",  \"description\": \"Check if all cards have been presented.\",\n  \"expression\": \"local_state.quiz_state.index >= local_state.quiz_state.cards.length\",\n  \"on_truthy\": \"step:14\",  \"on_falsy\": \"step:10\" }\n\n{ \"step\": \"10\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"description\": \"Show current card and collect user answer.\",\n  \"message_template\": \"Card {{quiz_state.index}} of {{quiz_state.cards.length}}: {{quiz_state.cards.0.term}}\",\n  \"options\": [\n    { \"label\": \"Correct\",   \"value\": \"correct\",   \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Incorrect\", \"value\": \"incorrect\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",                           \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"output_key\": \"user_answer\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\n{ \"step\": \"11\", \"type\": \"js_transform\", \"description\": \"Advance index and tally result.\",\n  \"expression\": \"...\", \"output_key\": \"quiz_state\", \"on_success\": \"next\" }\n\n{ \"step\": \"12\", \"type\": \"serv_insert\",  \"description\": \"Write test log entry.\",\n  \"...\", \"on_success\": \"next\", \"on_failure\": \"next\" }\n\n{ \"step\": \"13\", \"type\": \"serv_update\",  \"description\": \"Update card streak.\",\n  \"...\", \"on_success\": \"step:9\", \"on_failure\": \"step:9\" }\n\n{ \"step\": \"14\", \"...\"  }   ← post-loop entry point\n\nFlat loop rules:\n- Guard condition: on_falsy → first body step; on_truthy → first post-loop step\n- Last body step: on_success AND on_failure BOTH route back to the guard condition (step:9 in the example)\n- Cancel inside the loop body: route to a terminal step (end or cancel), NEVER back to the guard\n- Loop state (index, done flag, accumulators) lives in local_state and is written by a js_transform step inside the loop body"
   }
 ]

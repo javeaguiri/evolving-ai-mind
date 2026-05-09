@@ -9,7 +9,8 @@
       "Bash(node dev_scripts/upsert-step-type.mjs*)",
       "Bash(node dev_scripts/upsert-system-context.mjs*)",
       "Bash(node dev_scripts/pull-prompt.mjs*)",
-      "Bash(node dev_scripts/backfill-embeddings.mjs*)"
+      "Bash(node dev_scripts/backfill-embeddings.mjs*)",
+      "Bash(curl * https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod*)"
     ]
   }
 }
