@@ -228,7 +228,7 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 21 | `llm_call design_workflow_process` (Sonnet) — LEFT BRAIN PASS 2: design step sequence and state map. No dialogs — those are designed separately. Input: `{ userInput, domain, domain_schema, gap_analysis, right_brain_research, user_preferences, user_design_notes, step_type_contracts }`. Output: `process_spec { process_design[], state_map }`. `process_design` items exactly: `{ step_label, step_type, description, inputs{}, outputs{} }`. NO `dialog` field. `state_map`: `{ key: { type, written_by, read_by[] } }` | **`input.userInput`**, **`input.domain`**, **`domain_schema`**, **`gap_analysis`**, **`right_brain_research`**, **`user_preferences`**, **`user_design_notes`**, **`step_type_contracts`** | `…`, `seeded_prompts`<br>**`process_spec`** ←Added<br>(exposes `process_spec.process_design`, `process_spec.state_map`) |
 | 22 | `llm_call design_workflow_dialogs` (Sonnet) — LEFT BRAIN PASS 3: design Slack dialogs for every `human_gate` step. Joined to `process_spec` by `step_label`. Input: `{ process_design: "{{process_spec.process_design}}", domain_schema, user_preferences }`. Output: `dialog_spec { dialog_designs[] }`. Each item: `{ step_label, gate_type, message_template, options[], output_key?, context_key? }`. Options shape is gate_type-specific. | **`process_spec.process_design`**, **`domain_schema`**, **`user_preferences`** | `…`, `process_spec`<br>**`dialog_spec`** ←Added<br>(exposes `dialog_spec.dialog_designs`) |
 | **PHASE 4 — STEP GENERATION** | | | |
-| 23 | `llm_call generate_workflow_steps` (Sonnet) — Translation task only; all design decisions already made. The step generator joins `process_design` + `dialog_designs` by `step_label`. Input: `{ process_design, state_map, dialog_designs, domain_schema, user_feedback (←user_workflow_feedback), static_analysis (←static_analysis_result), previous_draft_steps (←draft_workflow.steps), path_simulation (←simulation_result), simulation_error_summary (←simulation_error_summary), path_error_summary (←path_error_summary) }`. Plus PGC_SystemContext injections: `step_type_contracts`, `routing_value_rules`, `flat_loop_example`. Output: `draft_workflow { name, description, intent_keywords, steps[] }`. Correction mode is **two-phase**: Phase 1 — apply static analysis fixes (content locked after fix, `level1_applied: true`); Phase 2 — apply routing-only fixes (`on_success`, `on_failure`, `on_select`, etc.) — may not modify `message_template`, `expression`, `query`, or any other non-routing field. Correction state (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) is embedded on each step in `previous_draft_steps` by js_transform steps; the LLM reads these fields but must not include them in its output. | **`process_spec.process_design`**, **`process_spec.state_map`**, **`dialog_spec.dialog_designs`**, **`domain_schema`**; `user_workflow_feedback`, `static_analysis_result`, `draft_workflow.steps`, `simulation_result`, `simulation_error_summary`, `path_error_summary` (all null on first run; populated on retry loops) | `…`, `dialog_spec`<br>**`draft_workflow`** ←Added<br>(or ←Updated on retry; exposes `draft_workflow.name`, `.description`, `.intent_keywords`, `.steps`) |
+| 23 | `llm_call generate_workflow_steps` (Sonnet) — Translation task only; all design decisions already made. The step generator joins `process_design` + `dialog_designs` by `step_label`. Input: `{ process_design, state_map, dialog_designs, domain_schema, user_feedback (←user_workflow_feedback), static_analysis (←static_analysis_result), previous_draft_steps (←draft_workflow.steps), simulation_error_summary (←simulation_error_summary) }`. Plus PGC_SystemContext injections: `step_type_contracts`, `routing_value_rules`, `flat_loop_example`. Output: `draft_workflow { name, description, intent_keywords, steps[] }`. Correction mode is **Phase 1 only**: apply static analysis fixes (content locked after fix, `level1_applied: true`). Phase 2 routing repair is handled exclusively by `fix_workflow_routing` (step 33a) — `generate_workflow_steps` does not receive `path_simulation` or `path_error_summary`. Correction state (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) is embedded on each step in `previous_draft_steps` by js_transform steps; the LLM reads these fields but must not include them in its output. | **`process_spec.process_design`**, **`process_spec.state_map`**, **`dialog_spec.dialog_designs`**, **`domain_schema`**; `user_workflow_feedback`, `static_analysis_result`, `draft_workflow.steps`, `simulation_error_summary` (all null on first run; populated on retry loops) | `…`, `dialog_spec`<br>**`draft_workflow`** ←Added<br>(or ←Updated on retry; exposes `draft_workflow.name`, `.description`, `.intent_keywords`, `.steps`) |
 | **PHASE 5 — VALIDATION** | | | |
 | 24 | `human_gate review_object` — User reviews the proposed step array before simulation. `context_key: draft_workflow.steps`. `item_label_template: "Step {{step}} ({{type}}): {{description}}"`. Options: "Looks good" → step:25; "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:25`. Placed before mocks/paths so a rejected draft avoids unnecessary LLM calls. | **`draft_workflow.steps`**, **`draft_workflow.name`** | `…`, `draft_workflow`<br>**`user_workflow_feedback`** ←Added (via modal; only written when feedback option is selected) |
 | 25 | `simulate` Level 1 — Static analysis: routing integrity, dead step targets, missing template keys, gate structure. Input: `steps_key: draft_workflow.steps`. `on_success: step:25a`. `on_failure: step:26`. Mocks and paths are not generated until Level 1 passes — saves 2 LLM calls per L1 failure cycle. | **`draft_workflow.steps`** | `…`, `user_workflow_feedback`<br>**`static_analysis_result`** ←Added |
@@ -243,7 +243,8 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 31 | `js_transform` — Format Level 2 path simulation failures into a readable summary (max 6 failed paths) for the human gate message. Reads `simulation_result.path_results[]` and `simulation_paths` (accessed directly in expression as `local_state.simulation_paths`). `output_key: path_error_summary`. `on_success: step:31a` | **`simulation_result`**, `simulation_paths` | `…`, `simulation_result`<br>**`path_error_summary`** ←Added |
 | 31a | `js_transform` — **L2 failure path.** Map over `draft_workflow.steps`; embed `level2_applied: false, level2_issue: <reason>` for steps identified by `path_results[].failure_step`; `level2_applied: true` for all others. `output_key: draft_workflow`. `on_success: step:32` | **`simulation_result`**, **`draft_workflow.steps`** | **`draft_workflow`** ←Updated (steps carry correction state) |
 | 32 | `js_transform` — Clear stale Level 1 analysis result before the Level 2 error gate so the step generator does not receive stale L1 context on the next iteration. `input_key: simulation_result` (content unused). `output_key: static_analysis_result`. Expression returns `''`. `on_success: step:33`. Runs unconditionally before step 33 regardless of which regenerate option the user picks. | `simulation_result` (input_key; content unused) | `static_analysis_result` ←Updated (reset to `''`) |
-| 33 | `human_gate confirm` — Notify user that Level 2 path simulation failed; offer to regenerate or cancel. Message: `{{path_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:23`. Step 23 receives `simulation_result` and `previous_draft_steps` (with correction state embedded) for phased correction. | **`path_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
+| 33 | `human_gate confirm` — Notify user that Level 2 path simulation failed; offer to repair or cancel. Message: `{{path_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:33a; "Regenerate automatically" → step:33a; Cancel → cancel. `on_success: step:33a`. Routes to step 33a (`fix_workflow_routing`) — not to step 23. Routing-only repair is isolated from the full generation prompt. | **`path_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
+| 33a | `llm_call fix_workflow_routing` (Sonnet) — Routing-only repair for Level 2 failures. Receives `draft_workflow.steps` plus workflow metadata (`name`, `description`, `intent_keywords` from `draft_workflow`) and simulation context (`path_error_summary`, `simulation_result`, `user_workflow_feedback`). Modifies ONLY routing fields (`on_success`, `on_failure`, `on_truthy`, `on_falsy`, `on_cancel`, `on_select` inside options[]). Must not modify `message_template`, `expression`, `query`, `mutation`, `output_key`, or any other content field. Output: `draft_workflow { name, description, intent_keywords, steps[] }` — same schema as step 23. `on_success: step:24` — routes to the review gate so the full L1+L2 pipeline re-runs on the repaired draft. `on_failure: cancel`. | **`draft_workflow.steps`**, **`draft_workflow.name`**, **`draft_workflow.description`**, **`draft_workflow.intent_keywords`**, **`path_error_summary`**, **`simulation_result`**; `user_workflow_feedback` | **`draft_workflow`** ←Updated (routing fields repaired; correction state fields stripped from output) |
 | **PHASE 6 — REGISTRATION** | | | |
 | 34 | `human_gate confirm` — Show simulation results; ask user to confirm registration. Message: "Simulation passed `{{simulation_result.paths_passed}}` of `{{simulation_result.paths_run}}` paths. Ready to register `{{draft_workflow.name}}`?" Options: Register → next; Cancel → cancel | **`simulation_result.paths_passed`**, **`simulation_result.paths_run`**, **`draft_workflow.name`** | (no new keys) |
 | 34a | `js_transform` — Strip correction state fields (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) from `draft_workflow.steps` before registration. `input_key: draft_workflow`. `output_key: draft_workflow`. `on_success: next` | **`draft_workflow`** | **`draft_workflow`** ←Updated (steps cleaned) |
@@ -337,11 +338,11 @@ state keys not in `state_map`. It translates — it does not design.
 ## Gate-bounded correction loops
 
 Steps 24–27 and 24–33 form gate-bounded correction loops. Every backward jump — from
-step 26a→27→step:23 (L1), or step 31a→32→33→step:23 (L2) — is safe because the
+step 26a→27→step:23 (L1), or step 31a→32→33→step:33a→step:24 (L2) — is safe because the
 correction path always passes through a `human_gate` (27 or 33) before re-running
 the step generator. This satisfies Guard 3's cycle-safety rule.
 
-If simulation repeatedly fails, the user cancels at step 27 (L1) or step 33 (L2).
+If simulation repeatedly fails, the user cancels at step 27 (L1) or step 33 (L2). The L2 repair path (step 33a) does not loop back — if `fix_workflow_routing` fails (`on_failure: cancel`), the run terminates without a human gate.
 There is no automated retry limit on human-gate-bounded loops.
 
 **Review gate placement (step 24).** The review gate runs immediately after step 23
@@ -362,19 +363,29 @@ with feedback" and "Regenerate automatically" options in step 33 flow through it
 unconditionally.
 
 **Step 23 correction inputs.** Step 23 receives `static_analysis_result` (full L1
-result object) and `simulation_result` (full L2 result object) directly — not the
-truncated formatted summaries used in the human gate messages. It also receives
-`simulation_error_summary` and `path_error_summary`, and `previous_draft_steps` with
-correction state embedded on each step. This gives the LLM the complete issue detail
-needed for accurate phased corrections.
+result object) and `simulation_error_summary` directly. It also receives
+`previous_draft_steps` with correction state embedded on each step. Step 23 does NOT
+receive `simulation_result` or `path_error_summary` — those are L2 inputs routed
+exclusively to step 33a (`fix_workflow_routing`).
 
-**Phased correction.** The `generate_workflow_steps` prompt enforces two sequential
-correction phases. Phase 1 applies static analysis fixes: only the flagged steps are
-modified; all other steps are copied verbatim from `previous_draft_steps`. Phase 2
-applies path simulation fixes: only routing fields (`on_success`, `on_failure`,
-`on_select`, etc.) may change — `message_template`, `expression`, `query`, `mutation`,
-and other content fields are prohibited. Steps with `level1_applied: true` are
-permanently locked in Phase 2.
+**Step 33a correction inputs.** Step 33a receives `draft_workflow.steps` as
+`previous_draft_steps`, plus `draft_workflow.name/description/intent_keywords`
+(echoed unchanged in output), `path_error_summary`, `simulation_result` (full L2
+result), and `user_workflow_feedback`. Modifies only routing fields; outputs the full
+`draft_workflow` object. Routes to step:24 (review gate) on success so the full
+L1+L2 pipeline re-runs on the repaired draft.
+
+**Phased correction — split across two prompts.** Phase 1 (static analysis fixes)
+is handled by `generate_workflow_steps` (step 23): only flagged steps are modified;
+all other steps are copied verbatim from `previous_draft_steps`. Phase 2 (routing-only
+fixes) is handled by `fix_workflow_routing` (step 33a): only routing fields
+(`on_success`, `on_failure`, `on_select`, `on_truthy`, `on_falsy`, `on_cancel`) may
+change — `message_template`, `expression`, `query`, `mutation`, and all other content
+fields are prohibited. Steps with `level1_applied: true` are permanently locked.
+
+The split prevents conflicting correction contexts from overloading a single prompt.
+`generate_workflow_steps` never receives `path_simulation` or `path_error_summary`.
+`fix_workflow_routing` never receives `static_analysis` or performs content corrections.
 
 **`previous_draft_steps` source.** Step 23's seed JSON passes
 `"previous_draft_steps": "{{draft_workflow.steps}}"`. `draft_workflow` is step 23's
@@ -410,11 +421,12 @@ registration so `PGC_Workflow.steps` is clean.
 | 23 | `generate_workflow_steps` | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
 | 28 | `generate_workflow_mocks` | `anthropic/claude-sonnet-4-5` | `mock_outputs` |
 | 29 | `generate_workflow_paths` | `anthropic/claude-sonnet-4-5` | `simulation_paths` |
+| 33a | `fix_workflow_routing` | `anthropic/claude-sonnet-4-5` | `draft_workflow` |
 
 PGC_SystemContext rows injected via `executeLlmCall`:
 - `step_type_contracts` — injected into steps 11, 21, 22, 23
 - `routing_value_rules` — injected into steps 21, 22, 23
-- `flat_loop_example` — injected into step 23 (and `fix_workflow_steps`)
+- `flat_loop_example` — injected into step 23
 
 ---
 
@@ -437,17 +449,23 @@ PGC_SystemContext rows injected via `executeLlmCall`:
   If no gate steps exist the output is an empty `dialog_designs: []` array. Conditional
   skipping when there are no gate steps is a future optimisation.
 - `generate_workflow_steps` (step 23) input variables: `process_design`, `state_map`,
-  `dialog_designs`, `domain_schema`, `user_feedback`, `static_analysis`, `path_simulation`,
+  `dialog_designs`, `domain_schema`, `user_feedback`, `static_analysis`,
   `previous_draft_steps` (resolved from `draft_workflow.steps` — step 23's own `output_key`;
   empty on first run, populated on retry loops with correction state embedded on each step),
-  `simulation_error_summary`, `path_error_summary`, plus `step_type_contracts`,
-  `routing_value_rules`, and `flat_loop_example` injected from `PGC_SystemContext`. The step
-  generator joins `process_design` and `dialog_designs` by `step_label`. Correction mode is
-  two-phase: Phase 1 fixes content (locks step via `level1_applied: true`); Phase 2 fixes
-  routing fields only. Correction state fields (`level1_applied`, `level1_issue`,
-  `level2_applied`, `level2_issue`) are read-only — the LLM must not include them in output;
-  step 34a strips them before registration.
-- The `generate_workflow_steps` prompt is at v13. The `output_schema` is `{ name,
+  `simulation_error_summary`, plus `step_type_contracts`, `routing_value_rules`, and
+  `flat_loop_example` injected from `PGC_SystemContext`. Does NOT receive `path_simulation`
+  or `path_error_summary` — those are L2 inputs routed to step 33a only. The step generator
+  joins `process_design` and `dialog_designs` by `step_label`. Correction is Phase 1 only:
+  fixes content and locks steps via `level1_applied: true`. Correction state fields
+  (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) are read-only —
+  the LLM must not include them in output; step 34a strips them before registration.
+- `fix_workflow_routing` (step 33a) input variables: `previous_draft_steps`
+  (`draft_workflow.steps`), `workflow_name` (`draft_workflow.name`), `workflow_description`
+  (`draft_workflow.description`), `workflow_keywords` (`draft_workflow.intent_keywords`),
+  `path_error_summary`, `path_simulation` (`simulation_result`), `user_feedback`
+  (`user_workflow_feedback`). Outputs `draft_workflow` (same schema as step 23). Modifies
+  only routing fields; routes to step:24 on success
+- The `generate_workflow_steps` prompt is at v11 (DB). The `fix_workflow_routing` prompt is at v1 (DB id 57). The `output_schema` is `{ name,
   description, intent_keywords, steps[] }` — correction state fields are not in the
   output schema; step 34a strips them from `draft_workflow.steps` before registration.
 - Step 24 (`human_gate review_object`) — placed before mocks/paths (steps 25–26) to avoid
