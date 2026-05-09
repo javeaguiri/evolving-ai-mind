@@ -791,52 +791,27 @@
       },
       {
         "step": "25",
-        "type": "llm_call",
-        "description": "Generate representative mock outputs for each step.",
-        "input": {
-          "prompt": "generate_workflow_mocks",
-          "steps": "{{draft_workflow.steps}}"
-        },
-        "output_key": "mock_outputs",
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "26",
-        "type": "llm_call",
-        "description": "Generate named simulation paths (happy path, cancel path, failure path).",
-        "input": {
-          "prompt": "generate_workflow_paths",
-          "steps": "{{draft_workflow.steps}}",
-          "mock_outputs": "{{mock_outputs}}"
-        },
-        "output_key": "simulation_paths",
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "27",
         "type": "simulate",
         "description": "Level 1 static analysis — routing, dead targets, missing templates, gate structure.",
         "input": {
           "steps_key": "draft_workflow.steps"
         },
         "output_key": "static_analysis_result",
-        "on_success": "step:30",
-        "on_failure": "step:28"
+        "on_success": "step:28",
+        "on_failure": "step:26"
       },
       {
-        "step": "28",
+        "step": "26",
         "type": "js_transform",
         "description": "Format Level 1 static analysis issues into a readable summary for display.",
         "input_key": "static_analysis_result",
         "output_key": "simulation_error_summary",
         "expression": "(function(){var sa = items && items.static_analysis;var issues = (sa && Array.isArray(sa.issues)) ? sa.issues : [];if(issues.length === 0) return \"Validation failed - no specific issues reported.\";var lines = issues.slice(0, 6).map(function(i){return \"- Step \" + (i.step || \"?\") + \": \" + (i.detail || i.check || \"validation issue\");});if(issues.length > 6) lines.push(\"...and \" + (issues.length - 6) + \" more issues\");return lines.join(\"\\n\");})()",
-        "on_success": "step:29",
+        "on_success": "step:27",
         "on_failure": "cancel"
       },
       {
-        "step": "29",
+        "step": "27",
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Notify user that Level 1 simulation failed and offer to regenerate or cancel.",
@@ -866,6 +841,31 @@
           }
         ],
         "on_success": "step:23",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "28",
+        "type": "llm_call",
+        "description": "Generate representative mock outputs for each step.",
+        "input": {
+          "prompt": "generate_workflow_mocks",
+          "steps": "{{draft_workflow.steps}}"
+        },
+        "output_key": "mock_outputs",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "29",
+        "type": "llm_call",
+        "description": "Generate named simulation paths (happy path, cancel path, failure path).",
+        "input": {
+          "prompt": "generate_workflow_paths",
+          "steps": "{{draft_workflow.steps}}",
+          "mock_outputs": "{{mock_outputs}}"
+        },
+        "output_key": "simulation_paths",
+        "on_success": "next",
         "on_failure": "cancel"
       },
       {
