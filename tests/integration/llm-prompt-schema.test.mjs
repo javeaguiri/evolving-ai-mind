@@ -75,7 +75,7 @@ if (shouldRun && !envVarsOk) {
 async function fetchPromptRows() {
   const resp = await fetch(`${process.env.SERV_API_URL}/api/v1/serv/table/getRows`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
     body:    JSON.stringify({
       tableName: 'PGC_Prompt',
       orderBy:   { column: 'version', direction: 'desc' },
