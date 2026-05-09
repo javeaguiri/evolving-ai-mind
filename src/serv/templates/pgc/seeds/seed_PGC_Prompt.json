@@ -1750,7 +1750,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 12,
+    "version": 14,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1767,7 +1767,7 @@
       {
         "name": "dialog_designs",
         "required": true,
-        "description": "Dialog specs from design_workflow_dialogs"
+        "description": "Dialog specs from design_workflow_dialogs — reference only in correction mode"
       },
       {
         "name": "domain_schema",
@@ -1782,22 +1782,37 @@
       {
         "name": "user_feedback",
         "required": false,
-        "description": "Free-text user instructions for this generation attempt — add, remove, or modify steps. Empty on first run."
+        "description": "Free-text user instructions for this generation attempt. Empty on first run."
       },
       {
         "name": "previous_draft_steps",
         "required": false,
-        "description": "The step array from the last generation attempt — non-empty when simulation_errors or path_errors is non-empty. Used in correction mode: fix only flagged steps."
+        "description": "The step array from the last generation attempt. Authoritative source for all step content in correction mode."
+      },
+      {
+        "name": "fix_history",
+        "required": false,
+        "description": "Per-step correction state built by the system (js_transform steps). Read-only — do not output."
+      },
+      {
+        "name": "simulation_error_summary",
+        "required": false,
+        "description": "Human-readable Level 1 static analysis error summary (from step 26). Empty when L1 passed."
+      },
+      {
+        "name": "path_error_summary",
+        "required": false,
+        "description": "Human-readable Level 2 path simulation error summary (from step 31). Empty when L2 passed."
       },
       {
         "name": "static_analysis",
         "required": false,
-        "description": "Level 1 static analysis result object (JSON) from the previous simulate attempt. Correction mode active when passed === false and issues[] is non-empty. Empty on first run."
+        "description": "Level 1 static analysis result object (full JSON). Correction mode active when passed === false. Empty on first run."
       },
       {
         "name": "path_simulation",
         "required": false,
-        "description": "Level 2 path simulation result object (JSON) from the previous simulate attempt. Correction mode active when paths_failed > 0. Empty on first run."
+        "description": "Level 2 path simulation result object (full JSON). Correction mode active when paths_failed > 0. Empty on first run."
       }
     ],
     "output_schema": {
@@ -1851,7 +1866,7 @@
               "description": {
                 "type": "string",
                 "minLength": 5,
-                "description": "One sentence describing what this step does and why — shown to the user at review time"
+                "description": "One sentence describing what this step does — shown to the user at review time"
               }
             },
             "patternProperties": {
@@ -1879,7 +1894,7 @@
       },
       "additionalProperties": false
     },
-    "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nUser feedback for this generation attempt (apply these instructions if non-empty — add, remove, or modify specific steps exactly as described):\n{{user_feedback}}\n\nLevel 1 static analysis result from the previous attempt (JSON — correction mode active when passed === false):\n{{static_analysis}}\n\nLevel 2 path simulation result from the previous attempt (JSON — correction mode active when paths_failed > 0):\n{{path_simulation}}\n\nPrevious draft steps — your last generation (present when static_analysis or path_simulation indicates errors):\n{{previous_draft_steps}}\n\nTRANSLATION RULES:\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key ('1', '2', '3', ...).\n2. For steps where step_type is 'human_gate': find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key. If no dialog_designs entry exists for a human_gate step, use a sensible default confirm gate.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n\nCORRECTION MODE — applies when static_analysis.passed === false, or path_simulation.paths_failed > 0:\n- Your previous draft steps are provided above as reference.\n- For static_analysis failures: fix ONLY the steps listed in static_analysis.issues[]. Copy all other steps unchanged.\n- For path_simulation failures: fix ONLY the routing/state issues in path_simulation.path_results[] where passed === false. Copy all other steps unchanged.\n- Do not redesign unflagged steps. Do not change their structure, routing, or content.\n\nFlat loop pattern — when a collection requires human interaction per item:\n- Loop state (index, accumulators) lives in local_state, written by js_transform\n- Backward reference is safe only when at least one human_gate exists in the loop path\n- Terminal condition: js_transform writes a done flag, condition step routes on it\n\nTRANSLATION RULE 5 — description is required on every step:\nCopy the description verbatim from the corresponding process_design item. For end steps use \"Workflow complete.\"\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", \"description\": \"<one sentence — copy from process_design.description>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\", \"description\": \"Workflow complete.\" }\n  ]\n}",
+    "prompt_text": "You are a workflow code generator for evolving-mind-ai. You translate a complete three-part design specification into a step array. You do NOT design — all design decisions are already made. You implement.\n\nProcess design (ordered step sequence with step types and data flow):\n{{process_design}}\n\nState map (every local_state key — type, written_by, read_by):\n{{state_map}}\n\nDialog designs (one entry per human_gate step, joined by step_label — reference only during first generation; in correction mode always copy templates from previous_draft_steps):\n{{dialog_designs}}\n\nDomain schema (tables and columns available):\n{{domain_schema}}\n\nWorked example showing correct step structure and data flow:\n{{example}}\n\nPrevious draft steps — your last generation (authoritative source for all step content in correction mode):\n{{previous_draft_steps}}\n\nfix_history — per-step correction state maintained by the system (read-only; do NOT output this field):\n{{fix_history}}\n\nLevel 1 static analysis error summary (human-readable; empty when L1 passed):\n{{simulation_error_summary}}\n\nLevel 2 path simulation error summary (human-readable; empty when L2 passed):\n{{path_error_summary}}\n\nLevel 1 static analysis result from the previous attempt (full JSON — correction mode active when passed === false):\n{{static_analysis}}\n\nLevel 2 path simulation result from the previous attempt (full JSON — correction mode active when paths_failed > 0):\n{{path_simulation}}\n\nUser feedback for this generation attempt (apply if non-empty):\n{{user_feedback}}\n\n=======================\nTRANSLATION RULES\n=======================\n1. Translate process_design items into steps in the order given. Each step_label becomes a step with a sequential numeric key (\"1\", \"2\", \"3\", ...).\n2. For steps where step_type is \"human_gate\": find the matching dialog_designs entry by step_label and use it to populate gate_type, message_template, options, output_key, and context_key.\n3. Use state_map to verify all {{template}} references resolve to keys written by prior steps. Never reference a key not in state_map (except input.*).\n4. js_transform expressions must be synchronous IIFEs. Use local_state.key for any prior output. No async, no fetch, no require.\n5. description is required on every step. Copy verbatim from the corresponding process_design item. For end steps use \"Workflow complete.\"\n\nTEMPLATE SYNTAX RULE — critical, non-negotiable:\n- ONLY dot-notation is supported: {{key}}, {{key.path}}, {{key.0.prop}}, {{key.N.prop}}\n- {{#each}}, {{#if}}, {{#unless}}, helpers, and any Handlebars block syntax are NOT supported and will cause a Level 1 static analysis failure\n- Replace any {{#each array}}...{{this.prop}}...{{/each}} with indexed access: {{array.0.prop}}, {{array.1.prop}}, {{array.2.prop}}\n\n=======================\nFLAT LOOP PATTERN\n=======================\n{{flat_loop_example}}\n\n=======================\nCORRECTION MODE\n=======================\nApplies when previous_draft_steps is non-empty. previous_draft_steps is the AUTHORITATIVE SOURCE for all step content. dialog_designs is reference-only in correction mode — never copy message_template or option content from it.\n\nFIX HISTORY (read-only — maintained by the system, do NOT include in your output):\nfix_history is provided as input context showing the correction state of each step. Use it to identify locked steps.\n- step_N.level1_applied: true → this step passed Level 1 static analysis. Its non-routing content is LOCKED. Do NOT modify: message_template, expression, query, mutation, values, options[].label, options[].description.\n- step_N.level2_applied: true → this step passed Level 2 path simulation. Its routing is verified correct.\n- step_N.level1_applied: false with level1_issue → this step has a known L1 issue. Fix it in Phase 1.\n- step_N.level2_applied: false with level2_issue → this step has a known L2 routing issue. Fix it in Phase 2.\n\nPHASE 1 — Static Analysis Fixes\nTriggers when static_analysis.passed === false.\n\n1. Read each entry in static_analysis.issues[].\n2. For each affected step: load it from previous_draft_steps, apply ONLY the specific fix described.\n3. Copy ALL other steps from previous_draft_steps exactly unchanged.\n4. Steps with level1_applied: true in fix_history are permanently locked — their non-routing content must not change even when copying.\n\nPHASE 2 — Path Simulation Fixes\nTriggers when path_simulation.paths_failed > 0.\nAlways starts from the Phase 1 result (or previous_draft_steps when Phase 1 did not trigger).\n\n1. For each failed path in path_simulation.path_results[] where passed === false: identify the routing field(s) causing the failure.\n2. Fix ONLY these routing fields: on_success, on_failure, on_truthy, on_falsy, on_cancel, on_error, on_empty, on_complete, on_select (inside options[]).\n3. Do NOT modify: message_template, expression, query, mutation, values, options[].label, options[].description, output_key, input, or any other non-routing field.\n4. Steps with level1_applied: true in fix_history MUST be copied verbatim — only their routing fields may be adjusted in Phase 2.\n\nBoth phases may apply in the same pass. Apply Phase 1 first, then Phase 2 on the Phase 1 result.\n\n=======================\nOUTPUT FORMAT\n=======================\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks. Do NOT include fix_history in your output.\n\n{\n  \"name\": \"<snake_case_workflow_name>\",\n  \"description\": \"<one sentence>\",\n  \"intent_keywords\": [\"<phrase 1>\", \"<phrase 2>\"],\n  \"steps\": [\n    { \"step\": \"1\", \"type\": \"<step_type>\", \"description\": \"<one sentence — copy from process_design.description>\", ... },\n    ...\n    { \"step\": \"N\", \"type\": \"end\", \"description\": \"Workflow complete.\" }\n  ]\n}",
     "probe_input": null,
     "max_output_tokens": null
   }
