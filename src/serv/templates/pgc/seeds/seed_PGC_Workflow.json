@@ -740,51 +740,26 @@
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
           "user_feedback": "{{user_workflow_feedback}}",
-          "simulation_errors": "{{simulation_error_summary}}",
+          "static_analysis": "{{static_analysis_result}}",
           "previous_draft_steps": "{{draft_workflow.steps}}",
-          "path_errors": "{{path_error_summary}}"
+          "path_simulation": "{{simulation_result}}"
         },
         "output_key": "draft_workflow",
-        "on_success": "next",
+        "on_success": "step:24",
         "on_failure": "cancel"
       },
       {
         "step": "24",
-        "type": "llm_call",
-        "description": "Generate representative mock outputs for each step.",
-        "input": {
-          "prompt": "generate_workflow_mocks",
-          "steps": "{{draft_workflow.steps}}"
-        },
-        "output_key": "mock_outputs",
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "25",
-        "type": "llm_call",
-        "description": "Generate named simulation paths (happy path, cancel path, failure path).",
-        "input": {
-          "prompt": "generate_workflow_paths",
-          "steps": "{{draft_workflow.steps}}",
-          "mock_outputs": "{{mock_outputs}}"
-        },
-        "output_key": "simulation_paths",
-        "on_success": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "26",
         "type": "human_gate",
         "gate_type": "review_object",
-        "description": "User reviews the proposed step array before simulation.",
+        "description": "User reviews the proposed step array before mocks and simulation are generated.",
         "message_template": "Review the proposed steps for {{draft_workflow.name}}.",
         "context_key": "draft_workflow.steps",
         "options": [
           {
             "label": "Looks good",
             "action": "confirm",
-            "on_select": "step:27"
+            "on_select": "step:25"
           },
           {
             "label": "Regenerate with feedback",
@@ -809,10 +784,35 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "step:27",
+        "on_success": "step:25",
         "on_failure": "cancel",
         "item_label_template": "Step {{step}} ({{type}}): {{description}}",
         "item_secondary_key": "on_success"
+      },
+      {
+        "step": "25",
+        "type": "llm_call",
+        "description": "Generate representative mock outputs for each step.",
+        "input": {
+          "prompt": "generate_workflow_mocks",
+          "steps": "{{draft_workflow.steps}}"
+        },
+        "output_key": "mock_outputs",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "26",
+        "type": "llm_call",
+        "description": "Generate named simulation paths (happy path, cancel path, failure path).",
+        "input": {
+          "prompt": "generate_workflow_paths",
+          "steps": "{{draft_workflow.steps}}",
+          "mock_outputs": "{{mock_outputs}}"
+        },
+        "output_key": "simulation_paths",
+        "on_success": "next",
+        "on_failure": "cancel"
       },
       {
         "step": "27",
@@ -893,6 +893,16 @@
       },
       {
         "step": "32",
+        "type": "js_transform",
+        "description": "Clear stale Level 1 analysis result before the Level 2 error gate so the step generator does not receive stale L1 context.",
+        "input_key": "simulation_result",
+        "output_key": "static_analysis_result",
+        "expression": "(function(){ return ''; })()",
+        "on_success": "step:33",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "33",
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Notify user that Level 2 path simulation failed and offer to regenerate or cancel.",
@@ -913,7 +923,7 @@
           {
             "label": "Regenerate automatically",
             "action": "regenerate",
-            "on_select": "step:33"
+            "on_select": "step:23"
           },
           {
             "label": "Cancel",
@@ -921,16 +931,6 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "step:23",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "33",
-        "type": "js_transform",
-        "description": "Clear stale Level 1 error summary before Level 2 automatic regeneration.",
-        "input_key": "simulation_result",
-        "output_key": "simulation_error_summary",
-        "expression": "(function(){ return ''; })()",
         "on_success": "step:23",
         "on_failure": "cancel"
       },

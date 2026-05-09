@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Edit",
-      "Write"
+      "Write",
+      "Bash(set -a && source .env.test*)",
+      "Bash(node dev_scripts/upsert-workflow.mjs*)",
+      "Bash(node dev_scripts/upsert-prompt.mjs*)",
+      "Bash(node dev_scripts/upsert-step-type.mjs*)",
+      "Bash(node dev_scripts/upsert-system-context.mjs*)",
+      "Bash(node dev_scripts/pull-prompt.mjs*)",
+      "Bash(node dev_scripts/backfill-embeddings.mjs*)"
     ]
   }
 }
