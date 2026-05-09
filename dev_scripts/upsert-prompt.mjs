@@ -149,8 +149,6 @@ for (const prompt of targets) {
         output_schema: prompt.output_schema ?? null,
         output_sample: prompt.output_sample ?? null,
         was_successful: prompt.was_successful ?? null,
-        probe_input: prompt.probe_input ?? null,
-        max_output_tokens: prompt.max_output_tokens ?? null,
       },
     });
     if (!result.success) { console.error('ERROR: insertRow failed', result); process.exit(1); }
