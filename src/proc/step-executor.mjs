@@ -399,19 +399,22 @@ export function runSandboxedExpression(expression, items, localState, traceId) {
   }
   assertSafeAst(ast);
 
-  // Execute in isolated context — 200ms timeout kills synchronous loops
-  // local_state gives expressions access to any workflow state key.
+  // Execute in isolated context. local_state and items are passed as JSON strings
+  // so the V8 contextification step is fast regardless of local_state size.
+  // JSON.parse inside the vm is a native built-in and adds only ~5–20ms overhead.
+  // 500ms timeout covers JSON.parse + expression; still catches real infinite loops.
   const sandbox = {
-    items,
-    local_state: localState,
+    __ls: JSON.stringify(localState),
+    __it: JSON.stringify(items ?? null),
     JSON, Math, Array, Object, String, Number, Boolean, Date,
   };
+  const wrapped = `var local_state=JSON.parse(__ls);var items=JSON.parse(__it);(${expression})`;
   let result;
   try {
-    result = vm.runInNewContext(expression, sandbox, { timeout: 200 });
+    result = vm.runInNewContext(wrapped, sandbox, { timeout: 500 });
   } catch (vmErr) {
     if (vmErr.message?.includes('Script execution timed out')) {
-      throw new Error('js_transform expression: execution timed out after 200ms — possible infinite loop');
+      throw new Error('js_transform expression: execution timed out after 500ms — possible infinite loop');
     }
     throw new Error(`js_transform expression: runtime error — ${vmErr.message}`);
   }
