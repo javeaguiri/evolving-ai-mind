@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, runSimulation } from '../../src/proc/step-executor.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -520,5 +520,90 @@ describe('add_entity step 5 — buildChildInserts expression', () => {
     assert.ok(result.every(r => r.row.recipe_id === 7));
     assert.equal(result.filter(r => r.tableName === 'PGD_Ingredients').length, 2);
     assert.equal(result.filter(r => r.tableName === 'PGD_Steps').length, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimulation — choice gate output_key propagation
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — choice gate writes output_key to local_state', () => {
+  // Minimal 3-step workflow: serv_query → human_gate(choice) → serv_insert
+  // The insert uses {{selected_id}} which comes from the choice gate.
+  const steps = [
+    {
+      step: '1', type: 'serv_query', table: 'PGD_Sets',
+      operation: 'query', on_failure: 'cancel', on_success: 'next',
+      output_key: 'active_sets',
+    },
+    {
+      step: '2', type: 'human_gate', gate_type: 'choice',
+      output_key: 'selected_id',
+      on_success: 'next', on_cancel: 'cancel', on_failure: 'cancel',
+      options: [
+        { label: 'A', value: '{{active_sets.0.id}}', action: 'next', description: '' },
+        { label: 'Cancel', value: 'cancel', action: 'cancel', description: '' },
+      ],
+    },
+    {
+      step: '3', type: 'serv_insert', table: 'PGD_Sessions',
+      operation: 'insert',
+      input: { set_id: '{{selected_id}}' },
+      on_failure: 'cancel', on_success: 'end',
+      output_key: 'session',
+    },
+    { step: 'end', type: 'end' },
+  ];
+
+  const mockOutputs = {
+    '1': [{ id: 42, name: 'Set A' }],
+    '3': { id: 99 },
+  };
+
+  it('happy path passes when choice gate user_response populates output_key', () => {
+    const result = runSimulation({
+      steps,
+      mockOutputs,
+      simulationPaths: [{
+        path_name: 'happy_path',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '1', outcome: 'success' },
+          { step: '2', outcome: 'gate', on_select: 'next', user_response: '42' },
+          { step: '3', outcome: 'success' },
+        ],
+      }],
+      runInput: {},
+    });
+
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, `path must pass; got: ${path.failure_reason}`);
+    assert.equal(path.terminal, 'end');
+
+    const step2 = path.local_state_transitions.find(t => t.step === '2');
+    assert.ok(step2.keys_added.includes('selected_id'), 'step 2 must add selected_id to keys_added');
+
+    const step3 = path.local_state_transitions.find(t => t.step === '3');
+    assert.equal(step3.template_vars_missing.length, 0, 'step 3 must see selected_id resolved');
+  });
+
+  it('cancel path passes and does not fail on missing output_key', () => {
+    const result = runSimulation({
+      steps,
+      mockOutputs,
+      simulationPaths: [{
+        path_name: 'cancel_path',
+        expected_terminal: 'cancelled',
+        decisions: [
+          { step: '1', outcome: 'success' },
+          { step: '2', outcome: 'gate', on_select: 'cancel', user_response: 'cancel' },
+        ],
+      }],
+      runInput: {},
+    });
+
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, `cancel path must pass; got: ${path.failure_reason}`);
+    assert.equal(path.terminal, 'cancelled');
   });
 });

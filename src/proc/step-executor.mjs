@@ -1520,6 +1520,13 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
         transition.keys_added.push(decision.output_key);
       }
 
+      // For choice gates, write user_response to the step's output_key — mirrors
+      // what resume_gate does in production when the user selects an option.
+      if (currentStep.gate_type === 'choice' && currentStep.output_key && decision.user_response !== undefined) {
+        localState[currentStep.output_key] = decision.user_response;
+        transition.keys_added.push(currentStep.output_key);
+      }
+
       // Resolve next step from on_select
       const onSelect = decision.on_select;
       nextKey = resolveSimNextKey(steps, currentKey, onSelect);
