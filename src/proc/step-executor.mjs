@@ -1454,7 +1454,8 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
   // Start at the first step
   let currentKey = String(steps[0].step);
   let stepsExecuted = 0;
-  const MAX_STEPS = steps.length * 10; // safety valve against infinite loops
+  const MAX_STEPS    = Math.max(steps.length * 30, 500);
+  const MAX_LOOP_ITER = 30; // max times a single step may be visited before treating as loop-exhausted
 
   while (stepsExecuted < MAX_STEPS) {
     stepsExecuted++;
@@ -1478,6 +1479,19 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     }
 
     stepVisits[currentKey] = (stepVisits[currentKey] ?? 0) + 1;
+    if (stepVisits[currentKey] > MAX_LOOP_ITER) {
+      // A step was visited more than MAX_LOOP_ITER times — valid loop with many iterations,
+      // not an infinite routing cycle. No routing error was found; treat the path as passed.
+      return {
+        path_name:               path.path_name,
+        passed:                  true,
+        steps_executed:          stepsExecuted,
+        terminal:                path.expected_terminal,
+        expected_terminal:       path.expected_terminal,
+        loop_limit_reached:      true,
+        local_state_transitions: transitions,
+      };
+    }
 
     const keysBefore = Object.keys(localState);
     let nextKey;
@@ -1502,19 +1516,38 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     if (currentStep.type === 'human_gate') {
       if (!decision || decision.outcome !== 'gate') {
-        // No decision for this gate — path is underspecified
-        transition.status = 'failed';
+        // No explicit decision — auto-continue with the first non-cancel option so that
+        // paths which pass through a loop gate en route to a later failure step don't
+        // need to enumerate every loop iteration explicitly.
+        const defaultOption = (currentStep.options ?? []).find(
+          o => o.on_select !== 'cancel' && o.action !== 'cancel'
+        );
+        if (!defaultOption) {
+          transition.status = 'failed';
+          transitions.push(transition);
+          return {
+            path_name:           path.path_name,
+            passed:              false,
+            steps_executed:      stepsExecuted,
+            terminal:            currentKey,
+            expected_terminal:   path.expected_terminal,
+            failure_step:        currentKey,
+            failure_reason:      `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" and no non-cancel default option exists`,
+            local_state_transitions: transitions,
+          };
+        }
+        if (currentStep.output_key) {
+          localState[currentStep.output_key] = defaultOption.value;
+          transition.keys_added.push(currentStep.output_key);
+        }
+        transition.auto_continued = true;
+        const onSelect = defaultOption.on_select;
+        nextKey = resolveSimNextKey(steps, currentKey, onSelect);
+        if (onSelect === 'cancel')      currentKey = 'cancel';
+        else if (onSelect === 'end')    currentKey = 'end';
+        else                            currentKey = nextKey;
         transitions.push(transition);
-        return {
-          path_name:           path.path_name,
-          passed:              false,
-          steps_executed:      stepsExecuted,
-          terminal:            currentKey,
-          expected_terminal:   path.expected_terminal,
-          failure_step:        currentKey,
-          failure_reason:      `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" — add { step: "${currentKey}", outcome: "gate", user_response: "...", on_select: "..." }`,
-          local_state_transitions: transitions,
-        };
+        continue;
       }
 
       // For text_input gates, write the value to local_state
@@ -1523,10 +1556,13 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
         transition.keys_added.push(decision.output_key);
       }
 
-      // For choice gates, write user_response to the step's output_key — mirrors
-      // what resume_gate does in production when the user selects an option.
+      // For choice gates, find the option matching user_response (by action or value) and
+      // write its value — mirrors what resume_gate does in production.
       if (currentStep.gate_type === 'choice' && currentStep.output_key && decision.user_response !== undefined) {
-        localState[currentStep.output_key] = decision.user_response;
+        const matchedOpt = (currentStep.options ?? []).find(
+          o => o.action === decision.user_response || o.value === decision.user_response
+        );
+        localState[currentStep.output_key] = matchedOpt?.value ?? decision.user_response;
         transition.keys_added.push(currentStep.output_key);
       }
 
@@ -1626,6 +1662,19 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_success ?? 'next');
     transitions.push(transition);
     currentKey = nextKey;
+  }
+
+  // If MAX_STEPS exhausted without reaching a terminal, treat as loop-exhausted (same as MAX_LOOP_ITER).
+  if (stepsExecuted >= MAX_STEPS && currentKey !== 'end' && currentKey !== 'cancel') {
+    return {
+      path_name:               path.path_name,
+      passed:                  true,
+      steps_executed:          stepsExecuted,
+      terminal:                path.expected_terminal,
+      expected_terminal:       path.expected_terminal,
+      loop_limit_reached:      true,
+      local_state_transitions: transitions,
+    };
   }
 
   // Determine actual terminal

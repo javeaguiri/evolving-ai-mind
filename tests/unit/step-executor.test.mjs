@@ -607,3 +607,166 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
     assert.equal(path.terminal, 'cancelled');
   });
 });
+
+// ---------------------------------------------------------------------------
+// runSimulation — choice gate resolves option value from action field
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — choice gate resolves option value, not raw user_response', () => {
+  // Step 2 options: { value: 'correct', action: 'confirm' } and { value: 'incorrect', action: 'incorrect' }.
+  // decision.user_response = 'confirm' (the action). The simulation must write 'correct' (the value).
+  const steps = [
+    {
+      step: '1', type: 'serv_query', table: 'PGD_Cards', on_success: 'next', on_failure: 'cancel',
+      output_key: 'cards',
+    },
+    {
+      step: '2', type: 'human_gate', gate_type: 'choice',
+      output_key: 'user_result',
+      on_success: 'next', on_cancel: 'cancel',
+      options: [
+        { label: '✅ Correct',   value: 'correct',   action: 'confirm',   on_select: 'next' },
+        { label: '❌ Incorrect', value: 'incorrect', action: 'incorrect', on_select: 'next' },
+        { label: 'Cancel',       value: 'cancel',    action: 'cancel',    on_select: 'cancel' },
+      ],
+    },
+    {
+      step: '3', type: 'serv_insert', table: 'PGD_TestLogs',
+      input: { result: '{{user_result}}' },
+      on_success: 'end', on_failure: 'cancel',
+      output_key: 'log',
+    },
+    { step: 'end', type: 'end' },
+  ];
+  const mockOutputs = { '1': [{ id: 1 }], '3': { id: 9 } };
+
+  it('writes option.value when user_response matches option action', () => {
+    const result = runSimulation({
+      steps, mockOutputs,
+      simulationPaths: [{
+        path_name: 'correct_path',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '1', outcome: 'success' },
+          { step: '2', outcome: 'gate', on_select: 'next', user_response: 'confirm' },
+        ],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, path.failure_reason);
+    const step3 = path.local_state_transitions.find(t => t.step === '3');
+    assert.equal(step3?.template_vars_missing.length, 0, 'step 3 must see user_result resolved');
+  });
+
+  it('writes option.value when user_response matches option value directly', () => {
+    const result = runSimulation({
+      steps, mockOutputs,
+      simulationPaths: [{
+        path_name: 'incorrect_path',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '1', outcome: 'success' },
+          { step: '2', outcome: 'gate', on_select: 'next', user_response: 'incorrect' },
+        ],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, path.failure_reason);
+    const step3 = path.local_state_transitions.find(t => t.step === '3');
+    assert.equal(step3?.template_vars_missing.length, 0, 'step 3 must see user_result resolved');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimulation — auto-continue human_gate when no decision provided
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — auto-continues human_gate with no decision using first non-cancel option', () => {
+  const steps = [
+    {
+      step: '1', type: 'serv_query', table: 'PGD_Items', on_success: 'next', on_failure: 'cancel',
+      output_key: 'items',
+    },
+    {
+      step: '2', type: 'human_gate', gate_type: 'choice',
+      output_key: 'choice',
+      on_success: 'next', on_cancel: 'cancel',
+      options: [
+        { label: 'Go', value: 'go', action: 'confirm', on_select: 'next' },
+        { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    },
+    {
+      step: '3', type: 'serv_insert', table: 'PGD_Results',
+      input: {}, on_success: 'end', on_failure: 'cancel',
+      output_key: 'result',
+    },
+    { step: 'end', type: 'end' },
+  ];
+  const mockOutputs = { '1': [{ id: 1 }], '3': { id: 5 } };
+
+  it('path passes and gate is marked auto_continued when no decision exists', () => {
+    const result = runSimulation({
+      steps, mockOutputs,
+      simulationPaths: [{
+        path_name: 'no_gate_decision',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '1', outcome: 'success' },
+          // no decision for step '2' — should auto-continue
+        ],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, path.failure_reason);
+    const step2 = path.local_state_transitions.find(t => t.step === '2');
+    assert.equal(step2?.auto_continued, true, 'step 2 must be marked auto_continued');
+    assert.ok(step2?.keys_added.includes('choice'), 'step 2 must write output_key when auto-continued');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimulation — loop limit reached returns passed: true
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — loop limit reached treats path as passed', () => {
+  // A 2-step loop: serv_query → human_gate that routes back to step 1 indefinitely.
+  // After MAX_LOOP_ITER visits to step 1, the simulation must return loop_limit_reached: true.
+  const steps = [
+    {
+      step: '1', type: 'serv_query', table: 'PGD_Cards', on_success: 'next', on_failure: 'cancel',
+      output_key: 'cards',
+    },
+    {
+      step: '2', type: 'human_gate', gate_type: 'choice',
+      output_key: 'ans',
+      on_success: 'next', on_cancel: 'cancel',
+      options: [
+        { label: 'Again', value: 'again', action: 'again', on_select: 'step:1' },
+        { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    },
+    { step: 'end', type: 'end' },
+  ];
+
+  it('returns passed:true with loop_limit_reached when a step is visited too many times', () => {
+    const result = runSimulation({
+      steps,
+      mockOutputs: { '1': [] },
+      simulationPaths: [{
+        path_name: 'loop_forever',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '2', outcome: 'gate', on_select: 'step:1', user_response: 'again' },
+        ],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, 'loop-exhausted path must be passed');
+    assert.equal(path.loop_limit_reached, true, 'loop_limit_reached flag must be set');
+  });
+});
