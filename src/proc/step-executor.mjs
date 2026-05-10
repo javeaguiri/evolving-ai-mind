@@ -1396,7 +1396,7 @@ function runLevel1StaticAnalysis(steps) {
 
     // Collect writes — step-level output_key
     const stepWrites = new Set();
-    if (s.output_key) {
+    if (s.output_key && typeof s.output_key === 'string') {
       const baseOut = s.output_key.split('.')[0];
       outputKeysSoFar.add(baseOut);
       stepWrites.add(baseOut);
@@ -1404,7 +1404,7 @@ function runLevel1StaticAnalysis(steps) {
     }
     // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
-      if (opt.output_key) {
+      if (opt.output_key && typeof opt.output_key === 'string') {
         const baseOut = opt.output_key.split('.')[0];
         outputKeysSoFar.add(baseOut);
         stepWrites.add(baseOut);
@@ -1588,7 +1588,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     if (currentStep.type === 'iterator') {
       // Treat iterator as a single step — output_key is written with an empty array
       // (mocks for iterator items are not required; the data-flow check is approximate)
-      if (currentStep.output_key) {
+      if (currentStep.output_key && typeof currentStep.output_key === 'string') {
         const baseOut = currentStep.output_key.split('.')[0];
         localState[baseOut] = [];
         transition.keys_added.push(baseOut);
@@ -1651,7 +1651,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     }
 
     // Write mock output to local_state
-    if (currentStep.output_key && mockOutput !== null) {
+    if (currentStep.output_key && typeof currentStep.output_key === 'string' && mockOutput !== null) {
       const baseOut = currentStep.output_key.split('.')[0];
       if (!localState[baseOut]) {
         localState[baseOut] = mockOutput;
