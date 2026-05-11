@@ -15,7 +15,7 @@
 //
 // Each /chat command starts a fresh session. Conversation continuation is via
 // the "Ask follow-up" button on the response, which routes to explain.mjs and
-// uses the session id (integer) to reload the full PGC_SessionEntry history.
+// uses the session query_id (UUID) to reload the full PGC_SessionEntry history.
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -92,7 +92,7 @@ export async function handle(req) {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: responseText,
-      queryId: sessionId,
+      queryId: sessionResp.row.query_id,
     });
   }
 
