@@ -15,7 +15,7 @@
 //
 // Each /chat command starts a fresh session. Conversation continuation is via
 // the "Ask follow-up" button on the response, which routes to explain.mjs and
-// uses the session queryId to reload the full PGC_SessionEntry history.
+// uses the session id (integer) to reload the full PGC_SessionEntry history.
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -55,7 +55,6 @@ export async function handle(req) {
   });
   if (!sessionResp.success) throw new Error(`PGC_Session insert failed: ${sessionResp.error}`);
   const sessionId = sessionResp.row.id;
-  const queryId   = sessionResp.row.query_id;
 
   console.info('proc/chat: session created', { sessionId, traceId });
 
@@ -87,17 +86,17 @@ export async function handle(req) {
 
   console.info('proc/chat: response ready', { sessionId, traceId });
 
-  // Enqueue Slack response — queryId drives the "Ask follow-up" button in callback.mjs
+  // Enqueue Slack response — sessionId drives the "Ask follow-up" button in callback.mjs
   if (callback) {
     await enqueueCallback(callback, {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: responseText,
-      queryId,
+      queryId: sessionId,
     });
   }
 
   if (req.source === 'http') {
-    return ok({ success: true, sessionId, queryId, response: responseText }, req.correlationId);
+    return ok({ success: true, sessionId, response: responseText }, req.correlationId);
   }
 }

@@ -359,7 +359,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
   // Persist output_key → local_state.
   // Comma-separated output_key (e.g. "a,b,c") destructures an object return value into
   // multiple top-level local_state keys simultaneously.
-  if (step.output_key && result.outputValue !== null && result.outputValue !== undefined) {
+  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== null && result.outputValue !== undefined) {
     const outKeys = step.output_key.split(',').map(k => k.trim());
     if (outKeys.length > 1 && typeof result.outputValue === 'object' && result.outputValue !== null) {
       for (const key of outKeys) {
