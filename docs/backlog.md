@@ -10,8 +10,8 @@ Mirrors the in-session TaskCreate list. Recreate at the start of each new sessio
 
 | # | Status | Task | Notes |
 |---|--------|------|-------|
-| 1 | ✅ done | Change queryId to use PGC_Session.id integer | `proc/chat.mjs`, `proc/explain.mjs`, `slackbot/explain.mjs` — commit `1e687d8` |
-| 2 | ✅ done | Disable Ask Follow-up button in /explain replies | Remove queryId from explain reply callback — commit `1e687d8` |
+| 1 | ↩️ reverted | Change queryId to use PGC_Session.id integer | Reverted by commit `fd69d46` — diagnostic notifications show UUID query_id so integer regex broke all /explain commands; UUID_RE restored across all three files |
+| 2 | ✅ done | Disable Ask Follow-up button in /explain replies | Remove queryId from explain reply callback — commit `1e687d8`; chat now sends UUID query_id so button still works |
 | 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `1e687d8` |
 | 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | seed_PGC_SystemContext.json + pushed to DB — commit `1e687d8` |
 | 5 | pending | Retest `/m create workflow Spanish flashcard quiz` | Cancel run 317 first; create_workflow v22 deployed |
