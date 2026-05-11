@@ -33,6 +33,7 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 | Item | Notes |
 |---|---|
+| JSON encoding consistency — DB-stored vs seed-file content | Seed files use `\uXXXX` escapes (project standard per `docs/data-architecture.md` §encoding). LLM-generated workflow content stored in `PGC_Workflow.steps` uses UTF-8 with literal Unicode (emojis, special chars). Risk: false-positive diffs when comparing live DB rows against seed files; potential double-encode / decode bugs in `fix_workflow`, `troubleshoot_workflow`, and any tool that round-trips steps JSON through `JSON.stringify`. Audit `dev_scripts/pull-*.mjs`, `upsert-*.mjs`, and SERV insert/read path for consistent normalization. |
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | Required before production. Right-brain can monitor `PGC_WorkflowStats` for anomalous run patterns and flag suspect workflows proactively |
 | Duplicate domain detection — LLM runs every time | `/create-domain recipes` re-runs the LLM even if the domain already exists. Fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` |
 | Tier 1 post-write validation — dead routing targets | After any `PGC_Workflow` write (fix_workflow step 8, create_workflow step 19), run Level 1 simulation on the written step array and fail immediately if dead routing targets are found |
