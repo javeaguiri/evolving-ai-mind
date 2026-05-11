@@ -14,9 +14,9 @@ Mirrors the in-session TaskCreate list. Recreate at the start of each new sessio
 | 2 | ✅ done | Disable Ask Follow-up button in /explain replies | Remove queryId from explain reply callback — commit `1e687d8`; chat now sends UUID query_id so button still works |
 | 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `1e687d8` |
 | 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | seed_PGC_SystemContext.json + pushed to DB — commit `1e687d8` |
-| 5 | pending | Retest `/m create workflow Spanish flashcard quiz` | Cancel run 317 first; create_workflow v22 deployed |
-| 6 | pending | Fix nested dynamic template in flashcard human_gate (step 9) | `{{loop_state.subset.{{loop_state.index}}.term}}` — add `current_card` extraction step before human_gate |
-| 7 | pending | Fix conditional increment in serv_update (flashcard step 11) | JS ternary in template `{{test_result === 'correct' ? '++' : 'current'}}` — pre-compute delta values in js_transform |
+| 5 | ✅ done | Retest `/m create workflow Spanish flashcard quiz` | Run 321 succeeded — `spanish_flashcard_quiz` registered. `review-output` false-positive cancel check fixed (commit `beb99c7`) |
+| 6 | pending | Fix nested dynamic template in quiz step 7 | `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` — runtime blocker; L1 did not catch it. Add `current_card` js_transform before step 7 and replace nested tokens with `{{current_card.term}}` / `{{current_card.card_type}}` |
+| 7 | ✅ done | Fix conditional increment in serv_update | Resolved in run 321 — LLM pre-computed delta values in step 8 js_transform (`card_updates`) and used flat references in step 9 |
 | 8 | pending | Run PGC_SystemContext.content JSONB migration | Design complete (architecture.md §4.3.3); DDL not yet run |
 | 9 | pending | Validate analyze_and_design_workflow field name fix | Prompt id 25; response_format + v10 deployed session 23 — not yet validated |
 | 10 | pending | Add PGC_WorkflowRun.session_id FK column | Migration script needed — column did not exist at bootstrap |
@@ -57,6 +57,16 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | `add_<domain>` workflows already in DB from v2/v3 are thin stubs | Existing domains (e.g. recipes) have the old 2-step workflow. Delete and recreate domain to get the v4 LLM-parse-first workflow, or manually upsert via `upsert-workflow.mjs` |
 | `init-brain.mjs` shared DDL utilities | `buildCreateTableSQL` and `getClient` imported by `schema.mjs` from `init-brain.mjs`. Refactor: extract to `src/shared/serv-utils.mjs` |
 | `PGC_Schema` not updated when `ALTER TABLE` adds a column | Every `ALTER TABLE` on a PGC table must be paired with an `UPDATE PGC_Schema SET columns = columns \|\| '[{"name":...}]'` |
+
+### spanish_flashcards Domain — Usability Enhancements (deferred from run 321)
+
+| Item | Notes |
+|---|---|
+| Timer-based response tracking | Capture `response_time_seconds` per test; add visual countdown to `human_gate` card presentation. How: js_transform before `TestLog` insert captures elapsed time via `Date.now()` delta stored in quiz_state. Adds time-pressure recall simulation. |
+| Spaced repetition scheduling | Add `next_review_date` column to `PGD_Flashcards`. Implement scheduled workflow that calculates review intervals from forgetting curves and posts review notifications. |
+| Session comparison analytics | New workflow that queries `PGD_StudySessions` with date-range filters and aggregates pass rates and average response times across sessions into a visual summary report. |
+
+---
 
 ### Low Priority
 
