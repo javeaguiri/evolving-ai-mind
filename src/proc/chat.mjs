@@ -7,14 +7,15 @@
 //
 // Flow:
 //   1. Read general_chat_system_prompt from PGC_SystemContext
-//   2. INSERT PGC_Session (general_chat, slack_thread_ts from callback.threadId)
+//   2. INSERT PGC_Session (general_chat, slack_thread_ts from callback)
 //   3. INSERT PGC_SessionEntry seq=1 (system), seq=2 (user)
 //   4. Call LLM (lightweight model)
 //   5. INSERT PGC_SessionEntry seq=3 (assistant)
-//   6. Enqueue HUMAN_NOTIFICATION with response
+//   6. Enqueue HUMAN_NOTIFICATION with response + queryId
 //
-// Thread continuation: future Slack Events API integration will route thread
-// replies here by looking up PGC_Session.slack_thread_ts.
+// Each /chat command starts a fresh session. Conversation continuation is via
+// the "Ask follow-up" button on the response, which routes to explain.mjs and
+// uses the session queryId to reload the full PGC_SessionEntry history.
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -54,16 +55,22 @@ export async function handle(req) {
   });
   if (!sessionResp.success) throw new Error(`PGC_Session insert failed: ${sessionResp.error}`);
   const sessionId = sessionResp.row.id;
+  const queryId   = sessionResp.row.query_id;
 
   console.info('proc/chat: session created', { sessionId, traceId });
 
   // INSERT seq=1 (system), seq=2 (user)
-  await insertRow('PGC_SessionEntry', {
+  // Failures here are fatal — without these entries explain.mjs cannot reconstruct
+  // the conversation history when the user clicks "Ask follow-up".
+  const sysResp = await insertRow('PGC_SessionEntry', {
     session_id: sessionId, sequence_number: 1, role: 'system', content: systemPrompt,
   });
-  await insertRow('PGC_SessionEntry', {
+  if (!sysResp.success) throw new Error(`PGC_SessionEntry seq=1 insert failed: ${sysResp.error}`);
+
+  const userResp = await insertRow('PGC_SessionEntry', {
     session_id: sessionId, sequence_number: 2, role: 'user', content: prompt.trim(),
   });
+  if (!userResp.success) throw new Error(`PGC_SessionEntry seq=2 insert failed: ${userResp.error}`);
 
   // Call LLM
   const messages = [
@@ -73,23 +80,24 @@ export async function handle(req) {
   const responseText = await callLlmWithMessages(CHAT_MODEL, messages, traceId);
 
   // INSERT seq=3 (assistant)
-  await insertRow('PGC_SessionEntry', {
+  const asstResp = await insertRow('PGC_SessionEntry', {
     session_id: sessionId, sequence_number: 3, role: 'assistant', content: responseText,
   });
+  if (!asstResp.success) throw new Error(`PGC_SessionEntry seq=3 insert failed: ${asstResp.error}`);
 
   console.info('proc/chat: response ready', { sessionId, traceId });
 
-  // Enqueue Slack response
+  // Enqueue Slack response — queryId drives the "Ask follow-up" button in callback.mjs
   if (callback) {
     await enqueueCallback(callback, {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: responseText,
-      queryId: sessionResp.row.query_id,
+      queryId,
     });
   }
 
   if (req.source === 'http') {
-    return ok({ success: true, sessionId, queryId: sessionResp.row.query_id, response: responseText }, req.correlationId);
+    return ok({ success: true, sessionId, queryId, response: responseText }, req.correlationId);
   }
 }
