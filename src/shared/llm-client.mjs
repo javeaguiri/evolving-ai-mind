@@ -144,12 +144,26 @@ export async function callLlmWithMessages(model, messages, traceId) {
 
   const history = messages.filter((m, i) => m.role !== 'system' && i !== lastUserIdx);
 
+  // The Agent API messages field for conversation history is only honoured by
+  // sonar models. Non-sonar models (anthropic/*, openai/*) routed through the
+  // gateway silently ignore it — the model only receives `input`. For those
+  // models, prepend the history as a formatted transcript inside `input` so
+  // the conversation context is always visible regardless of model.
+  const isSonar = typeof model === 'string' && model.includes('sonar');
+  let effectiveInput = input;
+  if (!isSonar && history.length > 0) {
+    const transcript = history
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n\n');
+    effectiveInput = `Previous conversation:\n\n${transcript}\n\nCurrent question: ${input}`;
+  }
+
   const body = {
     model,
-    input,
+    input:       effectiveInput,
     temperature: 0.2,
-    ...(instructions             ? { instructions }          : {}),
-    ...(history.length > 0       ? { messages: history }     : {}),
+    ...(instructions                    ? { instructions }          : {}),
+    ...(isSonar && history.length > 0   ? { messages: history }     : {}),
   };
 
   const controller = new AbortController();
