@@ -347,17 +347,17 @@ function runRoutingValueRules(steps) {
     checkToken(key, 'on_complete', s.on_complete);
 
     for (const opt of s.options ?? []) {
-      checkToken(key, `options[${opt.action}].on_select`, opt.on_select);
+      checkToken(key, `options[${opt.label ?? opt.value}].on_select`, opt.on_select);
     }
 
-    // Ensure every human_gate has a cancel option
+    // Ensure every human_gate has a cancel option (on_select === 'cancel')
     if (s.type === 'human_gate') {
-      const hasCancel = (s.options ?? []).some(o => o.action === 'cancel');
+      const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
       if (!hasCancel) {
         errors.push({
           type:    'semantic',
           rule:    'missing_cancel_option',
-          message: `human_gate step "${key}" has no option with action "cancel" — ` +
+          message: `human_gate step "${key}" has no option with on_select "cancel" — ` +
                    `every gate must give the user a way to cancel`,
           step:    key,
         });
