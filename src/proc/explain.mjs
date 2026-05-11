@@ -6,7 +6,7 @@
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
 // Flow:
-//   1. Look up PGC_Session by query_id
+//   1. Look up PGC_Session by id (integer sessionId passed as queryId)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
 //   4. Append new user entry (seq 3+)
@@ -30,8 +30,9 @@ export async function handle(req) {
   const traceId  = req.traceId  ?? req.correlationId;
   const threadTs = callback?.threadId ?? null;
 
-  if (!queryId?.trim()) {
-    if (req.source === 'http') return err(400, 'queryId is required', req.correlationId);
+  const sessionIdInt = parseInt(queryId, 10);
+  if (!queryId?.trim() || isNaN(sessionIdInt)) {
+    if (req.source === 'http') return err(400, 'queryId is required and must be a numeric session id', req.correlationId);
     return;
   }
   if (!prompt?.trim()) {
@@ -41,12 +42,12 @@ export async function handle(req) {
 
   console.info('proc/explain: received', { traceId, queryId });
 
-  // Look up session by query_id
+  // Look up session by integer id
   const sessionResp = await getRows('PGC_Session', [
-    { column: 'query_id', op: 'eq', value: queryId.trim() },
+    { column: 'id', op: 'eq', value: sessionIdInt },
   ]);
   if (!sessionResp.success || sessionResp.count === 0) {
-    const msg = `No session found for query_id ${queryId}`;
+    const msg = `No session found for id ${sessionIdInt}`;
     if (req.source === 'http') return err(404, msg, req.correlationId);
     if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
@@ -115,7 +116,7 @@ export async function handle(req) {
   console.info('proc/explain: response ready', { sessionId: session.id, traceId });
 
   // Enqueue Slack response — thread to established session thread.
-  // Include queryId so callback.mjs renders the "Ask follow-up" button.
+  // No queryId: "Ask follow-up" button only appears on the initial /chat response.
   if (responseCallback) {
     let replyText = responseText;
     if (reasoning && nextSeq === 3) {
@@ -125,11 +126,10 @@ export async function handle(req) {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: replyText,
-      queryId,
     });
   }
 
   if (req.source === 'http') {
-    return ok({ success: true, sessionId: session.id, queryId, response: responseText }, req.correlationId);
+    return ok({ success: true, sessionId: session.id, response: responseText }, req.correlationId);
   }
 }
