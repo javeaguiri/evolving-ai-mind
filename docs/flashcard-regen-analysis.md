@@ -193,3 +193,79 @@ In `seed_PGC_StepType.json`, update `js_transform`:
 | `dev_scripts/seed_PGC_StepType.json` | Update js_transform input_key + output_key contracts |
 
 After deploying code changes: run `node dev_scripts/upsert-prompt.mjs generate_workflow_steps` and `node dev_scripts/upsert-step-type.mjs` to push artifact updates to the DB. Run 317 should be cancelled and the Spanish flashcard quiz workflow re-created from scratch.
+
+---
+
+## Implementation Status (2026-05-11)
+
+All four fixes implemented, deployed, and pushed in commit `a0a939d`. Artifacts pushed to DB via upsert scripts. Unit tests: 18 pre-existing failures remain; 10 tests that were previously failing now pass as a side-effect of the engine fix. Zero regressions.
+
+---
+
+## Workflow Readiness Assessment
+
+**Short answer: the core logic is correct and about 70% of the way to a working runtime workflow.** The engine fix resolves the blocker that was causing the regeneration loop. However, two further issues exist in the generated step array that will surface on the next attempt.
+
+### What works well
+
+The overall structure from session 195 (attempt 1) is well-designed:
+
+- Load sets → user picks set → load cards → create study session (steps 1–4)
+- js_transform initialises loop state with sorted/weakest-first subset (step 5)
+- Condition guards mastery exit (step 6) and end-of-subset (step 7)
+- js_transform resets/filters subset when index wraps (step 8)
+- human_gate presents the card to the user (step 9)
+- js_transform updates streak, counters, and records result (step 10) ← fixed by engine
+- serv_update and serv_insert persist results (steps 11–12)
+- Loop closes back to the mastery guard (step 6)
+- Study session completed, notify user (steps 13–14)
+
+The flat-loop pattern is applied correctly; the state_map is coherent; routing is logically sound.
+
+### Remaining issue A — Dynamic index in `message_template` (will cause L1 or runtime failure)
+
+Step 9's `message_template` contains:
+
+```
+{{loop_state.subset.{{loop_state.index}}.term}}
+```
+
+The template resolver does not support nested `{{}}` tokens — it resolves tokens linearly via regex. `{{loop_state.index}}` would be extracted as one token and `loop_state.subset.` left as a literal fragment. The card term and definition will never render correctly.
+
+**Fix required:** Add a `js_transform` step before step 9 that extracts the current card from the subset and writes it to a flat key:
+
+```json
+{
+  "step": "8b",
+  "type": "js_transform",
+  "description": "Extract current card from loop_state.subset at current index.",
+  "expression": "(function(){ return local_state.loop_state.subset[local_state.loop_state.index]; })()",
+  "output_key": "current_card",
+  "on_success": "next"
+}
+```
+
+Then step 9's `message_template` can use `{{current_card.term}}` and `{{current_card.definition}}` safely.
+
+### Remaining issue B — Conditional increment in `serv_update` input (will fail at runtime)
+
+Step 11's `serv_update` input uses JS ternary expressions as template values:
+
+```json
+"total_passed": "{{test_result === 'correct' ? '++' : 'current'}}"
+```
+
+Template resolution only substitutes `{{key}}` tokens — it does not evaluate expressions. This would set the column to the literal string `"correct === 'correct' ? '++' : 'current'"` or similar.
+
+**Fix required:** Compute the actual increment values in step 10's `js_transform` and write them as `total_passed_delta` and `total_failed_delta` (integers 0 or 1), then reference `{{total_passed_delta}}` in the `serv_update`. Or compute new absolute values and pass them directly.
+
+### Summary
+
+| Issue | Caught by | Action needed |
+|-------|-----------|---------------|
+| Comma-separated `output_key` (step 10) | L1 | **Fixed** — engine now supports multi-output |
+| Missing `input_key` on js_transform steps | Runtime | **Fixed** — `input_key` now optional |
+| Nested dynamic template `{{subset.{{index}}.prop}}` (step 9) | L1 or runtime | New `current_card` extraction step needed |
+| JS ternary in `serv_update` input (step 11) | Runtime | Pre-compute delta values in js_transform |
+
+On the next `/m create workflow Spanish flashcard quiz` the engine fixes will allow the multi-output step 10 to work and L1 will pass that check. The LLM will then need to solve the remaining two issues — issue A should surface in L1 as `unsupported_handlebars_syntax`, which the prompt handles correctly. Issue B may pass L1/L2 silently and only fail at runtime, so it may require an additional regeneration cycle or manual inspection.
