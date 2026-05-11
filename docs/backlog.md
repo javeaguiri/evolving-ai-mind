@@ -4,6 +4,27 @@ Active tech debt register, tangential feature designs, and build history. Items 
 
 ---
 
+## 0. Active Task List
+
+Mirrors the in-session TaskCreate list. Recreate at the start of each new session with TaskCreate so tasks are trackable. Last updated: 2026-05-11.
+
+| # | Status | Task | Notes |
+|---|--------|------|-------|
+| 1 | ✅ done | Change queryId to use PGC_Session.id integer | `proc/chat.mjs`, `proc/explain.mjs`, `slackbot/explain.mjs` — commit `1e687d8` |
+| 2 | ✅ done | Disable Ask Follow-up button in /explain replies | Remove queryId from explain reply callback — commit `1e687d8` |
+| 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `1e687d8` |
+| 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | seed_PGC_SystemContext.json + pushed to DB — commit `1e687d8` |
+| 5 | pending | Retest `/m create workflow Spanish flashcard quiz` | Cancel run 317 first; create_workflow v22 deployed |
+| 6 | pending | Fix nested dynamic template in flashcard human_gate (step 9) | `{{loop_state.subset.{{loop_state.index}}.term}}` — add `current_card` extraction step before human_gate |
+| 7 | pending | Fix conditional increment in serv_update (flashcard step 11) | JS ternary in template `{{test_result === 'correct' ? '++' : 'current'}}` — pre-compute delta values in js_transform |
+| 8 | pending | Run PGC_SystemContext.content JSONB migration | Design complete (architecture.md §4.3.3); DDL not yet run |
+| 9 | pending | Validate analyze_and_design_workflow field name fix | Prompt id 25; response_format + v10 deployed session 23 — not yet validated |
+| 10 | pending | Add PGC_WorkflowRun.session_id FK column | Migration script needed — column did not exist at bootstrap |
+| 11 | pending | Add Tier 1 post-write validation after workflow writes | After fix_workflow step 8 / create_workflow step 19, run L1 simulation and fail on dead routing targets |
+| 12 | pending | Fix domain:null on create_workflow — inject domain_schema | Resolve domain before CREATE_WORKFLOW SQS dispatch; inject domain_schema into research_workflow_domain input |
+
+---
+
 ## 1. Tech Debt — Active
 
 Items are unresolved unless otherwise noted. ✅ items were resolved mid-session and are archived in git.
