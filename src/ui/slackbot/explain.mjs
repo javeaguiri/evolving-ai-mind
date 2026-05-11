@@ -4,8 +4,8 @@
 // src/ui/slackbot/explain.mjs
 // Handles POST /api/v1/ui/slack/explain
 //
-// Accepts: /explain <session_id> <prompt>
-// Opens a follow-up conversation anchored to a prior /chat session.
+// Accepts: /explain <query_id> <prompt>
+// Opens a diagnostic or chat follow-up conversation anchored to an existing PGC_Session.
 // ACKs immediately; enqueues EXPLAIN_QUERY to ProcFunction for async LLM call.
 // ProcFunction loads the existing session entries and continues the conversation.
 
@@ -16,8 +16,8 @@ import { err }                           from '../../shared/lambda-utils.mjs';
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// session_id must be a positive integer
-const SESSION_ID_RE = /^\d+$/;
+// query_id must be a valid UUID v4
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function handle(req) {
   if (req.method !== 'POST') {
@@ -34,8 +34,8 @@ export async function handle(req) {
   const queryId  = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
   const prompt   = spaceIdx === -1 ? '' : text.slice(spaceIdx + 1).trim();
 
-  if (!SESSION_ID_RE.test(queryId)) {
-    return err(400, 'Usage: /explain <session_id> <your question>  (session_id must be a number)', req.correlationId);
+  if (!UUID_RE.test(queryId)) {
+    return err(400, 'Usage: /explain <query_id> <your question>  (query_id must be a UUID)', req.correlationId);
   }
   if (!prompt) {
     return err(400, 'Usage: /explain <query_id> <your question>', req.correlationId);

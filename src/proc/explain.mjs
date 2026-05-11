@@ -6,7 +6,7 @@
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
 // Flow:
-//   1. Look up PGC_Session by id (integer sessionId passed as queryId)
+//   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
 //   4. Append new user entry (seq 3+)
@@ -22,6 +22,8 @@ import { getRows, insertRow, updateRows } from '../shared/serv-client.mjs';
 import { callLlmWithMessages }           from '../shared/llm-client.mjs';
 import { enqueueCallback }               from '../shared/sqs-callback.mjs';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const EXPLAIN_MODEL = 'anthropic/claude-sonnet-4-5';
 
 export async function handle(req) {
@@ -30,9 +32,8 @@ export async function handle(req) {
   const traceId  = req.traceId  ?? req.correlationId;
   const threadTs = callback?.threadId ?? null;
 
-  const sessionIdInt = parseInt(queryId, 10);
-  if (!queryId?.trim() || isNaN(sessionIdInt)) {
-    if (req.source === 'http') return err(400, 'queryId is required and must be a numeric session id', req.correlationId);
+  if (!UUID_RE.test(queryId?.trim() ?? '')) {
+    if (req.source === 'http') return err(400, 'queryId is required and must be a UUID', req.correlationId);
     return;
   }
   if (!prompt?.trim()) {
@@ -42,12 +43,12 @@ export async function handle(req) {
 
   console.info('proc/explain: received', { traceId, queryId });
 
-  // Look up session by integer id
+  // Look up session by query_id (UUID)
   const sessionResp = await getRows('PGC_Session', [
-    { column: 'id', op: 'eq', value: sessionIdInt },
+    { column: 'query_id', op: 'eq', value: queryId.trim() },
   ]);
   if (!sessionResp.success || sessionResp.count === 0) {
-    const msg = `No session found for id ${sessionIdInt}`;
+    const msg = `No session found for query_id ${queryId}`;
     if (req.source === 'http') return err(404, msg, req.correlationId);
     if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
     return;
