@@ -313,9 +313,9 @@ async function executeJsTransform({ step, localState, traceId }) {
 
   // Generic expression sandbox path
   if (expression) {
-    if (!step.input_key) throw new Error('js_transform expression step missing input_key');
     if (!step.output_key) throw new Error('js_transform expression step missing output_key');
-    const items  = resolvePath(localState, step.input_key);
+    // input_key is optional — expressions that read everything from local_state do not need it.
+    const items  = step.input_key ? resolvePath(localState, step.input_key) : null;
     const result = runSandboxedExpression(expression, items, localState, traceId);
     return { outputValue: result, nextAction: resolveNextAction(step.on_success, null) };
   }
@@ -1394,13 +1394,16 @@ function runLevel1StaticAnalysis(steps) {
       }
     }
 
-    // Collect writes — step-level output_key
+    // Collect writes — step-level output_key.
+    // Comma-separated output_key registers each listed key individually.
     const stepWrites = new Set();
     if (s.output_key && typeof s.output_key === 'string') {
-      const baseOut = s.output_key.split('.')[0];
-      outputKeysSoFar.add(baseOut);
-      stepWrites.add(baseOut);
-      if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
+      for (const rawKey of s.output_key.split(',')) {
+        const baseOut = rawKey.trim().split('.')[0];
+        outputKeysSoFar.add(baseOut);
+        stepWrites.add(baseOut);
+        if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
+      }
     }
     // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
@@ -1650,12 +1653,19 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
       };
     }
 
-    // Write mock output to local_state
+    // Write mock output to local_state.
+    // Comma-separated output_key writes to each listed key; if mockOutput is an object
+    // containing the key, use that value — otherwise write the whole mockOutput to each key.
     if (currentStep.output_key && typeof currentStep.output_key === 'string' && mockOutput !== null) {
-      const baseOut = currentStep.output_key.split('.')[0];
-      if (!localState[baseOut]) {
-        localState[baseOut] = mockOutput;
-        transition.keys_added.push(baseOut);
+      for (const rawKey of currentStep.output_key.split(',')) {
+        const baseOut = rawKey.trim().split('.')[0];
+        if (!localState[baseOut]) {
+          const val = (typeof mockOutput === 'object' && mockOutput !== null && baseOut in mockOutput)
+            ? mockOutput[baseOut]
+            : mockOutput;
+          localState[baseOut] = val;
+          transition.keys_added.push(baseOut);
+        }
       }
     }
 

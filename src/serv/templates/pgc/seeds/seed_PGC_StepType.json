@@ -60,14 +60,14 @@
       {
         "type": "string",
         "field": "input_key",
-        "required": true,
-        "description": "Dot-path into local_state resolving to the input value bound as 'items'. Required."
+        "required": false,
+        "description": "Optional dot-path into local_state resolving to the input value bound as 'items'. Omit when the expression reads everything it needs directly from local_state."
       },
       {
         "type": "string",
         "field": "output_key",
         "required": true,
-        "description": "Dot-path where the result is written to local_state"
+        "description": "Dot-path where the result is written to local_state. Comma-separate multiple keys (e.g. \"a,b,c\") to destructure an object return value into multiple top-level local_state keys simultaneously."
       },
       {
         "type": "string",
