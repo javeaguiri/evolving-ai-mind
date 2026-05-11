@@ -15,7 +15,6 @@ Mirrors the in-session TaskCreate list. Recreate at the start of each new sessio
 | 3 | ✅ done | Add typeof string guard to run-workflow.mjs output_key split | commit `1e687d8` |
 | 4 | ✅ done | Update flat_loop_example to document optional input_key and multi-output | seed_PGC_SystemContext.json + pushed to DB — commit `1e687d8` |
 | 5 | ✅ done | Retest `/m create workflow Spanish flashcard quiz` | Run 321 succeeded — `spanish_flashcard_quiz` registered. `review-output` false-positive cancel check fixed (commit `beb99c7`) |
-| 6 | pending | Fix nested dynamic template in quiz step 7 | `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` — runtime blocker; L1 did not catch it. Add `current_card` js_transform before step 7 and replace nested tokens with `{{current_card.term}}` / `{{current_card.card_type}}` |
 | 7 | ✅ done | Fix conditional increment in serv_update | Resolved in run 321 — LLM pre-computed delta values in step 8 js_transform (`card_updates`) and used flat references in step 9 |
 | 8 | pending | Run PGC_SystemContext.content JSONB migration | Design complete (architecture.md §4.3.3); DDL not yet run |
 | 9 | pending | Validate analyze_and_design_workflow field name fix | Prompt id 25; response_format + v10 deployed session 23 — not yet validated |
@@ -37,6 +36,7 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | Workflow safety guards (velocity detector, execution accumulator, cycle detector) | Required before production. Right-brain can monitor `PGC_WorkflowStats` for anomalous run patterns and flag suspect workflows proactively |
 | Duplicate domain detection — LLM runs every time | `/create-domain recipes` re-runs the LLM even if the domain already exists. Fix: add a `serv_query` pre-check step to `create_domain` workflow before the `llm_call` |
 | Tier 1 post-write validation — dead routing targets | After any `PGC_Workflow` write (fix_workflow step 8, create_workflow step 19), run Level 1 simulation on the written step array and fail immediately if dead routing targets are found |
+| L1 static analysis: detect nested `{{...{{...}}...}}` template tokens | `generate_workflow_steps` (run 321, step 7) produced `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` which passes L1 but fails at runtime. L1 should scan all string fields for the pattern `/\{\{[^}]*\{\{/` and raise `unsupported_handlebars_syntax` so the correction loop can fix it before the workflow is registered. |
 | `analyze_and_design_workflow` persistent schema mismatch | Prompt id 25. LLM produces wrong field names on every attempt. `response_format` + prompt rewrite deployed Session 23 — not yet validated. See `docs/prompt-issues.md` Issue 2 |
 | Guard 3 cycle detector — backward reference handling | Guard 3 must distinguish gate-bounded loops from tight computational loops. Rule: a backward reference is safe if the path from target back to source contains at least one `human_gate` step |
 
@@ -57,16 +57,6 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | `add_<domain>` workflows already in DB from v2/v3 are thin stubs | Existing domains (e.g. recipes) have the old 2-step workflow. Delete and recreate domain to get the v4 LLM-parse-first workflow, or manually upsert via `upsert-workflow.mjs` |
 | `init-brain.mjs` shared DDL utilities | `buildCreateTableSQL` and `getClient` imported by `schema.mjs` from `init-brain.mjs`. Refactor: extract to `src/shared/serv-utils.mjs` |
 | `PGC_Schema` not updated when `ALTER TABLE` adds a column | Every `ALTER TABLE` on a PGC table must be paired with an `UPDATE PGC_Schema SET columns = columns \|\| '[{"name":...}]'` |
-
-### spanish_flashcards Domain — Usability Enhancements (deferred from run 321)
-
-| Item | Notes |
-|---|---|
-| Timer-based response tracking | Capture `response_time_seconds` per test; add visual countdown to `human_gate` card presentation. How: js_transform before `TestLog` insert captures elapsed time via `Date.now()` delta stored in quiz_state. Adds time-pressure recall simulation. |
-| Spaced repetition scheduling | Add `next_review_date` column to `PGD_Flashcards`. Implement scheduled workflow that calculates review intervals from forgetting curves and posts review notifications. |
-| Session comparison analytics | New workflow that queries `PGD_StudySessions` with date-range filters and aggregates pass rates and average response times across sessions into a visual summary report. |
-
----
 
 ### Low Priority
 

@@ -268,4 +268,105 @@ Template resolution only substitutes `{{key}}` tokens — it does not evaluate e
 | Nested dynamic template `{{subset.{{index}}.prop}}` (step 9) | L1 or runtime | New `current_card` extraction step needed |
 | JS ternary in `serv_update` input (step 11) | Runtime | Pre-compute delta values in js_transform |
 
+---
+
+## Run 320 — Schema Validation False Positive (2026-05-11)
+
+**Symptom:** `generate_workflow_steps` (step 23) failed validation after 2 attempts with 2 schema errors per attempt. Different failure mode than run 317 — not a template variable error but a `schema_violation` pattern.
+
+### Root Cause — `review-output.mjs` wrong field name in cancel check
+
+`runRoutingValueRules` checked `o.action === 'cancel'` to verify that every `human_gate` had a cancel option. Human gate options use `on_select` for routing — there is no `action` field on options. Every cancel button the LLM correctly generated with `on_select: "cancel"` was rejected as a false positive.
+
+```js
+// Before fix — wrong field
+const hasCancel = (s.options ?? []).some(o => o.action === 'cancel');
+
+// After fix — correct field
+const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
+```
+
+**Correction attempt behavior:** The LLM received the error message "has no option with action 'cancel'" and on attempt 2 introduced a `special_buttons` array (not a real schema concept) with `action: "cancel"`. This added a second schema violation rather than fixing the first. Both attempts failed for the same underlying reason.
+
+**Fix:** Commit `beb99c7` — `review-output.mjs` corrected to check `o.on_select`. Also fixed the options loop error-message label from `opt.action` (always `undefined`) to `opt.label ?? opt.value`.
+
+**System implication logged in backlog:** L1 static analysis should detect nested `{{...{{...}}...}}` template tokens before the workflow is registered.
+
+---
+
+## Run 321 — Successful Registration (2026-05-11)
+
+**Result:** ✅ `spanish_flashcard_quiz` registered and ready (`domain: spanish_flashcards`, 13 steps).
+
+### What self-corrected vs run 317
+
+| Issue from Readiness Assessment | Outcome in run 321 |
+|---|---|
+| Comma-separated `output_key` (engine fix) | ✅ Working — step 8 uses `output_key: "quiz_state,card_updates"` correctly |
+| Missing `input_key` (engine fix) | ✅ Working — step 8 has no `input_key`; engine treats it as optional |
+| JS ternary in `serv_update` | ✅ Self-corrected — LLM pre-computed delta values in step 8 js_transform, writing `card_updates.total_passed` / `card_updates.total_failed` as flat integers; step 9 references them directly |
+| Nested dynamic template (step 7) | ⚠️ Still present — different token form but same problem (see below) |
+
+### Registered Workflow — Step Array Analysis
+
+**Structure (13 steps):**
+1. `serv_query` — load active flashcard sets ordered by name
+2. `human_gate` (choice) — user picks set (options A–E hardcoded to indices 0–4; cancel present)
+3. `serv_query` — load all cards for selected set
+4. `serv_insert` — create StudySession record
+5. `js_transform` — initialize `quiz_state` (shuffled cards, index=0, counters)
+6. `condition` — if `index >= cards_array.length` → step 11 (finalize), else → step 7
+7. `human_gate` (choice) — present card, collect correct/incorrect/cancel
+8. `js_transform` — advance index, compute `card_updates`, set done flag; `output_key: "quiz_state,card_updates"`
+9. `serv_update` — update flashcard streak/counters from `card_updates`
+10. `serv_insert` — write TestLog; `on_success/on_failure: "step:6"` (loop)
+11. `serv_update` — finalize StudySession with completion metrics
+12. `notify` — post quiz completion summary
+13. `end`
+
+**Good:** Flat-loop pattern applied correctly. Multi-output step 8 uses the engine fix. Conditional increment Issue B self-resolved. All routing targets exist.
+
+### Remaining Issue — Nested Template in Step 7 (runtime blocker)
+
+Step 7's `message_template`:
+```
+{{quiz_state.cards_array.{{quiz_state.index}}.term}}
+```
+
+The `design_workflow_dialogs` step (22) generated a bracket-notation form `.[quiz_state.index]` which is also unsupported. `generate_workflow_steps` (step 23) then re-expressed it as nested `{{}}`. Neither form works with the template resolver, which processes tokens in a single linear pass using `/\{\{([^}]+)\}\}/g`.
+
+**Runtime behavior:** The inner token `{{quiz_state.index}}` may be extracted as a match, leaving `quiz_state.cards_array.` and `.term}}` as literal fragments. The card term will never render.
+
+**Fix required (artifact repair — do not regenerate the whole workflow):** Insert a `js_transform` step 6b before step 7:
+```json
+{
+  "step": "6b",
+  "type": "js_transform",
+  "expression": "(() => local_state.quiz_state.cards_array[local_state.quiz_state.index])()",
+  "output_key": "current_card",
+  "on_success": "next"
+}
+```
+Then replace `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` with `{{current_card.term}}` and `{{quiz_state.cards_array.{{quiz_state.index}}.card_type}}` with `{{current_card.card_type}}` in step 7's `message_template`.
+
+**L1 miss:** L1 did not detect the nested template syntax. A system-level fix (add `/\{\{[^}]*\{\{/` scan in L1) is tracked in `docs/backlog.md` under High Priority.
+
+### Additional Observations
+
+- **Step 2 hardcoded set slots:** Options A–E hardcode `flashcard_sets.0` through `flashcard_sets.4`. If the user has fewer than 5 active sets, unused options will render `undefined`. Not a blocker for initial use but degrades the experience.
+- **Step 9 `on_failure: "next"`:** The flashcard stat update failing silently and continuing is intentional tolerance — acceptable.
+- **`quiz_state.cards_array.length` in step 11:** Accesses `.length` via dot-path template — works correctly since the resolver traverses via `obj[key]` which returns the native array length property.
+
+---
+
+## spanish_flashcards Domain — Deferred Feature Enhancements
+
+From `gap_analysis.deferred` in run 321 (`PGC_WorkflowRun` id 321). These are user artifact improvements — new workflows or domain schema changes — not system work.
+
+| Enhancement | Description | How to implement |
+|---|---|---|
+| Timer-based response tracking | Capture `response_time_seconds` per test; visual countdown during card presentation | `js_transform` before TestLog insert captures elapsed time via `Date.now()` delta stored in `quiz_state`. Add `response_time_seconds` column to `PGD_TestLogs`. |
+| Spaced repetition scheduling | Surface cards at scientifically determined review intervals rather than user-initiated sessions | Add `next_review_date` column to `PGD_Flashcards`. New scheduled workflow calculates intervals from forgetting curves and posts review notifications. |
+| Session comparison analytics | Visualize learning trends by comparing pass rates across multiple sessions | New workflow queries `PGD_StudySessions` with date-range filters and aggregates metrics into a visual summary report posted to Slack. |
+
 On the next `/m create workflow Spanish flashcard quiz` the engine fixes will allow the multi-output step 10 to work and L1 will pass that check. The LLM will then need to solve the remaining two issues — issue A should surface in L1 as `unsupported_handlebars_syntax`, which the prompt handles correctly. Issue B may pass L1/L2 silently and only fail at runtime, so it may require an additional regeneration cycle or manual inspection.
