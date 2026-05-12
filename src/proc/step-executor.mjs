@@ -230,7 +230,7 @@ async function executeLlmCall({ step, localState, run, traceId }) {
   let diagnosticPayload = null;
   try {
     const diagnosticsRow    = contextResp.rows?.find(r => r.key === 'diagnostics_config');
-    const diagnosticsConfig = diagnosticsRow ? JSON.parse(diagnosticsRow.content) : null;
+    const diagnosticsConfig = diagnosticsRow?.content ?? null;
     const enabledWorkflows  = diagnosticsConfig?.enabled_workflows ?? [];
 
     if (run?.workflow_name && enabledWorkflows.includes(run.workflow_name)) {

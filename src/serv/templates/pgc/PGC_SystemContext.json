@@ -6,8 +6,7 @@
     { "name": "id",            "type": "serial",      "primaryKey": true },
     { "name": "key",           "type": "text",        "nullable": false, "unique": true },
     { "name": "section",       "type": "text",        "nullable": false },
-    { "name": "content",       "type": "text",        "nullable": false },
-    { "name": "format",        "type": "text",        "nullable": false, "default": "'prose'" },
+    { "name": "content",       "type": "jsonb",       "nullable": false },
     { "name": "inject_always", "type": "boolean",     "nullable": false, "default": "false" },
     { "name": "inject_for",    "type": "jsonb",       "nullable": true },
     { "name": "version",       "type": "integer",     "nullable": false, "default": "1" },
@@ -15,9 +14,7 @@
     { "name": "updated_at",    "type": "timestamptz", "nullable": false, "default": "now()" }
   ],
   "foreign_keys": [],
-  "constraints": [
-    { "type": "check", "name": "chk_format", "expression": "format IN ('prose', 'json')" }
-  ],
+  "constraints": [],
   "triggers": [
     { "name": "trg_pgc_systemcontext_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
   ]

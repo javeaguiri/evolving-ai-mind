@@ -46,7 +46,8 @@ export async function handle(req) {
   const ctxResp = await getRows('PGC_SystemContext', [
     { column: 'key', op: 'eq', value: 'general_chat_system_prompt' },
   ]);
-  const systemPrompt = ctxResp.rows?.[0]?.content ?? DEFAULT_SYSTEM_PROMPT;
+  const rawContent   = ctxResp.rows?.[0]?.content;
+  const systemPrompt = (typeof rawContent === 'object' ? rawContent?.text : rawContent) ?? DEFAULT_SYSTEM_PROMPT;
 
   // INSERT PGC_Session
   const sessionResp = await insertRow('PGC_Session', {
