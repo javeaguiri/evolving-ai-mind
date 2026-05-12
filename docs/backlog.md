@@ -12,7 +12,7 @@ Mirrors the in-session TaskCreate list. Recreate at the start of each new sessio
 |---|--------|------|-------|
 | 1 | ↩️ reverted | Change queryId to use PGC_Session.id integer | Reverted by commit `fd69d46` — diagnostic notifications show UUID query_id so integer regex broke all /explain commands; UUID_RE restored across all three files |
 | 2 | ✅ done | Fix Ask Follow-up button in /explain reply threads | (1) `proc/explain.mjs`: restored `queryId: session.query_id` in HUMAN_NOTIFICATION. (2) `interactive.mjs`: `handleExplainFollowupButton` now calls `slack.chat.update` to replace the stale button before opening the modal. Completed tasks 3/4/5/7 moved to `docs/backlog-history.md` |
-| 8 | pending | Run PGC_SystemContext.content JSONB migration | Design complete (architecture.md §4.3.3); DDL not yet run |
+| 8 | ✅ done | Run PGC_SystemContext.content JSONB migration | content→jsonb, format column dropped. New schema.mjs endpoints: modifyColumn + dropColumn. seed rewritten to sections schema. |
 | 9 | pending | Validate analyze_and_design_workflow field name fix | Prompt id 25; response_format + v10 deployed session 23 — not yet validated |
 | 10 | pending | Add PGC_WorkflowRun.session_id FK column | Migration script needed — column did not exist at bootstrap |
 | 11 | pending | Add Tier 1 post-write validation after workflow writes | After fix_workflow step 8 / create_workflow step 19, run L1 simulation and fail on dead routing targets |
