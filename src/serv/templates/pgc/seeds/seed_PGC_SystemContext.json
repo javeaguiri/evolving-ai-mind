@@ -2,7 +2,6 @@
   {
     "key": "step_type_contracts",
     "section": "rules",
-    "format": "json",
     "inject_always": false,
     "inject_for": [
       "create_workflow",
@@ -10,13 +9,774 @@
       "analyze_and_design_workflow",
       "fix_workflow_steps"
     ],
-    "version": 9,
-    "content": "[{\"step_type\": \"condition\", \"description\": \"Evaluates a template expression against local_state and routes to one of two named steps without performing any I/O. Truthy: non-empty, non-\\\"null\\\", non-\\\"undefined\\\", non-\\\"0\\\". on_truthy and on_falsy use step:N routing format (e.g. \\\"step:2\\\", \\\"step:3\\\") \\u2014 same as all other routing fields. No output_key is written.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"expression\", \"required\": true, \"description\": \"{{template}} expression resolved against local_state \\u2014 e.g. \\\"{{input.id}}\\\"\"}, {\"type\": \"string\", \"field\": \"on_truthy\", \"required\": true, \"description\": \"step:N routing value to follow when expression is truthy \\u2014 e.g. \\\"step:2\\\"\"}, {\"type\": \"string\", \"field\": \"on_falsy\", \"required\": true, \"description\": \"step:N routing value to follow when expression is falsy \\u2014 e.g. \\\"step:3\\\"\"}], \"output_contract\": null, \"on_success_options\": [], \"on_failure_options\": []}, {\"step_type\": \"end\", \"description\": \"Terminal step \\u2014 marks the workflow run as completed. No input or output fields. Every workflow must have exactly one end step as its final step.\", \"input_contract\": [], \"output_contract\": null, \"on_success_options\": [], \"on_failure_options\": []}, {\"step_type\": \"human_gate\", \"description\": \"Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in an inline Slack input block), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions \\u2014 output_key written with selected value; if button has modal descriptor, output_key receives typed modal text instead). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors for overlay text input.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"gate_type\", \"required\": true, \"description\": \"confirm | edit_list | text_input | review_object | choice\"}, {\"type\": \"string\", \"field\": \"message_template\", \"required\": true, \"description\": \"Message shown to user \\u2014 supports {{template}} substitution\"}, {\"type\": \"string\", \"field\": \"context_key\", \"required\": false, \"description\": \"Dot-path into local_state for the data shown in the dialog (required for edit_list and review_object)\"}, {\"type\": \"array\", \"field\": \"options\", \"required\": true, \"description\": \"Array of option objects \\u2014 must include at least one with action/value: \\\"cancel\\\". Shape by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \\\"A\\\", \\\"B\\\"), and description is the explanatory sentence displayed above the buttons.\"}, {\"type\": \"array\", \"field\": \"special_buttons\", \"required\": false, \"description\": \"Optional buttons appended after options. Never appear in description_list. Use for Cancel or modal-trigger buttons. Supports modal descriptor: { title, input_label, placeholder, multiline }. Cancel obligation can be satisfied here instead of in options.\"}, {\"type\": \"string\", \"field\": \"input_label\", \"required\": false, \"description\": \"text_input only \\u2014 short label above the Slack input element. Defaults to \\\"Your input\\\".\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": false, \"description\": \"text_input: typed value written on submit. confirm+context_key: selected action written. choice: selected option.value written \\u2014 overridden by modal inputValue when button has modal descriptor.\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Default routing when no on_select override applies\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing on gate execution error \\u2014 not user cancellation\"}], \"output_contract\": null, \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"iterator\", \"description\": \"Executes a single item_step once per element of an array in local_state. Sequential only \\u2014 one item at a time. Collects results into an array at output_key. Items must be an array written by a prior step. Two categories: non-suspending (serv_*, llm_call, js_transform item steps \\u2014 all items run inline in one Lambda invocation) and suspending (human_gate item step \\u2014 suspends once per item, resumes on user response). Only gate_type: \\\"choice\\\" is valid as a suspending item_step.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"items_key\", \"required\": true, \"description\": \"Dot-path into local_state resolving to the array to iterate over\"}, {\"type\": \"object\", \"field\": \"item_step\", \"required\": true, \"description\": \"Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. Non-suspending item steps (serv_schema, serv_insert, serv_update, serv_delete, serv_query, llm_call, js_transform) execute inline in a single Lambda invocation. Suspending item steps (human_gate) suspend the iterator after each item \\u2014 only gate_type: \\\"choice\\\" is valid inside an iterator.\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": false, \"description\": \"local_state key where collected results array is written after all items complete\"}, {\"type\": \"string\", \"field\": \"on_complete\", \"required\": false, \"description\": \"Routing token after all items complete \\u2014 defaults to \\\"next\\\"\"}, {\"type\": \"string\", \"field\": \"execution_mode\", \"required\": true, \"description\": \"Must always be \\\"sequential\\\". Omitting this field is a workflow defect.\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token if an item_step fails\"}], \"output_contract\": [{\"type\": \"array\", \"field\": \"output_key\", \"description\": \"Array of outputValue from each item_step execution\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"js_transform\", \"description\": \"Runs a pure synchronous JS expression via acorn AST gate + vm.runInNewContext(200ms). Two bindings available: (1) items \\u2014 the resolved value of input_key from local_state. (2) local_state \\u2014 the full workflow state object; use local_state.key_name to read any prior step output across steps. No async, no I/O, no Node globals. Expression must be an IIFE or value expression that returns the output. Use for score tallies, filters, aggregations, string formatting, loop state mutations.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"expression\", \"required\": true, \"description\": \"Synchronous JS IIFE or value expression. items = resolved input_key value. local_state = full workflow state. Must return the output value. Example: (function(){ return items.filter(r => r.score > 0).length; })()\"}, {\"type\": \"string\", \"field\": \"input_key\", \"required\": true, \"description\": \"Dot-path into local_state resolving to the input value bound as 'items'. Required.\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"Dot-path where the result is written to local_state\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token \\u2014 supports step:N for backward loops\"}], \"output_contract\": [{\"type\": \"any\", \"field\": \"output_key\", \"description\": \"Result of the expression written to local_state[output_key]\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"llm_call\", \"description\": \"Calls an LLM using a named prompt from PGC_Prompt. Resolves template variables from local_state into the prompt. Runs the 2-attempt validation/correction loop. Writes the validated output object to output_key.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.prompt\", \"required\": true, \"description\": \"intent_category key into PGC_Prompt \\u2014 identifies which prompt to use\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key where the validated LLM output object is written\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token \\u2014 defaults to \\\"next\\\"\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token \\u2014 use \\\"cancel\\\" for unrecoverable failures\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"The validated LLM output object written to local_state[output_key]\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"notify\", \"description\": \"Sends a message to the user via the callback channel (Slack or any UI). The message_template is resolved against local_state. Does not block \\u2014 fire and forget. Typically the second-to-last step before \\\"end\\\".\", \"input_contract\": [{\"type\": \"string\", \"field\": \"message_template\", \"required\": true, \"description\": \"Message text \\u2014 supports {{template}} substitution from local_state\"}, {\"type\": \"string\", \"field\": \"notify_type\", \"required\": false, \"description\": \"SQS message type \\u2014 defaults to HUMAN_NOTIFICATION\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token \\u2014 typically \\\"end\\\" on the final notify step\"}], \"output_contract\": null, \"on_success_options\": [\"next\", \"end\"], \"on_failure_options\": []}, {\"step_type\": \"serv_delete\", \"description\": \"Deletes rows from a PGC or PGD table matching the given filters. Filters must be non-empty \\u2014 unfiltered mass deletes are rejected.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.tableName\", \"required\": true, \"description\": \"Table name \\u2014 must be registered in PGC_TableMap with allow_delete: true\"}, {\"type\": \"array\", \"field\": \"input.filters\", \"required\": true, \"description\": \"Non-empty filter array\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"{ tableName, deletedCount }\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_entity_get\", \"description\": \"Fetches one assembled entity by id via SERV-Entity getEntity. Returns root columns plus child arrays.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.entityName\", \"required\": true, \"description\": \"Entity name matching PGC_EntitySchema.entity_name\"}, {\"type\": \"integer\", \"field\": \"input.id\", \"required\": true, \"description\": \"Primary key id\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"Assembled entity object \\u2014 root columns plus child arrays\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_entity_query\", \"description\": \"Lists assembled entities via SERV-Entity listEntities. Returns root columns plus jsonb_agg child arrays.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.entityName\", \"required\": true, \"description\": \"Entity name matching PGC_EntitySchema.entity_name\"}, {\"type\": \"array\", \"field\": \"input.filters\", \"required\": false, \"description\": \"Filter array applied to root table\"}, {\"type\": \"integer\", \"field\": \"input.limit\", \"required\": false, \"description\": \"Maximum number of entities to return\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"array\", \"field\": \"output_key\", \"description\": \"Array of assembled entity objects\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_entity_schema\", \"description\": \"Loads a full entity schema by reading PGC_EntitySchema for join topology and PGC_Schema for live column definitions. Returns entity_name, root { table, columns }, and children.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.entityName\", \"required\": true, \"description\": \"Entity name matching PGC_EntitySchema.entity_name\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"{ entity_name, description, root: { table, columns: [{name,type}] }, children: [...] }\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_insert\", \"description\": \"Inserts a single row into any PGC or PGD table. Returns the inserted row including generated id.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.tableName\", \"required\": true, \"description\": \"Table name \\u2014 must be registered in PGC_TableMap\"}, {\"type\": \"object\", \"field\": \"input.row\", \"required\": true, \"description\": \"Row object \\u2014 system columns auto-populated\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": false, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"The inserted row including populated id\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_query\", \"description\": \"Reads rows from a PGC or PGD table with optional filters, ordering, and limit. Empty result is not an error \\u2014 returns an empty array.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.tableName\", \"required\": true, \"description\": \"Table name\"}, {\"type\": \"array\", \"field\": \"input.filters\", \"required\": false, \"description\": \"Filter array. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null\"}, {\"type\": \"object\", \"field\": \"input.orderBy\", \"required\": false, \"description\": \"{ column, direction }\"}, {\"type\": \"integer\", \"field\": \"input.limit\", \"required\": false, \"description\": \"Maximum rows\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"array\", \"field\": \"output_key\", \"description\": \"Array of row objects\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_schema\", \"description\": \"Creates a physical PostgreSQL table via SERV-Schema createTable. Registers in PGC_Schema and PGC_TableMap. Used inside iterators driven by a tables array.\", \"input_contract\": [{\"type\": \"object\", \"field\": \"input\", \"required\": true, \"description\": \"Full table definition \\u2014 tableName, target, columns, foreignKeys, constraints, triggers. May be \\\"{{item}}\\\" inside an iterator.\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"{ tableName, status: \\\"created\\\" }\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"serv_update\", \"description\": \"Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.tableName\", \"required\": true, \"description\": \"Table name\"}, {\"type\": \"array\", \"field\": \"input.filters\", \"required\": true, \"description\": \"Non-empty filter array\"}, {\"type\": \"object\", \"field\": \"input.updates\", \"required\": true, \"description\": \"column \\u2192 new value pairs\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": false, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"{ tableName, updatedCount, rows }\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}, {\"step_type\": \"simulate\", \"description\": \"Dry-runs a workflow step array without calling real services. Level 1: static analysis (routing, dead targets, template variables, required inputs). Level 2: path execution using mock_outputs and simulation_paths.\", \"input_contract\": [{\"type\": \"string\", \"field\": \"input.steps_key\", \"required\": true, \"description\": \"Dot-path to the steps array\"}, {\"type\": \"string\", \"field\": \"input.mock_outputs_key\", \"required\": false, \"description\": \"Dot-path to mock_outputs \\u2014 required for Level 2\"}, {\"type\": \"string\", \"field\": \"input.paths_key\", \"required\": false, \"description\": \"Dot-path to simulation_paths \\u2014 required for Level 2\"}, {\"type\": \"string\", \"field\": \"output_key\", \"required\": true, \"description\": \"local_state key\"}, {\"type\": \"string\", \"field\": \"on_success\", \"required\": false, \"description\": \"Routing token\"}, {\"type\": \"string\", \"field\": \"on_failure\", \"required\": false, \"description\": \"Routing token\"}], \"output_contract\": [{\"type\": \"object\", \"field\": \"output_key\", \"description\": \"{ passed, paths_run, paths_passed, paths_failed, static_analysis, path_results }\"}], \"on_success_options\": [\"next\", \"end\", \"step:N\"], \"on_failure_options\": [\"cancel\", \"step:N\"]}]"
+    "version": 10,
+    "content": {
+      "sections": [
+        {
+          "id": "contracts",
+          "heading": "Step Type Contracts",
+          "data": [
+            {
+              "step_type": "condition",
+              "description": "Evaluates a template expression against local_state and routes to one of two named steps without performing any I/O. Truthy: non-empty, non-\"null\", non-\"undefined\", non-\"0\". on_truthy and on_falsy use step:N routing format (e.g. \"step:2\", \"step:3\") \u2014 same as all other routing fields. No output_key is written.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "expression",
+                  "required": true,
+                  "description": "{{template}} expression resolved against local_state \u2014 e.g. \"{{input.id}}\""
+                },
+                {
+                  "type": "string",
+                  "field": "on_truthy",
+                  "required": true,
+                  "description": "step:N routing value to follow when expression is truthy \u2014 e.g. \"step:2\""
+                },
+                {
+                  "type": "string",
+                  "field": "on_falsy",
+                  "required": true,
+                  "description": "step:N routing value to follow when expression is falsy \u2014 e.g. \"step:3\""
+                }
+              ],
+              "output_contract": null,
+              "on_success_options": [],
+              "on_failure_options": []
+            },
+            {
+              "step_type": "end",
+              "description": "Terminal step \u2014 marks the workflow run as completed. No input or output fields. Every workflow must have exactly one end step as its final step.",
+              "input_contract": [],
+              "output_contract": null,
+              "on_success_options": [],
+              "on_failure_options": []
+            },
+            {
+              "step_type": "human_gate",
+              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in an inline Slack input block), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions \u2014 output_key written with selected value; if button has modal descriptor, output_key receives typed modal text instead). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors for overlay text input.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "gate_type",
+                  "required": true,
+                  "description": "confirm | edit_list | text_input | review_object | choice"
+                },
+                {
+                  "type": "string",
+                  "field": "message_template",
+                  "required": true,
+                  "description": "Message shown to user \u2014 supports {{template}} substitution"
+                },
+                {
+                  "type": "string",
+                  "field": "context_key",
+                  "required": false,
+                  "description": "Dot-path into local_state for the data shown in the dialog (required for edit_list and review_object)"
+                },
+                {
+                  "type": "array",
+                  "field": "options",
+                  "required": true,
+                  "description": "Array of option objects \u2014 must include at least one with action/value: \"cancel\". Shape by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons."
+                },
+                {
+                  "type": "array",
+                  "field": "special_buttons",
+                  "required": false,
+                  "description": "Optional buttons appended after options. Never appear in description_list. Use for Cancel or modal-trigger buttons. Supports modal descriptor: { title, input_label, placeholder, multiline }. Cancel obligation can be satisfied here instead of in options."
+                },
+                {
+                  "type": "string",
+                  "field": "input_label",
+                  "required": false,
+                  "description": "text_input only \u2014 short label above the Slack input element. Defaults to \"Your input\"."
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": false,
+                  "description": "text_input: typed value written on submit. confirm+context_key: selected action written. choice: selected option.value written \u2014 overridden by modal inputValue when button has modal descriptor."
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Default routing when no on_select override applies"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing on gate execution error \u2014 not user cancellation"
+                }
+              ],
+              "output_contract": null,
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "iterator",
+              "description": "Executes a single item_step once per element of an array in local_state. Sequential only \u2014 one item at a time. Collects results into an array at output_key. Items must be an array written by a prior step. Two categories: non-suspending (serv_*, llm_call, js_transform item steps \u2014 all items run inline in one Lambda invocation) and suspending (human_gate item step \u2014 suspends once per item, resumes on user response). Only gate_type: \"choice\" is valid as a suspending item_step.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "items_key",
+                  "required": true,
+                  "description": "Dot-path into local_state resolving to the array to iterate over"
+                },
+                {
+                  "type": "object",
+                  "field": "item_step",
+                  "required": true,
+                  "description": "Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. Non-suspending item steps (serv_schema, serv_insert, serv_update, serv_delete, serv_query, llm_call, js_transform) execute inline in a single Lambda invocation. Suspending item steps (human_gate) suspend the iterator after each item \u2014 only gate_type: \"choice\" is valid inside an iterator."
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": false,
+                  "description": "local_state key where collected results array is written after all items complete"
+                },
+                {
+                  "type": "string",
+                  "field": "on_complete",
+                  "required": false,
+                  "description": "Routing token after all items complete \u2014 defaults to \"next\""
+                },
+                {
+                  "type": "string",
+                  "field": "execution_mode",
+                  "required": true,
+                  "description": "Must always be \"sequential\". Omitting this field is a workflow defect."
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token if an item_step fails"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "array",
+                  "field": "output_key",
+                  "description": "Array of outputValue from each item_step execution"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "js_transform",
+              "description": "Runs a pure synchronous JS expression via acorn AST gate + vm.runInNewContext(200ms). Two bindings available: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output across steps. No async, no I/O, no Node globals. Expression must be an IIFE or value expression that returns the output. Use for score tallies, filters, aggregations, string formatting, loop state mutations.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "expression",
+                  "required": true,
+                  "description": "Synchronous JS IIFE or value expression. items = resolved input_key value. local_state = full workflow state. Must return the output value. Example: (function(){ return items.filter(r => r.score > 0).length; })()"
+                },
+                {
+                  "type": "string",
+                  "field": "input_key",
+                  "required": true,
+                  "description": "Dot-path into local_state resolving to the input value bound as 'items'. Required."
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "Dot-path where the result is written to local_state"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token \u2014 supports step:N for backward loops"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "any",
+                  "field": "output_key",
+                  "description": "Result of the expression written to local_state[output_key]"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "llm_call",
+              "description": "Calls an LLM using a named prompt from PGC_Prompt. Resolves template variables from local_state into the prompt. Runs the 2-attempt validation/correction loop. Writes the validated output object to output_key.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.prompt",
+                  "required": true,
+                  "description": "intent_category key into PGC_Prompt \u2014 identifies which prompt to use"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key where the validated LLM output object is written"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token \u2014 defaults to \"next\""
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token \u2014 use \"cancel\" for unrecoverable failures"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "The validated LLM output object written to local_state[output_key]"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "notify",
+              "description": "Sends a message to the user via the callback channel (Slack or any UI). The message_template is resolved against local_state. Does not block \u2014 fire and forget. Typically the second-to-last step before \"end\".",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "message_template",
+                  "required": true,
+                  "description": "Message text \u2014 supports {{template}} substitution from local_state"
+                },
+                {
+                  "type": "string",
+                  "field": "notify_type",
+                  "required": false,
+                  "description": "SQS message type \u2014 defaults to HUMAN_NOTIFICATION"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token \u2014 typically \"end\" on the final notify step"
+                }
+              ],
+              "output_contract": null,
+              "on_success_options": [
+                "next",
+                "end"
+              ],
+              "on_failure_options": []
+            },
+            {
+              "step_type": "serv_delete",
+              "description": "Deletes rows from a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass deletes are rejected.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.tableName",
+                  "required": true,
+                  "description": "Table name \u2014 must be registered in PGC_TableMap with allow_delete: true"
+                },
+                {
+                  "type": "array",
+                  "field": "input.filters",
+                  "required": true,
+                  "description": "Non-empty filter array"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "{ tableName, deletedCount }"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_entity_get",
+              "description": "Fetches one assembled entity by id via SERV-Entity getEntity. Returns root columns plus child arrays.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.entityName",
+                  "required": true,
+                  "description": "Entity name matching PGC_EntitySchema.entity_name"
+                },
+                {
+                  "type": "integer",
+                  "field": "input.id",
+                  "required": true,
+                  "description": "Primary key id"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "Assembled entity object \u2014 root columns plus child arrays"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_entity_query",
+              "description": "Lists assembled entities via SERV-Entity listEntities. Returns root columns plus jsonb_agg child arrays.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.entityName",
+                  "required": true,
+                  "description": "Entity name matching PGC_EntitySchema.entity_name"
+                },
+                {
+                  "type": "array",
+                  "field": "input.filters",
+                  "required": false,
+                  "description": "Filter array applied to root table"
+                },
+                {
+                  "type": "integer",
+                  "field": "input.limit",
+                  "required": false,
+                  "description": "Maximum number of entities to return"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "array",
+                  "field": "output_key",
+                  "description": "Array of assembled entity objects"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_entity_schema",
+              "description": "Loads a full entity schema by reading PGC_EntitySchema for join topology and PGC_Schema for live column definitions. Returns entity_name, root { table, columns }, and children.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.entityName",
+                  "required": true,
+                  "description": "Entity name matching PGC_EntitySchema.entity_name"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "{ entity_name, description, root: { table, columns: [{name,type}] }, children: [...] }"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_insert",
+              "description": "Inserts a single row into any PGC or PGD table. Returns the inserted row including generated id.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.tableName",
+                  "required": true,
+                  "description": "Table name \u2014 must be registered in PGC_TableMap"
+                },
+                {
+                  "type": "object",
+                  "field": "input.row",
+                  "required": true,
+                  "description": "Row object \u2014 system columns auto-populated"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": false,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "The inserted row including populated id"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_query",
+              "description": "Reads rows from a PGC or PGD table with optional filters, ordering, and limit. Empty result is not an error \u2014 returns an empty array.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.tableName",
+                  "required": true,
+                  "description": "Table name"
+                },
+                {
+                  "type": "array",
+                  "field": "input.filters",
+                  "required": false,
+                  "description": "Filter array. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
+                },
+                {
+                  "type": "object",
+                  "field": "input.orderBy",
+                  "required": false,
+                  "description": "{ column, direction }"
+                },
+                {
+                  "type": "integer",
+                  "field": "input.limit",
+                  "required": false,
+                  "description": "Maximum rows"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "array",
+                  "field": "output_key",
+                  "description": "Array of row objects"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_schema",
+              "description": "Creates a physical PostgreSQL table via SERV-Schema createTable. Registers in PGC_Schema and PGC_TableMap. Used inside iterators driven by a tables array.",
+              "input_contract": [
+                {
+                  "type": "object",
+                  "field": "input",
+                  "required": true,
+                  "description": "Full table definition \u2014 tableName, target, columns, foreignKeys, constraints, triggers. May be \"{{item}}\" inside an iterator."
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "{ tableName, status: \"created\" }"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "serv_update",
+              "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.tableName",
+                  "required": true,
+                  "description": "Table name"
+                },
+                {
+                  "type": "array",
+                  "field": "input.filters",
+                  "required": true,
+                  "description": "Non-empty filter array"
+                },
+                {
+                  "type": "object",
+                  "field": "input.updates",
+                  "required": true,
+                  "description": "column \u2192 new value pairs"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": false,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "{ tableName, updatedCount, rows }"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            },
+            {
+              "step_type": "simulate",
+              "description": "Dry-runs a workflow step array without calling real services. Level 1: static analysis (routing, dead targets, template variables, required inputs). Level 2: path execution using mock_outputs and simulation_paths.",
+              "input_contract": [
+                {
+                  "type": "string",
+                  "field": "input.steps_key",
+                  "required": true,
+                  "description": "Dot-path to the steps array"
+                },
+                {
+                  "type": "string",
+                  "field": "input.mock_outputs_key",
+                  "required": false,
+                  "description": "Dot-path to mock_outputs \u2014 required for Level 2"
+                },
+                {
+                  "type": "string",
+                  "field": "input.paths_key",
+                  "required": false,
+                  "description": "Dot-path to simulation_paths \u2014 required for Level 2"
+                },
+                {
+                  "type": "string",
+                  "field": "output_key",
+                  "required": true,
+                  "description": "local_state key"
+                },
+                {
+                  "type": "string",
+                  "field": "on_success",
+                  "required": false,
+                  "description": "Routing token"
+                },
+                {
+                  "type": "string",
+                  "field": "on_failure",
+                  "required": false,
+                  "description": "Routing token"
+                }
+              ],
+              "output_contract": [
+                {
+                  "type": "object",
+                  "field": "output_key",
+                  "description": "{ passed, paths_run, paths_passed, paths_failed, static_analysis, path_results }"
+                }
+              ],
+              "on_success_options": [
+                "next",
+                "end",
+                "step:N"
+              ],
+              "on_failure_options": [
+                "cancel",
+                "step:N"
+              ]
+            }
+          ]
+        }
+      ]
+    }
   },
   {
     "key": "routing_value_rules",
     "section": "rules",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "create_workflow",
@@ -24,97 +784,146 @@
       "generate_workflow_paths",
       "fix_workflow_steps"
     ],
-    "version": 5,
-    "content": "ROUTING VALUE RULES \u2014 every on_success, on_failure, and on_select field in a workflow step must use one of these exact tokens:\n\n  next        \u2014 advance to the sequentially next step in the array\n  end         \u2014 terminate the workflow run as completed\n  cancel      \u2014 cancel the run and clear the stack (same effect as the user clicking Cancel)\n  step:<key>  \u2014 jump directly to the step with the given key (e.g. \"step:3\", \"step:3a\")\n\nNOTES:\n- \"step:N\" uses the actual step key string, not a position index. \"step:3a\" jumps to the step whose \"step\" field is \"3a\".\n- Backward references (routing to an earlier step key) are safe ONLY when there is at least one human_gate on the path from the target back to the source. Without a gate, backward references create infinite loops.\n- on_failure should be \"cancel\" for any step that calls an external service (llm_call, serv_query, serv_insert, serv_update, serv_delete) and fails unrecoverably.\n- Every human_gate MUST have at least one option with action: \"cancel\". This is enforced by the static analysis validator.\n- notify steps only support \"next\" and \"end\" in on_success \u2014 they have no on_failure.\n- end steps have no routing fields.\n\nNOTE \u2014 condition steps:\ncondition on_truthy and on_falsy use the same step:N format as all other routing fields (e.g. \"step:8\").\nBare keys (e.g. \"8\") are NOT valid for any routing field including on_truthy and on_falsy.\n\nCOMMON MISTAKE \u2014 bare step keys:\n  WRONG:  \"on_success\": \"8\"       (bare key \u2014 not a valid routing token)\n  RIGHT:  \"on_success\": \"step:8\"  (always prefix with step:)\nThe step: prefix is mandatory. A bare number or identifier is never a valid routing value."
+    "version": 6,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "ROUTING VALUE RULES \u2014 every on_success, on_failure, and on_select field in a workflow step must use one of these exact tokens:\n\n  next        \u2014 advance to the sequentially next step in the array\n  end         \u2014 terminate the workflow run as completed\n  cancel      \u2014 cancel the run and clear the stack (same effect as the user clicking Cancel)\n  step:<key>  \u2014 jump directly to the step with the given key (e.g. \"step:3\", \"step:3a\")\n\nNOTES:\n- \"step:N\" uses the actual step key string, not a position index. \"step:3a\" jumps to the step whose \"step\" field is \"3a\".\n- Backward references (routing to an earlier step key) are safe ONLY when there is at least one human_gate on the path from the target back to the source. Without a gate, backward references create infinite loops.\n- on_failure should be \"cancel\" for any step that calls an external service (llm_call, serv_query, serv_insert, serv_update, serv_delete) and fails unrecoverably.\n- Every human_gate MUST have at least one option with action: \"cancel\". This is enforced by the static analysis validator.\n- notify steps only support \"next\" and \"end\" in on_success \u2014 they have no on_failure.\n- end steps have no routing fields.\n\nNOTE \u2014 condition steps:\ncondition on_truthy and on_falsy use the same step:N format as all other routing fields (e.g. \"step:8\").\nBare keys (e.g. \"8\") are NOT valid for any routing field including on_truthy and on_falsy.\n\nCOMMON MISTAKE \u2014 bare step keys:\n  WRONG:  \"on_success\": \"8\"       (bare key \u2014 not a valid routing token)\n  RIGHT:  \"on_success\": \"step:8\"  (always prefix with step:)\nThe step: prefix is mandatory. A bare number or identifier is never a valid routing value."
+        }
+      ]
+    }
   },
   {
     "key": "create_domain_example",
     "section": "examples",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "create_workflow",
       "analyze_and_design_workflow"
     ],
-    "version": 7,
-    "content": "WORKED EXAMPLE \u2014 create_domain workflow (condensed data flow)\n\nThis is the canonical example of a correct workflow definition. Use it as the reference for step structure, template syntax, data flow, and the expression-based js_transform pattern.\n\nrun.input = { userInput: \"stock portfolio\" }\n\nStep 1  llm_call (prompt: \"create_domain\", user_input: \"{{input.userInput}}\")\n        \u2192 output_key: \"proposed_scaffold\"\n        \u2192 local_state.proposed_scaffold = { domain: \"stock_portfolio\", tables: [...] }\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 2  js_transform (expression-based, input_key: \"proposed_scaffold.tables\", output_key: \"proposed_scaffold.tables\")\n        expression: \"(function() { var SYS = new Set(['id','created_at','updated_at']); return items.map(function(t) { var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: local_state.proposed_scaffold.domain }); }); })()\"\n        \u2192 enriches each table with columnSummary field\n        \u2192 NOTE: local_state is a first-class sandbox binding \u2014 use local_state.key_name to read any prior step output\n        \u2192 NOTE: transform_type built-ins (columnSummary, buildChildInserts, etc.) are REMOVED \u2014 always use expression\n        \u2192 on_success: \"next\"\n\nStep 3  human_gate (gate_type: \"edit_list\", context_key: \"proposed_scaffold.tables\")\n        \u2192 options: [confirm\u2192\"step:3d\", add_table\u2192\"step:3a\", cancel\u2192\"cancel\"]\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 3a human_gate (gate_type: \"text_input\", output_key: \"new_table_description\")\n        \u2192 user types table description, written to local_state.new_table_description\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 3b llm_call (prompt: \"design_table\", inputs: domain, existing_tables, user_input)\n        \u2192 output_key: \"new_table\"\n\nStep 3c js_transform (expression merges new_table into proposed_scaffold.tables)\n        \u2192 reads local_state.new_table and local_state.proposed_scaffold via local_state binding\n        \u2192 on_success: \"step:3\"  \u2190 intentional backward reference (safe \u2014 step 3 is a human_gate)\n\nStep 3d human_gate (gate_type: \"review_object\", context_key: \"proposed_scaffold.tables\")\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 4  human_gate (gate_type: \"confirm\") \u2014 final DDL confirmation\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 5  iterator (items_key: \"proposed_scaffold.tables\", execution_mode: \"sequential\")\n          item_step: serv_schema createTable({{item}})\n        \u2192 output_key: \"created_tables\", on_complete: \"next\"\n\nStep 6  js_transform (expression derives registration data from scaffold \u2014 no LLM)\n        \u2192 reads: local_state.proposed_scaffold.domain, local_state.proposed_scaffold.tables\n        \u2192 output_key: \"generated\" = { domainHelp, intentMapRows, entitySchemas }\n\nStep 7  human_gate (gate_type: \"review_object\", context_key: \"generated.domainHelp\")\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 8  serv_insert (tableName: \"PGC_DomainHelp\", row: \"{{generated.domainHelp}}\")\n\nStep 9  iterator over generated.intentMapRows \u2014 serv_insert PGC_IntentMap({{item}})\n\nStep 10b iterator over generated.entitySchemas \u2014 serv_insert PGC_EntitySchema({{item}})\n\nStep 11 notify \"Domain {{proposed_scaffold.domain}} created.\"\n        \u2192 on_success: \"end\"\n\nStep 12 end\n\nKEY PATTERNS FROM THIS EXAMPLE:\n- Template syntax: {{key}}, {{key.field}}, {{key.0.field}}, {{item}}, {{item.field}}, {{input.field}}\n- output_key establishes the local_state key that downstream steps reference\n- js_transform ALWAYS uses expression \u2014 never transform_type (built-ins are removed)\n- expression is an IIFE: (function(){ ... return value; })()\n- local_state is available in every expression \u2014 read any prior step output via local_state.key_name\n- Backward references (step:3) are safe only when every path back passes through at least one human_gate\n- serv_insert row values use template substitution: \"{{generated.domainHelp}}\" resolves to the full object\n- iterator must always include execution_mode: \"sequential\"\n\nFLAT LOOP PATTERN \u2014 for workflows that iterate over a collection with human interaction per item:\n\nUse this when a simple iterator cannot be used because each item requires human interaction (e.g. a quiz, a review flow, a step-by-step tutorial).\n\nExample: Spanish vocabulary quiz\n  state: local_state.cards (array loaded once), local_state.index (0), local_state.score ({ passed:0, failed:0 })\n\n  Step 1: serv_entity_query \u2014 load flashcards into local_state.cards (with optional set_id filter)\n  Step 2: js_transform \u2014 shuffle cards, initialise index=0 and score={passed:0,failed:0} using (function(){ return { cards: shuffle(items), index: 0, score: {passed:0,failed:0} }; })()\n          output_key: \"quiz_state\"\n  Step 3: js_transform \u2014 pick current card: (function(){ return local_state.quiz_state.cards[local_state.quiz_state.index]; })()\n          input_key: \"quiz_state\", output_key: \"current_card\"\n  Step 4: human_gate confirm \u2014 show card front (message_template: \"Term: {{current_card.term}}\"), options: [Show answer\u2192next, Cancel\u2192cancel]\n  Step 5: human_gate text_input \u2014 show card back, user types answer, output_key: \"user_answer\"\n  Step 6: llm_call evaluate_translation \u2014 input: { term: \"{{current_card.term}}\", definition: \"{{current_card.definition}}\", user_answer: \"{{user_answer}}\" }, output_key: \"eval_result\"\n  Step 7: js_transform \u2014 update score and advance index:\n          expression: (function(){ var qs = local_state.quiz_state; var res = local_state.eval_result; var newScore = { passed: qs.score.passed + (res.result==='pass'?1:0), failed: qs.score.failed + (res.result==='fail'?1:0) }; return { cards: qs.cards, index: qs.index + 1, score: newScore }; })()\n          input_key: \"quiz_state\", output_key: \"quiz_state\"\n  Step 8: human_gate confirm \u2014 show result + feedback (message_template: \"{{eval_result.feedback}}\"), options: [Next card\u2192step:3, Finish\u2192step:9, Cancel\u2192cancel]\n          \u2190 BACKWARD REFERENCE: step:3 is safe because steps 4, 5, 8 are human_gates in the loop path\n  Step 9: condition \u2014 check if more cards remain: expression: \"{{quiz_state.index}}\"\n          Actually use a js_transform before: compute done = index >= cards.length, then condition on that flag\n  Step 10: notify \u2014 quiz summary\n  Step 11: end\n\nFLAT LOOP GUARD 3 SAFETY RULE:\n- A backward reference (e.g. step 8 \u2192 step:3) is SAFE if and only if the path from the target step back to the source step contains at least one human_gate\n- Without a human_gate in the loop, the Step Processor spins synchronously and exhausts Lambda\n- Always verify: target_step ... [human_gate] ... source_step ... backward_ref \u2192 target_step"
+    "version": 8,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "WORKED EXAMPLE \u2014 create_domain workflow (condensed data flow)\n\nThis is the canonical example of a correct workflow definition. Use it as the reference for step structure, template syntax, data flow, and the expression-based js_transform pattern.\n\nrun.input = { userInput: \"stock portfolio\" }\n\nStep 1  llm_call (prompt: \"create_domain\", user_input: \"{{input.userInput}}\")\n        \u2192 output_key: \"proposed_scaffold\"\n        \u2192 local_state.proposed_scaffold = { domain: \"stock_portfolio\", tables: [...] }\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 2  js_transform (expression-based, input_key: \"proposed_scaffold.tables\", output_key: \"proposed_scaffold.tables\")\n        expression: \"(function() { var SYS = new Set(['id','created_at','updated_at']); return items.map(function(t) { var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: local_state.proposed_scaffold.domain }); }); })()\"\n        \u2192 enriches each table with columnSummary field\n        \u2192 NOTE: local_state is a first-class sandbox binding \u2014 use local_state.key_name to read any prior step output\n        \u2192 NOTE: transform_type built-ins (columnSummary, buildChildInserts, etc.) are REMOVED \u2014 always use expression\n        \u2192 on_success: \"next\"\n\nStep 3  human_gate (gate_type: \"edit_list\", context_key: \"proposed_scaffold.tables\")\n        \u2192 options: [confirm\u2192\"step:3d\", add_table\u2192\"step:3a\", cancel\u2192\"cancel\"]\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 3a human_gate (gate_type: \"text_input\", output_key: \"new_table_description\")\n        \u2192 user types table description, written to local_state.new_table_description\n        \u2192 on_success: \"next\", on_failure: \"cancel\"\n\nStep 3b llm_call (prompt: \"design_table\", inputs: domain, existing_tables, user_input)\n        \u2192 output_key: \"new_table\"\n\nStep 3c js_transform (expression merges new_table into proposed_scaffold.tables)\n        \u2192 reads local_state.new_table and local_state.proposed_scaffold via local_state binding\n        \u2192 on_success: \"step:3\"  \u2190 intentional backward reference (safe \u2014 step 3 is a human_gate)\n\nStep 3d human_gate (gate_type: \"review_object\", context_key: \"proposed_scaffold.tables\")\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 4  human_gate (gate_type: \"confirm\") \u2014 final DDL confirmation\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 5  iterator (items_key: \"proposed_scaffold.tables\", execution_mode: \"sequential\")\n          item_step: serv_schema createTable({{item}})\n        \u2192 output_key: \"created_tables\", on_complete: \"next\"\n\nStep 6  js_transform (expression derives registration data from scaffold \u2014 no LLM)\n        \u2192 reads: local_state.proposed_scaffold.domain, local_state.proposed_scaffold.tables\n        \u2192 output_key: \"generated\" = { domainHelp, intentMapRows, entitySchemas }\n\nStep 7  human_gate (gate_type: \"review_object\", context_key: \"generated.domainHelp\")\n        \u2192 confirm \u2192 \"next\", cancel \u2192 \"cancel\"\n\nStep 8  serv_insert (tableName: \"PGC_DomainHelp\", row: \"{{generated.domainHelp}}\")\n\nStep 9  iterator over generated.intentMapRows \u2014 serv_insert PGC_IntentMap({{item}})\n\nStep 10b iterator over generated.entitySchemas \u2014 serv_insert PGC_EntitySchema({{item}})\n\nStep 11 notify \"Domain {{proposed_scaffold.domain}} created.\"\n        \u2192 on_success: \"end\"\n\nStep 12 end\n\nKEY PATTERNS FROM THIS EXAMPLE:\n- Template syntax: {{key}}, {{key.field}}, {{key.0.field}}, {{item}}, {{item.field}}, {{input.field}}\n- output_key establishes the local_state key that downstream steps reference\n- js_transform ALWAYS uses expression \u2014 never transform_type (built-ins are removed)\n- expression is an IIFE: (function(){ ... return value; })()\n- local_state is available in every expression \u2014 read any prior step output via local_state.key_name\n- Backward references (step:3) are safe only when every path back passes through at least one human_gate\n- serv_insert row values use template substitution: \"{{generated.domainHelp}}\" resolves to the full object\n- iterator must always include execution_mode: \"sequential\"\n\nFLAT LOOP PATTERN \u2014 for workflows that iterate over a collection with human interaction per item:\n\nUse this when a simple iterator cannot be used because each item requires human interaction (e.g. a quiz, a review flow, a step-by-step tutorial).\n\nExample: Spanish vocabulary quiz\n  state: local_state.cards (array loaded once), local_state.index (0), local_state.score ({ passed:0, failed:0 })\n\n  Step 1: serv_entity_query \u2014 load flashcards into local_state.cards (with optional set_id filter)\n  Step 2: js_transform \u2014 shuffle cards, initialise index=0 and score={passed:0,failed:0} using (function(){ return { cards: shuffle(items), index: 0, score: {passed:0,failed:0} }; })()\n          output_key: \"quiz_state\"\n  Step 3: js_transform \u2014 pick current card: (function(){ return local_state.quiz_state.cards[local_state.quiz_state.index]; })()\n          input_key: \"quiz_state\", output_key: \"current_card\"\n  Step 4: human_gate confirm \u2014 show card front (message_template: \"Term: {{current_card.term}}\"), options: [Show answer\u2192next, Cancel\u2192cancel]\n  Step 5: human_gate text_input \u2014 show card back, user types answer, output_key: \"user_answer\"\n  Step 6: llm_call evaluate_translation \u2014 input: { term: \"{{current_card.term}}\", definition: \"{{current_card.definition}}\", user_answer: \"{{user_answer}}\" }, output_key: \"eval_result\"\n  Step 7: js_transform \u2014 update score and advance index:\n          expression: (function(){ var qs = local_state.quiz_state; var res = local_state.eval_result; var newScore = { passed: qs.score.passed + (res.result==='pass'?1:0), failed: qs.score.failed + (res.result==='fail'?1:0) }; return { cards: qs.cards, index: qs.index + 1, score: newScore }; })()\n          input_key: \"quiz_state\", output_key: \"quiz_state\"\n  Step 8: human_gate confirm \u2014 show result + feedback (message_template: \"{{eval_result.feedback}}\"), options: [Next card\u2192step:3, Finish\u2192step:9, Cancel\u2192cancel]\n          \u2190 BACKWARD REFERENCE: step:3 is safe because steps 4, 5, 8 are human_gates in the loop path\n  Step 9: condition \u2014 check if more cards remain: expression: \"{{quiz_state.index}}\"\n          Actually use a js_transform before: compute done = index >= cards.length, then condition on that flag\n  Step 10: notify \u2014 quiz summary\n  Step 11: end\n\nFLAT LOOP GUARD 3 SAFETY RULE:\n- A backward reference (e.g. step 8 \u2192 step:3) is SAFE if and only if the path from the target step back to the source step contains at least one human_gate\n- Without a human_gate in the loop, the Step Processor spins synchronously and exhausts Lambda\n- Always verify: target_step ... [human_gate] ... source_step ... backward_ref \u2192 target_step"
+        }
+      ]
+    }
   },
   {
     "key": "step_usage_patterns",
     "section": "rules",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "analyze_and_design_workflow",
       "fix_workflow_steps"
     ],
-    "version": 4,
-    "content": "STEP USAGE PATTERNS \u2014 concrete correct forms for each step type\n\nThese patterns show exactly how to write each step type. The most common mistake\nfor each type is noted. Use these alongside the step_type_contracts schema.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\njs_transform \u2014 expression-based data manipulation\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: input_key, output_key, expression, on_success\nexpression MUST be a synchronous IIFE that returns the output value.\n\nCorrect \u2014 enrich an array, read cross-step state via local_state:\n{\n  \"step\": \"2\", \"type\": \"js_transform\",\n  \"input_key\": \"proposed_scaffold.tables\",\n  \"output_key\": \"proposed_scaffold.tables\",\n  \"expression\": \"(function() { return items.map(function(t) { return Object.assign({}, t, { domain: local_state.proposed_scaffold.domain }); }); })()\",\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 update a loop counter using cross-step local_state reads:\n{\n  \"step\": \"7\", \"type\": \"js_transform\",\n  \"input_key\": \"quiz_state\",\n  \"output_key\": \"quiz_state\",\n  \"expression\": \"(function() { var qs = local_state.quiz_state; var res = local_state.eval_result; return { cards: qs.cards, index: qs.index + 1, score: { passed: qs.score.passed + (res.result==='pass'?1:0), failed: qs.score.failed + (res.result==='fail'?1:0) } }; })()\",\n  \"on_success\": \"next\"\n}\n\nCorrect \u2014 compute a boolean flag for a condition step:\n{\n  \"step\": \"8a\", \"type\": \"js_transform\",\n  \"input_key\": \"quiz_state\",\n  \"output_key\": \"quiz_done\",\n  \"expression\": \"(function() { var qs = local_state.quiz_state; return qs.index >= qs.cards.length; })()\",\n  \"on_success\": \"next\"\n}\n\nMISTAKES:\n\u2717 expression that is not an IIFE: \"items.filter(...)\" \u2014 must be (function(){...return ...;})()\n\u2717 using output_key as a dot-path to merge into a parent: \"quiz_state.done\" \u2014 only top-level keys are reliable write targets; for nested writes, return the full updated object\n\u2717 trying to await or fetch inside expression \u2014 no async, no I/O\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\ncondition \u2014 routes on a boolean expression, no I/O\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: expression, on_truthy, on_falsy\non_truthy and on_falsy are BARE STEP KEYS \u2014 not \"step:N\" format.\nThe executor internally prepends \"step:\" \u2014 providing \"step:3\" here causes a double-prefix.\n\nCorrect:\n{\n  \"step\": \"8b\", \"type\": \"condition\",\n  \"expression\": \"{{quiz_done}}\",\n  \"on_truthy\": \"10\",\n  \"on_falsy\": \"3\"\n}\n\nMISTAKES:\n\u2717 on_truthy: \"step:3\" \u2014 WRONG. Use bare key: \"3\"\n\u2717 condition writes no output_key \u2014 it produces no local_state value\n\u2717 using a {{template}} that resolves to a complex object \u2014 expression must resolve to a truthy/falsy scalar. Write a boolean flag in a prior js_transform and condition on that flag.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 confirm type (simple acknowledgement)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type, message_template, options (must include cancel)\n\nCorrect \u2014 simple confirmation before a destructive action:\n{\n  \"step\": \"4\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.\",\n  \"options\": [\n    { \"label\": \"Confirm delete\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",         \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 confirm gate with context_key shows the data object above the buttons.\nWhen context_key is present and output_key is set, the user's selected action\nvalue is written to local_state[output_key]:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"What would you like help with?\",\n  \"context_key\": \"help_options.domainButtons\",\n  \"output_key\": \"help_selection\",\n  \"options\": [\n    { \"label\": \"System commands\", \"action\": \"system\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",          \"action\": \"cancel\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 output_key on a confirm gate WITHOUT context_key \u2014 the value is never written. output_key only writes on text_input gates and on confirm gates that also have context_key.\n\u2717 missing cancel option \u2014 required by static analysis validator.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 text_input type (free text capture)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"text_input\", message_template, output_key, options\noutput_key is REQUIRED and is the local_state key where the typed value is written on submit.\nNo context_key \u2014 text_input shows only the message_template.\nOptions must have exactly one Submit (action: confirm) and one Cancel.\n\nCorrect:\n{\n  \"step\": \"5\", \"type\": \"human_gate\", \"gate_type\": \"text_input\",\n  \"message_template\": \"{{current_card.definition}}\\n\\nType the Spanish term:\",\n  \"output_key\": \"user_answer\",\n  \"options\": [\n    { \"label\": \"Submit\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\", \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 context_key on text_input \u2014 invalid, ignored\n\u2717 omitting output_key \u2014 the typed value is lost\n\u2717 output_key on confirm/review_object gate types \u2014 has no effect; only text_input writes on submit\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 review_object type (structured summary)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"review_object\", message_template, context_key, options\n\nCorrect:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"review_object\",\n  \"message_template\": \"Here's what I parsed. Does this look right?\",\n  \"context_key\": \"parsed_entity\",\n  \"options\": [\n    { \"label\": \"Looks good\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",     \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\niterator \u2014 sequential execution over an array\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: items_key, item_step, output_key, on_complete, execution_mode\nexecution_mode MUST always be \"sequential\". Without it the iterator is non-sequential\nand large batches will exhaust Lambda concurrency.\nitem_step uses {{item}} and {{item.field}} to reference the current element.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"iterator\",\n  \"items_key\": \"child_inserts\",\n  \"item_step\": {\n    \"type\": \"serv_insert\",\n    \"input\": { \"tableName\": \"{{item.tableName}}\", \"row\": \"{{item.row}}\" },\n    \"on_failure\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"inserted_children\",\n  \"on_complete\": \"next\",\n  \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 omitting execution_mode \u2014 always required\n\u2717 item_step referencing local_state keys that do not exist yet \u2014 item_step runs with the parent frame's local_state plus the injected 'item' key\n\u2717 output_key omitted \u2014 iterator results are lost\n\n\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 choice type (single-select with descriptions)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"choice\", message_template, options (value/label/description shape)\noutput_key is written with the selected option's value when the user responds.\nOptions use { value, label, description, on_select } \u2014 value is the machine identifier\nwritten to output_key, label is the short button text, description is shown above buttons.\n\nCorrect \u2014 standalone choice gate:\n{\n  \"step\": \"3b\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"How should the quiz evaluate your answers?\",\n  \"output_key\": \"eval_preference\",\n  \"options\": [\n    { \"value\": \"llm\",    \"label\": \"A\", \"description\": \"LLM grades each answer \u2014 precise but uses tokens\", \"on_select\": \"next\" },\n    { \"value\": \"self\",   \"label\": \"B\", \"description\": \"Self-report pass/fail after seeing the answer\",     \"on_select\": \"next\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop workflow\",                               \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 choice gate as item_step inside a suspending iterator:\n{\n  \"step\": \"5\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_success\": \"next\",\n    \"on_failure\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"next\",\n  \"on_failure\": \"cancel\"\n}\nEach item in preference_gates must have shape: { question, options: [{value, label, description, on_select}] }\nThe iterator suspends once per item. resume_gate increments current_index and strips\nthe item binding before merging state back onto the iterator frame.\nThe results array at output_key collects one selected value per item.\n\nMISTAKES:\n\u2717 Using confirm, edit_list, review_object, or text_input as item_step gate_type inside\n  an iterator \u2014 only choice composes correctly into a results array per item.\n\u2717 Omitting execution_mode: \"sequential\" on any iterator \u2014 always required.\n\u2717 Using a suspending iterator when inter-item state is needed \u2014 use the flat loop\n  pattern instead (backward step reference with a human_gate in the loop path).\n  See the flat loop example in create_domain_example system context.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nllm_call \u2014 calling an existing prompt\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: input.prompt (intent_category), output_key, on_success, on_failure\ninput.prompt must match an intent_category in PGC_Prompt. All other input keys\nbecome {{template}} substitutions in the prompt text.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"llm_call\",\n  \"input\": {\n    \"prompt\": \"evaluate_translation\",\n    \"term\":        \"{{current_card.term}}\",\n    \"definition\":  \"{{current_card.definition}}\",\n    \"user_answer\": \"{{user_answer}}\"\n  },\n  \"output_key\": \"eval_result\",\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 referencing a prompt intent_category that does not exist in PGC_Prompt \u2014 check design_spec.prompts_needed to confirm the prompt was seeded\n\u2717 adding output_schema to an llm_call step \u2014 output_schema is defined on the PGC_Prompt row, not on the step"
+    "version": 5,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "STEP USAGE PATTERNS \u2014 concrete correct forms for each step type\n\nThese patterns show exactly how to write each step type. The most common mistake\nfor each type is noted. Use these alongside the step_type_contracts schema.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\njs_transform \u2014 expression-based data manipulation\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: input_key, output_key, expression, on_success\nexpression MUST be a synchronous IIFE that returns the output value.\n\nCorrect \u2014 enrich an array, read cross-step state via local_state:\n{\n  \"step\": \"2\", \"type\": \"js_transform\",\n  \"input_key\": \"proposed_scaffold.tables\",\n  \"output_key\": \"proposed_scaffold.tables\",\n  \"expression\": \"(function() { return items.map(function(t) { return Object.assign({}, t, { domain: local_state.proposed_scaffold.domain }); }); })()\",\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 update a loop counter using cross-step local_state reads:\n{\n  \"step\": \"7\", \"type\": \"js_transform\",\n  \"input_key\": \"quiz_state\",\n  \"output_key\": \"quiz_state\",\n  \"expression\": \"(function() { var qs = local_state.quiz_state; var res = local_state.eval_result; return { cards: qs.cards, index: qs.index + 1, score: { passed: qs.score.passed + (res.result==='pass'?1:0), failed: qs.score.failed + (res.result==='fail'?1:0) } }; })()\",\n  \"on_success\": \"next\"\n}\n\nCorrect \u2014 compute a boolean flag for a condition step:\n{\n  \"step\": \"8a\", \"type\": \"js_transform\",\n  \"input_key\": \"quiz_state\",\n  \"output_key\": \"quiz_done\",\n  \"expression\": \"(function() { var qs = local_state.quiz_state; return qs.index >= qs.cards.length; })()\",\n  \"on_success\": \"next\"\n}\n\nMISTAKES:\n\u2717 expression that is not an IIFE: \"items.filter(...)\" \u2014 must be (function(){...return ...;})()\n\u2717 using output_key as a dot-path to merge into a parent: \"quiz_state.done\" \u2014 only top-level keys are reliable write targets; for nested writes, return the full updated object\n\u2717 trying to await or fetch inside expression \u2014 no async, no I/O\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\ncondition \u2014 routes on a boolean expression, no I/O\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: expression, on_truthy, on_falsy\non_truthy and on_falsy are BARE STEP KEYS \u2014 not \"step:N\" format.\nThe executor internally prepends \"step:\" \u2014 providing \"step:3\" here causes a double-prefix.\n\nCorrect:\n{\n  \"step\": \"8b\", \"type\": \"condition\",\n  \"expression\": \"{{quiz_done}}\",\n  \"on_truthy\": \"10\",\n  \"on_falsy\": \"3\"\n}\n\nMISTAKES:\n\u2717 on_truthy: \"step:3\" \u2014 WRONG. Use bare key: \"3\"\n\u2717 condition writes no output_key \u2014 it produces no local_state value\n\u2717 using a {{template}} that resolves to a complex object \u2014 expression must resolve to a truthy/falsy scalar. Write a boolean flag in a prior js_transform and condition on that flag.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 confirm type (simple acknowledgement)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type, message_template, options (must include cancel)\n\nCorrect \u2014 simple confirmation before a destructive action:\n{\n  \"step\": \"4\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.\",\n  \"options\": [\n    { \"label\": \"Confirm delete\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",         \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 confirm gate with context_key shows the data object above the buttons.\nWhen context_key is present and output_key is set, the user's selected action\nvalue is written to local_state[output_key]:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"What would you like help with?\",\n  \"context_key\": \"help_options.domainButtons\",\n  \"output_key\": \"help_selection\",\n  \"options\": [\n    { \"label\": \"System commands\", \"action\": \"system\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",          \"action\": \"cancel\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 output_key on a confirm gate WITHOUT context_key \u2014 the value is never written. output_key only writes on text_input gates and on confirm gates that also have context_key.\n\u2717 missing cancel option \u2014 required by static analysis validator.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 text_input type (free text capture)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"text_input\", message_template, output_key, options\noutput_key is REQUIRED and is the local_state key where the typed value is written on submit.\nNo context_key \u2014 text_input shows only the message_template.\nOptions must have exactly one Submit (action: confirm) and one Cancel.\n\nCorrect:\n{\n  \"step\": \"5\", \"type\": \"human_gate\", \"gate_type\": \"text_input\",\n  \"message_template\": \"{{current_card.definition}}\\n\\nType the Spanish term:\",\n  \"output_key\": \"user_answer\",\n  \"options\": [\n    { \"label\": \"Submit\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\", \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 context_key on text_input \u2014 invalid, ignored\n\u2717 omitting output_key \u2014 the typed value is lost\n\u2717 output_key on confirm/review_object gate types \u2014 has no effect; only text_input writes on submit\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 review_object type (structured summary)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"review_object\", message_template, context_key, options\n\nCorrect:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"review_object\",\n  \"message_template\": \"Here's what I parsed. Does this look right?\",\n  \"context_key\": \"parsed_entity\",\n  \"options\": [\n    { \"label\": \"Looks good\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",     \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\niterator \u2014 sequential execution over an array\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: items_key, item_step, output_key, on_complete, execution_mode\nexecution_mode MUST always be \"sequential\". Without it the iterator is non-sequential\nand large batches will exhaust Lambda concurrency.\nitem_step uses {{item}} and {{item.field}} to reference the current element.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"iterator\",\n  \"items_key\": \"child_inserts\",\n  \"item_step\": {\n    \"type\": \"serv_insert\",\n    \"input\": { \"tableName\": \"{{item.tableName}}\", \"row\": \"{{item.row}}\" },\n    \"on_failure\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"inserted_children\",\n  \"on_complete\": \"next\",\n  \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 omitting execution_mode \u2014 always required\n\u2717 item_step referencing local_state keys that do not exist yet \u2014 item_step runs with the parent frame's local_state plus the injected 'item' key\n\u2717 output_key omitted \u2014 iterator results are lost\n\n\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nhuman_gate \u2014 choice type (single-select with descriptions)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: gate_type: \"choice\", message_template, options (value/label/description shape)\noutput_key is written with the selected option's value when the user responds.\nOptions use { value, label, description, on_select } \u2014 value is the machine identifier\nwritten to output_key, label is the short button text, description is shown above buttons.\n\nCorrect \u2014 standalone choice gate:\n{\n  \"step\": \"3b\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"How should the quiz evaluate your answers?\",\n  \"output_key\": \"eval_preference\",\n  \"options\": [\n    { \"value\": \"llm\",    \"label\": \"A\", \"description\": \"LLM grades each answer \u2014 precise but uses tokens\", \"on_select\": \"next\" },\n    { \"value\": \"self\",   \"label\": \"B\", \"description\": \"Self-report pass/fail after seeing the answer\",     \"on_select\": \"next\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop workflow\",                               \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nCorrect \u2014 choice gate as item_step inside a suspending iterator:\n{\n  \"step\": \"5\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_success\": \"next\",\n    \"on_failure\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"next\",\n  \"on_failure\": \"cancel\"\n}\nEach item in preference_gates must have shape: { question, options: [{value, label, description, on_select}] }\nThe iterator suspends once per item. resume_gate increments current_index and strips\nthe item binding before merging state back onto the iterator frame.\nThe results array at output_key collects one selected value per item.\n\nMISTAKES:\n\u2717 Using confirm, edit_list, review_object, or text_input as item_step gate_type inside\n  an iterator \u2014 only choice composes correctly into a results array per item.\n\u2717 Omitting execution_mode: \"sequential\" on any iterator \u2014 always required.\n\u2717 Using a suspending iterator when inter-item state is needed \u2014 use the flat loop\n  pattern instead (backward step reference with a human_gate in the loop path).\n  See the flat loop example in create_domain_example system context.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nllm_call \u2014 calling an existing prompt\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nREQUIRED fields: input.prompt (intent_category), output_key, on_success, on_failure\ninput.prompt must match an intent_category in PGC_Prompt. All other input keys\nbecome {{template}} substitutions in the prompt text.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"llm_call\",\n  \"input\": {\n    \"prompt\": \"evaluate_translation\",\n    \"term\":        \"{{current_card.term}}\",\n    \"definition\":  \"{{current_card.definition}}\",\n    \"user_answer\": \"{{user_answer}}\"\n  },\n  \"output_key\": \"eval_result\",\n  \"on_success\": \"next\", \"on_failure\": \"cancel\"\n}\n\nMISTAKES:\n\u2717 referencing a prompt intent_category that does not exist in PGC_Prompt \u2014 check design_spec.prompts_needed to confirm the prompt was seeded\n\u2717 adding output_schema to an llm_call step \u2014 output_schema is defined on the PGC_Prompt row, not on the step"
+        }
+      ]
+    }
   },
   {
     "key": "runtime_bindings",
     "section": "rules",
-    "format": "prose",
-    "inject_always": false,
-    "inject_for": [
-      "generate_workflow_steps",
-      "analyze_and_design_workflow"
-    ],
-    "version": 1,
-    "content": "RUNTIME BINDINGS \u2014 what is available in local_state at each step\n\nThe Step Processor injects certain values into local_state automatically.\nThese are available in every step without being written by any workflow step.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\ninput.* \u2014 the WorkflowRun input object (always available, read-only)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAvailable in every step of every workflow as {{input.<field>}}.\nNever written or modified by any step. Set when the WorkflowRun is created.\n\nFor create_workflow workflows, input contains:\n  input.userInput   \u2014 the raw user text, e.g. \"create workflow Spanish vocabulary quiz\"\n  input.domain      \u2014 domain resolved by the intent preprocessor, e.g. \"spanish_flashcards\"\n                      May be null if the intent preprocessor could not resolve a domain.\n\nFor *_entity workflows, input contains:\n  input.userInput   \u2014 raw user text\n  input.entity_name \u2014 PascalCase entity name, e.g. \"SpanishFlashcard\"\n  input.id          \u2014 integer id for get/update/delete workflows\n  input.search      \u2014 search term for get workflows\n  input.updates     \u2014 field\u2192value object for update workflows\n\nTemplate usage: {{input.userInput}}, {{input.domain}}, {{input.entity_name}}\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\noutput_key lifecycle \u2014 how step outputs become local_state keys\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nWhen a step completes successfully:\n  local_state[step.output_key] = step result value\n\nThe output_key value is then available to all subsequent steps in the same frame\nas a top-level local_state key via {{output_key}} or {{output_key.field}}.\n\nDot-notation output_key: \"proposed_scaffold.tables\" writes to\nlocal_state.proposed_scaffold.tables \u2014 the parent object must already exist.\nFor top-level writes, always use a simple key like \"quiz_state\" or \"result\".\n\noutput_key is NOT written by: condition, notify, end, iterator (iterator writes\nits output_key to the PARENT frame after all items complete).\n\noutput_key on human_gate:\n  text_input gate      \u2192 output_key IS written (the typed value)\n  confirm gate with context_key \u2192 output_key IS written (the selected action value)\n  confirm gate without context_key \u2192 output_key is NOT written\n  review_object gate   \u2192 output_key is NOT written\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nitem and item.* \u2014 iterator scope binding\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAvailable ONLY inside an iterator's item_step. Not available in the parent frame.\nitem is the current array element for this iteration.\n\n  item            \u2014 the full current element\n  item.field      \u2014 a field on the current element\n  item.tableName  \u2014 example for array of { tableName, row } objects\n\nThe item_step executes with the parent frame's local_state plus the injected item.\nAll parent local_state keys (including input.*) are readable inside item_step.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nlocal_state in js_transform expressions\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nInside a js_transform expression, two bindings are available:\n  items       \u2014 the value of input_key resolved from local_state at execution time\n  local_state \u2014 the full local_state object at execution time\n\nUse local_state to read any prior step's output_key:\n  local_state.eval_result.result      \u2014 reads the result field of eval_result\n  local_state.quiz_state.cards.length \u2014 array length\n  local_state.quiz_state.index        \u2014 loop counter\n\nBoth items and local_state reflect the state at the moment the step executes.\nlocal_state does not contain future step outputs.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\niterator output in parent frame\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAfter all items in an iterator complete, the iterator frame pops and the parent\nframe resumes. The iterator's output_key is written to the PARENT frame's\nlocal_state as an array of all item results in execution order.\n\nExample: iterator with output_key \"inserted_children\" over 3 items produces:\n  local_state.inserted_children = [ result_item_0, result_item_1, result_item_2 ]"
-  },
-  {
-    "key": "template_syntax",
-    "section": "rules",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "generate_workflow_steps",
       "analyze_and_design_workflow"
     ],
     "version": 2,
-    "content": "TEMPLATE SYNTAX \u2014 how {{template}} references resolve\n\nTemplate references are resolved by template-resolver.mjs against local_state\nat the moment each step executes. All step input fields support template substitution.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nReference forms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n{{key}}              top-level local_state key\n                     e.g. {{proposed_scaffold}} resolves to the full object\n\n{{key.field}}        dot-path into a nested object\n                     e.g. {{proposed_scaffold.domain}} resolves to the domain string\n\n{{key.0.field}}      array index access \u2014 0 is the first element\n                     e.g. {{entity_schema_rows.0.root_table}}\n\n{{input.field}}      reads from run.input (the WorkflowRun input object)\n                     e.g. {{input.userInput}}, {{input.domain}}, {{input.entity_name}}\n                     input.* is read-only and always available\n\n{{item}}             current iterator element \u2014 only valid inside item_step\n{{item.field}}       field on the current iterator element\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nObject and array resolution\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nWhen a {{template}} resolves to an object or array, the full value is passed\nto the step input field. This is intentional for serv_insert row fields:\n\n  \"row\": \"{{generated.domainHelp}}\"\n  \u2192 row receives the full domainHelp object, not a string\n\n  \"row\": \"{{item}}\"\n  \u2192 row receives the full current iterator element\n\n  \"filters\": \"{{input.filters}}\"\n  \u2192 filters receives the array directly\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nUnresolved references\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nIf the path does not exist in local_state, the template resolves to an\nempty string silently \u2014 no error is thrown. Design implication:\n\n\u2717 Do not use {{some_key}} in a condition expression expecting a boolean \u2014\n  if some_key is absent it resolves to \"\" which is falsy, silently routing wrong.\n\u2713 Use a js_transform to compute a boolean flag explicitly, then condition on that.\n\n\u2717 Do not use {{input.domain}} without checking design_spec \u2014 input.domain may be\n  null if the intent preprocessor could not resolve a domain. The left brain's\n  design_spec should note this and handle it in process_design.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nNested template references\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nTemplate substitution is single-pass \u2014 nested templates ({{{{key}}}} or a template\nwhose value itself contains {{...}}) are NOT double-resolved. Design for single-pass:\nthe step input contains the template, local_state contains the resolved value.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nmessage_template restrictions\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nmessage_template fields support ONLY {{key.path}} dot-notation.\nNEVER use Handlebars block syntax ({{#each}}, {{this}}, {{/each}}).\n\nWhen dialog_designs contains a message_template with Handlebars syntax, transform it:\n  INPUT:  {{#each tables}}{{this.name}}{{/each}}\n  OUTPUT: {{tables.0.name}}, {{tables.1.name}}, etc.\n\nUse indexed dot-notation ({{array.0.field}}, {{array.1.field}}) to reference array elements."
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "RUNTIME BINDINGS \u2014 what is available in local_state at each step\n\nThe Step Processor injects certain values into local_state automatically.\nThese are available in every step without being written by any workflow step.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\ninput.* \u2014 the WorkflowRun input object (always available, read-only)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAvailable in every step of every workflow as {{input.<field>}}.\nNever written or modified by any step. Set when the WorkflowRun is created.\n\nFor create_workflow workflows, input contains:\n  input.userInput   \u2014 the raw user text, e.g. \"create workflow Spanish vocabulary quiz\"\n  input.domain      \u2014 domain resolved by the intent preprocessor, e.g. \"spanish_flashcards\"\n                      May be null if the intent preprocessor could not resolve a domain.\n\nFor *_entity workflows, input contains:\n  input.userInput   \u2014 raw user text\n  input.entity_name \u2014 PascalCase entity name, e.g. \"SpanishFlashcard\"\n  input.id          \u2014 integer id for get/update/delete workflows\n  input.search      \u2014 search term for get workflows\n  input.updates     \u2014 field\u2192value object for update workflows\n\nTemplate usage: {{input.userInput}}, {{input.domain}}, {{input.entity_name}}\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\noutput_key lifecycle \u2014 how step outputs become local_state keys\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nWhen a step completes successfully:\n  local_state[step.output_key] = step result value\n\nThe output_key value is then available to all subsequent steps in the same frame\nas a top-level local_state key via {{output_key}} or {{output_key.field}}.\n\nDot-notation output_key: \"proposed_scaffold.tables\" writes to\nlocal_state.proposed_scaffold.tables \u2014 the parent object must already exist.\nFor top-level writes, always use a simple key like \"quiz_state\" or \"result\".\n\noutput_key is NOT written by: condition, notify, end, iterator (iterator writes\nits output_key to the PARENT frame after all items complete).\n\noutput_key on human_gate:\n  text_input gate      \u2192 output_key IS written (the typed value)\n  confirm gate with context_key \u2192 output_key IS written (the selected action value)\n  confirm gate without context_key \u2192 output_key is NOT written\n  review_object gate   \u2192 output_key is NOT written\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nitem and item.* \u2014 iterator scope binding\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAvailable ONLY inside an iterator's item_step. Not available in the parent frame.\nitem is the current array element for this iteration.\n\n  item            \u2014 the full current element\n  item.field      \u2014 a field on the current element\n  item.tableName  \u2014 example for array of { tableName, row } objects\n\nThe item_step executes with the parent frame's local_state plus the injected item.\nAll parent local_state keys (including input.*) are readable inside item_step.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nlocal_state in js_transform expressions\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nInside a js_transform expression, two bindings are available:\n  items       \u2014 the value of input_key resolved from local_state at execution time\n  local_state \u2014 the full local_state object at execution time\n\nUse local_state to read any prior step's output_key:\n  local_state.eval_result.result      \u2014 reads the result field of eval_result\n  local_state.quiz_state.cards.length \u2014 array length\n  local_state.quiz_state.index        \u2014 loop counter\n\nBoth items and local_state reflect the state at the moment the step executes.\nlocal_state does not contain future step outputs.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\niterator output in parent frame\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nAfter all items in an iterator complete, the iterator frame pops and the parent\nframe resumes. The iterator's output_key is written to the PARENT frame's\nlocal_state as an array of all item results in execution order.\n\nExample: iterator with output_key \"inserted_children\" over 3 items produces:\n  local_state.inserted_children = [ result_item_0, result_item_1, result_item_2 ]"
+        }
+      ]
+    }
+  },
+  {
+    "key": "template_syntax",
+    "section": "rules",
+    "inject_always": false,
+    "inject_for": [
+      "generate_workflow_steps",
+      "analyze_and_design_workflow"
+    ],
+    "version": 3,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "TEMPLATE SYNTAX \u2014 how {{template}} references resolve\n\nTemplate references are resolved by template-resolver.mjs against local_state\nat the moment each step executes. All step input fields support template substitution.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nReference forms\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n{{key}}              top-level local_state key\n                     e.g. {{proposed_scaffold}} resolves to the full object\n\n{{key.field}}        dot-path into a nested object\n                     e.g. {{proposed_scaffold.domain}} resolves to the domain string\n\n{{key.0.field}}      array index access \u2014 0 is the first element\n                     e.g. {{entity_schema_rows.0.root_table}}\n\n{{input.field}}      reads from run.input (the WorkflowRun input object)\n                     e.g. {{input.userInput}}, {{input.domain}}, {{input.entity_name}}\n                     input.* is read-only and always available\n\n{{item}}             current iterator element \u2014 only valid inside item_step\n{{item.field}}       field on the current iterator element\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nObject and array resolution\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nWhen a {{template}} resolves to an object or array, the full value is passed\nto the step input field. This is intentional for serv_insert row fields:\n\n  \"row\": \"{{generated.domainHelp}}\"\n  \u2192 row receives the full domainHelp object, not a string\n\n  \"row\": \"{{item}}\"\n  \u2192 row receives the full current iterator element\n\n  \"filters\": \"{{input.filters}}\"\n  \u2192 filters receives the array directly\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nUnresolved references\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nIf the path does not exist in local_state, the template resolves to an\nempty string silently \u2014 no error is thrown. Design implication:\n\n\u2717 Do not use {{some_key}} in a condition expression expecting a boolean \u2014\n  if some_key is absent it resolves to \"\" which is falsy, silently routing wrong.\n\u2713 Use a js_transform to compute a boolean flag explicitly, then condition on that.\n\n\u2717 Do not use {{input.domain}} without checking design_spec \u2014 input.domain may be\n  null if the intent preprocessor could not resolve a domain. The left brain's\n  design_spec should note this and handle it in process_design.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nNested template references\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nTemplate substitution is single-pass \u2014 nested templates ({{{{key}}}} or a template\nwhose value itself contains {{...}}) are NOT double-resolved. Design for single-pass:\nthe step input contains the template, local_state contains the resolved value.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nmessage_template restrictions\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nmessage_template fields support ONLY {{key.path}} dot-notation.\nNEVER use Handlebars block syntax ({{#each}}, {{this}}, {{/each}}).\n\nWhen dialog_designs contains a message_template with Handlebars syntax, transform it:\n  INPUT:  {{#each tables}}{{this.name}}{{/each}}\n  OUTPUT: {{tables.0.name}}, {{tables.1.name}}, etc.\n\nUse indexed dot-notation ({{array.0.field}}, {{array.1.field}}) to reference array elements."
+        }
+      ]
+    }
   },
   {
     "key": "workflow_constraints",
     "section": "rules",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "generate_workflow_steps",
       "analyze_and_design_workflow",
       "fix_workflow_steps"
     ],
-    "version": 4,
-    "content": "WORKFLOW CONSTRAINTS \u2014 structural rules the Step Processor enforces\n\nThese constraints apply to every generated workflow. Violating them produces\nsilent failures, incorrect routing, or Lambda exhaustion. The static analysis\nvalidator (simulate Level 1) catches many of these before registration.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStep array structure\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2713 Every workflow must have exactly one end step.\n\u2713 The end step must be the last step in the array.\n\u2713 Every non-end step must have on_success set to a valid routing token.\n\u2713 Every step that calls an external service must have on_failure: \"cancel\".\n  External service steps: llm_call, serv_query, serv_insert, serv_update,\n  serv_delete, serv_entity_query, serv_entity_get, serv_entity_schema, serv_schema.\n\u2713 Step keys are strings matched by exact equality. \"3\" and \"3a\" are distinct.\n  Never use integer step keys \u2014 always quote as strings: \"step\": \"1\" not \"step\": 1.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStep type constraints\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nnotify:\n  \u2717 No on_failure field \u2014 notify is fire-and-forget, errors are silently discarded\n  \u2713 on_success must be \"next\" or \"end\" only\n\ncondition:\n  \u2717 Writes no output to local_state \u2014 it only routes\n  \u2713 on_truthy and on_falsy use step:N format (e.g. \"step:3\") \u2014 same as all other routing fields\n  \u2717 Do not use a complex object reference in expression \u2014 condition expects a scalar\n    truthy/falsy value. Pre-compute boolean flags in js_transform.\n\nend:\n  \u2717 No routing fields (on_success, on_failure, etc.)\n  \u2713 Must be the last step in the array\n\nhuman_gate:\n  \u2713 Must always have at least one option with action: \"cancel\" (confirm/edit_list/review_object/text_input) or value: \"cancel\" (choice) \u2014 this may be placed in special_buttons instead of options\n  \u2713 gate_type values: confirm | edit_list | text_input | review_object | choice\n  \u2713 output_key only has effect on: text_input (writes typed value),\n    confirm with context_key (writes selected action value),\n    and choice (writes selected option.value \u2014 overridden by modal inputValue when the button has a modal descriptor)\n  \u2717 output_key on review_object or confirm without context_key is ignored\n  \u2713 special_buttons \u2014 optional array of action buttons appended after options buttons,\n    never shown in description_list content. Use for Cancel and modal-trigger buttons.\n    Supports modal descriptor { title, input_label, placeholder, multiline } \u2014 on click\n    opens a Slack overlay modal. Modal submit writes typed text to output_key and resumes\n    the suspended gate with the original button on_select routing. The button click itself\n    does NOT advance the workflow \u2014 only modal submission does.\n  \u2713 text_input renders an inline Slack input block in the message (no modal required).\n    multiline: true on the step renders a multi-line text area.\n\niterator:\n  \u2713 execution_mode MUST always be \"sequential\" \u2014 required on every iterator step.\n    Omitting it is a workflow defect.\n  \u2713 output_key is written to the PARENT frame after all items complete\n  \u2717 item_step cannot reference output_keys written by other items in the same\n    iterator \u2014 items execute one at a time, results only available after all done\n\n  ITERATOR TAXONOMY \u2014 two categories based on whether item_step suspends:\n\n  Non-suspending iterator \u2014 item_step is a service step (serv_schema, serv_insert,\n  serv_update, serv_delete, serv_query, llm_call, js_transform). All items execute\n  inline in a single Lambda invocation. No SQS hop per item. This is the standard\n  case for DDL creation, bulk inserts, and data transforms.\n\n  Suspending iterator \u2014 item_step is human_gate. Each item requires a full\n  suspend/resume cycle. The iterator suspends after building the gate dialog. When\n  the user responds, resume_gate pops the gate frame, detects the parent is an\n  iterator frame, increments current_index, strips the item binding from local_state,\n  and does NOT set current_step on the iterator frame. The next execute_top\n  re-enters the iterator at the incremented index.\n  \u2713 Only gate_type: \"choice\" is valid as a suspending item_step gate_type.\n  \u2717 Do not use confirm, edit_list, review_object, or text_input as item_step\n    gate_type inside an iterator.\n\n  WHEN TO USE SUSPENDING ITERATOR vs FLAT LOOP:\n  Use a suspending iterator when: you have a fixed list of independent questions,\n  each needing one answer, with no inter-item state dependency.\n  Use the flat loop pattern (backward step reference) when: each iteration reads\n  results from previous iterations, loop termination depends on accumulated state,\n  or the loop body has conditional branching per item.\n  See create_domain_example in PGC_SystemContext for a complete flat loop example.\n  Guard 3 applies to flat loops \u2014 a human_gate must exist on every backward path.\n\nserv_delete and serv_update:\n  \u2713 filters array must be non-empty \u2014 unfiltered mass operations are rejected by SERV\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nGuard 3 \u2014 backward reference safety\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nA backward step reference (on_success: \"step:3\" where step 3 comes before the\ncurrent step) is only safe when at least one human_gate exists on the path from\nthe target step back to the source step.\n\nWITHOUT a human_gate in the loop path:\n  The Step Processor executes the loop synchronously, one SQS message per step.\n  With no suspension point, the loop exhausts Lambda execution time (~60 seconds)\n  or triggers Guard 1 stuck-step detection after 3 idempotency hits.\n\nWITH a human_gate in the loop path:\n  The loop suspends at each gate while waiting for user input. Zero Lambda cost\n  while suspended. The loop can iterate indefinitely without timeout risk.\n\nVerify before adding any backward reference:\n  source_step \u2192 ... \u2192 [human_gate somewhere here] \u2192 ... \u2192 target_step \u2192 ... \u2192 source_step\n  If no human_gate exists in that path, the backward reference is unsafe.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nGuard 1 \u2014 stuck-step detection\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nThe Step Processor tracks idempotency hits per (run_id, frame_id, step_key).\nAfter 3 consecutive hits on the same step key, the run is marked failed and\nthe user is notified with the stuck step name and run id.\n\nThis fires when:\n  - A backward reference loop has no human_gate (tight computational loop)\n  - A step repeatedly fails and the on_failure routing sends it back to itself\n  - SQS redelivers the same message 3+ times due to downstream failures\n\nTight loops without gates will always trigger Guard 1. Design loops with gates."
+    "version": 5,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "WORKFLOW CONSTRAINTS \u2014 structural rules the Step Processor enforces\n\nThese constraints apply to every generated workflow. Violating them produces\nsilent failures, incorrect routing, or Lambda exhaustion. The static analysis\nvalidator (simulate Level 1) catches many of these before registration.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStep array structure\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2713 Every workflow must have exactly one end step.\n\u2713 The end step must be the last step in the array.\n\u2713 Every non-end step must have on_success set to a valid routing token.\n\u2713 Every step that calls an external service must have on_failure: \"cancel\".\n  External service steps: llm_call, serv_query, serv_insert, serv_update,\n  serv_delete, serv_entity_query, serv_entity_get, serv_entity_schema, serv_schema.\n\u2713 Step keys are strings matched by exact equality. \"3\" and \"3a\" are distinct.\n  Never use integer step keys \u2014 always quote as strings: \"step\": \"1\" not \"step\": 1.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStep type constraints\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nnotify:\n  \u2717 No on_failure field \u2014 notify is fire-and-forget, errors are silently discarded\n  \u2713 on_success must be \"next\" or \"end\" only\n\ncondition:\n  \u2717 Writes no output to local_state \u2014 it only routes\n  \u2713 on_truthy and on_falsy use step:N format (e.g. \"step:3\") \u2014 same as all other routing fields\n  \u2717 Do not use a complex object reference in expression \u2014 condition expects a scalar\n    truthy/falsy value. Pre-compute boolean flags in js_transform.\n\nend:\n  \u2717 No routing fields (on_success, on_failure, etc.)\n  \u2713 Must be the last step in the array\n\nhuman_gate:\n  \u2713 Must always have at least one option with action: \"cancel\" (confirm/edit_list/review_object/text_input) or value: \"cancel\" (choice) \u2014 this may be placed in special_buttons instead of options\n  \u2713 gate_type values: confirm | edit_list | text_input | review_object | choice\n  \u2713 output_key only has effect on: text_input (writes typed value),\n    confirm with context_key (writes selected action value),\n    and choice (writes selected option.value \u2014 overridden by modal inputValue when the button has a modal descriptor)\n  \u2717 output_key on review_object or confirm without context_key is ignored\n  \u2713 special_buttons \u2014 optional array of action buttons appended after options buttons,\n    never shown in description_list content. Use for Cancel and modal-trigger buttons.\n    Supports modal descriptor { title, input_label, placeholder, multiline } \u2014 on click\n    opens a Slack overlay modal. Modal submit writes typed text to output_key and resumes\n    the suspended gate with the original button on_select routing. The button click itself\n    does NOT advance the workflow \u2014 only modal submission does.\n  \u2713 text_input renders an inline Slack input block in the message (no modal required).\n    multiline: true on the step renders a multi-line text area.\n\niterator:\n  \u2713 execution_mode MUST always be \"sequential\" \u2014 required on every iterator step.\n    Omitting it is a workflow defect.\n  \u2713 output_key is written to the PARENT frame after all items complete\n  \u2717 item_step cannot reference output_keys written by other items in the same\n    iterator \u2014 items execute one at a time, results only available after all done\n\n  ITERATOR TAXONOMY \u2014 two categories based on whether item_step suspends:\n\n  Non-suspending iterator \u2014 item_step is a service step (serv_schema, serv_insert,\n  serv_update, serv_delete, serv_query, llm_call, js_transform). All items execute\n  inline in a single Lambda invocation. No SQS hop per item. This is the standard\n  case for DDL creation, bulk inserts, and data transforms.\n\n  Suspending iterator \u2014 item_step is human_gate. Each item requires a full\n  suspend/resume cycle. The iterator suspends after building the gate dialog. When\n  the user responds, resume_gate pops the gate frame, detects the parent is an\n  iterator frame, increments current_index, strips the item binding from local_state,\n  and does NOT set current_step on the iterator frame. The next execute_top\n  re-enters the iterator at the incremented index.\n  \u2713 Only gate_type: \"choice\" is valid as a suspending item_step gate_type.\n  \u2717 Do not use confirm, edit_list, review_object, or text_input as item_step\n    gate_type inside an iterator.\n\n  WHEN TO USE SUSPENDING ITERATOR vs FLAT LOOP:\n  Use a suspending iterator when: you have a fixed list of independent questions,\n  each needing one answer, with no inter-item state dependency.\n  Use the flat loop pattern (backward step reference) when: each iteration reads\n  results from previous iterations, loop termination depends on accumulated state,\n  or the loop body has conditional branching per item.\n  See create_domain_example in PGC_SystemContext for a complete flat loop example.\n  Guard 3 applies to flat loops \u2014 a human_gate must exist on every backward path.\n\nserv_delete and serv_update:\n  \u2713 filters array must be non-empty \u2014 unfiltered mass operations are rejected by SERV\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nGuard 3 \u2014 backward reference safety\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nA backward step reference (on_success: \"step:3\" where step 3 comes before the\ncurrent step) is only safe when at least one human_gate exists on the path from\nthe target step back to the source step.\n\nWITHOUT a human_gate in the loop path:\n  The Step Processor executes the loop synchronously, one SQS message per step.\n  With no suspension point, the loop exhausts Lambda execution time (~60 seconds)\n  or triggers Guard 1 stuck-step detection after 3 idempotency hits.\n\nWITH a human_gate in the loop path:\n  The loop suspends at each gate while waiting for user input. Zero Lambda cost\n  while suspended. The loop can iterate indefinitely without timeout risk.\n\nVerify before adding any backward reference:\n  source_step \u2192 ... \u2192 [human_gate somewhere here] \u2192 ... \u2192 target_step \u2192 ... \u2192 source_step\n  If no human_gate exists in that path, the backward reference is unsafe.\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nGuard 1 \u2014 stuck-step detection\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nThe Step Processor tracks idempotency hits per (run_id, frame_id, step_key).\nAfter 3 consecutive hits on the same step key, the run is marked failed and\nthe user is notified with the stuck step name and run id.\n\nThis fires when:\n  - A backward reference loop has no human_gate (tight computational loop)\n  - A step repeatedly fails and the on_failure routing sends it back to itself\n  - SQS redelivers the same message 3+ times due to downstream failures\n\nTight loops without gates will always trigger Guard 1. Design loops with gates."
+        }
+      ]
+    }
   },
   {
     "key": "diagnostics_config",
     "section": "config",
-    "format": "json",
     "inject_always": false,
     "inject_for": [],
     "version": 1,
-    "content": "{\"enabled_workflows\":[\"create_workflow\",\"create_domain\"]}"
+    "content": {
+      "enabled_workflows": [
+        "create_workflow",
+        "create_domain"
+      ]
+    }
   },
   {
     "key": "general_chat_system_prompt",
     "section": "chat",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [],
-    "version": 1,
-    "content": "You are a helpful assistant integrated into evolving-mind-ai, a personal cognitive automation system. Answer clearly and concisely."
+    "version": 2,
+    "content": {
+      "text": "You are a helpful assistant integrated into evolving-mind-ai, a personal cognitive automation system. Answer clearly and concisely."
+    }
   },
   {
     "key": "flat_loop_example",
     "section": "examples",
-    "format": "prose",
     "inject_always": false,
     "inject_for": [
       "generate_workflow_steps",
       "fix_workflow_steps"
     ],
-    "content": "FLAT LOOP PATTERN \u2014 use when the workflow must iterate a step sequence with human interaction per item. Do NOT use the iterator step type for human-interactive loops.\n\nA flat loop consists of: (1) a guard condition, (2) the loop body steps, (3) the last body step routing back to the guard.\n\nExample \u2014 quiz card loop (guard at step 9, body at steps 10\u201313, post-loop at step 14):\n\n{ \"step\": \"9\",  \"type\": \"condition\",  \"description\": \"Check if all cards have been presented.\",\n  \"expression\": \"local_state.quiz_state.index >= local_state.quiz_state.cards.length\",\n  \"on_truthy\": \"step:14\",  \"on_falsy\": \"step:10\" }\n\n{ \"step\": \"10\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"description\": \"Show current card and collect user answer.\",\n  \"message_template\": \"Card {{quiz_state.index}} of {{quiz_state.cards.length}}: {{quiz_state.cards.0.term}}\",\n  \"options\": [\n    { \"label\": \"Correct\",   \"value\": \"correct\",   \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Incorrect\", \"value\": \"incorrect\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",                           \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"output_key\": \"user_answer\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\n{ \"step\": \"11\", \"type\": \"js_transform\", \"description\": \"Advance index and tally result.\",\n  \"expression\": \"...\", \"output_key\": \"quiz_state\", \"on_success\": \"next\" }\n\n{ \"step\": \"12\", \"type\": \"serv_insert\",  \"description\": \"Write test log entry.\",\n  \"...\", \"on_success\": \"next\", \"on_failure\": \"next\" }\n\n{ \"step\": \"13\", \"type\": \"serv_update\",  \"description\": \"Update card streak.\",\n  \"...\", \"on_success\": \"step:9\", \"on_failure\": \"step:9\" }\n\n{ \"step\": \"14\", \"...\"  }   \u2190 post-loop entry point\n\nFlat loop rules:\n- Guard condition: on_falsy \u2192 first body step; on_truthy \u2192 first post-loop step\n- Last body step: on_success AND on_failure BOTH route back to the guard condition (step:9 in the example)\n- Cancel inside the loop body: route to a terminal step (end or cancel), NEVER back to the guard\n- Loop state (index, done flag, accumulators) lives in local_state and is written by a js_transform step inside the loop body\n- js_transform input_key is optional \u2014 omit it when the expression reads directly from local_state (e.g. local_state.loop_state.index). To write multiple local_state keys from one js_transform, use a comma-separated output_key (e.g. \"a,b,c\") \u2014 the engine destructures the object return value into each named key simultaneously."
+    "version": 2,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "FLAT LOOP PATTERN \u2014 use when the workflow must iterate a step sequence with human interaction per item. Do NOT use the iterator step type for human-interactive loops.\n\nA flat loop consists of: (1) a guard condition, (2) the loop body steps, (3) the last body step routing back to the guard.\n\nExample \u2014 quiz card loop (guard at step 9, body at steps 10\u201313, post-loop at step 14):\n\n{ \"step\": \"9\",  \"type\": \"condition\",  \"description\": \"Check if all cards have been presented.\",\n  \"expression\": \"local_state.quiz_state.index >= local_state.quiz_state.cards.length\",\n  \"on_truthy\": \"step:14\",  \"on_falsy\": \"step:10\" }\n\n{ \"step\": \"10\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"description\": \"Show current card and collect user answer.\",\n  \"message_template\": \"Card {{quiz_state.index}} of {{quiz_state.cards.length}}: {{quiz_state.cards.0.term}}\",\n  \"options\": [\n    { \"label\": \"Correct\",   \"value\": \"correct\",   \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Incorrect\", \"value\": \"incorrect\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",                           \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"output_key\": \"user_answer\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\n{ \"step\": \"11\", \"type\": \"js_transform\", \"description\": \"Advance index and tally result.\",\n  \"expression\": \"...\", \"output_key\": \"quiz_state\", \"on_success\": \"next\" }\n\n{ \"step\": \"12\", \"type\": \"serv_insert\",  \"description\": \"Write test log entry.\",\n  \"...\", \"on_success\": \"next\", \"on_failure\": \"next\" }\n\n{ \"step\": \"13\", \"type\": \"serv_update\",  \"description\": \"Update card streak.\",\n  \"...\", \"on_success\": \"step:9\", \"on_failure\": \"step:9\" }\n\n{ \"step\": \"14\", \"...\"  }   \u2190 post-loop entry point\n\nFlat loop rules:\n- Guard condition: on_falsy \u2192 first body step; on_truthy \u2192 first post-loop step\n- Last body step: on_success AND on_failure BOTH route back to the guard condition (step:9 in the example)\n- Cancel inside the loop body: route to a terminal step (end or cancel), NEVER back to the guard\n- Loop state (index, done flag, accumulators) lives in local_state and is written by a js_transform step inside the loop body\n- js_transform input_key is optional \u2014 omit it when the expression reads directly from local_state (e.g. local_state.loop_state.index). To write multiple local_state keys from one js_transform, use a comma-separated output_key (e.g. \"a,b,c\") \u2014 the engine destructures the object return value into each named key simultaneously."
+        }
+      ]
+    }
   }
 ]

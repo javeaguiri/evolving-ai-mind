@@ -8,7 +8,7 @@
 // Matches on key — each key is unique in PGC_SystemContext.
 //
 // If a row with the given key exists — updateRows
-//   (content, section, format, inject_always, inject_for, version).
+//   (content, section, inject_always, inject_for, version).
 // If not — insertRow (full row).
 //
 // Reads from: ../src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json
@@ -65,11 +65,10 @@ async function servPost(path, body) {
 
 for (const row of targets) {
   console.log(`\nUpserting system context: ${row.key} v${row.version}`);
-  console.log(`  section:      ${row.section}`);
-  console.log(`  format:       ${row.format}`);
-  console.log(`  inject_for:   ${JSON.stringify(row.inject_for ?? [])}`);
+  console.log(`  section:       ${row.section}`);
+  console.log(`  inject_for:    ${JSON.stringify(row.inject_for ?? [])}`);
   console.log(`  inject_always: ${row.inject_always ?? false}`);
-  console.log(`  content:      ${row.content.slice(0, 80)}...`);
+  console.log(`  content:       ${JSON.stringify(row.content).slice(0, 80)}...`);
 
   // Check if row exists by key
   const existing = await servPost('/api/v1/serv/table/getRows', {
@@ -99,7 +98,6 @@ for (const row of targets) {
       updates:   {
         content:       row.content,
         section:       row.section       ?? null,
-        format:        row.format        ?? 'prose',
         inject_always: row.inject_always ?? false,
         inject_for:    row.inject_for    ?? [],
         version:       row.version       ?? 1,
@@ -122,7 +120,6 @@ for (const row of targets) {
         key:           row.key,
         content:       row.content,
         section:       row.section       ?? null,
-        format:        row.format        ?? 'prose',
         inject_always: row.inject_always ?? false,
         inject_for:    row.inject_for    ?? [],
         version:       row.version       ?? 1,

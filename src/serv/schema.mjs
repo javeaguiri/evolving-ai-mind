@@ -9,6 +9,9 @@
 //
 // Routes:
 //   POST   /serv/schema/createTable   — build DDL from JSON + register in PGC_Schema
+//   POST   /serv/schema/addColumn     — ALTER TABLE ... ADD COLUMN + PGC_Schema sync
+//   POST   /serv/schema/modifyColumn  — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
+//   POST   /serv/schema/dropColumn    — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
 //   POST   /serv/schema/listTables    — list all entries in PGC_Schema
 //   POST   /serv/schema/getTable      — get one entry by table_name
 //   POST   /serv/schema/updateTable   — update description/definition in PGC_Schema
@@ -53,8 +56,10 @@ const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 export async function handle(req) {
   switch (req.subRoute) {
     case 'createTable': return createTable(req);
-    case 'addColumn':   return addColumn(req);
-    case 'listTables':  return listTables(req);
+    case 'addColumn':    return addColumn(req);
+    case 'modifyColumn': return modifyColumn(req);
+    case 'dropColumn':   return dropColumn(req);
+    case 'listTables':   return listTables(req);
     case 'getTable':    return getTable(req);
     case 'updateTable': return updateTable(req);
     case 'deleteTable': return deleteTable(req);
@@ -238,6 +243,138 @@ async function addColumn(req) {
   } catch (error) {
     console.error('schema addColumn error:', error.message);
     return err(500, `addColumn failed: ${error.message}`, req.correlationId);
+  } finally {
+    await client.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/modifyColumn
+// ---------------------------------------------------------------------------
+
+async function modifyColumn(req) {
+  const { tableName, columnName, newType, using: usingExpr = null } = req.body;
+
+  if (!tableName)  return err(400, 'tableName is required',  req.correlationId);
+  if (!columnName) return err(400, 'columnName is required', req.correlationId);
+  if (!newType)    return err(400, 'newType is required',    req.correlationId);
+
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+  if (!/^[a-z][a-z0-9_]*$/.test(columnName)) {
+    return err(400, `Invalid column name "${columnName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
+  }
+  if (!ALLOWED_TYPES.has(newType.toLowerCase())) {
+    return err(400, `Column type "${newType}" is not allowed`, req.correlationId);
+  }
+  if (usingExpr && !/^[a-z][a-z0-9_]*::[a-z][a-z0-9\s]*$/.test(usingExpr)) {
+    return err(400, 'USING expression must be in the form "columnName::type"', req.correlationId);
+  }
+
+  const client = getClient(process.env.PGC_DATABASE_URL);
+
+  try {
+    await client.connect();
+
+    const lookup = await client.query(
+      `SELECT id, target, columns FROM "PGC_Schema" WHERE table_name = $1`,
+      [tableName]
+    );
+    if (lookup.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+
+    const { id: schemaId, target, columns: existingCols } = lookup.rows[0];
+    const colsArray = Array.isArray(existingCols) ? existingCols : [];
+
+    if (!colsArray.some(c => c.name === columnName)) {
+      return err(404, `Column "${columnName}" not found in PGC_Schema for "${tableName}"`, req.correlationId);
+    }
+
+    const ddlClient  = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+    if (target === 'pgd') await ddlClient.connect();
+
+    const usingClause = usingExpr ? ` USING ${usingExpr}` : '';
+    await ddlClient.query(
+      `ALTER TABLE "${tableName}" ALTER COLUMN "${columnName}" TYPE ${newType}${usingClause}`
+    );
+    console.info(`schema: modified column ${columnName} on ${tableName} — type now ${newType}`);
+
+    if (target === 'pgd') await ddlClient.end();
+
+    const updatedCols = colsArray.map(c => c.name === columnName ? { ...c, type: newType } : c);
+    await client.query(
+      `UPDATE "PGC_Schema" SET columns = $1::jsonb, updated_at = now() WHERE id = $2`,
+      [JSON.stringify(updatedCols), schemaId]
+    );
+
+    return ok({ success: true, tableName, column: columnName, newType, action: 'modified' }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema modifyColumn error:', error.message);
+    return err(500, `modifyColumn failed: ${error.message}`, req.correlationId);
+  } finally {
+    await client.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/dropColumn
+// ---------------------------------------------------------------------------
+
+async function dropColumn(req) {
+  const { tableName, columnName } = req.body;
+
+  if (!tableName)  return err(400, 'tableName is required',  req.correlationId);
+  if (!columnName) return err(400, 'columnName is required', req.correlationId);
+
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+  if (!/^[a-z][a-z0-9_]*$/.test(columnName)) {
+    return err(400, `Invalid column name "${columnName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
+  }
+
+  const client = getClient(process.env.PGC_DATABASE_URL);
+
+  try {
+    await client.connect();
+
+    const lookup = await client.query(
+      `SELECT id, target, columns FROM "PGC_Schema" WHERE table_name = $1`,
+      [tableName]
+    );
+    if (lookup.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+
+    const { id: schemaId, target, columns: existingCols } = lookup.rows[0];
+    const colsArray = Array.isArray(existingCols) ? existingCols : [];
+
+    if (!colsArray.some(c => c.name === columnName)) {
+      return ok({ success: true, tableName, column: columnName, action: 'not_in_schema' }, req.correlationId);
+    }
+
+    const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+    if (target === 'pgd') await ddlClient.connect();
+
+    await ddlClient.query(`ALTER TABLE "${tableName}" DROP COLUMN IF EXISTS "${columnName}" CASCADE`);
+    console.info(`schema: dropped column ${columnName} from ${tableName}`);
+
+    if (target === 'pgd') await ddlClient.end();
+
+    const updatedCols = colsArray.filter(c => c.name !== columnName);
+    await client.query(
+      `UPDATE "PGC_Schema" SET columns = $1::jsonb, updated_at = now() WHERE id = $2`,
+      [JSON.stringify(updatedCols), schemaId]
+    );
+
+    return ok({ success: true, tableName, column: columnName, action: 'dropped' }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema dropColumn error:', error.message);
+    return err(500, `dropColumn failed: ${error.message}`, req.correlationId);
   } finally {
     await client.end();
   }

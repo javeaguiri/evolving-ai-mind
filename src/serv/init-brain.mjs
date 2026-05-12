@@ -566,16 +566,15 @@ async function seedPGCSystemContext(client) {
     // applied to live rows. Use upsert-system-context.mjs to force content updates.
     await client.query(
       `INSERT INTO "PGC_SystemContext"
-         (key, section, content, format, inject_always, inject_for, version)
-       SELECT $1, $2, $3, $4, $5, $6, $7
+         (key, section, content, inject_always, inject_for, version)
+       SELECT $1, $2, $3, $4, $5, $6
        WHERE NOT EXISTS (
          SELECT 1 FROM "PGC_SystemContext" WHERE key = $1
        )`,
       [
         row.key,
         row.section       ?? null,
-        row.content,
-        row.format        ?? 'prose',
+        typeof row.content === 'object' ? JSON.stringify(row.content) : row.content,
         row.inject_always ?? false,
         JSON.stringify(row.inject_for ?? []),
         row.version       ?? 1,

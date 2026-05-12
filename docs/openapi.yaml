@@ -2924,6 +2924,135 @@ paths:
         '500':
           description: ALTER TABLE or PGC_Schema update failed
 
+  /api/v1/serv/schema/modifyColumn:
+    post:
+      summary: Change a column's type — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... ALTER COLUMN ... TYPE on the physical table
+        and updates PGC_Schema.columns to reflect the new type.
+
+        An optional USING expression controls the cast — must be in the form
+        "columnName::type" (e.g. "content::jsonb"). Omit for implicit casts
+        where PostgreSQL can convert automatically.
+
+        Column name must be lowercase alphanumeric + underscore and must already
+        exist in PGC_Schema.columns. Column type must be in ALLOWED_TYPES.
+        Targets the correct database (pgc or pgd) based on PGC_Schema.target.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, columnName, newType]
+              properties:
+                tableName:
+                  type: string
+                  example: PGC_SystemContext
+                columnName:
+                  type: string
+                  example: content
+                newType:
+                  type: string
+                  example: jsonb
+                using:
+                  type: string
+                  description: >
+                    Optional USING expression for the cast — must be "columnName::type".
+                    Required when PostgreSQL cannot cast implicitly (e.g. text → jsonb).
+                  example: content::jsonb
+            examples:
+              text_to_jsonb:
+                summary: Change content column from text to jsonb
+                value:
+                  tableName: PGC_SystemContext
+                  columnName: content
+                  newType: jsonb
+                  using: content::jsonb
+      responses:
+        '200':
+          description: Column type changed
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGC_SystemContext
+                column: content
+                newType: jsonb
+                action: modified
+        '400':
+          description: Invalid tableName, column name, type, or USING expression
+        '404':
+          description: Table or column not found in PGC_Schema
+        '500':
+          description: ALTER TABLE or PGC_Schema update failed
+
+  /api/v1/serv/schema/dropColumn:
+    post:
+      summary: Drop a column — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... DROP COLUMN IF EXISTS ... CASCADE on the physical
+        table and removes the column from PGC_Schema.columns.
+
+        CASCADE ensures dependent check constraints and indexes are dropped
+        automatically (e.g. dropping a column that a CHECK constraint references).
+
+        If the column is not in PGC_Schema.columns the response is action=not_in_schema
+        (no DDL executed). Column name must be lowercase alphanumeric + underscore.
+        Targets the correct database (pgc or pgd) based on PGC_Schema.target.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, columnName]
+              properties:
+                tableName:
+                  type: string
+                  example: PGC_SystemContext
+                columnName:
+                  type: string
+                  example: format
+            examples:
+              drop_format:
+                summary: Drop format column (also drops chk_format constraint via CASCADE)
+                value:
+                  tableName: PGC_SystemContext
+                  columnName: format
+      responses:
+        '200':
+          description: Column dropped or not found in schema
+          content:
+            application/json:
+              examples:
+                dropped:
+                  summary: Column dropped
+                  value:
+                    success: true
+                    tableName: PGC_SystemContext
+                    column: format
+                    action: dropped
+                not_in_schema:
+                  summary: Column not in PGC_Schema — no-op
+                  value:
+                    success: true
+                    tableName: PGC_SystemContext
+                    column: format
+                    action: not_in_schema
+        '400':
+          description: Invalid tableName or column name
+        '404':
+          description: Table not found in PGC_Schema
+        '500':
+          description: ALTER TABLE or PGC_Schema update failed
+
   /api/v1/serv/schema/deleteTable:
     post:
       summary: Drop table + remove from PGC_Schema
