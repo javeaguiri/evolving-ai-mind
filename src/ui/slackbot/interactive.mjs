@@ -314,6 +314,24 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
     return err(400, 'explain_followup button value missing queryId', correlationId);
   }
 
+  // Disable the clicked button by replacing the message with static text.
+  // Prevents stale "Ask follow-up" buttons accumulating in the explain thread.
+  // The subsequent /explain response will supply a fresh button.
+  if (channel && threadTs) {
+    const gateText    = payload.message?.text ?? '';
+    const gateContext = gateText ? `\n> _${gateText}_` : '';
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   `💬 Follow-up submitted.${gateContext}`,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `💬 Follow-up submitted.${gateContext}` } }],
+      });
+    } catch (error) {
+      console.warn('interactive: explain_followup chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+  }
+
   if (triggerId) {
     try {
       await slack.views.open({

@@ -1394,8 +1394,33 @@ function runLevel1StaticAnalysis(steps) {
       }
     }
 
+    // Check required input fields for serv_* step types.
+    // These are enforced at runtime; L1 catches missing fields before registration.
+    // Template references (e.g. "{{item.tableName}}") are valid — only absent/null/empty fails.
+    const servRequired = {
+      serv_query:  ['tableName'],
+      serv_insert: ['tableName', 'row'],
+      serv_update: ['tableName', 'filters', 'updates'],
+      serv_delete: ['tableName', 'filters'],
+    };
+    if (servRequired[s.type]) {
+      const inputObj = s.input ?? {};
+      for (const field of servRequired[s.type]) {
+        const val = inputObj[field];
+        if (val === undefined || val === null || val === '') {
+          issues.push({
+            check:         'serv_step_missing_required_input',
+            step:          stepKey,
+            failure_class: 'serv_step_missing_required_input',
+            detail:        `${s.type} step "${stepKey}" is missing required input field "${field}". Provide input.${field} as a literal value or a {{template}} reference.`,
+          });
+        }
+      }
+    }
+
     // Collect writes — step-level output_key.
     // Comma-separated output_key registers each listed key individually.
+    // Non-string output_key is a workflow defect — report as error.
     const stepWrites = new Set();
     if (s.output_key && typeof s.output_key === 'string') {
       for (const rawKey of s.output_key.split(',')) {
@@ -1404,6 +1429,13 @@ function runLevel1StaticAnalysis(steps) {
         stepWrites.add(baseOut);
         if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
       }
+    } else if (s.output_key !== undefined && s.output_key !== null && s.output_key !== '') {
+      issues.push({
+        check:         'malformed_output_key',
+        step:          stepKey,
+        failure_class: 'malformed_output_key',
+        detail:        `Step "${stepKey}" output_key must be a string but got ${typeof s.output_key}: ${JSON.stringify(s.output_key)}`,
+      });
     }
     // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
@@ -1412,6 +1444,13 @@ function runLevel1StaticAnalysis(steps) {
         outputKeysSoFar.add(baseOut);
         stepWrites.add(baseOut);
         if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
+      } else if (opt.output_key !== undefined && opt.output_key !== null && opt.output_key !== '') {
+        issues.push({
+          check:         'malformed_output_key',
+          step:          stepKey,
+          failure_class: 'malformed_output_key',
+          detail:        `Step "${stepKey}" option output_key must be a string but got ${typeof opt.output_key}: ${JSON.stringify(opt.output_key)}`,
+        });
       }
     }
 

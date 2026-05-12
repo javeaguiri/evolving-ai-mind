@@ -117,7 +117,9 @@ export async function handle(req) {
   console.info('proc/explain: response ready', { sessionId: session.id, traceId });
 
   // Enqueue Slack response — thread to established session thread.
-  // No queryId: "Ask follow-up" button only appears on the initial /chat response.
+  // Include queryId so callback.mjs renders "Ask follow-up" on every reply.
+  // interactive.mjs disables the clicked button before opening the follow-up modal,
+  // preventing stale button accumulation in the thread.
   if (responseCallback) {
     let replyText = responseText;
     if (reasoning && nextSeq === 3) {
@@ -127,6 +129,7 @@ export async function handle(req) {
       type:    'HUMAN_NOTIFICATION',
       traceId,
       message: replyText,
+      queryId: session.query_id,
     });
   }
 
