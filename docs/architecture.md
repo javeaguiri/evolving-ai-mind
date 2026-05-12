@@ -2451,7 +2451,6 @@ Written to `local_state[output_key]` on completion:
       ]
     }
   ],
-  "skip_path_warnings": []
 }
 ```
 
@@ -3814,7 +3813,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | | — First complete create_domain end-to-end: 4 PGD tables + 4 CRUD workflows + 4 IntentMap rows | ✅ |
 | 4b | create_workflow workflow full implementation | ✅ complete — v3.2-create-workflow-complete |
 | | — `run-workflow.mjs`: `on_failure: "human_feedback"` — `pushRecoveryGate()` in both catch blocks | ✅ |
-| | — `step-executor.mjs`: `simulate` step type — Level 1 static analysis, Level 2 path execution, Level 3 skip-path analysis | ✅ |
+| | — `step-executor.mjs`: `simulate` step type — Level 1 static analysis, Level 2 path execution | ✅ |
 | | — `review-output.mjs`: Pass 2b `runRoutingValueRules()` — routing token validation on steps arrays | ✅ |
 | | — `dev_scripts/seed_PGC_StepType.mjs`: 12 live step types seeded with routing value contracts | ✅ |
 | | — `dev_scripts/seed_PGC_SystemContext.mjs`: `step_type_contracts`, `routing_value_rules`, `create_domain_example` rows seeded | ✅ |
@@ -3881,7 +3880,7 @@ All Phase 1 refactoring complete as of `v3.2-clean-baseline`. See Section 13.
 | `serv_entity_get` | ✅ live | Calls SERV-Entity getEntity by id — single assembled entity at output_key |
 | `serv_update` | ✅ live | Generic filter + updates shape, full template resolution, enforces non-empty filters |
 | `serv_delete` | ✅ live | Generic filter shape, full template resolution, enforces non-empty filters |
-| `simulate` | ✅ live | Level 1 static analysis + Level 2 path execution + Level 3 skip-path analysis (advisory). Used by `create_workflow` steps 4 and 7 |
+| `simulate` | ✅ live | Level 1 static analysis + Level 2 path execution. Used by `create_workflow` steps 4 and 7 |
 | `sub_workflow` | ⬜ MVP | Required for multi-step iterator items (quiz workflow). Option B flat loop is workaround |
 | `condition` | ✅ live | Session 19 — expression evaluation, on_truthy/on_falsy routing |
 | `capability_call` | ⬜ Backlog | Not yet defined — see Section 15.1 |

@@ -532,8 +532,9 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
   // The insert uses {{selected_id}} which comes from the choice gate.
   const steps = [
     {
-      step: '1', type: 'serv_query', table: 'PGD_Sets',
-      operation: 'query', on_failure: 'cancel', on_success: 'next',
+      step: '1', type: 'serv_query',
+      input: { tableName: 'PGD_Sets' },
+      on_failure: 'cancel', on_success: 'next',
       output_key: 'active_sets',
     },
     {
@@ -546,9 +547,8 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
       ],
     },
     {
-      step: '3', type: 'serv_insert', table: 'PGD_Sessions',
-      operation: 'insert',
-      input: { set_id: '{{selected_id}}' },
+      step: '3', type: 'serv_insert',
+      input: { tableName: 'PGD_Sessions', row: { set_id: '{{selected_id}}' } },
       on_failure: 'cancel', on_success: 'end',
       output_key: 'session',
     },
@@ -584,7 +584,7 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
     assert.ok(step2.keys_added.includes('selected_id'), 'step 2 must add selected_id to keys_added');
 
     const step3 = path.local_state_transitions.find(t => t.step === '3');
-    assert.equal(step3.template_vars_missing.length, 0, 'step 3 must see selected_id resolved');
+    assert.ok(step3.keys_before.includes('selected_id'), 'selected_id must be in local_state when step 3 runs');
   });
 
   it('cancel path passes and does not fail on missing output_key', () => {
@@ -617,7 +617,9 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
   // decision.user_response = 'confirm' (the action). The simulation must write 'correct' (the value).
   const steps = [
     {
-      step: '1', type: 'serv_query', table: 'PGD_Cards', on_success: 'next', on_failure: 'cancel',
+      step: '1', type: 'serv_query',
+      input: { tableName: 'PGD_Cards' },
+      on_success: 'next', on_failure: 'cancel',
       output_key: 'cards',
     },
     {
@@ -631,8 +633,8 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
       ],
     },
     {
-      step: '3', type: 'serv_insert', table: 'PGD_TestLogs',
-      input: { result: '{{user_result}}' },
+      step: '3', type: 'serv_insert',
+      input: { tableName: 'PGD_TestLogs', row: { result: '{{user_result}}' } },
       on_success: 'end', on_failure: 'cancel',
       output_key: 'log',
     },
@@ -656,7 +658,7 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
     const path = result.path_results[0];
     assert.equal(path.passed, true, path.failure_reason);
     const step3 = path.local_state_transitions.find(t => t.step === '3');
-    assert.equal(step3?.template_vars_missing.length, 0, 'step 3 must see user_result resolved');
+    assert.ok(step3?.keys_before.includes('user_result'), 'user_result must be in local_state when step 3 runs');
   });
 
   it('writes option.value when user_response matches option value directly', () => {
@@ -675,7 +677,7 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
     const path = result.path_results[0];
     assert.equal(path.passed, true, path.failure_reason);
     const step3 = path.local_state_transitions.find(t => t.step === '3');
-    assert.equal(step3?.template_vars_missing.length, 0, 'step 3 must see user_result resolved');
+    assert.ok(step3?.keys_before.includes('user_result'), 'user_result must be in local_state when step 3 runs');
   });
 });
 
@@ -686,7 +688,9 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
 describe('runSimulation — auto-continues human_gate with no decision using first non-cancel option', () => {
   const steps = [
     {
-      step: '1', type: 'serv_query', table: 'PGD_Items', on_success: 'next', on_failure: 'cancel',
+      step: '1', type: 'serv_query',
+      input: { tableName: 'PGD_Items' },
+      on_success: 'next', on_failure: 'cancel',
       output_key: 'items',
     },
     {
@@ -699,8 +703,9 @@ describe('runSimulation — auto-continues human_gate with no decision using fir
       ],
     },
     {
-      step: '3', type: 'serv_insert', table: 'PGD_Results',
-      input: {}, on_success: 'end', on_failure: 'cancel',
+      step: '3', type: 'serv_insert',
+      input: { tableName: 'PGD_Results', row: {} },
+      on_success: 'end', on_failure: 'cancel',
       output_key: 'result',
     },
     { step: 'end', type: 'end' },
@@ -737,7 +742,9 @@ describe('runSimulation — loop limit reached treats path as passed', () => {
   // After MAX_LOOP_ITER visits to step 1, the simulation must return loop_limit_reached: true.
   const steps = [
     {
-      step: '1', type: 'serv_query', table: 'PGD_Cards', on_success: 'next', on_failure: 'cancel',
+      step: '1', type: 'serv_query',
+      input: { tableName: 'PGD_Cards' },
+      on_success: 'next', on_failure: 'cancel',
       output_key: 'cards',
     },
     {
