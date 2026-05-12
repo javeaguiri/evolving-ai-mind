@@ -262,8 +262,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Immediate Open Work
 
-1. **End-to-end retest** `/m create workflow Spanish flashcard quiz` — `create_workflow` v22 is deployed (step 1b removed, Other → `step:2`). Verify no second text_input box on Other click. If step 2 LLM fails, check `workflow_mode` in `local_state`.
-2. **PGC_SystemContext.content → JSONB** — design complete (§4.3.3); DDL not yet run. Steps: rewrite 7 seed entries → update `PGC_SystemContext.json` template → update `upsert-system-context.mjs` → run upsert script → execute 3 DDL statements.
+1. **PGC_SystemContext.content → JSONB** — complete (session 35). `content` column is now `jsonb`; `format` column dropped. New SERV endpoints: `modifyColumn`, `dropColumn`. Seed rewritten to `{sections:[{id,data}]}` schema. Task 9 is next.
 
 ### Medium Priority
 
