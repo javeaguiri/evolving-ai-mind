@@ -677,6 +677,16 @@ export function buildDialog(step, localState) {
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
 
+  // reveal — optional on any gate type. Renders a button that opens a read-only
+  // modal with resolved content. Does NOT resume the gate — peek only.
+  if (step.reveal) {
+    fields.push({
+      type:         'reveal',
+      button_label: step.reveal.button_label,
+      content:      resolveTemplate(step.reveal.content ?? '', localState),
+    });
+  }
+
   // actions — from step.options
   // step.options may be a template string (e.g. "{{item.options}}") when the gate
   // lives inside an iterator item_step — resolve it before mapping.
@@ -745,6 +755,16 @@ async function executeServInsert({ step, localState, traceId }) {
 
   if (!tableName) throw new Error('serv_insert step missing input.tableName');
   if (!row)       throw new Error('serv_insert step missing input.row');
+
+  if (tableName === 'PGC_Workflow' && Array.isArray(row?.steps)) {
+    const l1 = runLevel1StaticAnalysis(row.steps);
+    if (l1.issues.length > 0) {
+      throw Object.assign(
+        new Error(`PGC_Workflow insert rejected — L1 validation failed (${l1.issues.length} issue(s))`),
+        { l1Issues: l1.issues }
+      );
+    }
+  }
 
   console.info('step-executor: serv_insert', { tableName, traceId });
 
@@ -1022,6 +1042,16 @@ async function executeServUpdate({ step, localState, traceId }) {
   if (!tableName) throw new Error('serv_update step missing input.tableName');
   if (!filters || filters.length === 0) throw new Error('serv_update step missing or empty input.filters');
   if (!updates || Object.keys(updates).length === 0) throw new Error('serv_update step missing input.updates');
+
+  if (tableName === 'PGC_Workflow' && Array.isArray(updates?.steps)) {
+    const l1 = runLevel1StaticAnalysis(updates.steps);
+    if (l1.issues.length > 0) {
+      throw Object.assign(
+        new Error(`PGC_Workflow update rejected — L1 validation failed (${l1.issues.length} issue(s))`),
+        { l1Issues: l1.issues }
+      );
+    }
+  }
 
   console.info('step-executor: serv_update', {
     tableName,
@@ -1323,6 +1353,26 @@ function runLevel1StaticAnalysis(steps) {
           failure_class: 'missing_cancel_option',
           detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
         });
+      }
+
+      // reveal field — both button_label and content must be non-empty strings
+      if (s.reveal !== undefined && s.reveal !== null) {
+        if (!s.reveal.button_label || typeof s.reveal.button_label !== 'string' || !s.reveal.button_label.trim()) {
+          issues.push({
+            check:         'reveal_missing_button_label',
+            step:          stepKey,
+            failure_class: 'reveal_missing_button_label',
+            detail:        `human_gate step "${stepKey}" has a reveal field but reveal.button_label is missing or empty.`,
+          });
+        }
+        if (!s.reveal.content || typeof s.reveal.content !== 'string' || !s.reveal.content.trim()) {
+          issues.push({
+            check:         'reveal_missing_content',
+            step:          stepKey,
+            failure_class: 'reveal_missing_content',
+            detail:        `human_gate step "${stepKey}" has a reveal field but reveal.content is missing or empty.`,
+          });
+        }
       }
 
       // review_object and confirm gates must not have output_key

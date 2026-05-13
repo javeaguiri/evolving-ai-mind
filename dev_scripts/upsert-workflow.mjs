@@ -21,6 +21,7 @@
 
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
+import { runSimulation } from '../src/proc/step-executor.mjs';
 
 const SERV_API_URL = process.env.SERV_API_URL;
 const WORKFLOW_NAME = process.argv[2] ?? null;
@@ -92,6 +93,18 @@ for (const workflow of targets) {
   console.log(`\nWorkflow: ${workflow.name}`);
   console.log(`  Seed version : v${workflow.version}  fingerprint: ${seedFp}`);
   console.log(`  Steps        : ${workflow.steps.map(s => `${s.step}:${s.type}`).join(' \u2192 ')}`);
+
+  // L1 static analysis \u2014 reject before DB write if steps have structural issues.
+  const l1Result = runSimulation({ steps: workflow.steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+  if (!l1Result.static_analysis.passed) {
+    console.error(`\n  L1 VALIDATION FAILED \u2014 ${l1Result.static_analysis.issues.length} issue(s):`);
+    for (const issue of l1Result.static_analysis.issues) {
+      console.error(`    [${issue.check}] step ${issue.step}: ${issue.detail}`);
+    }
+    console.error('\n  Fix the issues above before upserting. Skipping this workflow.\n');
+    continue;
+  }
+  console.log(`  L1 validation: passed`);
 
   const existing = await servPost('/api/v1/serv/table/getRows', {
     tableName: 'PGC_Workflow',

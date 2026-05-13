@@ -734,6 +734,184 @@ describe('runSimulation — auto-continues human_gate with no decision using fir
 });
 
 // ---------------------------------------------------------------------------
+// buildDialog — reveal field
+// ---------------------------------------------------------------------------
+
+describe('buildDialog — reveal field', () => {
+  it('adds reveal field to dialog when step.reveal is present', () => {
+    const step = {
+      step:      '6r',
+      type:      'human_gate',
+      gate_type: 'choice',
+      message_template: 'Pick an answer.',
+      reveal: {
+        button_label: 'Show Definition',
+        content:      'A workflow is a reusable sequence of declarative steps.',
+      },
+      output_key: 'answer',
+      options: [
+        { value: 'a', label: 'A', description: 'Option A', on_select: 'next' },
+        { value: 'cancel', label: 'Cancel', on_select: 'cancel' },
+      ],
+    };
+    const dialog = buildDialog(step, {});
+    const revealField = dialog.fields.find(f => f.type === 'reveal');
+    assert.ok(revealField, 'reveal field must be present');
+    assert.equal(revealField.button_label, 'Show Definition');
+    assert.equal(revealField.content, 'A workflow is a reusable sequence of declarative steps.');
+  });
+
+  it('resolves template tokens in reveal.content', () => {
+    const step = {
+      step:      'r1',
+      type:      'human_gate',
+      gate_type: 'choice',
+      message_template: 'Test.',
+      reveal: {
+        button_label: 'Show',
+        content:      'The answer is {{definition}}.',
+      },
+      options: [{ value: 'cancel', label: 'Cancel', on_select: 'cancel' }],
+    };
+    const dialog = buildDialog(step, { definition: 'forty-two' });
+    const revealField = dialog.fields.find(f => f.type === 'reveal');
+    assert.ok(revealField);
+    assert.equal(revealField.content, 'The answer is forty-two.');
+  });
+
+  it('does not add reveal field when step.reveal is absent', () => {
+    const step = {
+      step:      'r2',
+      type:      'human_gate',
+      gate_type: 'choice',
+      message_template: 'No reveal.',
+      options: [{ value: 'cancel', label: 'Cancel', on_select: 'cancel' }],
+    };
+    const dialog = buildDialog(step, {});
+    const revealField = dialog.fields.find(f => f.type === 'reveal');
+    assert.equal(revealField, undefined, 'reveal field must not be present');
+  });
+
+  it('reveal field appears before actions field in dialog.fields', () => {
+    const step = {
+      step:      'r3',
+      type:      'human_gate',
+      gate_type: 'choice',
+      message_template: 'Order test.',
+      reveal: { button_label: 'Reveal', content: 'Some content.' },
+      options: [{ value: 'cancel', label: 'Cancel', on_select: 'cancel' }],
+    };
+    const dialog = buildDialog(step, {});
+    const revealIdx  = dialog.fields.findIndex(f => f.type === 'reveal');
+    const actionsIdx = dialog.fields.findIndex(f => f.type === 'actions');
+    assert.ok(revealIdx !== -1, 'reveal must be present');
+    assert.ok(actionsIdx !== -1, 'actions must be present');
+    assert.ok(revealIdx < actionsIdx, 'reveal must appear before actions');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runSimulation — L1 reveal field validation
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — L1 reveal field validation', () => {
+  function makeRevealStep(reveal) {
+    return {
+      step: '1', type: 'human_gate', gate_type: 'choice',
+      message_template: 'Test.',
+      reveal,
+      options: [
+        { value: 'a', label: 'A', description: '', on_select: 'end' },
+        { value: 'cancel', label: 'Cancel', on_select: 'cancel' },
+      ],
+      on_success: 'end',
+    };
+  }
+
+  it('passes L1 when reveal has non-empty button_label and content', () => {
+    const result = runSimulation({
+      steps: [
+        makeRevealStep({ button_label: 'Show', content: 'Some content.' }),
+        { step: 'end', type: 'end' },
+      ],
+      mockOutputs: null, simulationPaths: null, runInput: {},
+    });
+    assert.equal(result.static_analysis.passed, true, JSON.stringify(result.static_analysis.issues));
+  });
+
+  it('fails L1 when reveal.button_label is empty', () => {
+    const result = runSimulation({
+      steps: [
+        makeRevealStep({ button_label: '', content: 'Some content.' }),
+        { step: 'end', type: 'end' },
+      ],
+      mockOutputs: null, simulationPaths: null, runInput: {},
+    });
+    assert.equal(result.static_analysis.passed, false);
+    const issue = result.static_analysis.issues.find(i => i.check === 'reveal_missing_button_label');
+    assert.ok(issue, 'reveal_missing_button_label issue must be present');
+  });
+
+  it('fails L1 when reveal.content is empty', () => {
+    const result = runSimulation({
+      steps: [
+        makeRevealStep({ button_label: 'Show', content: '' }),
+        { step: 'end', type: 'end' },
+      ],
+      mockOutputs: null, simulationPaths: null, runInput: {},
+    });
+    assert.equal(result.static_analysis.passed, false);
+    const issue = result.static_analysis.issues.find(i => i.check === 'reveal_missing_content');
+    assert.ok(issue, 'reveal_missing_content issue must be present');
+  });
+
+  it('fails L1 when both reveal fields are missing', () => {
+    const result = runSimulation({
+      steps: [
+        makeRevealStep({ button_label: '', content: '' }),
+        { step: 'end', type: 'end' },
+      ],
+      mockOutputs: null, simulationPaths: null, runInput: {},
+    });
+    assert.equal(result.static_analysis.passed, false);
+    assert.equal(result.static_analysis.issues.length, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ping_core seed — reveal step present and valid
+// ---------------------------------------------------------------------------
+
+describe('ping_core seed — step 6r reveal gate', () => {
+  it('has step 6r with gate_type choice and a reveal field', () => {
+    const step = getStep('ping_core', '6r');
+    assert.equal(step.gate_type, 'choice');
+    assert.ok(step.reveal, 'step 6r must have reveal field');
+    assert.ok(step.reveal.button_label, 'reveal.button_label must be non-empty');
+    assert.ok(step.reveal.content, 'reveal.content must be non-empty');
+  });
+
+  it('step 6r passes L1 validation', () => {
+    const wf = seed.find(w => w.name === 'ping_core');
+    const result = runSimulation({ steps: wf.steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+    assert.equal(result.static_analysis.passed, true, JSON.stringify(result.static_analysis.issues));
+  });
+
+  it('step 8p, 8t, 8y, 8n are all present', () => {
+    for (const key of ['8p', '8t', '8y', '8n']) {
+      const step = getStep('ping_core', key);
+      assert.ok(step, `step ${key} must exist`);
+    }
+  });
+
+  it('step 8 condition routes to 8y on truthy and 8n on falsy', () => {
+    const step = getStep('ping_core', '8');
+    assert.equal(step.on_truthy, 'step:8y');
+    assert.equal(step.on_falsy,  'step:8n');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // runSimulation — loop limit reached returns passed: true
 // ---------------------------------------------------------------------------
 
