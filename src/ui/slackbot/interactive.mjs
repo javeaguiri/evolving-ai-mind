@@ -91,6 +91,12 @@ export async function handle(req) {
     return handleExplainFollowupButton(buttonValue, payload, req.correlationId);
   }
 
+  // peek_reveal — reveal button on a human_gate. Opens a read-only modal showing
+  // the resolved content. Does NOT advance or resume the gate.
+  if (buttonValue.action === 'peek_reveal') {
+    return handlePeekReveal(buttonValue, payload, req.correlationId);
+  }
+
   const { workflowRunId, action: userResponse, responseData } = buttonValue;
   if (!workflowRunId || !userResponse) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
@@ -497,6 +503,43 @@ async function handleExplainViewSubmission(payload, traceId) {
   } catch (error) {
     console.error('interactive: explain_followup_modal SQS enqueue failed', { error: error.message, traceId });
     return err(500, `SQS enqueue failed: ${error.message}`, traceId);
+  }
+
+  return { statusCode: 200, body: '' };
+}
+
+// ---------------------------------------------------------------------------
+// handlePeekReveal — reveal button clicked on a human_gate.
+// Opens a read-only informational modal. Never enqueues resume_gate.
+// ---------------------------------------------------------------------------
+
+async function handlePeekReveal(buttonValue, payload, correlationId) {
+  const { content } = buttonValue;
+  const triggerId   = payload.trigger_id;
+  const traceId     = correlationId || randomUUID();
+
+  if (!triggerId) {
+    console.warn('interactive: peek_reveal missing trigger_id', { traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  try {
+    await slack.views.open({
+      trigger_id: triggerId,
+      view: {
+        type:   'modal',
+        title:  { type: 'plain_text', text: 'Definition' },
+        close:  { type: 'plain_text', text: 'Close' },
+        blocks: [{
+          type:     'section',
+          block_id: 'reveal_content_block',
+          text:     { type: 'mrkdwn', text: content ?? '(no content)' },
+        }],
+      },
+    });
+    console.info('interactive: peek_reveal modal opened', { traceId });
+  } catch (error) {
+    console.error('interactive: peek_reveal views.open failed', { error: error.message, traceId });
   }
 
   return { statusCode: 200, body: '' };

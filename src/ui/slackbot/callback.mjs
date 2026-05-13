@@ -517,6 +517,21 @@ function dialogToBlocks(dialog, workflowRunId) {
         break;
       }
 
+      case 'reveal': {
+        // Peek-only button — clicking opens a read-only modal with the resolved content.
+        // Does NOT advance the workflow gate. interactive.mjs handles 'peek_reveal' action.
+        blocks.push({
+          type:     'actions',
+          elements: [{
+            type:      'button',
+            text:      { type: 'plain_text', text: field.button_label },
+            action_id: 'peek_reveal',
+            value:     JSON.stringify({ action: 'peek_reveal', content: field.content }),
+          }],
+        });
+        break;
+      }
+
       case 'actions': {
         // btn.modal is an optional descriptor for buttons that require a text input modal.
         // action_id must be unique within a message — append button index so that blank
