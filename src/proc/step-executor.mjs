@@ -435,6 +435,7 @@ async function executeHumanGate({ step, localState, run, traceId }) {
   const gatePayload = {
     type:          'HUMAN_GATE',
     workflowRunId: run.id,
+    step:          String(step.step),
     gate_type:     gateType,
     dialog,
     callback:      run.callback,
