@@ -255,7 +255,7 @@ async function postHumanGate(message) {
   // text_input gates render an inline input block directly in the message.
   // Slack input blocks work in messages — state.values is populated in the
   // block_actions payload when the user clicks Submit. No modal required.
-  // block_id is fixed so interactive.mjs can read state.values by key.
+  // block_id is unique per run so Slack does not carry forward the previous gate's typed value.
   if (gateType === 'text_input') {
     const textboxField = dialog?.fields?.find(f => f.type === 'textbox') ?? {};
     const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
@@ -263,7 +263,7 @@ async function postHumanGate(message) {
     const isMultiline  = message.multiline ?? textboxField.multiline ?? false;
     const inputBlock   = {
       type:     'input',
-      block_id: 'text_input_block',
+      block_id: `text_input_block_${workflowRunId}`,
       element:  {
         type:      'plain_text_input',
         action_id: 'text_input_value',
