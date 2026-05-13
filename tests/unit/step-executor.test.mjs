@@ -907,8 +907,8 @@ describe('ping_core seed — step 6r reveal gate', () => {
 
   it('step 8 condition routes to 8y on truthy and 8n on falsy', () => {
     const step = getStep('ping_core', '8');
-    assert.equal(step.on_truthy, 'step:8y');
-    assert.equal(step.on_falsy,  'step:8n');
+    assert.equal(step.on_truthy, '8y');
+    assert.equal(step.on_falsy,  '8n');
   });
 });
 
