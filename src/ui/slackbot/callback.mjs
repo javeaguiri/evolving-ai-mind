@@ -250,7 +250,7 @@ async function postWorkflowError(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanGate(message) {
-  const { callback, gate_type: gateType, dialog, workflowRunId, message_ts, traceId } = message;
+  const { callback, gate_type: gateType, dialog, workflowRunId, step: stepKey, message_ts, traceId } = message;
 
   // text_input gates render an inline input block directly in the message.
   // Slack input blocks work in messages — state.values is populated in the
@@ -263,7 +263,7 @@ async function postHumanGate(message) {
     const isMultiline  = message.multiline ?? textboxField.multiline ?? false;
     const inputBlock   = {
       type:     'input',
-      block_id: `text_input_block_${workflowRunId}`,
+      block_id: `text_input_block_${workflowRunId}_${stepKey ?? 'x'}`,
       element:  {
         type:      'plain_text_input',
         action_id: 'text_input_value',
@@ -291,13 +291,15 @@ async function postHumanGate(message) {
             style:     'primary',
             text:      { type: 'plain_text', text: 'Submit' },
             action_id: 'workflow_text_submit',
-            value:     JSON.stringify({ workflowRunId, action: 'confirm' }),
+            // gateType included so interactive.mjs can use delete+reply instead of
+            // chat.update — Slack silently ignores chat.update on messages with input blocks.
+            value:     JSON.stringify({ workflowRunId, action: 'confirm', gateType: 'text_input' }),
           },
           {
             type:      'button',
             text:      { type: 'plain_text', text: 'Cancel' },
             action_id: 'workflow_text_cancel',
-            value:     JSON.stringify({ workflowRunId, action: 'cancel' }),
+            value:     JSON.stringify({ workflowRunId, action: 'cancel', gateType: 'text_input' }),
           },
         ];
     const blocks = [

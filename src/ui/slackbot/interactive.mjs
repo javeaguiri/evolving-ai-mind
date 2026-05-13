@@ -221,11 +221,11 @@ export async function handle(req) {
   });
 
   // Replace buttons with a static confirmation — prevents duplicate clicks.
-  // chat.update replaces the original message in-place. If this fails we still
-  // enqueue the resume_gate — a cosmetic failure should not block the workflow.
   //
-  // Include the gate's own message text in the ack so the user can see which
-  // step was just completed — without it all acks look identical in the thread.
+  // text_input gates: Slack silently ignores chat.update on messages containing
+  // input blocks. Use chat.delete + new reply instead to clear the stale UI.
+  // For all other gate types: chat.update replaces in-place.
+  // For remove_item: keep the gate open — Step Processor re-enqueues HUMAN_GATE.
   const gateContext    = gateText ? `\n> _${gateText}_` : '';
   const confirmationText = userResponse === 'confirm'
     ? `✅ Confirmed.${gateContext}`
@@ -235,26 +235,40 @@ export async function handle(req) {
     ? `❌ Cancelled.${gateContext}`
     : `✅ ${userResponse}.${gateContext}`;
 
-  // For remove_item we keep the gate open — don't replace the full message,
-  // just acknowledge. The Step Processor will re-enqueue an updated HUMAN_GATE.
-  // For confirm/cancel we replace the message to prevent further clicks.
-  if (userResponse !== 'remove_item') {
+  if (userResponse === 'remove_item') {
+    // Keep gate open — Step Processor re-enqueues updated HUMAN_GATE.
+  } else if (buttonValue.gateType === 'text_input') {
+    // Delete the original message (removes input block + stale buttons),
+    // then post a clean confirmation reply in the same thread.
+    try {
+      await slack.chat.delete({ channel, ts: threadId });
+      await slack.chat.postMessage({
+        channel,
+        thread_ts: payload.message?.thread_ts ?? threadId,
+        text:      confirmationText,
+        blocks:    [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
+      });
+    } catch (error) {
+      console.warn('interactive: text_input delete+reply failed (non-fatal)', {
+        error:     error.message,
+        errorCode: error.data?.error,
+        channel,
+        ts:        threadId,
+        traceId,
+      });
+    }
+  } else {
     try {
       await slack.chat.update({
         channel,
         ts:     threadId,
         text:   confirmationText,
-        blocks: [
-          {
-            type: 'section',
-            text: { type: 'mrkdwn', text: confirmationText },
-          },
-        ],
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
       });
     } catch (error) {
       console.warn('interactive: chat.update failed (non-fatal)', {
         error:     error.message,
-        errorCode: error.data?.error,   // Slack error code e.g. 'cant_update_message'
+        errorCode: error.data?.error,
         channel,
         ts:        threadId,
         traceId,

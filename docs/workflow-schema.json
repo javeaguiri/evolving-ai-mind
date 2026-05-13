@@ -272,6 +272,10 @@
           "default": false,
           "description": "text_input only. True renders a multi-line textarea; false renders a single-line input."
         },
+        "placeholder": {
+          "type": "string",
+          "description": "text_input only. Placeholder text shown inside the Slack input element when empty. Supports newlines for multiline hints."
+        },
         "options": {
           "type": "array",
           "description": "Gate action buttons. Shape is determined by gate_type: choice gates use choiceOption (value field, not action); all other gate types use confirmOption (action field, not value). Must include at least one cancel path — either here or in special_buttons.",
