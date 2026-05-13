@@ -62,6 +62,8 @@ Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. 
 - [ ] `docs/backlog.md` updated — items completed, new items added
 - [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-NN.md` with outcome notes
 
+> **No test environment (interim process):** deploy branch to prod → validate end-to-end → then merge to main. Main must always reflect what is actually running in prod. Once a test environment exists, this flips: deploy to test → validate → merge to main → deploy to prod.
+
 ### Interaction shorthands
 - **"add to todo"** — Claude gives a 2–3 sentence perspective on the item, then adds it to `docs/backlog.md`.
 - **"add to sprint"** — Claude adds the item to `docs/sprints/CURRENT.md` scope (in-session sprint adjustment).
