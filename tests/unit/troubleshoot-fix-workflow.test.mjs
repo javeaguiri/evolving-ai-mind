@@ -88,8 +88,8 @@ const BROKEN_CONDITION_STEPS = [
   { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
   { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_failure: 'next' },
   { step: '3', type: 'js_transform', input_key: 'right_brain_research', output_key: 'preference_gates', expression: '(function(){ return []; })()', on_success: 'next' },
-  // BUG: on_truthy uses routing token, on_falsy is pre-prefixed
-  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_truthy: 'next', on_falsy: 'step:6' },
+  // BUG: both sides use routing tokens instead of bare step keys
+  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_truthy: 'next', on_falsy: 'cancel' },
   { step: '5', type: 'end' },
   { step: '6', type: 'end' },
 ];
@@ -109,9 +109,9 @@ const ALL_FOUR_CONDITION_BUGS = [
   ...BROKEN_CONDITION_STEPS,
   { step: '7', type: 'serv_query', input: { tableName: 'PGC_StepType', filters: [] }, output_key: 'step_type_contracts', on_success: 'next', on_failure: 'cancel' },
   { step: '8', type: 'js_transform', input_key: 'step_type_contracts', output_key: 'routing_flags', expression: '(function(){ return { is_blocked: false, needs_schema: false }; })()', on_success: 'next' },
-  { step: '9',  type: 'condition', expression: '{{routing_flags.is_blocked}}',  on_truthy: 'step:9a', on_falsy: 'next' },
+  { step: '9',  type: 'condition', expression: '{{routing_flags.is_blocked}}',  on_truthy: 'cancel', on_falsy: '11' },
   { step: '9a', type: 'notify', message_template: 'Blocked', on_success: 'end' },
-  { step: '10', type: 'condition', expression: '{{routing_flags.needs_schema}}', on_truthy: 'step:10a', on_falsy: 'next' },
+  { step: '10', type: 'condition', expression: '{{routing_flags.needs_schema}}', on_truthy: 'next', on_falsy: '11' },
   { step: '10a', type: 'end' },
   { step: '11', type: 'end' },
 ];
@@ -142,11 +142,10 @@ describe('Level 1 static analysis — condition routing contract', () => {
     assert.equal(issue.failure_class, 'dead_routing_target');
   });
 
-  test('detects on_falsy: "step:6" — normalised to step:step:6, dead-target since "step:6" is not a step key', () => {
+  test('detects on_falsy: "cancel" — routing token in condition step normalised to step:cancel, dead-target since "cancel" is not a step key', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
-    // executeCondition wraps on_falsy with 'step:' → 'step:step:6'.
-    // ROUTING_TOKEN_RE accepts 'step:step:6' (step: + non-empty string).
-    // Dead-target check then fires: 'step:6' is not a step key in the array.
+    // condition on_falsy: 'cancel' — bare, normalised to step:cancel.
+    // ROUTING_TOKEN_RE accepts it; dead-target fires since "cancel" is not a step key.
     const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_falsy'));
     assert.ok(issue, 'Expected issue on step 4 on_falsy');
     assert.equal(issue.failure_class, 'dead_routing_target');

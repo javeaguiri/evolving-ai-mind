@@ -2063,8 +2063,8 @@
         "type": "condition",
         "description": "Route on text validation result.",
         "expression": "{{text_valid}}",
-        "on_truthy": "step:4",
-        "on_falsy": "step:3e"
+        "on_truthy": "4",
+        "on_falsy": "3e"
       },
       {
         "step": "3e",
@@ -2089,20 +2089,25 @@
       {
         "step": "4",
         "type": "human_gate",
-        "gate_type": "text_input",
-        "message_template": "Test 3 of 10 — Multiline Text Input\n\nMULTILINE TEST: Type the three lines exactly as shown, then click Submit:\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
-        "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "gate_type": "choice",
+        "message_template": "Test 3 of 10 — Multiline Text Input\n\nMULTILINE TEST: Click *Open Text Area* below. A multiline modal will open.\n\nPaste exactly these three lines, then click Submit:\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
         "output_key": "ping_multiline",
-        "multiline": true,
-        "options": [
+        "options": [],
+        "special_buttons": [
           {
-            "label": "Submit",
-            "action": "confirm",
-            "on_select": "next"
+            "value": "ping_multiline_submit",
+            "label": "Open Text Area",
+            "on_select": "next",
+            "modal": {
+              "title": "Multiline Input",
+              "input_label": "Paste your 3 lines",
+              "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+              "multiline": true
+            }
           },
           {
+            "value": "cancel",
             "label": "Cancel",
-            "action": "cancel",
             "on_select": "cancel"
           }
         ],
@@ -2124,8 +2129,8 @@
         "type": "condition",
         "description": "Route on multiline validation result.",
         "expression": "{{multiline_valid}}",
-        "on_truthy": "step:5",
-        "on_falsy": "step:4e"
+        "on_truthy": "5",
+        "on_falsy": "4e"
       },
       {
         "step": "4e",
@@ -2190,8 +2195,8 @@
         "type": "condition",
         "description": "Route on modal validation result.",
         "expression": "{{modal_valid}}",
-        "on_truthy": "step:5b",
-        "on_falsy": "step:5e"
+        "on_truthy": "5b",
+        "on_falsy": "5e"
       },
       {
         "step": "5e",
@@ -2400,8 +2405,8 @@
         "type": "condition",
         "description": "Route on ping_condition_bool: truthy path to 8y, falsy path to 8n. Both converge on 9f.",
         "expression": "{{ping_condition_bool}}",
-        "on_truthy": "step:8y",
-        "on_falsy": "step:8n"
+        "on_truthy": "8y",
+        "on_falsy": "8n"
       },
       {
         "step": "8y",
@@ -2475,8 +2480,8 @@
         "type": "condition",
         "description": "Route on follow-up validation result.",
         "expression": "{{followup_valid}}",
-        "on_truthy": "step:9",
-        "on_falsy": "step:9fe"
+        "on_truthy": "9",
+        "on_falsy": "9fe"
       },
       {
         "step": "9fe",

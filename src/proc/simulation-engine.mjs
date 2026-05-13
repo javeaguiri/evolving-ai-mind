@@ -140,8 +140,16 @@ export function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: s.on_truthy });
-    if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: s.on_falsy });
+    // condition on_truthy/on_falsy accept bare step keys (e.g. "4", "3e") — normalise
+    // to step:N format so ROUTING_TOKEN_RE and dead-target checks work uniformly.
+    if (s.on_truthy) {
+      const v = s.type === 'condition' && !String(s.on_truthy).startsWith('step:') ? `step:${s.on_truthy}` : s.on_truthy;
+      routingValues.push({ field: 'on_truthy', value: v });
+    }
+    if (s.on_falsy) {
+      const v = s.type === 'condition' && !String(s.on_falsy).startsWith('step:') ? `step:${s.on_falsy}` : s.on_falsy;
+      routingValues.push({ field: 'on_falsy', value: v });
+    }
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
