@@ -13,7 +13,8 @@
       "Bash(curl * https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod*)",
       "Bash(git push origin main*)",
       "Bash(sam build*)",
-      "Bash(sam deploy --no-confirm-changeset*)"
+      "Bash(sam deploy --no-confirm-changeset*)",
+      "Bash(aws logs tail *)"
     ]
   }
 }
