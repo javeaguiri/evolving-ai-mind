@@ -64,6 +64,7 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 | Item | Notes |
 |---|---|
+| Peek reveal: evaluate `task_card` block as inline accordion | Current impl opens a modal (`peek_reveal` button → `views.open`). Slack's `task_card` block type (from `api.slack.com/partners/thinking-steps`) renders an inline accordion — title + collapsible output text, no modal required. If available for standard bot tokens (not just partner apps), replace `peek_reveal` handler in `interactive.mjs` + `dialogToBlocks` in `callback.mjs` with a `chat.postMessage` that appends a `task_card` block. Verify availability first: post a test message with the block and confirm it renders in the target workspace. |
 | Test environment | Stand up a parallel AWS environment (separate SAM stack, separate RDS instance, separate Slack workspace) so changes can be validated end-to-end before touching prod. Needed before any concurrent contributors or automated integration test runs against live infra. |
 | `README.md` environment bootstrap coverage | README currently describes what the system does but not how to create a new environment from scratch. Add a "Bootstrapping a new environment" section covering: AWS prerequisites, SSM parameter names and values, `sam build && sam deploy`, `POST /api/v1/serv/bootstrap`, and the `dev_scripts/upsert-*.mjs` seed sequence. Should be the single reference for spinning up prod or test. |
 | `design-domain.mjs` dead code | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
