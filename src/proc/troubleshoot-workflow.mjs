@@ -21,7 +21,7 @@
 import { ok, err }              from '../shared/lambda-utils.mjs';
 import { enqueueWorkflow, enqueueCallback } from '../shared/sqs-callback.mjs';
 import { getRows }              from '../shared/serv-client.mjs';
-import { runSimulation }        from './step-executor.mjs';
+import { runSimulation }        from './simulation-engine.mjs';
 
 export async function handle(req) {
   const body         = req.body ?? {};

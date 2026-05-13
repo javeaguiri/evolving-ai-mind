@@ -27,7 +27,7 @@
 
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { runSimulation } from '../../src/proc/step-executor.mjs';
+import { runSimulation } from '../../src/proc/simulation-engine.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helpers — mirror logic from troubleshoot-workflow.mjs / fix-workflow.mjs
