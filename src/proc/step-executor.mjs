@@ -554,8 +554,9 @@ export function buildDialog(step, localState) {
       fields.push({
         type:      'textbox',
         name:      'user_input',
-        label: step.input_label ?? 'Your input',
-        multiline: step.multiline ?? false,
+        label:       step.input_label   ?? 'Your input',
+        multiline:   step.multiline     ?? false,
+        ...(step.placeholder ? { placeholder: step.placeholder } : {}),
       });
       break;
     }
