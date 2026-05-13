@@ -289,8 +289,12 @@ evolving-mind-ai/
 │   │   │                             not a unit test runner; run manually with node
 │   │   ├── run-workflow.mjs          POST /proc/run-workflow — Step Processor; executes one stack frame per
 │   │   │                             SQS message (execute_top, resume_gate, cancel)
-│   │   ├── simulate-workflow.mjs     POST /proc/simulate-workflow — standalone workflow simulation endpoint;
-│   │   │                             runs Level 1 + Level 2 analysis without creating a WorkflowRun
+│   │   ├── simulate-workflow.mjs     POST /proc/simulate-workflow — standalone workflow simulation HTTP adapter;
+│   │   │                             validates request shape, delegates to simulation-engine.mjs, returns result
+│   │   ├── simulation-engine.mjs     Pure simulation module — no I/O, no AWS SDK, no Slack SDK.
+│   │   │                             Exports runSimulation (Level 1 + Level 2) and runLevel1StaticAnalysis.
+│   │   │                             Consumed by: simulate-workflow.mjs (HTTP), step-executor.mjs (simulate
+│   │   │                             step type), and dev_scripts/upsert-workflow.mjs (pre-write L1 guard).
 │   │   ├── step-executor.mjs         Step type dispatch — llm_call, js_transform, human_gate, serv_schema,
 │   │   │                             serv_insert, serv_query, serv_update, serv_delete, serv_entity_query,
 │   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate, notify, end

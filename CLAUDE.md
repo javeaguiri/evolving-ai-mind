@@ -56,8 +56,9 @@ Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. 
 - [ ] `node --test tests/unit/*.test.mjs` passes
 - [ ] Simulate Level 1+2 pass on any new or modified workflows
 - [ ] `CLAUDE.md` "Current State" updated
-- [ ] `docs/architecture.md` updated if any architectural decisions were made
+- [ ] `docs/architecture.md` updated if any architectural decisions were made **or any `.mjs` file was added/removed/renamed**
 - [ ] `docs/data-architecture.md` updated if any schema changes
+- [ ] `README.md` updated if environment setup, bootstrap steps, or infrastructure changed
 - [ ] `docs/backlog.md` updated — items completed, new items added
 - [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-NN.md` with outcome notes
 

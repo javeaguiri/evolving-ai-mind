@@ -62,6 +62,8 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 | Item | Notes |
 |---|---|
+| Test environment | Stand up a parallel AWS environment (separate SAM stack, separate RDS instance, separate Slack workspace) so changes can be validated end-to-end before touching prod. Needed before any concurrent contributors or automated integration test runs against live infra. |
+| `README.md` environment bootstrap coverage | README currently describes what the system does but not how to create a new environment from scratch. Add a "Bootstrapping a new environment" section covering: AWS prerequisites, SSM parameter names and values, `sam build && sam deploy`, `POST /api/v1/serv/bootstrap`, and the `dev_scripts/upsert-*.mjs` seed sequence. Should be the single reference for spinning up prod or test. |
 | `design-domain.mjs` dead code | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
 | Orphan table cleanup tooling | Failed partial runs leave orphan tables — `delete-domain` covers full domains; per-table cleanup is manual |
 | AWS infrastructure cost — Bastion Host public IPv4 | EC2 Bastion accrues ~$2.82/month. Replace with AWS SSM Session Manager when promotional credits near exhaustion |
