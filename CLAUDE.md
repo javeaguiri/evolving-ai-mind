@@ -35,6 +35,47 @@ Unless the change is in **system code** (a genuine engine defect), bug fixes mus
 
 ---
 
+## Development Process — Sprint Cycles
+
+### Session start
+Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. It contains the active sprint goal, branch, acceptance criteria, and test scenarios.
+
+### Sprint lifecycle
+
+| Phase | Steps |
+|-------|-------|
+| **Retro** | What required multiple L1/L2 correction cycles? What broke post-simulation? What backlog items aged? Each finding maps to a prompt update, context update, or new L1 check. |
+| **Scope** | Review `docs/backlog.md`. Select items. Write `docs/sprints/CURRENT.md` with goal, branch name, acceptance criteria, out-of-scope list. |
+| **Prep** | Review and update relevant PGC_SystemContext rows, PGC_Prompt entries, and PGC_StepType contracts *before* writing code. Fix system self-knowledge first. |
+| **Branch** | `git checkout -b sprint/NN-short-slug` |
+| **Implement** | Commit to branch using conventional format. Unit tests must pass before each push. |
+| **Review** | Push branch. User reviews via `git diff` and commit messages. No merge without explicit approval. |
+| **Close** | Merge to main → deploy → update all docs (see checklist below). |
+
+### Sprint close checklist (enforce before merge)
+- [ ] `node --test tests/unit/*.test.mjs` passes
+- [ ] Simulate Level 1+2 pass on any new or modified workflows
+- [ ] `CLAUDE.md` "Current State" updated
+- [ ] `docs/architecture.md` updated if any architectural decisions were made
+- [ ] `docs/data-architecture.md` updated if any schema changes
+- [ ] `docs/backlog.md` updated — items completed, new items added
+- [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-NN.md` with outcome notes
+
+### Interaction shorthands
+- **"add to todo"** — Claude gives a 2–3 sentence perspective on the item, then adds it to `docs/backlog.md`.
+- **"add to sprint"** — Claude adds the item to `docs/sprints/CURRENT.md` scope (in-session sprint adjustment).
+
+### Enforcement
+Claude enforces sprint discipline. If any of the following are skipped, Claude calls it out before proceeding:
+- Branching before implementation starts
+- Unit tests before pushing
+- Doc updates before merge
+- Retro before scoping a new sprint
+
+This applies even if the user does not mention it. The checklist is a hard gate, not a suggestion.
+
+---
+
 ## Final Decisions (non-negotiable)
 
 Never suggest changing:
