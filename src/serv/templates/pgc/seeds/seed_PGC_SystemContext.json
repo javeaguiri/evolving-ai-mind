@@ -9,7 +9,7 @@
       "analyze_and_design_workflow",
       "fix_workflow_steps"
     ],
-    "version": 10,
+    "version": 11,
     "content": {
       "sections": [
         {
@@ -315,7 +315,7 @@
                   "type": "array",
                   "field": "input.filters",
                   "required": true,
-                  "description": "Non-empty filter array"
+                  "description": "Non-empty array of { column, op, value } filter objects \u2014 must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
                 },
                 {
                   "type": "string",
@@ -413,7 +413,7 @@
                   "type": "array",
                   "field": "input.filters",
                   "required": false,
-                  "description": "Filter array applied to root table"
+                  "description": "Array of { column, op, value } filter objects applied to the root table. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
                 },
                 {
                   "type": "integer",
@@ -569,7 +569,7 @@
                   "type": "array",
                   "field": "input.filters",
                   "required": false,
-                  "description": "Filter array. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
+                  "description": "Array of { column, op, value } filter objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
                 },
                 {
                   "type": "object",
@@ -667,7 +667,7 @@
                   "type": "array",
                   "field": "input.filters",
                   "required": true,
-                  "description": "Non-empty filter array"
+                  "description": "Non-empty array of { column, op, value } filter objects \u2014 must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
                 },
                 {
                   "type": "object",
@@ -922,6 +922,24 @@
         {
           "id": "main",
           "data": "FLAT LOOP PATTERN \u2014 use when the workflow must iterate a step sequence with human interaction per item. Do NOT use the iterator step type for human-interactive loops.\n\nA flat loop consists of: (1) a guard condition, (2) the loop body steps, (3) the last body step routing back to the guard.\n\nExample \u2014 quiz card loop (guard at step 9, body at steps 10\u201313, post-loop at step 14):\n\n{ \"step\": \"9\",  \"type\": \"condition\",  \"description\": \"Check if all cards have been presented.\",\n  \"expression\": \"local_state.quiz_state.index >= local_state.quiz_state.cards.length\",\n  \"on_truthy\": \"step:14\",  \"on_falsy\": \"step:10\" }\n\n{ \"step\": \"10\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"description\": \"Show current card and collect user answer.\",\n  \"message_template\": \"Card {{quiz_state.index}} of {{quiz_state.cards.length}}: {{quiz_state.cards.0.term}}\",\n  \"options\": [\n    { \"label\": \"Correct\",   \"value\": \"correct\",   \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Incorrect\", \"value\": \"incorrect\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",                           \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"output_key\": \"user_answer\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\n{ \"step\": \"11\", \"type\": \"js_transform\", \"description\": \"Advance index and tally result.\",\n  \"expression\": \"...\", \"output_key\": \"quiz_state\", \"on_success\": \"next\" }\n\n{ \"step\": \"12\", \"type\": \"serv_insert\",  \"description\": \"Write test log entry.\",\n  \"...\", \"on_success\": \"next\", \"on_failure\": \"next\" }\n\n{ \"step\": \"13\", \"type\": \"serv_update\",  \"description\": \"Update card streak.\",\n  \"...\", \"on_success\": \"step:9\", \"on_failure\": \"step:9\" }\n\n{ \"step\": \"14\", \"...\"  }   \u2190 post-loop entry point\n\nFlat loop rules:\n- Guard condition: on_falsy \u2192 first body step; on_truthy \u2192 first post-loop step\n- Last body step: on_success AND on_failure BOTH route back to the guard condition (step:9 in the example)\n- Cancel inside the loop body: route to a terminal step (end or cancel), NEVER back to the guard\n- Loop state (index, done flag, accumulators) lives in local_state and is written by a js_transform step inside the loop body\n- js_transform input_key is optional \u2014 omit it when the expression reads directly from local_state (e.g. local_state.loop_state.index). To write multiple local_state keys from one js_transform, use a comma-separated output_key (e.g. \"a,b,c\") \u2014 the engine destructures the object return value into each named key simultaneously."
+        }
+      ]
+    }
+  },
+  {
+    "key": "serv_db_step_shapes",
+    "section": "examples",
+    "inject_always": false,
+    "inject_for": [
+      "generate_workflow_steps",
+      "fix_workflow_steps"
+    ],
+    "version": 1,
+    "content": {
+      "sections": [
+        {
+          "id": "main",
+          "data": "DB STEP SHAPES \u2014 canonical serv_* step examples\n\nEvery filter must follow: { \"column\": \"<exact column name>\", \"op\": \"<op>\", \"value\": \"<literal or {{template}}>\" }\n\nValid ops (exact strings \u2014 no SQL operators, no alternatives):\n  eq       equal (=)              neq      not equal (!=)\n  gt       greater than (>)       gte      greater than or equal (>=)\n  lt       less than (<)          lte      less than or equal (<=)\n  like     SQL LIKE pattern       in       value is in an array\n  is_null  IS NULL (no value)     not_null IS NOT NULL (no value)\n\nserv_query (read rows \u2014 filters optional):\n{ \"step\": \"1\", \"type\": \"serv_query\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{input.id}}\" }],\n             \"orderBy\": { \"column\": \"created_at\", \"direction\": \"desc\" }, \"limit\": 50 },\n  \"output_key\": \"results\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\nserv_insert (create one row):\n{ \"step\": \"2\", \"type\": \"serv_insert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"row\": { \"col1\": \"{{input.value}}\", \"col2\": \"literal\" } },\n  \"output_key\": \"inserted_row\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\nserv_update (update matching rows \u2014 filters REQUIRED, must scope to specific rows):\n{ \"step\": \"3\", \"type\": \"serv_update\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }],\n             \"updates\": { \"col1\": \"{{input.value}}\" } },\n  \"output_key\": \"update_result\", \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\nserv_delete (delete matching rows \u2014 filters REQUIRED, must scope to specific rows):\n{ \"step\": \"4\", \"type\": \"serv_delete\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }] },\n  \"on_success\": \"next\", \"on_failure\": \"cancel\" }\n\nFILTER RULES:\n- filters is always an array of filter objects \u2014 never a plain string, never flat key-value pairs\n- column is always a literal column name (e.g. \"id\", \"name\") \u2014 never a {{template}}\n- op is always a literal string from the list above \u2014 never \"=\", \"!=\", \"==\", \"contains\", \"equals\"\n- value is a literal or a {{template}} reference; omit for is_null and not_null ops\n- serv_update and serv_delete MUST have at least one filter \u2014 unfiltered mass writes are rejected at runtime"
         }
       ]
     }

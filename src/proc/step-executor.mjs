@@ -1418,6 +1418,51 @@ function runLevel1StaticAnalysis(steps) {
       }
     }
 
+    // Validate filter array element shape and op values for serv_* steps.
+    // Skips validation when filters is a template reference string (resolved at runtime).
+    const VALID_FILTER_OPS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null']);
+    const SERV_FILTER_STEPS = new Set(['serv_query', 'serv_update', 'serv_delete', 'serv_entity_query']);
+    if (SERV_FILTER_STEPS.has(s.type)) {
+      const rawFilters = s.input?.filters ?? null;
+      if (rawFilters !== null && typeof rawFilters !== 'string' && Array.isArray(rawFilters)) {
+        for (let fi = 0; fi < rawFilters.length; fi++) {
+          const f = rawFilters[fi];
+          if (typeof f !== 'object' || f === null) {
+            issues.push({
+              check:         'serv_step_invalid_filter',
+              step:          stepKey,
+              failure_class: 'serv_step_invalid_filter',
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] must be an object with shape { column, op, value } but got ${JSON.stringify(f)}. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null`,
+            });
+            continue;
+          }
+          if (!f.column || typeof f.column !== 'string') {
+            issues.push({
+              check:         'serv_step_invalid_filter',
+              step:          stepKey,
+              failure_class: 'serv_step_invalid_filter',
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] is missing or invalid "column" field. Each filter must be { column, op, value }.`,
+            });
+          }
+          if (!f.op) {
+            issues.push({
+              check:         'serv_step_invalid_filter',
+              step:          stepKey,
+              failure_class: 'serv_step_invalid_filter',
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] is missing "op" field. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null`,
+            });
+          } else if (!VALID_FILTER_OPS.has(f.op)) {
+            issues.push({
+              check:         'serv_step_invalid_filter_op',
+              step:          stepKey,
+              failure_class: 'serv_step_invalid_filter_op',
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] has invalid op "${f.op}". Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null — never use SQL operators like "=", "!=", "contains"`,
+            });
+          }
+        }
+      }
+    }
+
     // Collect writes — step-level output_key.
     // Comma-separated output_key registers each listed key individually.
     // Non-string output_key is a workflow defect — report as error.
