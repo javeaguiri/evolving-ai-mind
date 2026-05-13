@@ -660,7 +660,7 @@ export function buildDialog(step, localState) {
         ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
         : (step.options ?? []);
       const choiceItems = rawChoiceOptions
-        .map(o => ({ value: o.value, label: o.label, description: o.description ?? '' }));
+        .map(o => ({ value: o.value, label: o.label, description: resolveTemplate(o.description ?? '', localState) }));
       if (choiceItems.length > 0) {
         fields.push({ type: 'description_list', items: choiceItems });
       }
@@ -1349,6 +1349,11 @@ function runLevel1StaticAnalysis(steps) {
     if (s.input_key)  templatesToCheck.push(`{{${s.input_key}}}`);
     if (s.items_key)  templatesToCheck.push(`{{${s.items_key}}}`);
     if (s.type === 'condition' && s.expression) templatesToCheck.push(s.expression);
+    // Scan option and special_button description fields — choice gate descriptions
+    // are resolved via resolveTemplate at runtime; unresolved refs must be caught here.
+    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      if (typeof opt.description === 'string' && opt.description) templatesToCheck.push(opt.description);
+    }
 
     const stepReads          = new Set();
     const seenTemplateIssues = new Set();
