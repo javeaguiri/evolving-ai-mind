@@ -20,7 +20,7 @@
 
 import { randomUUID }      from 'crypto';
 import { ok, err }         from '../shared/lambda-utils.mjs';
-import { runSimulation }   from './step-executor.mjs';
+import { runSimulation }   from './simulation-engine.mjs';
 
 export async function handle(req) {
   const body    = req.body ?? {};

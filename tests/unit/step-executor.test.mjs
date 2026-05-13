@@ -15,7 +15,8 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, runSimulation } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression } from '../../src/proc/step-executor.mjs';
+import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures

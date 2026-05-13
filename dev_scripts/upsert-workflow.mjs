@@ -21,7 +21,7 @@
 
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
-import { runSimulation } from '../src/proc/step-executor.mjs';
+import { runSimulation } from '../src/proc/simulation-engine.mjs';
 
 const SERV_API_URL = process.env.SERV_API_URL;
 const WORKFLOW_NAME = process.argv[2] ?? null;
