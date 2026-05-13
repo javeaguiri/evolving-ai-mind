@@ -2090,7 +2090,8 @@
         "step": "4",
         "type": "human_gate",
         "gate_type": "text_input",
-        "message_template": "Test 3 of 10 — Multiline Text Input\n\nMULTILINE TEST: Click *Open Text Area* below. A multiline modal will open.\n\nPaste exactly these three lines, then click Submit:\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "message_template": "Test 3 of 10 — Multiline Text Input\n\nMULTILINE TEST: Type the three lines exactly as shown, then click Submit:\n\nLine 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
         "output_key": "ping_multiline",
         "multiline": true,
         "options": [
