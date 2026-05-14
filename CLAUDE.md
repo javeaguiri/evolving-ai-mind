@@ -56,10 +56,15 @@ Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. 
 - [ ] `node --test tests/unit/*.test.mjs` passes
 - [ ] Simulate Level 1+2 pass on any new or modified workflows
 - [ ] `CLAUDE.md` "Current State" updated
-- [ ] `docs/architecture.md` updated if any architectural decisions were made
+- [ ] `docs/architecture.md` updated if any architectural decisions were made **or any `.mjs` file was added/removed/renamed**
 - [ ] `docs/data-architecture.md` updated if any schema changes
+- [ ] `README.md` updated if environment setup, bootstrap steps, or infrastructure changed
 - [ ] `docs/backlog.md` updated — items completed, new items added
 - [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-NN.md` with outcome notes
+
+> **No test environment (interim process):** deploy branch to prod → validate end-to-end → then merge to main. Main must always reflect what is actually running in prod. Once a test environment exists, this flips: deploy to test → validate → merge to main → deploy to prod.
+
+> **Deployment = code + seeds.** `sam deploy` only updates Lambda code. After every deploy, run `git diff main...HEAD -- src/serv/templates/pgc/seeds/` to identify changed seed files, then upsert each one: `node dev_scripts/upsert-workflow.mjs`, `node dev_scripts/upsert-step-type.mjs`, `node dev_scripts/upsert-prompt.mjs`, `node dev_scripts/upsert-system-context.mjs`. Seeds not upserted means the DB is still running the old definitions.
 
 ### Interaction shorthands
 - **"add to todo"** — Claude gives a 2–3 sentence perspective on the item, then adds it to `docs/backlog.md`.
@@ -288,6 +293,14 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Recently Completed
 
+**Sprint 1 (2026-05-14) — Engine Expressiveness:**
+- `reveal` field on `human_gate` steps: renders an inline `task_card` block (Slack partner block) above the gate buttons — no click required. `button_label` → card title, resolved `content` → rich_text output. L1 validates both fields non-empty. `callback.mjs` + `step-executor.mjs`.
+- Post-write L1 validation: `create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` before persisting to `PGC_Workflow`. Blocks invalid workflows at write time with structured 422 error. `dev_scripts/upsert-workflow.mjs` surfaces errors clearly.
+- `ping_core` v16: 10 numbered tests (Test X of 10), condition step with true/false branch verification, reveal gate test (step 6r). Validated end-to-end in prod.
+- `simulation-engine.mjs` extracted from `simulate-workflow.mjs` — shared by HTTP adapter and `step-executor.mjs`.
+- Condition step seed fix: stripped `step:` prefix from `on_truthy`/`on_falsy` in all seed workflows — aligns with `workflow-schema.json` `bareStepKey` contract. 225/225 unit tests pass.
+- `docs/slack-block-kit.md`: partner block types section added (`task_card` reference).
+
 **Session 33 (2026-05-04):**
 - `/chat` and `/explain` endpoints — `src/proc/chat.mjs`, `src/proc/explain.mjs`, `src/ui/slackbot/chat.mjs`, `src/ui/slackbot/explain.mjs`
 - `PGC_Session` + `PGC_SessionEntry` tables bootstrapped and seeded via `POST /api/v1/serv/bootstrap`
@@ -295,11 +308,6 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - `LLM_DIAGNOSTIC` SQS result type: step-executor writes diagnostics non-blocking, run-workflow enqueues, callback.mjs posts to channel root (no thread)
 - API key security: `INTERNAL_API_KEY` env var on ProcFunction + ServFunction; `ApiKeyRequired: true` on ProcProxy + ServProxy events; `InternalApiKey` + `InternalApiUsagePlan` in `template.yaml`; `x-api-key` header in `serv-client.mjs`
 - `docs/security-architecture.md` extracted from architecture.md §12
-
-**Session 32 (2026-05-01):**
-- `generate_workflow_steps` context reduction (~55KB → ~41KB)
-- `probe_input` fingerprint fix in `dev_scripts/upsert-prompt.mjs`
-- `PGC_SystemContext.content` → JSONB schema designed — see `docs/architecture.md` §4.3.3
 
 ### Immediate Open Work
 

@@ -289,8 +289,12 @@ evolving-mind-ai/
 │   │   │                             not a unit test runner; run manually with node
 │   │   ├── run-workflow.mjs          POST /proc/run-workflow — Step Processor; executes one stack frame per
 │   │   │                             SQS message (execute_top, resume_gate, cancel)
-│   │   ├── simulate-workflow.mjs     POST /proc/simulate-workflow — standalone workflow simulation endpoint;
-│   │   │                             runs Level 1 + Level 2 analysis without creating a WorkflowRun
+│   │   ├── simulate-workflow.mjs     POST /proc/simulate-workflow — standalone workflow simulation HTTP adapter;
+│   │   │                             validates request shape, delegates to simulation-engine.mjs, returns result
+│   │   ├── simulation-engine.mjs     Pure simulation module — no I/O, no AWS SDK, no Slack SDK.
+│   │   │                             Exports runSimulation (Level 1 + Level 2) and runLevel1StaticAnalysis.
+│   │   │                             Consumed by: simulate-workflow.mjs (HTTP), step-executor.mjs (simulate
+│   │   │                             step type), and dev_scripts/upsert-workflow.mjs (pre-write L1 guard).
 │   │   ├── step-executor.mjs         Step type dispatch — llm_call, js_transform, human_gate, serv_schema,
 │   │   │                             serv_insert, serv_query, serv_update, serv_delete, serv_entity_query,
 │   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate, notify, end
@@ -1504,6 +1508,24 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
+###### `reveal` (optional, all gate types)
+
+Renders an inline `task_card` block above the gate buttons. The definition is always
+visible — no click required. The gate remains suspended; the card is read-only.
+
+```json
+"reveal": {
+  "button_label": "Show Definition",
+  "content": "{{some.template}}"
+}
+```
+
+`content` is resolved via `resolveTemplate` before the HUMAN_GATE SQS message is
+built. `button_label` becomes the `task_card` title. Both fields are required and
+must be non-empty strings — L1 validation rejects steps where either is missing.
+`callback.mjs` renders the block using `randomUUID()` for `task_id` and
+`status: "complete"` — posted directly in the gate message, not as a thread reply.
+
 ###### Template syntax
 
 Templates appear in `message_template`, `input` values, and `context_key`. The
@@ -1655,6 +1677,17 @@ and `paths_key` are optional — if absent, the `simulate` step runs Level 1
 static analysis only. `on_failure` routes back to the step where the user can
 review and correct the workflow definition before re-simulating.
 Full schema, validation levels, and result structure: see **Section 6.5.6**.
+
+##### Post-write L1 validation
+
+`create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` on the generated
+steps array **before** calling SERV to persist the workflow. If issues are found the
+write is blocked and a `422` response is returned with the structured issue list.
+`upsert-workflow.mjs` surfaces L1 errors clearly in terminal output. This prevents
+dead-routing or structurally invalid workflows from entering `PGC_Workflow` at all.
+
+The check is performed in PROC (not SERV) because `runLevel1StaticAnalysis` lives in
+`simulation-engine.mjs` which is a PROC-tier module — SERV has no access to it.
 
 ##### `condition`
 ```json

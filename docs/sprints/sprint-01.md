@@ -99,3 +99,24 @@ Update the `ping_core` workflow artifact (`seed_PGC_Workflow.json` + upsert) to:
 - [ ] `docs/data-architecture.md` updated if any schema changes
 - [ ] `docs/backlog.md` updated
 - [ ] This file renamed to `docs/sprints/sprint-01.md` with outcome notes
+
+---
+
+## Outcome
+
+**Status:** Complete — merged to main 2026-05-14.
+
+**Acceptance criteria met:**
+- ✅ `reveal` field renders inline `task_card` above gate buttons (no click required)
+- ✅ `reveal.content` template tokens resolve correctly at render time
+- ✅ L1 catches missing/empty `reveal.button_label` and `reveal.content`
+- ✅ Post-write L1 rejects workflows with bad steps before DB write; 422 with issue list
+- ✅ `upsert-workflow.mjs` surfaces L1 errors clearly
+- ✅ `ping_core` v16 end-to-end: all 10 tests pass, "Test X of 10" numbering, condition both paths verified, reveal step works
+- ✅ 225/225 unit tests pass
+- ✅ L1+L2 simulation passes on ping_core (0 issues)
+
+**Retro notes:**
+- Condition step seeds had `step:N` routing format in `on_truthy`/`on_falsy` — schema requires bare keys. Fixed 10 occurrences across 4 workflows. L1 enforces this going forward.
+- `reveal` UX iterated: started as modal (`views.open`), moved to thread `chat.postMessage`, then to inline `task_card` in the gate message. Final form (inline, always visible) validated in prod.
+- `simulation-engine.mjs` extraction was prerequisite work not in original scope but necessary to avoid duplication.
