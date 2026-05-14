@@ -2,8 +2,8 @@
 
 **Goal:** Make `create_workflow` produce a working workflow end-to-end, using a Spanish
 flashcard quiz as the test vehicle. Success is: the user runs `create_workflow` for a
-flashcard quiz domain, the generated workflow uses `reveal` on its human gates, and it
-runs correctly in prod with no L1/runtime failures.
+freshly created flashcard domain, the generated workflow uses `reveal` on its human gates,
+and it runs correctly in prod with no L1/runtime failures.
 
 **Branch:** `sprint/02-create-workflow-reliability`
 
@@ -11,7 +11,27 @@ runs correctly in prod with no L1/runtime failures.
 
 ## Scope
 
-### Track A — Simulation Enrichment
+### Track A — create_workflow Domain Context
+
+`create_workflow` currently runs with `domain: null` throughout — the right brain has
+no domain schema to reason about. This prevents it from generating steps that reference
+actual PGD table columns, and prevents domain-specific preference questions.
+
+1. **Resolve domain before dispatch** — in `classify-intent.mjs` (or the mind.mjs
+   pre-pass), resolve the domain name from the user's intent and inject it into the
+   CREATE_WORKFLOW SQS payload so `input.domain` is populated.
+
+2. **Inject domain_schema into research step** — `research_workflow_domain` receives
+   only `workflow_description` and `domain` (null). Add `domain_schema` (the full
+   PGD table column map for that domain) as an input variable so the right brain can
+   surface domain-specific preference questions (e.g. "which column holds the Spanish
+   word?").
+
+3. **`research_workflow_domain` prompt update** — update prompt to use `domain_schema`
+   input and instruct the right brain to derive field references from actual column
+   names, not guesses.
+
+### Track B — Simulation Enrichment
 
 Enrich L1 static analysis to catch the specific failure modes that cause generated
 workflows to break at runtime. Driven by what actually fails during flashcard quiz
@@ -37,29 +57,10 @@ validation — not abstract hardening for its own sake.
 4. **Additional gaps** — any other L1 defects surfaced during flashcard quiz test runs
    are in scope for this track.
 
-### Track B — create_workflow Domain Context
-
-`create_workflow` currently runs with `domain: null` throughout — the right brain has
-no domain schema to reason about. This prevents it from generating steps that reference
-actual PGD table columns, and prevents domain-specific preference questions.
-
-1. **Resolve domain before dispatch** — in `classify-intent.mjs` (or the mind.mjs
-   pre-pass), resolve the domain name from the user's intent and inject it into the
-   CREATE_WORKFLOW SQS payload so `input.domain` is populated.
-
-2. **Inject domain_schema into research step** — `research_workflow_domain` receives
-   only `workflow_description` and `domain` (null). Add `domain_schema` (the full
-   PGD table column map for that domain) as an input variable so the right brain can
-   surface domain-specific preference questions (e.g. "which column holds the Spanish
-   word?").
-
-3. **`research_workflow_domain` prompt update** — update prompt to use `domain_schema`
-   input and instruct the right brain to derive field references from actual column
-   names, not guesses.
-
 ### Test Vehicle — Spanish Flashcard Quiz
 
-The flashcard quiz domain must already exist in PGD before running `create_workflow`.
+A new flashcard domain will be created fresh via `create_domain` at the start of
+testing. `create_workflow` is then run against that domain to generate the quiz workflow.
 The generated workflow must:
 
 - Iterate over flashcard rows (one human gate per card)
@@ -87,15 +88,15 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
 
 ## Acceptance Criteria
 
+- [ ] `create_workflow` run for Spanish flashcard quiz: `input.domain` is populated
+  (not null) by the time the workflow executes
+- [ ] `research_workflow_domain` receives `domain_schema` and surfaces domain-specific
+  preference questions about the flashcard table columns
 - [ ] L1 rejects `on_truthy`/`on_falsy` values that are routing tokens (`"next"`,
   `"cancel"`, `"end"`) or `step:N`-prefixed — must be bare step keys in `stepKeys`
 - [ ] L1 raises `unsupported_handlebars_syntax` for nested `{{...{{...}}...}}` patterns
 - [ ] `PGC_StepType` + `PGC_SystemContext.step_type_contracts` document the `reveal`
   field so the generation LLM knows to use it
-- [ ] `create_workflow` run for Spanish flashcard quiz: `input.domain` is populated
-  (not null) by the time the workflow executes
-- [ ] `research_workflow_domain` receives `domain_schema` and surfaces domain-specific
-  preference questions about the flashcard table columns
 - [ ] Generated flashcard quiz workflow passes L1+L2 simulation with 0 issues
 - [ ] Generated flashcard quiz human gate uses `reveal` (inline `task_card` with the
   English definition shown above the answer choices)
