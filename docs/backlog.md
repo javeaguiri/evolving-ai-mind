@@ -39,6 +39,8 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | L1 static analysis: detect nested `{{...{{...}}...}}` template tokens | `generate_workflow_steps` (run 321, step 7) produced `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` which passes L1 but fails at runtime. L1 should scan all string fields for the pattern `/\{\{[^}]*\{\{/` and raise `unsupported_handlebars_syntax` so the correction loop can fix it before the workflow is registered. |
 | `analyze_and_design_workflow` persistent schema mismatch | Prompt id 25. LLM produces wrong field names on every attempt. `response_format` + prompt rewrite deployed Session 23 — not yet validated. See `docs/prompt-issues.md` Issue 2 |
 | Guard 3 cycle detector — backward reference handling | Guard 3 must distinguish gate-bounded loops from tight computational loops. Rule: a backward reference is safe if the path from target back to source contains at least one `human_gate` step |
+| ✅ `workflow-schema.json` condition step bare key mismatch | Fixed. Stripped `step:` prefix from all `on_truthy`/`on_falsy` values in `create_workflow`, `fix_workflow`, `get_entity`, `diagnose_prompt_schema` seed definitions (10 occurrences). All 225 unit tests now pass. |
+| L1 static analysis does not enforce condition routing contract | `runLevel1StaticAnalysis` applies generic `ROUTING_TOKEN_RE` to `on_truthy`/`on_falsy` values. This misses two classes of defect: (1) `on_truthy: "next"` passes L1 but at runtime `executeCondition` normalises it to `"step:next"` — a dead target. (2) `on_truthy: "step:6"` passes L1, but the condition contract requires bare keys; if a future refactor removes the normalisation, this silently breaks. Fix: add a condition-specific L1 check that validates `on_truthy`/`on_falsy` are bare step keys that exist in `stepKeys`, not routing tokens. Failing test suite: `troubleshoot-fix-workflow.test.mjs` (suites 1, 2, 4, 6, 7). |
 
 ### Medium Priority
 
@@ -62,6 +64,9 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 | Item | Notes |
 |---|---|
+| ✅ Peek reveal: `task_card` block | Implemented. `peek_reveal` now posts a `task_card` block (`status: complete`, `output`: rich_text) as a thread reply via `chat.postMessage` instead of opening a modal. `button_label` passed in button value and used as card `title`. See `docs/slack-bot-kit.md` for block reference. |
+| Test environment | Stand up a parallel AWS environment (separate SAM stack, separate RDS instance, separate Slack workspace) so changes can be validated end-to-end before touching prod. Needed before any concurrent contributors or automated integration test runs against live infra. |
+| `README.md` environment bootstrap coverage | README currently describes what the system does but not how to create a new environment from scratch. Add a "Bootstrapping a new environment" section covering: AWS prerequisites, SSM parameter names and values, `sam build && sam deploy`, `POST /api/v1/serv/bootstrap`, and the `dev_scripts/upsert-*.mjs` seed sequence. Should be the single reference for spinning up prod or test. |
 | `design-domain.mjs` dead code | No longer receives traffic since Step Processor took over. Remove in next cleanup pass |
 | Orphan table cleanup tooling | Failed partial runs leave orphan tables — `delete-domain` covers full domains; per-table cleanup is manual |
 | AWS infrastructure cost — Bastion Host public IPv4 | EC2 Bastion accrues ~$2.82/month. Replace with AWS SSM Session Manager when promotional credits near exhaustion |

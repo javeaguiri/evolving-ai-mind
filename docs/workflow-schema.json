@@ -272,6 +272,10 @@
           "default": false,
           "description": "text_input only. True renders a multi-line textarea; false renders a single-line input."
         },
+        "placeholder": {
+          "type": "string",
+          "description": "text_input only. Placeholder text shown inside the Slack input element when empty. Supports newlines for multiline hints."
+        },
         "options": {
           "type": "array",
           "description": "Gate action buttons. Shape is determined by gate_type: choice gates use choiceOption (value field, not action); all other gate types use confirmOption (action field, not value). Must include at least one cancel path — either here or in special_buttons.",
@@ -286,6 +290,16 @@
           "type": "array",
           "description": "Appended after options in the Slack actions block. Never rendered in description_list. Field convention: choice gates use 'value'; non-choice gates use 'action'. Any button may carry a modal descriptor to open an overlay without advancing the workflow.",
           "items": { "$ref": "#/definitions/specialButton" }
+        },
+        "reveal": {
+          "type": "object",
+          "description": "Optional peek-only reveal button. Renders a button that opens a read-only Slack modal with resolved content. Does NOT advance or resume the gate. Valid on any gate_type.",
+          "required": ["button_label", "content"],
+          "additionalProperties": false,
+          "properties": {
+            "button_label": { "type": "string", "description": "Label for the reveal button." },
+            "content":      { "type": "string", "description": "Slack mrkdwn content shown in the modal. Supports {{key}} template substitution resolved at suspension time." }
+          }
         },
         "on_success": { "$ref": "#/definitions/routingToken" },
         "on_failure": { "$ref": "#/definitions/routingToken" }

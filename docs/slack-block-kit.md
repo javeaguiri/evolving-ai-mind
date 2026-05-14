@@ -1,9 +1,10 @@
 # Slack Block Kit Reference
 
-> Source: https://docs.slack.dev/block-kit  
+> Sources: https://docs.slack.dev/block-kit · https://api.slack.com/partners/thinking-steps  
 > Examples captured from live Slack workspace — responses show actual payloads,
 > not Block Kit Builder simulations. Block Kit Builder cannot simulate interactive
 > responses (button clicks, form submissions) — those responses require a live app.
+> Partner block types (see section below) are not available in Block Kit Builder.
 
 ---
 
@@ -729,6 +730,103 @@ fires. Fires a `block_actions` event with the selected option's `value`.
 
 ---
 
+## Partner block types
+
+Non-standard blocks from the Slack partner API. Not available in Block Kit Builder — test
+only in a live workspace. Source: https://api.slack.com/partners/thinking-steps
+
+### `task_card`
+
+An inline accordion that renders a collapsible task result — title, optional details, and
+output — directly in a message or thread without opening a modal. Designed for streaming
+AI "thinking steps" but usable for any reveal-style content.
+
+**Usage in evolving-mind-ai:** the `reveal` gate field. When the user clicks "Show
+Definition" on a `human_gate`, `handlePeekReveal` in `interactive.mjs` posts a `task_card`
+block as a thread reply via `chat.postMessage`. The gate stays suspended; the card is
+read-only and does not advance the workflow. `trigger_id` is not needed.
+
+#### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `"task_card"` | Yes | Block type discriminator |
+| `task_id` | UUID string | Yes | Unique per card; generate with `randomUUID()` |
+| `title` | string | Yes | Heading shown collapsed and expanded |
+| `status` | string | Yes | `"in_progress"` (spinner) or `"complete"` |
+| `details` | rich_text | No | Secondary context shown alongside the title |
+| `output` | rich_text | No | Main body content |
+
+#### Minimal example — reveal gate
+
+```json
+{
+  "type": "task_card",
+  "task_id": "bb9cb0c7-bf08-4eed-9e44-3ee71ef021a6",
+  "title": "Show Definition",
+  "status": "complete",
+  "output": {
+    "type": "rich_text",
+    "elements": [
+      {
+        "type": "rich_text_section",
+        "elements": [
+          { "type": "text", "text": "The resolved definition text goes here." }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Full example — with details and link in output
+
+```json
+{
+  "type": "task_card",
+  "task_id": "bb9cb0c7-bf08-4eed-9e44-3ee71ef021a6",
+  "title": "Demonstrating Task Card Block Features...",
+  "status": "in_progress",
+  "details": {
+    "type": "rich_text",
+    "elements": [
+      {
+        "type": "rich_text_section",
+        "elements": [
+          { "type": "text", "text": "Fetching from " },
+          {
+            "type": "link",
+            "url": "https://api.slack.com/partners/thinking-steps",
+            "text": "This Thinking Steps"
+          }
+        ]
+      }
+    ]
+  },
+  "output": {
+    "type": "rich_text",
+    "elements": [
+      {
+        "type": "rich_text_section",
+        "elements": [
+          {
+            "type": "text",
+            "text": "This task card shows how timeline mode interleaves text and tool calls in streaming content, making it ideal for short, naturally flowing tasks, unlike plan mode which groups tasks under a shared goal."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Notes:**
+- `output` uses `rich_text` format, not `mrkdwn`. Links use a `link` element with `url` + `text`.
+- `details` is optional; omit when there is no secondary context.
+- Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
+
+---
+
 ## Design notes for evolving-mind-ai
 
 ### choice gate rendering
@@ -741,6 +839,11 @@ Both patterns fire `block_actions`. The clicked button's `value` is the selected
 an `actions` block containing Submit/Cancel buttons. The `state.values` in the resulting
 `block_actions` payload contains the typed text at `state.values[block_id][action_id].value`.
 Use explicit `block_id` values so the key is predictable.
+
+### reveal gate rendering
+Use a `task_card` block posted via `chat.postMessage` in the thread. Set `status:
+"complete"`, `title` from `button_label`, and `output` as a `rich_text` section with the
+resolved content string. No `trigger_id` needed — do not use `views.open` for reveal.
 
 ### trigger_id window
 `trigger_id` from a button click expires after 3 seconds. If opening a modal in response
