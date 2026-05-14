@@ -293,6 +293,14 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Recently Completed
 
+**Sprint 1 (2026-05-14) — Engine Expressiveness:**
+- `reveal` field on `human_gate` steps: renders an inline `task_card` block (Slack partner block) above the gate buttons — no click required. `button_label` → card title, resolved `content` → rich_text output. L1 validates both fields non-empty. `callback.mjs` + `step-executor.mjs`.
+- Post-write L1 validation: `create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` before persisting to `PGC_Workflow`. Blocks invalid workflows at write time with structured 422 error. `dev_scripts/upsert-workflow.mjs` surfaces errors clearly.
+- `ping_core` v16: 10 numbered tests (Test X of 10), condition step with true/false branch verification, reveal gate test (step 6r). Validated end-to-end in prod.
+- `simulation-engine.mjs` extracted from `simulate-workflow.mjs` — shared by HTTP adapter and `step-executor.mjs`.
+- Condition step seed fix: stripped `step:` prefix from `on_truthy`/`on_falsy` in all seed workflows — aligns with `workflow-schema.json` `bareStepKey` contract. 225/225 unit tests pass.
+- `docs/slack-block-kit.md`: partner block types section added (`task_card` reference).
+
 **Session 33 (2026-05-04):**
 - `/chat` and `/explain` endpoints — `src/proc/chat.mjs`, `src/proc/explain.mjs`, `src/ui/slackbot/chat.mjs`, `src/ui/slackbot/explain.mjs`
 - `PGC_Session` + `PGC_SessionEntry` tables bootstrapped and seeded via `POST /api/v1/serv/bootstrap`
@@ -300,11 +308,6 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - `LLM_DIAGNOSTIC` SQS result type: step-executor writes diagnostics non-blocking, run-workflow enqueues, callback.mjs posts to channel root (no thread)
 - API key security: `INTERNAL_API_KEY` env var on ProcFunction + ServFunction; `ApiKeyRequired: true` on ProcProxy + ServProxy events; `InternalApiKey` + `InternalApiUsagePlan` in `template.yaml`; `x-api-key` header in `serv-client.mjs`
 - `docs/security-architecture.md` extracted from architecture.md §12
-
-**Session 32 (2026-05-01):**
-- `generate_workflow_steps` context reduction (~55KB → ~41KB)
-- `probe_input` fingerprint fix in `dev_scripts/upsert-prompt.mjs`
-- `PGC_SystemContext.content` → JSONB schema designed — see `docs/architecture.md` §4.3.3
 
 ### Immediate Open Work
 
