@@ -11,7 +11,36 @@ and it runs correctly in prod with no L1/runtime failures.
 
 ## Scope
 
-### Track A — create_workflow Domain Context
+### Track A — L/R Brain Pattern for create_domain
+
+Apply the reusable R/L brain design pattern (see `docs/architecture.md` §6.11 and
+`docs/create-domain-design.md` Target Design section) to the `create_domain` workflow.
+`create_domain` currently invokes the left brain directly from raw user input — no right
+brain research pass, no pre-design preference gates. This produces schemas that reflect
+LLM guesses rather than stated user choices and domain best practice.
+
+The target design (create_domain v9) adds a pre-generation pipeline before the existing
+step 1 LLM call:
+
+1. **Duplicate domain pre-check** — `serv_query PGC_DomainHelp` before step 1. If
+   domain exists: `human_gate` offering update aliases / recreate / cancel (Type 5 gap).
+
+2. **Right brain research step** — `llm_call research_domain_schema` (Perplexity sonar).
+   Input: `userInput` + inferred domain category. Retrieves data modelling best practices,
+   canonical table structures, normalisation patterns. Surfaces Type 1 preference questions
+   where the answer changes schema structure.
+
+3. **Preference gate iterator** — `condition` on whether research found preference
+   questions → `iterator` of `human_gate choice` steps, one per preference question.
+   User picks from structured options derived from research, not a blank field.
+
+4. **Left brain call updated** — existing step 1 `llm_call create_domain` now receives
+   `userInput` + research findings + confirmed preferences. Steps 2–12 unchanged.
+
+Prompts needed: `research_domain_schema` (new, right brain). `create_domain` prompt
+updated to accept and use research + preference inputs.
+
+### Track B — create_workflow Domain Context
 
 `create_workflow` currently runs with `domain: null` throughout — the right brain has
 no domain schema to reason about. This prevents it from generating steps that reference
@@ -31,7 +60,7 @@ actual PGD table columns, and prevents domain-specific preference questions.
    input and instruct the right brain to derive field references from actual column
    names, not guesses.
 
-### Track B — Simulation Enrichment
+### Track C — Simulation Enrichment
 
 Enrich L1 static analysis to catch the specific failure modes that cause generated
 workflows to break at runtime. Driven by what actually fails during flashcard quiz
@@ -88,15 +117,28 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
 
 ## Acceptance Criteria
 
+**Track A — create_domain L/R**
+- [ ] `create_domain` pre-checks for duplicate domain before running LLM
+- [ ] Right brain research step runs before left brain schema generation
+- [ ] Preference gates surface from research output; user answers before schema is designed
+- [ ] Left brain receives research findings + confirmed preferences; produces schema
+  implementing known choices, not guesses
+
+**Track B — create_workflow domain context**
 - [ ] `create_workflow` run for Spanish flashcard quiz: `input.domain` is populated
   (not null) by the time the workflow executes
 - [ ] `research_workflow_domain` receives `domain_schema` and surfaces domain-specific
   preference questions about the flashcard table columns
+
+**Track C — simulation enrichment**
 - [ ] L1 rejects `on_truthy`/`on_falsy` values that are routing tokens (`"next"`,
   `"cancel"`, `"end"`) or `step:N`-prefixed — must be bare step keys in `stepKeys`
 - [ ] L1 raises `unsupported_handlebars_syntax` for nested `{{...{{...}}...}}` patterns
 - [ ] `PGC_StepType` + `PGC_SystemContext.step_type_contracts` document the `reveal`
   field so the generation LLM knows to use it
+
+**End-to-end (test vehicle)**
+- [ ] Fresh flashcard domain created via `create_domain` using the new L/R pipeline
 - [ ] Generated flashcard quiz workflow passes L1+L2 simulation with 0 issues
 - [ ] Generated flashcard quiz human gate uses `reveal` (inline `task_card` with the
   English definition shown above the answer choices)
@@ -111,8 +153,9 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
 - [ ] Unit tests pass
 - [ ] L1+L2 simulation pass on generated flashcard quiz workflow
 - [ ] `CLAUDE.md` Current State updated
-- [ ] `docs/architecture.md` updated (condition L1 contract, nested template check,
-  domain injection, reveal in step_type_contracts)
+- [ ] `docs/architecture.md` updated (L/R pattern in create_domain, condition L1 contract,
+  nested template check, domain injection, reveal in step_type_contracts)
+- [ ] `docs/create-domain-design.md` updated if create_domain step flow changes
 - [ ] `docs/data-architecture.md` updated if any schema changes
 - [ ] `docs/backlog.md` updated — Task 11 marked done (post-write L1 completed Sprint 1);
   new items added
