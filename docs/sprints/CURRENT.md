@@ -82,9 +82,11 @@ actual PGD table columns, and prevents domain-specific preference questions.
 
 ### Track C — Simulation Enrichment
 
-Enrich both L1 static analysis and L2 path execution to catch the specific failure
-modes that cause generated workflows to break at runtime. Driven by what actually
-fails during flashcard quiz validation — not abstract hardening for its own sake.
+Enrich both L1 static analysis and L2 path execution to catch the failure
+modes that cause generated workflows to fail during runtime. Driven by what
+fails during flashcard quiz workflow at creation-time and run-time, and 
+when create-domain and create-workflow fails during run-time and/or pass through 
+Level 1 simulation in upsert-workflow during Track A and B development.
 
 Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
 
