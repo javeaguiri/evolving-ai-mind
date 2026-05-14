@@ -60,13 +60,35 @@ actual PGD table columns, and prevents domain-specific preference questions.
    input and instruct the right brain to derive field references from actual column
    names, not guesses.
 
+4. **`POST /api/v1/proc/delete-workflow` endpoint** — new HTTP + SQS (`DELETE_WORKFLOW`)
+   endpoint that removes a single named workflow and all its associated artifacts.
+   Mirrors the cascading delete pattern in `delete-domain.mjs`.
+
+   Deletion order (FK-safe — same constraint set as delete-domain):
+   - Fetch `PGC_Workflow.id` by `name` (or reject 404 if not found)
+   - Fetch all `PGC_WorkflowRun.id` rows where `workflow_id = <id>`
+   - Delete `PGC_WorkflowRunStep` rows where `run_id IN (<run ids>)`
+   - Delete `PGC_WorkflowRun` rows where `workflow_id = <id>`
+   - Delete `PGC_IntentMap` rows where `workflow_id = <id>` (FK — cleaner than
+     the LIKE-pattern approach delete-domain uses)
+   - Delete `PGC_Workflow` row where `id = <id>`
+
+   New file: `src/proc/delete-workflow.mjs`. Registration:
+   - `openapi.yaml` — spec-first rule applies, add entry before coding
+   - `src/proc/handler.mjs` — one `if (message.type === 'DELETE_WORKFLOW')` block in
+     `processSqsBatch` and one `case 'delete-workflow':` in `dispatch()`
+   - `template.yaml` is NOT touched — the PROC Lambda uses a `{proxy+}` catch-all
+   Add `DELETE_WORKFLOW` to the SQS fire-and-forget category in `docs/architecture.md`.
+
 ### Track C — Simulation Enrichment
 
-Enrich L1 static analysis to catch the specific failure modes that cause generated
-workflows to break at runtime. Driven by what actually fails during flashcard quiz
-validation — not abstract hardening for its own sake.
+Enrich both L1 static analysis and L2 path execution to catch the specific failure
+modes that cause generated workflows to break at runtime. Driven by what actually
+fails during flashcard quiz validation — not abstract hardening for its own sake.
 
-**Known gaps to close:**
+Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
+
+**L1 gaps to close:**
 
 1. **Condition routing contract** — L1 currently applies generic `ROUTING_TOKEN_RE` to
    `on_truthy`/`on_falsy`. A value of `"next"` or `"cancel"` passes L1 silently but
@@ -83,8 +105,28 @@ validation — not abstract hardening for its own sake.
    `human_gate` so that `generate_workflow_steps` LLM knows to use it. Without this
    the LLM cannot generate a gate with `reveal`.
 
-4. **Additional gaps** — any other L1 defects surfaced during flashcard quiz test runs
-   are in scope for this track.
+4. **Additional L1 gaps** — any other L1 defects surfaced during flashcard quiz test
+   runs are in scope for this track.
+
+**L2 gaps to close:**
+
+5. **Iterator body simulation** — L2 currently treats `iterator` as a single step that
+   writes an empty array and jumps to `on_complete`, skipping body steps entirely. For
+   the flashcard quiz, the human gates and score-tracking steps inside the iterator are
+   never exercised in simulation — so the quiz's core logic is invisible to L2. Fix:
+   when L2 encounters an `iterator` step, enter the body and simulate at least one
+   iteration using the path's decision entries for those body-step keys. After decisions
+   are exhausted or the loop-visit cap is hit, exit via `on_complete`. The body's
+   `localState` writes (e.g. `score`, `answer`) must be visible to subsequent steps.
+
+6. **`reveal.content` template resolution in L2** — L1 checks that `reveal.content` is
+   a non-empty string, but does not verify that any `{{template}}` tokens inside it
+   resolve to available `localState` keys at path execution time. Fix: L2 path execution
+   must treat `reveal.content` the same as `message_template` — extract template refs
+   and fail the path if any base key is missing from `localState` at that point.
+
+7. **Additional L2 gaps** — any other L2 path execution defects surfaced during
+   flashcard quiz simulation runs are in scope for this track.
 
 ### Test Vehicle — Spanish Flashcard Quiz
 
@@ -129,6 +171,9 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
   (not null) by the time the workflow executes
 - [ ] `research_workflow_domain` receives `domain_schema` and surfaces domain-specific
   preference questions about the flashcard table columns
+- [ ] `POST /api/v1/proc/delete-workflow` deletes PGC_WorkflowRunStep, PGC_WorkflowRun,
+  PGC_IntentMap, and PGC_Workflow rows for the named workflow; returns 404 for unknown
+  names; openapi.yaml and architecture.md updated before implementation
 
 **Track C — simulation enrichment**
 - [ ] L1 rejects `on_truthy`/`on_falsy` values that are routing tokens (`"next"`,
@@ -136,6 +181,10 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
 - [ ] L1 raises `unsupported_handlebars_syntax` for nested `{{...{{...}}...}}` patterns
 - [ ] `PGC_StepType` + `PGC_SystemContext.step_type_contracts` document the `reveal`
   field so the generation LLM knows to use it
+- [ ] L2 enters iterator body for at least one iteration — body-step human gates and
+  state writes are exercised, not skipped
+- [ ] L2 validates `reveal.content` template variables against `localState` at path
+  execution time (same as `message_template`)
 
 **End-to-end (test vehicle)**
 - [ ] Fresh flashcard domain created via `create_domain` using the new L/R pipeline
