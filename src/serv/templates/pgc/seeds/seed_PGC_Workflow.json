@@ -506,8 +506,8 @@
         "type": "condition",
         "description": "Skip Tier 1 preference gates if right brain found no preference questions.",
         "expression": "{{preference_gates.length}}",
-        "on_truthy": "step:8",
-        "on_falsy": "step:9"
+        "on_truthy": "8",
+        "on_falsy": "9"
       },
       {
         "step": "8",
@@ -606,8 +606,8 @@
         "type": "condition",
         "description": "Hard stop if gap analysis detected a missing step type capability.",
         "expression": "{{routing_flags.is_blocked}}",
-        "on_truthy": "step:14",
-        "on_falsy": "step:15"
+        "on_truthy": "14",
+        "on_falsy": "15"
       },
       {
         "step": "14",
@@ -621,8 +621,8 @@
         "type": "condition",
         "description": "Check for blocking schema gaps.",
         "expression": "{{routing_flags.needs_schema}}",
-        "on_truthy": "step:16",
-        "on_falsy": "step:18"
+        "on_truthy": "16",
+        "on_falsy": "18"
       },
       {
         "step": "16",
@@ -675,8 +675,8 @@
         "type": "condition",
         "description": "Skip prompt seeding if there are no missing prompts.",
         "expression": "{{missing_prompts.length}}",
-        "on_truthy": "step:20",
-        "on_falsy": "step:21"
+        "on_truthy": "20",
+        "on_falsy": "21"
       },
       {
         "step": "20",
@@ -1090,8 +1090,8 @@
         "type": "condition",
         "description": "If brokenSteps were supplied in input, skip the DB load. Otherwise load them from PGC_Workflow.",
         "expression": "{{input.brokenSteps}}",
-        "on_truthy": "step:3",
-        "on_falsy": "step:2"
+        "on_truthy": "3",
+        "on_falsy": "2"
       },
       {
         "step": "2",
@@ -1224,8 +1224,8 @@
         "type": "condition",
         "description": "Skip context update iterator if LLM produced no context_updates.",
         "expression": "{{fix_result.context_updates.length}}",
-        "on_truthy": "step:10",
-        "on_falsy": "step:11"
+        "on_truthy": "10",
+        "on_falsy": "11"
       },
       {
         "step": "10",
@@ -1310,8 +1310,8 @@
         "type": "condition",
         "description": "Skip cancellation iterator if no active runs to cancel.",
         "expression": "{{runs_to_cancel.length}}",
-        "on_truthy": "step:15",
-        "on_falsy": "step:16"
+        "on_truthy": "15",
+        "on_falsy": "16"
       },
       {
         "step": "15",
@@ -1374,8 +1374,8 @@
         "type": "condition",
         "description": "Route to id lookup when input.id is set, otherwise fall through to name search.",
         "expression": "{{input.id}}",
-        "on_truthy": "step:2",
-        "on_falsy": "step:3"
+        "on_truthy": "2",
+        "on_falsy": "3"
       },
       {
         "step": "2",
@@ -1841,8 +1841,8 @@
         "type": "condition",
         "description": "Any violations found?",
         "expression": "{{gate_payload.hasViolations}}",
-        "on_truthy": "step:9",
-        "on_falsy": "step:12"
+        "on_truthy": "9",
+        "on_falsy": "12"
       },
       {
         "step": "9",
@@ -1893,8 +1893,8 @@
         "type": "condition",
         "description": "Cancel the failed WorkflowRun if supplied",
         "expression": "{{input.failedRunId}}",
-        "on_truthy": "step:11a",
-        "on_falsy": "step:11b"
+        "on_truthy": "11a",
+        "on_falsy": "11b"
       },
       {
         "step": "11a",

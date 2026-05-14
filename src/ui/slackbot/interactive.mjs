@@ -524,36 +524,38 @@ async function handleExplainViewSubmission(payload, traceId) {
 
 // ---------------------------------------------------------------------------
 // handlePeekReveal — reveal button clicked on a human_gate.
-// Opens a read-only informational modal. Never enqueues resume_gate.
+// Posts a task_card block in the thread showing the resolved content.
+// Never enqueues resume_gate.
 // ---------------------------------------------------------------------------
 
 async function handlePeekReveal(buttonValue, payload, correlationId) {
-  const { content } = buttonValue;
-  const triggerId   = payload.trigger_id;
-  const traceId     = correlationId || randomUUID();
-
-  if (!triggerId) {
-    console.warn('interactive: peek_reveal missing trigger_id', { traceId });
-    return { statusCode: 200, body: '' };
-  }
+  const { content, button_label } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
 
   try {
-    await slack.views.open({
-      trigger_id: triggerId,
-      view: {
-        type:   'modal',
-        title:  { type: 'plain_text', text: 'Definition' },
-        close:  { type: 'plain_text', text: 'Close' },
-        blocks: [{
-          type:     'section',
-          block_id: 'reveal_content_block',
-          text:     { type: 'mrkdwn', text: content ?? '(no content)' },
-        }],
-      },
+    await slack.chat.postMessage({
+      channel,
+      thread_ts: threadTs,
+      text:      content ?? '(no content)',
+      blocks: [{
+        type:    'task_card',
+        task_id: randomUUID(),
+        title:   button_label ?? 'Definition',
+        status:  'complete',
+        output: {
+          type:     'rich_text',
+          elements: [{
+            type:     'rich_text_section',
+            elements: [{ type: 'text', text: content ?? '(no content)' }],
+          }],
+        },
+      }],
     });
-    console.info('interactive: peek_reveal modal opened', { traceId });
+    console.info('interactive: peek_reveal task_card posted', { traceId });
   } catch (error) {
-    console.error('interactive: peek_reveal views.open failed', { error: error.message, traceId });
+    console.error('interactive: peek_reveal task_card failed', { error: error.message, traceId });
   }
 
   return { statusCode: 200, body: '' };
