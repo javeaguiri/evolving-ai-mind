@@ -520,15 +520,16 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'reveal': {
-        // Peek-only button — clicking opens a read-only modal with the resolved content.
-        // Does NOT advance the workflow gate. interactive.mjs handles 'peek_reveal' action.
+        // Peek-only button — clicking posts a task_card block in the thread with the
+        // resolved content. Does NOT advance the workflow gate. interactive.mjs handles
+        // 'peek_reveal' action.
         blocks.push({
           type:     'actions',
           elements: [{
             type:      'button',
             text:      { type: 'plain_text', text: field.button_label },
             action_id: 'peek_reveal',
-            value:     JSON.stringify({ action: 'peek_reveal', content: field.content }),
+            value:     JSON.stringify({ action: 'peek_reveal', content: field.content, button_label: field.button_label }),
           }],
         });
         break;
