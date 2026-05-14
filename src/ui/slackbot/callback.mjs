@@ -17,7 +17,8 @@
 //   1. Add a case to routeCallback() below.
 //   2. No new queue or Lambda needed for the common case.
 
-import { WebClient } from '@slack/web-api';
+import { randomUUID }  from 'node:crypto';
+import { WebClient }   from '@slack/web-api';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -520,17 +521,19 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'reveal': {
-        // Peek-only button — clicking posts a task_card block in the thread with the
-        // resolved content. Does NOT advance the workflow gate. interactive.mjs handles
-        // 'peek_reveal' action.
+        // Inline task_card shown above the gate buttons — no click required.
         blocks.push({
-          type:     'actions',
-          elements: [{
-            type:      'button',
-            text:      { type: 'plain_text', text: field.button_label },
-            action_id: 'peek_reveal',
-            value:     JSON.stringify({ action: 'peek_reveal', content: field.content, button_label: field.button_label }),
-          }],
+          type:    'task_card',
+          task_id: randomUUID(),
+          title:   field.button_label,
+          status:  'complete',
+          output: {
+            type:     'rich_text',
+            elements: [{
+              type:     'rich_text_section',
+              elements: [{ type: 'text', text: field.content ?? '' }],
+            }],
+          },
         });
         break;
       }

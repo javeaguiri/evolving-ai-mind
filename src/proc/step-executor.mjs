@@ -680,8 +680,8 @@ export function buildDialog(step, localState) {
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
 
-  // reveal — optional on any gate type. Renders a button that opens a read-only
-  // modal with resolved content. Does NOT resume the gate — peek only.
+  // reveal — optional on any gate type. Renders an inline task_card above the
+  // gate buttons with resolved content. Does NOT resume the gate — peek only.
   if (step.reveal) {
     fields.push({
       type:         'reveal',

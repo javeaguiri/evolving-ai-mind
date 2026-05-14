@@ -2268,7 +2268,7 @@
         "step": "6r",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 6 of 10 — Reveal Gate\n\nREVEAL GATE TEST: A definition is hidden below. Click *Show Definition* to reveal it, then pick the correct answer.",
+        "message_template": "Test 6 of 10 — Reveal Gate\n\nREVEAL GATE TEST: The definition is shown below. Pick the correct answer.",
         "reveal": {
           "button_label": "Show Definition",
           "content": "A *workflow* is a reusable sequence of declarative steps stored in PGC_Workflow. The engine executes it without calling an LLM once it is saved."
