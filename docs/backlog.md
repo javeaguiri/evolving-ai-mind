@@ -52,6 +52,11 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | `createTable` DDL + PGC_Schema insert not in a transaction | Physical table can exist without registry row on partial failure |
 | `updateTable` ALTER TABLE | Currently metadata only — does not execute ALTER TABLE |
 | `iterator` cannot express multi-step per-item sequences | Requires `sub_workflow` step type (MVP) or flat loop pattern (Option B) |
+| `sub_workflow` step type — create_domain add-table migration | Option B (text_input gate + inline LLM) should be replaced with Option C: a reusable `design_table` sub-workflow. Prerequisite: `sub_workflow` step type live |
+| `serv_aggregate` step type | GROUP BY + aggregation at DB level. Required for budget reports, portfolio summaries. Alternative to `llm_call` for arithmetic over query results |
+| SERV-Query cross-entity parameterised SELECT | Join across multiple PGD tables with pagination. Required for complex entity reports |
+| Gate types: `select_one`, `select_many` | `buildDialog()` stubs exist in step-executor.mjs. `select_one` limited to flat entity lists via `context_key`. Use `choice` for options with descriptions until live |
+| `PGC_Workflow.intent_embedding` population at domain creation | Add embedding generation step to `create_domain` workflow and `generate_crud_workflows` prompt. Prerequisite for pgvector Pass 2 semantic search |
 | `delete-domain.mjs` missing `PGC_Workflow` + `PGC_IntentMap` cleanup | When a domain is deleted, its 4 CRUD workflows + 4 IntentMap rows are not removed. Fix: query workflow IDs by `domain`, delete IntentMap where `workflow_id IN [ids]`, delete Workflow rows. Requires `allow_delete: true` on both tables |
 | `PGC_WorkflowRun.session_id` FK column | Add `session_id integer FK → PGC_Session.id nullable` to `PGC_WorkflowRun`. Migration script needed — column did not exist at bootstrap |
 | Live prompt export back to seed files | When the right-brain improves a prompt, the improvement lives only in DB. Fix: `dev_scripts/export-prompts.mjs` reads live rows and overwrites `seed_PGC_Prompt.json`. Required before right-brain improvement loop is useful at scale |
