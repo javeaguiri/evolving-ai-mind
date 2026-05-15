@@ -37,6 +37,7 @@ import { handle as diagnosePromptSchema } from './diagnose-prompt-schema.mjs';
 import { handle as monitorPromptQuality } from './monitor-prompt-quality.mjs';
 import { handle as chat }               from './chat.mjs';
 import { handle as explain }            from './explain.mjs';
+import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -106,6 +107,12 @@ async function processSqsBatch(records) {
       // run-workflow.mjs dispatchSqs which handles them generically.
       if (message.type === 'WORKFLOW_STEP') {
         await dispatchSqs(message);
+        continue;
+      }
+      // DELETE_WORKFLOW — development/testing cleanup
+      if (message.type === 'DELETE_WORKFLOW') {
+        const req = buildReqFromSqs(message);
+        await deleteWorkflow(req);
         continue;
       }
       // DELETE_DOMAIN — development/testing cleanup
@@ -244,6 +251,9 @@ async function dispatch(req) {
 
     case 'explain':
       return explain(req);
+
+    case 'delete-workflow':
+      return deleteWorkflow(req);
 
     default:
       return err(404, `PROC route "${req.route}" not found`, req.correlationId);
