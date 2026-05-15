@@ -11,15 +11,134 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 8,
+    "version": 9,
     "steps": [
+      {
+        "step": "0a",
+        "type": "js_transform",
+        "description": "Derive candidate domain slug from user input for duplicate pre-check.",
+        "input_key": "input",
+        "output_key": "candidate_domain",
+        "expression": "(function() { return (items.userInput || '').toLowerCase().trim().replace(/\\s+/g, '_').replace(/[^a-z0-9_]/g, ''); })()",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "0b",
+        "type": "serv_query",
+        "description": "Check whether this domain already exists in PGC_DomainHelp.",
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{candidate_domain}}"
+            }
+          ],
+          "limit": 1
+        },
+        "output_key": "existing_domain_check",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "0c",
+        "type": "condition",
+        "description": "If domain already exists: show exists gate. Else: proceed to right brain research.",
+        "expression": "{{existing_domain_check.length}}",
+        "on_truthy": "0d",
+        "on_falsy": "1R"
+      },
+      {
+        "step": "0d",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Domain already exists. Offer recreate (overwrite registration) or cancel.",
+        "message_template": "Domain *{{candidate_domain}}* already exists. Recreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
+        "options": [
+          {
+            "label": "Recreate",
+            "action": "confirm",
+            "on_select": "1R"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "1R",
+        "type": "llm_call",
+        "description": "RIGHT BRAIN: Research domain data-modelling best practices and surface structural preference questions before schema design.",
+        "input": {
+          "prompt": "research_domain_schema",
+          "user_input": "{{input.userInput}}"
+        },
+        "output_key": "domain_research",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "1a",
+        "type": "js_transform",
+        "description": "Build preference_gates array from right brain research output.",
+        "input_key": "domain_research",
+        "output_key": "preference_gates",
+        "expression": "(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, options: opts }; }); })()",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "1az",
+        "type": "js_transform",
+        "description": "Initialize user_preferences to empty array so it is always defined for the left brain call.",
+        "input_key": "preference_gates",
+        "output_key": "user_preferences",
+        "expression": "(function() { return []; })()",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "1b",
+        "type": "condition",
+        "description": "Skip preference gates if research found no structural decisions to ask.",
+        "expression": "{{preference_gates.length}}",
+        "on_truthy": "1c",
+        "on_falsy": "1"
+      },
+      {
+        "step": "1c",
+        "type": "iterator",
+        "description": "Present each research preference question as a choice gate. User answers structural decisions before schema is designed.",
+        "items_key": "preference_gates",
+        "item_step": {
+          "type": "human_gate",
+          "gate_type": "choice",
+          "message_template": "{{item.question}}",
+          "options": "{{item.options}}",
+          "output_key": "user_preferences",
+          "on_success": "next",
+          "on_failure": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "user_preferences",
+        "on_complete": "1",
+        "on_failure": "cancel"
+      },
       {
         "step": "1",
         "type": "llm_call",
-        "description": "LLM designs full domain schema. Must produce one primary table (no FK references) and zero or more child tables referencing it.",
+        "description": "LEFT BRAIN: Design domain schema using research findings and confirmed user preferences.",
         "input": {
           "prompt": "create_domain",
-          "user_input": "{{input.userInput}}"
+          "user_input": "{{input.userInput}}",
+          "research_findings": "{{domain_research.findings}}",
+          "user_preferences": "{{user_preferences}}"
         },
         "output_key": "proposed_scaffold",
         "on_success": "next",

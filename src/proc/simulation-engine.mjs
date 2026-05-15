@@ -11,8 +11,8 @@
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 // Known valid routing token pattern — "next", "end", "cancel",
-// or "step:<key>" where <key> is a non-empty string.
-const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+)$/;
+// a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
+const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 
 // ---------------------------------------------------------------------------
 // runSimulation — exported for the HTTP simulate-workflow endpoint.
@@ -140,40 +140,59 @@ export function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    // condition on_truthy/on_falsy accept bare step keys (e.g. "4", "3e") — normalise
-    // to step:N format so ROUTING_TOKEN_RE and dead-target checks work uniformly.
-    if (s.on_truthy) {
-      const v = s.type === 'condition' && !String(s.on_truthy).startsWith('step:') ? `step:${s.on_truthy}` : s.on_truthy;
-      routingValues.push({ field: 'on_truthy', value: v });
+    // condition on_truthy/on_falsy: only bare step keys that exist in stepKeys are valid.
+    // Control tokens (next, end, cancel) and step:N format are all wrong here.
+    for (const condField of ['on_truthy', 'on_falsy']) {
+      if (!s[condField]) continue;
+      const cv = String(s[condField]);
+      const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
+      if (CONTROL_TOKENS.has(cv) || cv.startsWith('step:')) {
+        issues.push({
+          check:         'condition_routing_invalid',
+          step:          stepKey,
+          failure_class: 'condition_routing_invalid',
+          detail:        `Step "${stepKey}" field "${condField}" value "${cv}" is invalid in a condition step. Use a bare step key (e.g. "3", "3a") that exists in the workflow. Control tokens (next, end, cancel) and step:N format are not valid here.`,
+        });
+      } else if (!stepKeys.has(cv)) {
+        issues.push({
+          check:         'dead_routing_target',
+          step:          stepKey,
+          failure_class: 'dead_routing_target',
+          detail:        `Step "${stepKey}" field "${condField}" routes to "${cv}" but no step with key "${cv}" exists`,
+        });
+      }
     }
-    if (s.on_falsy) {
-      const v = s.type === 'condition' && !String(s.on_falsy).startsWith('step:') ? `step:${s.on_falsy}` : s.on_falsy;
-      routingValues.push({ field: 'on_falsy', value: v });
-    }
+
+    if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: s.on_truthy });
+    if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: s.on_falsy });
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
+    const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
     for (const { field, value } of routingValues) {
-      if (!ROUTING_TOKEN_RE.test(String(value))) {
+      // condition on_truthy/on_falsy already validated above — skip here
+      if (s.type === 'condition' && (field === 'on_truthy' || field === 'on_falsy')) continue;
+      const sv = String(value);
+      if (!ROUTING_TOKEN_RE.test(sv)) {
         issues.push({
           check:         'unknown_routing_value',
           step:          stepKey,
           failure_class: 'unknown_routing_value',
-          detail:        `Step "${stepKey}" field "${field}" has unknown routing value "${value}". Valid values: next, end, cancel, step:<key>`,
+          detail:        `Step "${stepKey}" field "${field}" has unknown routing value "${sv}". Valid values: next, end, cancel, a bare step key, or step:<key>`,
         });
       }
-      // Check dead step:N targets
-      if (String(value).startsWith('step:')) {
-        const target = String(value).slice(5);
-        if (!stepKeys.has(target)) {
-          issues.push({
-            check:         'dead_routing_target',
-            step:          stepKey,
-            failure_class: 'dead_routing_target',
-            detail:        `Step "${stepKey}" field "${field}" routes to "step:${target}" but no step with key "${target}" exists`,
-          });
-        }
+      // Dead-target check: applies to step:N and bare step keys (any token not next/end/cancel).
+      let target = null;
+      if (sv.startsWith('step:'))       target = sv.slice(5);
+      else if (!CONTROL_TOKENS.has(sv)) target = sv;
+      if (target !== null && !stepKeys.has(target)) {
+        issues.push({
+          check:         'dead_routing_target',
+          step:          stepKey,
+          failure_class: 'dead_routing_target',
+          detail:        `Step "${stepKey}" field "${field}" routes to "${sv}" but no step with key "${target}" exists`,
+        });
       }
     }
 
