@@ -55,14 +55,14 @@
 
     "routingToken": {
       "type": "string",
-      "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
-      "description": "Valid routing value for on_success, on_failure, on_select. 'next' = advance to next step in array order; 'step:N' = jump to step with key N (e.g. 'step:8', never bare '8'); 'cancel' = cancel run; 'end' = complete run."
+      "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*|[a-zA-Z0-9][a-zA-Z0-9_]*)$",
+      "description": "Valid routing value for on_success, on_failure, on_select, on_complete. Canonical values: 'next' (advance to next step), 'end' (complete run), 'cancel' (cancel run), or a bare step key (e.g. '3', '3a', '1R'). step:N format is also accepted for backwards compatibility."
     },
 
     "bareStepKey": {
       "type": "string",
       "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_]*$",
-      "description": "Used ONLY in condition.on_truthy and condition.on_falsy. Bare step key without any prefix — the executor internally resolves it as step:N. NEVER use routing tokens (next, end, cancel) here — they will fail at runtime."
+      "description": "Used in condition.on_truthy and condition.on_falsy. Bare step key — same rule as all other routing fields. Do NOT use routing tokens (next, end, cancel) here — they will fail at runtime because condition routes to a step key, not a control token."
     },
 
     "modalDescriptor": {

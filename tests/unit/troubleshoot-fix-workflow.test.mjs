@@ -131,24 +131,19 @@ const HEALTHY_STEPS = [
 
 describe('Level 1 static analysis — condition routing contract', () => {
 
-  test('detects on_truthy: "next" — normalised to step:next, dead-target since "next" is not a step key', () => {
+  test('detects on_truthy: "next" — control token is invalid in condition step', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
     assert.equal(result.static_analysis.passed, false);
-    // executeCondition wraps on_truthy with 'step:' → 'step:next'.
-    // ROUTING_TOKEN_RE accepts 'step:next' (step: + non-empty string).
-    // Dead-target check then fires: 'next' is not a step key in the array.
     const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_truthy'));
     assert.ok(issue, 'Expected issue on step 4 on_truthy');
-    assert.equal(issue.failure_class, 'dead_routing_target');
+    assert.equal(issue.failure_class, 'condition_routing_invalid');
   });
 
-  test('detects on_falsy: "cancel" — routing token in condition step normalised to step:cancel, dead-target since "cancel" is not a step key', () => {
+  test('detects on_falsy: "cancel" — control token is invalid in condition step', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
-    // condition on_falsy: 'cancel' — bare, normalised to step:cancel.
-    // ROUTING_TOKEN_RE accepts it; dead-target fires since "cancel" is not a step key.
     const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_falsy'));
     assert.ok(issue, 'Expected issue on step 4 on_falsy');
-    assert.equal(issue.failure_class, 'dead_routing_target');
+    assert.equal(issue.failure_class, 'condition_routing_invalid');
   });
 
   test('finds all four condition routing bugs in create_workflow v4', () => {
