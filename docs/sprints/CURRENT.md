@@ -100,21 +100,41 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
    `design_workflow_dialogs`, `design_workflow_process`, `generate_workflow_steps`
    prompts — content now lives in PGC_SystemContext only.
 
-4. **Nested template detection** — `{{quiz_state.cards.{{quiz_state.index}}.term}}`
+4. **`serv_query` output shape missing from PGC_StepType** — `serv_query` writes the
+   rows array directly to `output_key` (e.g. `results = [{...}, ...]`), not an object
+   with a `rows` property. An LLM writing a condition after a `serv_query` must know to
+   write `{{results.length}}` not `{{results.rows.length}}`. This is not documented in
+   `PGC_StepType.output_contract` for `serv_query` — surfaced when Track A required a
+   pre-check condition on `existing_domain_check`. Fix: add the output shape to
+   `serv_query` output_contract in `seed_PGC_StepType.json` and `step_type_contracts`.
+
+5. **`llm_call` input-to-prompt binding not documented** — The mechanism by which step
+   input keys become prompt template substitution variables is missing from `PGC_StepType`
+   and `PGC_SystemContext`. LLMs need to know: (a) each key in step `input` (except
+   `prompt`) becomes a `{{key}}` substitution in the prompt text — key name must match
+   exactly; (b) `user_input` is the special primary free-text key — it is also sent as
+   the human/user message to the LLM; (c) a camelCase key in the step (`userInput`) does
+   NOT match a snake_case placeholder in the prompt (`{{user_input}}`). Surfaced when
+   `create_domain` v4 had `{{userInput}}` in prompt text but `user_input` in step input
+   — the mismatch was masked by the human-message fallback. Fix: document this binding
+   contract in `llm_call` input_contract in `seed_PGC_StepType.json` and add an
+   `llm_call_binding` section to `step_type_contracts` SystemContext.
+
+6. **Nested template detection** — `{{quiz_state.cards.{{quiz_state.index}}.term}}`
    passes L1 but fails at runtime. Fix: scan all string fields for
    `/\{\{[^}]*\{\{/`, raise `unsupported_handlebars_syntax`.
 
-5. **`reveal` field in step_type_contracts** — `PGC_SystemContext.step_type_contracts`
+7. **`reveal` field in step_type_contracts** — `PGC_SystemContext.step_type_contracts`
    and `seed_PGC_StepType.json` must document the `reveal` optional field on
    `human_gate` so that `generate_workflow_steps` LLM knows to use it. Without this
    the LLM cannot generate a gate with `reveal`.
 
-6. **Additional L1 gaps** — any other L1 defects surfaced during flashcard quiz test
+8. **Additional L1 gaps** — any other L1 defects surfaced during flashcard quiz test
    runs are in scope for this track.
 
 **L2 gaps to close:**
 
-7. **Iterator body simulation** — L2 currently treats `iterator` as a single step that
+9. **Iterator body simulation** — L2 currently treats `iterator` as a single step that
    writes an empty array and jumps to `on_complete`, skipping body steps entirely. For
    the flashcard quiz, the human gates and score-tracking steps inside the iterator are
    never exercised in simulation — so the quiz's core logic is invisible to L2. Fix:
@@ -123,13 +143,13 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
    are exhausted or the loop-visit cap is hit, exit via `on_complete`. The body's
    `localState` writes (e.g. `score`, `answer`) must be visible to subsequent steps.
 
-8. **`reveal.content` template resolution in L2** — L1 checks that `reveal.content` is
+10. **`reveal.content` template resolution in L2** — L1 checks that `reveal.content` is
    a non-empty string, but does not verify that any `{{template}}` tokens inside it
    resolve to available `localState` keys at path execution time. Fix: L2 path execution
    must treat `reveal.content` the same as `message_template` — extract template refs
    and fail the path if any base key is missing from `localState` at that point.
 
-9. **Additional L2 gaps** — any other L2 path execution defects surfaced during
+11. **Additional L2 gaps** — any other L2 path execution defects surfaced during
    flashcard quiz simulation runs are in scope for this track.
 
 ### Test Vehicle — Spanish Flashcard Quiz
