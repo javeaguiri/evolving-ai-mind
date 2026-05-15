@@ -1182,8 +1182,8 @@ async function executeSimulate({ step, localState, run, traceId }) {
  * and routes to on_truthy or on_falsy without performing any I/O.
  *
  * Truthy: resolved value is non-empty string, not "null", not "undefined", not "0".
- * on_truthy / on_falsy use step:N format (e.g. "step:2", "step:3"). Bare keys are
- * also accepted for legacy compatibility — both normalise to "step:N" on return.
+ * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is also
+ * accepted for compatibility — both normalise to a bare key before return.
  *
  * No output_key is written — condition steps produce no state output.
  */

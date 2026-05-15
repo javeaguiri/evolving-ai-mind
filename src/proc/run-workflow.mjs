@@ -1118,6 +1118,10 @@ async function recordStepAudit(runId, frameId, stepNumber, stepType,
 function resolveNextStep(steps, currentStepKey, nextAction) {
   if (nextAction === 'end')            return 'end';
   if (nextAction?.startsWith('step:')) return nextAction.slice(5);
+  // Bare step key — any token that matches an existing step key is a direct jump.
+  if (nextAction && nextAction !== 'next' && steps.some(s => String(s.step) === String(nextAction))) {
+    return String(nextAction);
+  }
   const idx = steps.findIndex(s => String(s.step) === String(currentStepKey));
   if (idx === -1 || idx === steps.length - 1) return 'end';
   return String(steps[idx + 1].step);
@@ -1127,6 +1131,10 @@ function resolveOnSelect(steps, currentStepKey, onSelect) {
   if (onSelect === 'cancel')           return 'cancel';
   if (onSelect === 'end')              return 'end';
   if (onSelect?.startsWith('step:'))   return onSelect.slice(5);
+  // Bare step key — any token that matches an existing step key is a direct jump.
+  if (onSelect && onSelect !== 'next' && steps.some(s => String(s.step) === String(onSelect))) {
+    return String(onSelect);
+  }
   return resolveNextStep(steps, currentStepKey, 'next');
 }
 
