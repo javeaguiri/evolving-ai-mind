@@ -613,13 +613,13 @@
         "type": "string",
         "field": "on_truthy",
         "required": true,
-        "description": "Bare step key to route to when expression is truthy \u2014 e.g. \"2\". Do NOT prefix with step: here."
+        "description": "Step routing value when expression is truthy. Accepts 'step:N' (e.g. 'step:2') or bare key (e.g. '2') \u2014 both are valid. Never use routing tokens 'next', 'cancel', or 'end' \u2014 these are not step keys and will cause a dead-target runtime error."
       },
       {
         "type": "string",
         "field": "on_falsy",
         "required": true,
-        "description": "Bare step key to route to when expression is falsy \u2014 e.g. \"3\". Do NOT prefix with step: here."
+        "description": "Step routing value when expression is falsy. Accepts 'step:N' (e.g. 'step:3') or bare key (e.g. '3'). Never use routing tokens 'next', 'cancel', or 'end'."
       }
     ],
     "output_contract": null,
@@ -734,7 +734,7 @@
         "type": "object",
         "field": "item_step",
         "required": true,
-        "description": "Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. All parent local_state keys are also readable."
+        "description": "Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. All parent local_state keys are also readable. Two categories: non-suspending item_steps (serv_schema, serv_insert, serv_update, serv_delete, serv_query, llm_call, js_transform) run inline within a single Lambda invocation. Suspending item_steps (human_gate with gate_type: \"choice\") suspend the iterator after each item and resume on user response — only gate_type: \"choice\" is valid inside an iterator. Dynamic options pattern: set \"options\": \"{{item.options}}\" on the human_gate item_step — the single-token template resolves to the current item’s options array at runtime, enabling per-item dynamic choice lists built by a prior js_transform step."
       },
       {
         "type": "string",
