@@ -74,27 +74,47 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
 
 **L1 gaps to close:**
 
-1. **Condition routing contract** — L1 currently applies generic `ROUTING_TOKEN_RE` to
-   `on_truthy`/`on_falsy`. A value of `"next"` or `"cancel"` passes L1 silently but
-   becomes a dead target at runtime (`executeCondition` prefixes it to `"step:next"`).
-   Fix: condition-specific L1 check — values must be bare step keys that exist in
-   `stepKeys`, not routing tokens.
+1. **Condition routing contract** ✅ DONE — `condition_routing_invalid` check added to
+   `simulation-engine.mjs`. `on_truthy`/`on_falsy` values that are control tokens
+   (`next`, `end`, `cancel`) or `step:N`-prefixed now fail L1 with
+   `failure_class: condition_routing_invalid`. Bare step keys in `stepKeys` are the
+   only valid values.
 
-2. **Nested template detection** — `{{quiz_state.cards.{{quiz_state.index}}.term}}`
+2. **Bare step key routing — L1 + runtime** ✅ DONE (surfaced by routing standardisation
+   session) — Three gaps closed together:
+   - `ROUTING_TOKEN_RE` in `simulation-engine.mjs` did not accept bare step keys for
+     `on_success`/`on_failure`/`on_select`/`on_complete`; dead-target check only handled
+     `step:N` targets. Both updated.
+   - `resolveNextStep` and `resolveOnSelect` in `run-workflow.mjs` treated bare step
+     keys as "next" (advance to next array entry) instead of jumping to the named step.
+     Fixed: any token matching an existing step key is treated as a direct jump.
+   - `workflow-schema.json` `routingToken` pattern required `step:N` format; updated
+     to also accept bare step keys.
+
+3. **PGC routing context inconsistency** ✅ DONE (surfaced by routing standardisation
+   session) — `routing_value_rules` v7 stated `step:N` is mandatory and bare keys are
+   wrong. `step_type_contracts` condition entry said `step:N`. `step_usage_patterns`
+   preference gate iterator example used `step:C`/`step:D`. All corrected to bare keys
+   as canonical (routing_value_rules v8, step_type_contracts v14, step_usage_patterns v7,
+   PGC_StepType condition entry updated). Duplicate routing rules removed from
+   `design_workflow_dialogs`, `design_workflow_process`, `generate_workflow_steps`
+   prompts — content now lives in PGC_SystemContext only.
+
+4. **Nested template detection** — `{{quiz_state.cards.{{quiz_state.index}}.term}}`
    passes L1 but fails at runtime. Fix: scan all string fields for
    `/\{\{[^}]*\{\{/`, raise `unsupported_handlebars_syntax`.
 
-3. **`reveal` field in step_type_contracts** — `PGC_SystemContext.step_type_contracts`
+5. **`reveal` field in step_type_contracts** — `PGC_SystemContext.step_type_contracts`
    and `seed_PGC_StepType.json` must document the `reveal` optional field on
    `human_gate` so that `generate_workflow_steps` LLM knows to use it. Without this
    the LLM cannot generate a gate with `reveal`.
 
-4. **Additional L1 gaps** — any other L1 defects surfaced during flashcard quiz test
+6. **Additional L1 gaps** — any other L1 defects surfaced during flashcard quiz test
    runs are in scope for this track.
 
 **L2 gaps to close:**
 
-5. **Iterator body simulation** — L2 currently treats `iterator` as a single step that
+7. **Iterator body simulation** — L2 currently treats `iterator` as a single step that
    writes an empty array and jumps to `on_complete`, skipping body steps entirely. For
    the flashcard quiz, the human gates and score-tracking steps inside the iterator are
    never exercised in simulation — so the quiz's core logic is invisible to L2. Fix:
@@ -103,13 +123,13 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
    are exhausted or the loop-visit cap is hit, exit via `on_complete`. The body's
    `localState` writes (e.g. `score`, `answer`) must be visible to subsequent steps.
 
-6. **`reveal.content` template resolution in L2** — L1 checks that `reveal.content` is
+8. **`reveal.content` template resolution in L2** — L1 checks that `reveal.content` is
    a non-empty string, but does not verify that any `{{template}}` tokens inside it
    resolve to available `localState` keys at path execution time. Fix: L2 path execution
    must treat `reveal.content` the same as `message_template` — extract template refs
    and fail the path if any base key is missing from `localState` at that point.
 
-7. **Additional L2 gaps** — any other L2 path execution defects surfaced during
+9. **Additional L2 gaps** — any other L2 path execution defects surfaced during
    flashcard quiz simulation runs are in scope for this track.
 
 ### Test Vehicle — Spanish Flashcard Quiz
