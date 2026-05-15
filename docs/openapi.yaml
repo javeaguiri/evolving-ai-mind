@@ -1844,6 +1844,75 @@ paths:
         '500':
           description: SERV deleteTable or PGC_DomainHelp removal failed
 
+  /api/v1/proc/delete-workflow:
+    post:
+      summary: Delete a workflow — removes all run history and intent map entries
+      description: >
+        Permanently deletes a single named workflow and all its associated artifacts.
+        Intended for development and testing cleanup. Use with caution.
+
+        Steps performed (FK-safe order):
+          1. Fetch PGC_Workflow.id by name — 404 if not found
+          2. Fetch all PGC_WorkflowRun.id rows for that workflow_id
+          3. Delete PGC_WorkflowRunStep rows where run_id IN (run ids)
+          4. Delete PGC_WorkflowRun rows where workflow_id = id
+          5. Delete PGC_IntentMap rows where workflow_id = id (FK-based)
+          6. Delete PGC_Workflow row
+
+        Transport-agnostic — callable via HTTP (curl) or SQS (DELETE_WORKFLOW).
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Workflow name as stored in PGC_Workflow.name
+                  example: spanish_flashcard_quiz
+                callback:
+                  $ref: '#/components/schemas/Callback'
+                traceId:
+                  type: string
+                  format: uuid
+            example:
+              name: spanish_flashcard_quiz
+      responses:
+        '200':
+          description: Workflow deleted
+          content:
+            application/json:
+              example:
+                success: true
+                name: spanish_flashcard_quiz
+                deletedRunStepCount: 12
+                deletedRunCount: 3
+                deletedIntentCount: 1
+                workflowDeleted: true
+        '400':
+          description: name is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workflow not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Deletion step failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/proc/design-domain:
     post:
       summary: LLM domain design — no DB writes, returns scaffold for human review
