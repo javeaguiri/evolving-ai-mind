@@ -40,27 +40,9 @@ step 1 LLM call:
 Prompts needed: `research_domain_schema` (new, right brain). `create_domain` prompt
 updated to accept and use research + preference inputs.
 
-### Track B — create_workflow Domain Context
+### Track B — delete-workflow Endpoint
 
-`create_workflow` currently runs with `domain: null` throughout — the right brain has
-no domain schema to reason about. This prevents it from generating steps that reference
-actual PGD table columns, and prevents domain-specific preference questions.
-
-1. **Resolve domain before dispatch** — in `classify-intent.mjs` (or the mind.mjs
-   pre-pass), resolve the domain name from the user's intent and inject it into the
-   CREATE_WORKFLOW SQS payload so `input.domain` is populated.
-
-2. **Inject domain_schema into research step** — `research_workflow_domain` receives
-   only `workflow_description` and `domain` (null). Add `domain_schema` (the full
-   PGD table column map for that domain) as an input variable so the right brain can
-   surface domain-specific preference questions (e.g. "which column holds the Spanish
-   word?").
-
-3. **`research_workflow_domain` prompt update** — update prompt to use `domain_schema`
-   input and instruct the right brain to derive field references from actual column
-   names, not guesses.
-
-4. **`POST /api/v1/proc/delete-workflow` endpoint** — new HTTP + SQS (`DELETE_WORKFLOW`)
+1. **`POST /api/v1/proc/delete-workflow` endpoint** — new HTTP + SQS (`DELETE_WORKFLOW`)
    endpoint that removes a single named workflow and all its associated artifacts.
    Mirrors the cascading delete pattern in `delete-domain.mjs`.
 
@@ -168,11 +150,7 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
 - [ ] Left brain receives research findings + confirmed preferences; produces schema
   implementing known choices, not guesses
 
-**Track B — create_workflow domain context**
-- [ ] `create_workflow` run for Spanish flashcard quiz: `input.domain` is populated
-  (not null) by the time the workflow executes
-- [ ] `research_workflow_domain` receives `domain_schema` and surfaces domain-specific
-  preference questions about the flashcard table columns
+**Track B — delete-workflow endpoint**
 - [ ] `POST /api/v1/proc/delete-workflow` deletes PGC_WorkflowRunStep, PGC_WorkflowRun,
   PGC_IntentMap, and PGC_Workflow rows for the named workflow; returns 404 for unknown
   names; openapi.yaml and architecture.md updated before implementation
