@@ -242,13 +242,16 @@ export function runLevel1StaticAnalysis(steps) {
         }
       }
 
-      // review_object and confirm gates must not have output_key
-      if ((s.gate_type === 'review_object' || s.gate_type === 'confirm') && s.output_key) {
+      // review_object never writes output_key.
+      // confirm without context_key is a static yes/no — no output_key.
+      // confirm WITH context_key is a dynamic selection gate — output_key IS written by resume_gate.
+      const isStaticConfirm = s.gate_type === 'confirm' && !s.context_key;
+      if ((s.gate_type === 'review_object' || isStaticConfirm) && s.output_key) {
         issues.push({
           check:         'gate_output_key_invalid',
           step:          stepKey,
           failure_class: 'gate_output_key_invalid',
-          detail:        `Gate type "${s.gate_type}" on step "${stepKey}" has output_key but this gate type does not write to local_state. Only text_input gates write output_key.`,
+          detail:        `Gate type "${s.gate_type}" on step "${stepKey}" has output_key but this gate type does not write to local_state. Only text_input and dynamic confirm (with context_key) gates write output_key.`,
         });
       }
     }
