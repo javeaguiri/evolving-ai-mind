@@ -26,16 +26,18 @@ import { enqueueCallback }            from '../shared/sqs-callback.mjs';
 import { getRows, deleteRows, servPost } from '../shared/serv-client.mjs';
 
 export async function handle(req) {
-  const { domain } = req.body ?? {};
+  const rawDomain = (req.body?.domain ?? '').trim();
+  // Normalise user-supplied domain: "Spanish flashcards" → "spanish_flashcards"
+  const domain   = rawDomain.toLowerCase().replace(/\s+/g, '_');
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId ?? req.correlationId;
 
-  if (!domain?.trim()) {
+  if (!domain) {
     if (req.source === 'sqs' && callback) {
       await enqueueCallback(callback, {
-        type:   'DELETE_DOMAIN_ERROR',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
-        result: { success: false, error: 'domain is required' },
+        message: 'Usage: /delete-domain <domain>',
       });
       return;
     }
@@ -43,12 +45,15 @@ export async function handle(req) {
   }
 
   try {
-    const result = await runDeleteDomain({ domain: domain.trim(), traceId });
+    const result = await runDeleteDomain({ domain, traceId });
 
     if (req.source === 'http') return ok(result, req.correlationId);
 
     if (callback) {
-      await enqueueCallback(callback, { type: 'DELETE_DOMAIN_RESULT', traceId, result });
+      const message = result.warning
+        ? `Domain \`${domain}\` not found — nothing was deleted.`
+        : `Domain \`${domain}\` deleted.\n• Tables dropped: ${result.deletedTables.length > 0 ? result.deletedTables.join(', ') : 'none'}\n• Workflows removed: ${result.deletedWorkflowCount}\n• Intent patterns removed: ${result.deletedIntentCount}`;
+      await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     }
 
   } catch (error) {
