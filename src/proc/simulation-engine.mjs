@@ -275,6 +275,21 @@ export function runLevel1StaticAnalysis(steps) {
     const stepReads          = new Set();
     const seenTemplateIssues = new Set();
     for (const template of templatesToCheck) {
+      // Nested {{ detection must happen before extractTemplateRefs — e.g.
+      // "{{cards.{{index}}.term}}" is structurally unparseable, not a ref error.
+      if (/\{\{[^}]*\{\{/.test(template)) {
+        const issueKey = `nested_template::${template.slice(0, 60)}`;
+        if (!seenTemplateIssues.has(issueKey)) {
+          seenTemplateIssues.add(issueKey);
+          issues.push({
+            check:         'unsupported_handlebars_syntax',
+            step:          stepKey,
+            failure_class: 'unsupported_handlebars_syntax',
+            detail:        `Step "${stepKey}" contains nested template syntax which is not supported: "${template.slice(0, 80)}". Pre-compute the value in a js_transform step and reference the result key instead.`,
+          });
+        }
+        continue;
+      }
       const refs = extractTemplateRefs(template);
       for (const ref of refs) {
         // Detect unsupported Handlebars syntax before the standard unresolved-key check.
@@ -550,6 +565,23 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
           transition.keys_added.push(currentStep.output_key);
         }
         transition.auto_continued = true;
+        // validate reveal.content template refs against localState at suspension time
+        const revealMissing = checkRevealContent(currentStep, localState);
+        if (revealMissing.length > 0) {
+          transition.template_vars_missing.push(...revealMissing);
+          transition.status = 'failed';
+          transitions.push(transition);
+          return {
+            path_name:           path.path_name,
+            passed:              false,
+            steps_executed:      stepsExecuted,
+            terminal:            currentKey,
+            expected_terminal:   path.expected_terminal,
+            failure_step:        currentKey,
+            failure_reason:      `Step "${currentKey}" reveal.content references missing key(s): ${revealMissing.join(', ')}. Available keys: ${Object.keys(localState).join(', ')}`,
+            local_state_transitions: transitions,
+          };
+        }
         const onSelect = defaultOption.on_select;
         nextKey = resolveSimNextKey(steps, currentKey, onSelect);
         if (onSelect === 'cancel')      currentKey = 'cancel';
@@ -575,6 +607,24 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
         transition.keys_added.push(currentStep.output_key);
       }
 
+      // validate reveal.content template refs against localState at suspension time
+      const gateRevealMissing = checkRevealContent(currentStep, localState);
+      if (gateRevealMissing.length > 0) {
+        transition.template_vars_missing.push(...gateRevealMissing);
+        transition.status = 'failed';
+        transitions.push(transition);
+        return {
+          path_name:           path.path_name,
+          passed:              false,
+          steps_executed:      stepsExecuted,
+          terminal:            currentKey,
+          expected_terminal:   path.expected_terminal,
+          failure_step:        currentKey,
+          failure_reason:      `Step "${currentKey}" reveal.content references missing key(s): ${gateRevealMissing.join(', ')}. Available keys: ${Object.keys(localState).join(', ')}`,
+          local_state_transitions: transitions,
+        };
+      }
+
       // Resolve next step from on_select
       const onSelect = decision.on_select;
       nextKey = resolveSimNextKey(steps, currentKey, onSelect);
@@ -595,13 +645,57 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     }
 
     if (currentStep.type === 'iterator') {
-      // Treat iterator as a single step — output_key is written with an empty array
-      // (mocks for iterator items are not required; the data-flow check is approximate)
+      // Simulate one body iteration so body-step state writes reach localState.
+      // item is a minimal sentinel so {{item.*}} refs are treated as resolved.
+      localState.item = {};
+      transition.keys_added.push('item');
+
+      const bodyStep = currentStep.item_step;
+      if (bodyStep && typeof bodyStep === 'object') {
+        if (bodyStep.type === 'human_gate') {
+          // Auto-continue with the first non-cancel option — same policy as outer gates.
+          const bodyOpts = Array.isArray(bodyStep.options) ? bodyStep.options : [];
+          const defaultBodyOpt = bodyOpts.find(o => o.on_select !== 'cancel' && o.action !== 'cancel');
+          if (bodyStep.output_key && typeof bodyStep.output_key === 'string') {
+            const baseOut = bodyStep.output_key.split('.')[0];
+            localState[baseOut] = defaultBodyOpt?.value ?? null;
+            if (!transition.keys_added.includes(baseOut)) transition.keys_added.push(baseOut);
+          }
+          // Check reveal.content on body gate (item 10)
+          const bodyRevealMissing = checkRevealContent(bodyStep, localState);
+          if (bodyRevealMissing.length > 0) {
+            transition.template_vars_missing.push(...bodyRevealMissing);
+            transition.status = 'failed';
+            transitions.push(transition);
+            return {
+              path_name:           path.path_name,
+              passed:              false,
+              steps_executed:      stepsExecuted,
+              terminal:            currentKey,
+              expected_terminal:   path.expected_terminal,
+              failure_step:        currentKey,
+              failure_reason:      `Iterator "${currentKey}" body reveal.content references missing key(s): ${bodyRevealMissing.join(', ')}. Available keys: ${Object.keys(localState).join(', ')}`,
+              local_state_transitions: transitions,
+            };
+          }
+        } else if (bodyStep.output_key && typeof bodyStep.output_key === 'string') {
+          // For serv_insert, llm_call, js_transform bodies — write a minimal mock value
+          const baseOut = bodyStep.output_key.split('.')[0];
+          if (!transition.keys_added.includes(baseOut)) {
+            localState[baseOut] = {};
+            transition.keys_added.push(baseOut);
+          }
+        }
+      }
+
+      // Iterator output_key holds the collected array across all iterations.
       if (currentStep.output_key && typeof currentStep.output_key === 'string') {
         const baseOut = currentStep.output_key.split('.')[0];
-        localState[baseOut] = [];
-        transition.keys_added.push(baseOut);
+        const bodyVal = localState[baseOut];
+        localState[baseOut] = bodyVal !== undefined ? [bodyVal] : [];
+        if (!transition.keys_added.includes(baseOut)) transition.keys_added.push(baseOut);
       }
+
       nextKey = resolveSimNextKey(steps, currentKey, currentStep.on_complete ?? 'next');
       transitions.push(transition);
       currentKey = nextKey;
@@ -737,15 +831,33 @@ function extractTemplateRefs(template) {
  * but operates purely on the steps array without DB access).
  */
 function resolveSimNextKey(steps, currentKey, nextAction) {
-  if (!nextAction || nextAction === 'next') {
-    const idx = steps.findIndex(s => String(s.step) === String(currentKey));
-    if (idx === -1 || idx === steps.length - 1) return 'end';
-    return String(steps[idx + 1].step);
+  if (nextAction === 'end')    return 'end';
+  if (nextAction === 'cancel') return 'cancel';
+  if (nextAction?.startsWith('step:')) return nextAction.slice(5);
+  // Bare step key — any token matching an existing step key is a direct jump.
+  if (nextAction && nextAction !== 'next' && steps.some(s => String(s.step) === String(nextAction))) {
+    return String(nextAction);
   }
-  if (nextAction === 'end')                  return 'end';
-  if (nextAction === 'cancel')               return 'cancel';
-  if (nextAction.startsWith('step:'))        return nextAction.slice(5);
-  return 'end';
+  // 'next' or absent — advance to the next step in array order.
+  const idx = steps.findIndex(s => String(s.step) === String(currentKey));
+  if (idx === -1 || idx === steps.length - 1) return 'end';
+  return String(steps[idx + 1].step);
+}
+
+/**
+ * Extract template refs from reveal.content and return any whose base key is
+ * absent from localState. Returns an empty array when reveal is absent/null.
+ */
+function checkRevealContent(step, localState) {
+  if (!step.reveal?.content || typeof step.reveal.content !== 'string') return [];
+  const missing = [];
+  for (const ref of extractTemplateRefs(step.reveal.content)) {
+    const baseKey = ref.split('.')[0];
+    if (baseKey !== 'item' && baseKey !== 'input' && !(baseKey in localState)) {
+      missing.push(ref);
+    }
+  }
+  return missing;
 }
 
 /**

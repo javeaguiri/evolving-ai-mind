@@ -956,3 +956,205 @@ describe('runSimulation — loop limit reached treats path as passed', () => {
     assert.equal(path.loop_limit_reached, true, 'loop_limit_reached flag must be set');
   });
 });
+
+// ---------------------------------------------------------------------------
+// L1 — nested {{ detection (item 6)
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — L1 rejects nested {{...{{...}}...}} syntax', () => {
+  it('raises unsupported_handlebars_syntax for nested template in message_template', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_query',
+        input: { tableName: 'PGD_Cards' },
+        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+      },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        // nested {{ — dynamically computed index inside a template token
+        message_template: '{{cards.{{current_index}}.term}}',
+        options: [
+          { label: 'A', value: 'a', action: 'a', on_select: 'next' },
+          { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_success: 'next', on_failure: 'cancel',
+      },
+      { step: '3', type: 'end' },
+    ];
+    const result = runSimulation({ steps, simulationPaths: [], runInput: {} });
+    const issue = result.static_analysis.issues.find(i => i.failure_class === 'unsupported_handlebars_syntax');
+    assert.ok(issue, 'must report unsupported_handlebars_syntax');
+    assert.equal(issue.step, '2');
+    assert.equal(result.static_analysis.passed, false, 'L1 must fail');
+  });
+
+  it('does not flag valid single-level templates', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_query',
+        input: { tableName: 'PGD_Cards' },
+        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+      },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        message_template: '{{cards.0.term}}',
+        options: [
+          { label: 'A', value: 'a', action: 'a', on_select: 'next' },
+          { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_success: 'next', on_failure: 'cancel',
+      },
+      { step: '3', type: 'end' },
+    ];
+    const result = runSimulation({ steps, simulationPaths: [], runInput: {} });
+    const nested = result.static_analysis.issues.filter(i => i.failure_class === 'unsupported_handlebars_syntax');
+    assert.equal(nested.length, 0, 'no nested template issues for valid template');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L2 — iterator body simulation (item 9)
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — L2 simulates one iterator body iteration', () => {
+  // Iterator whose body is a choice gate that writes output_key.
+  // A downstream step uses {{answers}} — must be available after the iterator.
+  const steps = [
+    {
+      step: '1', type: 'serv_query',
+      input: { tableName: 'PGD_Cards' },
+      output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+    },
+    {
+      step: '2', type: 'iterator',
+      items_key: 'cards',
+      item_step: {
+        type: 'human_gate', gate_type: 'choice',
+        message_template: '{{item.term}}',
+        output_key: 'answers',
+        options: [
+          { label: 'A', value: 'correct', action: 'correct', on_select: 'next' },
+          { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_success: 'next', on_failure: 'cancel',
+      },
+      execution_mode: 'sequential',
+      output_key: 'answers',
+      on_complete: 'next', on_failure: 'cancel',
+    },
+    {
+      step: '3', type: 'notify',
+      message_template: 'Done — {{answers.length}} answers',
+      on_success: 'end',
+    },
+    { step: '4', type: 'end' },
+  ];
+
+  it('body output_key is available to downstream steps', () => {
+    const result = runSimulation({
+      steps,
+      mockOutputs: { '1': [{ id: 1, term: 'hola' }] },
+      simulationPaths: [{
+        path_name: 'happy_path',
+        expected_terminal: 'end',
+        decisions: [
+          { step: '1', outcome: 'success' },
+        ],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, `path must pass; got: ${path.failure_reason}`);
+
+    const iter = path.local_state_transitions.find(t => t.step === '2');
+    assert.ok(iter, 'iterator step must appear in transitions');
+    assert.ok(iter.keys_added.includes('answers'), 'answers must be added by iterator');
+  });
+
+  it('L1 still passes for a valid iterator with body gate', () => {
+    const result = runSimulation({ steps, simulationPaths: [], runInput: {} });
+    assert.equal(result.static_analysis.passed, true, `L1 must pass; issues: ${JSON.stringify(result.static_analysis.issues)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L2 — reveal.content template validation (item 10)
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — L2 validates reveal.content template vars', () => {
+  it('fails path when reveal.content references a key not yet in localState', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_query',
+        input: { tableName: 'PGD_Cards' },
+        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+      },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        message_template: '{{cards.0.term}}',
+        reveal: {
+          button_label: 'Show Answer',
+          content: '{{definition}}',  // 'definition' never written to localState
+        },
+        options: [
+          { label: 'A', value: 'a', action: 'a', on_select: 'next' },
+          { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_success: 'next', on_failure: 'cancel',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({
+      steps,
+      mockOutputs: { '1': [{ id: 1, term: 'hola', definition: 'hello' }] },
+      simulationPaths: [{
+        path_name: 'reveal_missing',
+        expected_terminal: 'end',
+        decisions: [{ step: '1', outcome: 'success' }],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, false, 'path must fail due to missing reveal.content key');
+    assert.ok(path.failure_reason.includes('reveal.content'), `failure_reason must mention reveal.content; got: ${path.failure_reason}`);
+    assert.ok(path.failure_step === '2', `failure_step must be step 2; got: ${path.failure_step}`);
+  });
+
+  it('passes when reveal.content keys are all available in localState', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_query',
+        input: { tableName: 'PGD_Cards' },
+        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+      },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        message_template: '{{cards.0.term}}',
+        reveal: {
+          button_label: 'Show Answer',
+          content: '{{cards.0.definition}}',  // cards IS in localState after step 1
+        },
+        options: [
+          { label: 'A', value: 'a', action: 'a', on_select: 'next' },
+          { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_success: 'next', on_failure: 'cancel',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({
+      steps,
+      mockOutputs: { '1': [{ id: 1, term: 'hola', definition: 'hello' }] },
+      simulationPaths: [{
+        path_name: 'reveal_ok',
+        expected_terminal: 'end',
+        decisions: [{ step: '1', outcome: 'success' }],
+      }],
+      runInput: {},
+    });
+    const path = result.path_results[0];
+    assert.equal(path.passed, true, `path must pass; got: ${path.failure_reason}`);
+  });
+});
