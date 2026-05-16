@@ -135,11 +135,11 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
-  it('create_domain step 3 seed carries modal descriptor on add_table option', () => {
+  it('create_domain step 12 seed carries modal descriptor on add_table option', () => {
     // Guard: catches any future seed edit that accidentally drops the modal field
-    const step = getStep('create_domain', '3');
+    const step = getStep('create_domain', '12');
     const addTableOpt = step.options.find(o => o.action === 'add_table');
-    assert.ok(addTableOpt, 'add_table option must exist on step 3');
+    assert.ok(addTableOpt, 'add_table option must exist on step 12');
     assert.ok(addTableOpt.modal,                    'modal field must be present');
     assert.ok(addTableOpt.modal.title,               'modal.title must be present');
     assert.ok(addTableOpt.modal.input_label,         'modal.input_label must be present');
@@ -193,9 +193,9 @@ describe('runSandboxedExpression — local_state binding', () => {
 // create_domain expressions
 // ---------------------------------------------------------------------------
 
-describe('create_domain step 2 — columnSummary expression', () => {
+describe('create_domain step 11 — columnSummary expression', () => {
   it('enriches tables with columnSummary and domain, excluding system columns', () => {
-    const step = getStep('create_domain', '2');
+    const step = getStep('create_domain', '11');
     const result = runSandboxedExpression(
       step.expression,
       TABLES,
@@ -211,9 +211,9 @@ describe('create_domain step 2 — columnSummary expression', () => {
   });
 });
 
-describe('create_domain step 3c — merge + columnSummary expression', () => {
+describe('create_domain step 14 — merge + columnSummary expression', () => {
   it('merges new_table (child FK) from local_state and re-enriches all tables', () => {
-    const step = getStep('create_domain', '3c');
+    const step = getStep('create_domain', '14');
     const result = runSandboxedExpression(
       step.expression,
       TABLES,
@@ -232,7 +232,7 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
   });
 
   it('applies existing_table_modifications when new table is a parent/grouping concept', () => {
-    const step = getStep('create_domain', '3c');
+    const step = getStep('create_domain', '14');
     const newParentTable = {
       tableName: 'PGD_FlashCardSets',
       foreignKeys: [],
@@ -279,7 +279,7 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
   });
 
   it('re-enriches without merge when new_table is null', () => {
-    const step = getStep('create_domain', '3c');
+    const step = getStep('create_domain', '14');
     const result = runSandboxedExpression(
       step.expression,
       TABLES,
@@ -292,7 +292,7 @@ describe('create_domain step 3c — merge + columnSummary expression', () => {
   });
 
   it('re-enriches without merge when new_table is absent from local_state', () => {
-    const step = getStep('create_domain', '3c');
+    const step = getStep('create_domain', '14');
     const result = runSandboxedExpression(
       step.expression,
       TABLES,
