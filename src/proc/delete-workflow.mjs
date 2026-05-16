@@ -37,8 +37,12 @@ export async function handle(req) {
     return err(400, 'name is required', req.correlationId);
   }
 
+  // Normalise to snake_case — workflow names are always snake_case identifiers.
+  // "flashcard quiz" → "flashcard_quiz". Resolves common user input variations.
+  const normalised = name.trim().toLowerCase().replace(/\s+/g, '_');
+
   try {
-    const result = await runDeleteWorkflow({ name: name.trim(), traceId });
+    const result = await runDeleteWorkflow({ name: normalised, traceId });
 
     if (result.notFound) {
       if (req.source === 'sqs' && callback) {
@@ -85,7 +89,19 @@ async function runDeleteWorkflow({ name, traceId }) {
   }
 
   if (!workflowResp.rows?.length) {
-    return { notFound: true, error: `Workflow "${name}" not found` };
+    // Fallback: partial match — catches minor spelling variations
+    const likeResp = await getRows(
+      'PGC_Workflow',
+      [{ column: 'name', op: 'like', value: `%${name}%` }],
+      null, 1
+    );
+    if (!likeResp.success || !likeResp.rows?.length) {
+      return { notFound: true, error: `Workflow "${name}" not found` };
+    }
+    console.info('delete-workflow: resolved via partial match', {
+      searched: name, resolved: likeResp.rows[0].name, traceId,
+    });
+    return runDeleteWorkflow({ name: likeResp.rows[0].name, traceId });
   }
 
   const workflowId = workflowResp.rows[0].id;

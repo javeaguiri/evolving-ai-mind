@@ -176,7 +176,7 @@ async function addColumn(req) {
   if (!colName || !/^[a-z][a-z0-9_]*$/.test(colName)) {
     return err(400, `Invalid column name "${colName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
   }
-  if (!colType || !ALLOWED_TYPES.has(colType.toLowerCase())) {
+  if (!colType || !ALLOWED_TYPES.has(colType.toLowerCase().split('(')[0].trim())) {
     return err(400, `Column type "${colType}" is not allowed`, req.correlationId);
   }
 
@@ -265,7 +265,7 @@ async function modifyColumn(req) {
   if (!/^[a-z][a-z0-9_]*$/.test(columnName)) {
     return err(400, `Invalid column name "${columnName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
   }
-  if (!ALLOWED_TYPES.has(newType.toLowerCase())) {
+  if (!ALLOWED_TYPES.has(newType.toLowerCase().split('(')[0].trim())) {
     return err(400, `Column type "${newType}" is not allowed`, req.correlationId);
   }
   if (usingExpr && !/^[a-z][a-z0-9_]*::[a-z][a-z0-9\s]*$/.test(usingExpr)) {
@@ -604,7 +604,7 @@ function validateCreatePayload({ tableName, target, columns }) {
     if (!col.name || !col.type) {
       return `Each column must have name and type`;
     }
-    if (!ALLOWED_TYPES.has(col.type.toLowerCase())) {
+    if (!ALLOWED_TYPES.has(col.type.toLowerCase().split('(')[0].trim())) {
       return `Column type "${col.type}" is not allowed — rejected for security`;
     }
   }
