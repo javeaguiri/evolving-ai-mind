@@ -28,9 +28,9 @@ export async function handle(req) {
   if (!name?.trim()) {
     if (req.source === 'sqs' && callback) {
       await enqueueCallback(callback, {
-        type:   'DELETE_WORKFLOW_ERROR',
+        type:    'HUMAN_NOTIFICATION',
         traceId,
-        result: { success: false, error: 'name is required' },
+        message: 'Usage: /delete-workflow <name>',
       });
       return;
     }
@@ -43,9 +43,9 @@ export async function handle(req) {
     if (result.notFound) {
       if (req.source === 'sqs' && callback) {
         await enqueueCallback(callback, {
-          type:   'DELETE_WORKFLOW_ERROR',
+          type:    'HUMAN_NOTIFICATION',
           traceId,
-          result: { success: false, error: result.error },
+          message: `Workflow \`${name.trim()}\` not found — nothing was deleted.`,
         });
         return;
       }
@@ -55,7 +55,8 @@ export async function handle(req) {
     if (req.source === 'http') return ok(result, req.correlationId);
 
     if (callback) {
-      await enqueueCallback(callback, { type: 'DELETE_WORKFLOW_RESULT', traceId, result });
+      const message = `Workflow \`${result.name}\` deleted.\n• Run history removed: ${result.deletedRunCount} run(s), ${result.deletedRunStepCount} step(s)\n• Intent patterns removed: ${result.deletedIntentCount}`;
+      await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     }
 
   } catch (error) {
