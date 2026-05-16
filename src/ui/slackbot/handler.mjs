@@ -17,6 +17,8 @@ import { parseEvent, err } from '../../shared/lambda-utils.mjs';
 import { handle as ping          } from './ping.mjs';
 import { handle as createDomain  } from './create-domain.mjs';
 import { handle as createWorkflow } from './create-workflow.mjs';
+import { handle as deleteDomain  } from './delete-domain.mjs';
+import { handle as deleteWorkflow } from './delete-workflow.mjs';
 import { handle as interactive   } from './interactive.mjs';
 import { handle as help          } from './help.mjs';
 import { handle as shutdown      } from './shutdown.mjs';
@@ -103,8 +105,10 @@ export async function handler(event) {
   }
   switch (route) {
     case 'ping':          return ping(req);
-    case 'create-domain': return createDomain(req);
+    case 'create-domain':   return createDomain(req);
     case 'create-workflow': return createWorkflow(req);
+    case 'delete-domain':   return deleteDomain(req);
+    case 'delete-workflow': return deleteWorkflow(req);
     case 'interactive':   return interactive(req);
     case 'help':          return help(req);
     case 'shutdown':      return shutdown(req);

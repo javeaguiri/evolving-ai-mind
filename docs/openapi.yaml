@@ -1263,7 +1263,115 @@ paths:
             Usage: /create-workflow <description>
         '500':
           description: Slack ACK post failed or SQS enqueue failed
-          
+
+  /api/v1/ui/slack/delete-domain:
+    post:
+      summary: /delete-domain slash command — permanently delete a domain
+      description: >
+        Handles the /delete-domain Slack slash command. Extracts the domain name
+        from the text field and enqueues DELETE_DOMAIN to the WorkflowQueue.
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret (HMAC-SHA256 + replay protection)
+          3. Extracts text field as domain — required, returns 400 if empty
+          4. Posts ACK message to Slack via chat.postMessage — ackTs becomes the thread root
+          5. Enqueues DELETE_DOMAIN to SQS WorkflowQueue:
+               { type: DELETE_DOMAIN, domain, callback: { provider, channel, threadId: ackTs } }
+          6. Returns { statusCode: 200, body: '' } immediately — Slack 3s window
+
+        ProcFunction dispatches to proc/delete-domain.mjs which drops all PGD tables,
+        removes PGC_Schema, PGC_TableMap, PGC_EntitySchema, PGC_Workflow, PGC_IntentMap,
+        and PGC_DomainHelp rows. Result posted as a threaded Slack reply.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /delete-domain
+                text:
+                  type: string
+                  description: Snake_case domain name to delete.
+                  example: spanish_flashcard
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            ACK posted to Slack and DELETE_DOMAIN enqueued. Returns empty body —
+            deletion result arrives as a threaded Slack reply.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: text is empty. Usage: /delete-domain <domain>
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+
+  /api/v1/ui/slack/delete-workflow:
+    post:
+      summary: /delete-workflow slash command — delete a workflow and its run history
+      description: >
+        Handles the /delete-workflow Slack slash command. Extracts the workflow name
+        from the text field and enqueues DELETE_WORKFLOW to the WorkflowQueue.
+
+        Flow:
+          1. Slack POSTs to this endpoint
+          2. SlackbotFunction verifies Slack signing secret (HMAC-SHA256 + replay protection)
+          3. Extracts text field as name — required, returns 400 if empty
+          4. Posts ACK message to Slack via chat.postMessage — ackTs becomes the thread root
+          5. Enqueues DELETE_WORKFLOW to SQS WorkflowQueue:
+               { type: DELETE_WORKFLOW, name, callback: { provider, channel, threadId: ackTs } }
+          6. Returns { statusCode: 200, body: '' } immediately — Slack 3s window
+
+        ProcFunction dispatches to proc/delete-workflow.mjs which removes
+        PGC_WorkflowRunStep, PGC_WorkflowRun, PGC_IntentMap, and PGC_Workflow rows.
+        Returns 404 if the workflow name is unknown. Result posted as a threaded Slack reply.
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [command, text, user_id, channel_id]
+              properties:
+                command:
+                  type: string
+                  example: /delete-workflow
+                text:
+                  type: string
+                  description: Exact workflow name as stored in PGC_Workflow.name.
+                  example: spanish_flashcard_quiz
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: >
+            ACK posted to Slack and DELETE_WORKFLOW enqueued. Returns empty body —
+            deletion result (including 404 if not found) arrives as a threaded Slack reply.
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: text is empty. Usage: /delete-workflow <name>
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+
   # ── PROC ───────────────────────────────────────────────────────────────────
 
   /api/v1/proc/ping-db:

@@ -160,7 +160,8 @@ entry messages, which carry no run ID and are consumed once.
 | `CREATE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/create-workflow.mjs |
 | `TROUBLESHOOT_WORKFLOW` | — | 1 — fire-and-forget | run-workflow.mjs (on failure) / developer curl | proc/troubleshoot-workflow.mjs |
 | `FIX_WORKFLOW` | — | 1 — fire-and-forget → 2 on gate | troubleshoot-workflow.mjs (autoFix) / developer curl | proc/fix-workflow.mjs |
-| `DELETE_WORKFLOW` | — | 1 — fire-and-forget | developer curl | proc/delete-workflow.mjs |
+| `DELETE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-domain.mjs |
+| `DELETE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-workflow.mjs |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
