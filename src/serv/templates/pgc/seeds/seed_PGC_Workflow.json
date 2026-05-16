@@ -11,10 +11,10 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 9,
+    "version": 10,
     "steps": [
       {
-        "step": "0a",
+        "step": "1",
         "type": "js_transform",
         "description": "Derive candidate domain slug from user input for duplicate pre-check.",
         "input_key": "input",
@@ -24,7 +24,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "0b",
+        "step": "2",
         "type": "serv_query",
         "description": "Check whether this domain already exists in PGC_DomainHelp.",
         "input": {
@@ -43,24 +43,24 @@
         "on_failure": "cancel"
       },
       {
-        "step": "0c",
+        "step": "3",
         "type": "condition",
         "description": "If domain already exists: show exists gate. Else: proceed to right brain research.",
         "expression": "{{existing_domain_check.length}}",
-        "on_truthy": "0d",
-        "on_falsy": "1R"
+        "on_truthy": "4",
+        "on_falsy": "5"
       },
       {
-        "step": "0d",
+        "step": "4",
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Domain already exists. Offer recreate (overwrite registration) or cancel.",
-        "message_template": "Domain *{{candidate_domain}}* already exists. Recreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
+        "message_template": "Domain *{{candidate_domain}}* already exists. Recreating will overwrite its help text and aliases. The existing tables are NOT dropped \u2014 only the domain registration is regenerated.",
         "options": [
           {
             "label": "Recreate",
             "action": "confirm",
-            "on_select": "1R"
+            "on_select": "5"
           },
           {
             "label": "Cancel",
@@ -72,7 +72,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "1R",
+        "step": "5",
         "type": "llm_call",
         "description": "RIGHT BRAIN: Research domain data-modelling best practices and surface structural preference questions before schema design.",
         "input": {
@@ -84,7 +84,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "1a",
+        "step": "6",
         "type": "js_transform",
         "description": "Build preference_gates array from right brain research output.",
         "input_key": "domain_research",
@@ -94,7 +94,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "1az",
+        "step": "7",
         "type": "js_transform",
         "description": "Initialize user_preferences to empty array so it is always defined for the left brain call.",
         "input_key": "preference_gates",
@@ -104,15 +104,15 @@
         "on_failure": "cancel"
       },
       {
-        "step": "1b",
+        "step": "8",
         "type": "condition",
         "description": "Skip preference gates if research found no structural decisions to ask.",
         "expression": "{{preference_gates.length}}",
-        "on_truthy": "1c",
-        "on_falsy": "1"
+        "on_truthy": "9",
+        "on_falsy": "10"
       },
       {
-        "step": "1c",
+        "step": "9",
         "type": "iterator",
         "description": "Present each research preference question as a choice gate. User answers structural decisions before schema is designed.",
         "items_key": "preference_gates",
@@ -127,11 +127,11 @@
         },
         "execution_mode": "sequential",
         "output_key": "user_preferences",
-        "on_complete": "1",
+        "on_complete": "10",
         "on_failure": "cancel"
       },
       {
-        "step": "1",
+        "step": "10",
         "type": "llm_call",
         "description": "LEFT BRAIN: Design domain schema using research findings and confirmed user preferences.",
         "input": {
@@ -145,7 +145,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "2",
+        "step": "11",
         "type": "js_transform",
         "description": "Enrich each table with columnSummary and domain field.",
         "input_key": "proposed_scaffold.tables",
@@ -155,7 +155,7 @@
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } return enrich(items, local_state.proposed_scaffold.domain); })()"
       },
       {
-        "step": "3",
+        "step": "12",
         "type": "human_gate",
         "gate_type": "edit_list",
         "description": "User reviews proposed table list. Child tables may be removed. User may also add a table.",
@@ -173,13 +173,13 @@
           {
             "label": "Looks good",
             "action": "confirm",
-            "on_select": "step:3d"
+            "on_select": "15"
           },
           {
             "label": "Add a table",
             "action": "add_table",
-            "on_select": "step:3b",
-            "on_modal_close": "step:3",
+            "on_select": "13",
+            "on_modal_close": "12",
             "modal": {
               "title": "Add a table",
               "input_label": "Describe the table",
@@ -198,7 +198,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "3b",
+        "step": "13",
         "type": "llm_call",
         "description": "LLM designs the new table from user description.",
         "input": {
@@ -212,17 +212,17 @@
         "on_failure": "cancel"
       },
       {
-        "step": "3c",
+        "step": "14",
         "type": "js_transform",
         "description": "Merge new_table, apply existing_table_modifications, topological sort so FK targets precede referencing tables, re-enrich. Loops back to step 3.",
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
-        "on_success": "step:3",
+        "on_success": "12",
         "on_failure": "cancel",
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } function topoSort(tables) {  var nameToTable = {};  tables.forEach(function(t) { nameToTable[t.tableName] = t; });  var deps = {};  tables.forEach(function(t) {   var d = [];   (t.foreignKeys || []).forEach(function(fk) {    var ref = fk.references && fk.references.table;    if (ref && nameToTable[ref] && ref !== t.tableName) d.push(ref);   });   deps[t.tableName] = d;  });  var result = [], visited = {}, inStack = {};  function visit(name) {   if (visited[name]) return;   if (inStack[name]) return;   inStack[name] = true;   (deps[name] || []).forEach(visit);   inStack[name] = false;   visited[name] = true;   if (nameToTable[name]) result.push(nameToTable[name]);  }  tables.forEach(function(t) { visit(t.tableName); });  return result; } var newTable = local_state.new_table; var domain = local_state.proposed_scaffold.domain; var mods = (newTable && Array.isArray(newTable.existing_table_modifications))   ? newTable.existing_table_modifications : []; var patched = items.map(function(t) {  var mod = mods.find(function(m) { return m.tableName === t.tableName; });  if (!mod) return t;  var extraCols = Array.isArray(mod.add_columns) ? mod.add_columns : [];  var extraFKs  = Array.isArray(mod.add_foreign_keys) ? mod.add_foreign_keys : [];  return Object.assign({}, t, {   columns:     (t.columns || []).concat(extraCols),   foreignKeys: (t.foreignKeys || []).concat(extraFKs)  }); }); var cleanNew = null; if (newTable) {  cleanNew = Object.assign({}, newTable);  delete cleanNew.existing_table_modifications; } var merged = cleanNew ? patched.concat([cleanNew]) : patched; var ordered = topoSort(merged); return enrich(ordered, domain);})()"
       },
       {
-        "step": "3d",
+        "step": "15",
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "User reviews the full column details of all tables before DDL is executed.",
@@ -244,7 +244,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "4",
+        "step": "16",
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Final confirmation before DDL execution.",
@@ -265,7 +265,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "5",
+        "step": "17",
         "type": "iterator",
         "description": "Create each confirmed PGD table via SERV-Schema createTable.",
         "items_key": "proposed_scaffold.tables",
@@ -280,9 +280,9 @@
         "on_failure": "cancel"
       },
       {
-        "step": "6",
+        "step": "18",
         "type": "js_transform",
-        "description": "Derive domain registration data deterministically from confirmed scaffold — no LLM.",
+        "description": "Derive domain registration data deterministically from confirmed scaffold \u2014 no LLM.",
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "on_success": "next",
@@ -290,7 +290,7 @@
         "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' '), entityName.toLowerCase(), words[words.length - 1]])); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ] }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { return !t.foreignKeys || t.foreignKeys.length === 0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
       },
       {
-        "step": "7",
+        "step": "19",
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "User reviews and confirms aliases and CRUD commands before they are written to PGC_DomainHelp.",
@@ -312,7 +312,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "8",
+        "step": "20",
         "type": "serv_insert",
         "description": "Write confirmed domain aliases and commands to PGC_DomainHelp.",
         "input": {
@@ -323,7 +323,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "9",
+        "step": "21",
         "type": "iterator",
         "description": "Insert the 5 PGC_IntentMap rows.",
         "items_key": "generated.intentMapRows",
@@ -341,7 +341,7 @@
         "on_failure": "cancel"
       },
       {
-        "step": "10b",
+        "step": "22",
         "type": "iterator",
         "description": "Register each generated entity schema in PGC_EntitySchema.",
         "items_key": "generated.entitySchemas",
@@ -359,14 +359,14 @@
         "on_failure": "cancel"
       },
       {
-        "step": "11",
+        "step": "23",
         "type": "notify",
         "description": "Confirm domain creation with concrete command examples.",
-        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n• /m list {{proposed_scaffold.domain}}\n• /m get {{proposed_scaffold.domain}} <n>\n• /m add {{proposed_scaffold.domain}} <description>\n• /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n• /m delete {{proposed_scaffold.domain}} id=<number>",
+        "message_template": "Domain {{proposed_scaffold.domain}} is ready with {{proposed_scaffold.tables.length}} tables.\n\nTry:\n\u2022 /m list {{proposed_scaffold.domain}}\n\u2022 /m get {{proposed_scaffold.domain}} <n>\n\u2022 /m add {{proposed_scaffold.domain}} <description>\n\u2022 /m update {{proposed_scaffold.domain}} id=<number> <field>=<value>\n\u2022 /m delete {{proposed_scaffold.domain}} id=<number>",
         "on_success": "end"
       },
       {
-        "step": "12",
+        "step": "24",
         "type": "end"
       }
     ]
@@ -374,7 +374,7 @@
   {
     "name": "help",
     "domain": null,
-    "description": "Interactive help — shows system commands or live domain help.",
+    "description": "Interactive help \u2014 shows system commands or live domain help.",
     "intent_keywords": [
       "help",
       "what can you do",
@@ -408,13 +408,13 @@
         "output_key": "help_options",
         "on_success": "next",
         "on_failure": "next",
-        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
+        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' \u2014 ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '\u2026' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
       },
       {
         "step": "3",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 1 — What would you like help with?",
+        "description": "Level 1 \u2014 What would you like help with?",
         "message_template": "What would you like help with?",
         "context_key": "help_options.domainButtons",
         "output_key": "help_selection",
@@ -442,13 +442,13 @@
         "on_success": "next",
         "on_failure": "next",
         "input_key": "help_options",
-        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '• `' + c.syntax + '` — ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
+        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '\u2022 `' + c.syntax + '` \u2014 ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
       {
         "step": "5",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Level 2 — Display the resolved help content.",
+        "description": "Level 2 \u2014 Display the resolved help content.",
         "message_template": "{{resolved_help.content}}",
         "options": [
           {
@@ -595,7 +595,7 @@
         "description": "Format right brain findings and autonomous decisions into a readable summary for the user gate.",
         "input_key": "right_brain_research",
         "output_key": "research_summary",
-        "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions — proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()",
+        "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions \u2014 proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()",
         "on_success": "next",
         "on_failure": "next"
       },
@@ -604,7 +604,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Show user what the right brain researched and decided before preference gates. User can continue or cancel.",
-        "message_template": "🧠 *Right brain research complete for:* {{input.userInput}}\n\n{{research_summary.summary}}\n\n_{{research_summary.decision_note}}. {{research_summary.question_note}}._",
+        "message_template": "\ud83e\udde0 *Right brain research complete for:* {{input.userInput}}\n\n{{research_summary.summary}}\n\n_{{research_summary.decision_note}}. {{research_summary.question_note}}._",
         "options": [
           {
             "label": "Continue",
@@ -631,7 +631,7 @@
       {
         "step": "8",
         "type": "iterator",
-        "description": "Tier 1 user preference gates — choice type with lettered buttons and descriptions.",
+        "description": "Tier 1 user preference gates \u2014 choice type with lettered buttons and descriptions.",
         "items_key": "preference_gates",
         "item_step": {
           "type": "human_gate",
@@ -652,7 +652,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "Optional free-text gate for user to provide design context not surfaced by the preference questions. Skip proceeds without writing anything.",
-        "message_template": "Anything else I should know about how this workflow should behave? Add context the questions above didn’t cover, or press Skip.",
+        "message_template": "Anything else I should know about how this workflow should behave? Add context the questions above didn\u2019t cover, or press Skip.",
         "output_key": "user_design_notes",
         "options": [
           {
@@ -732,7 +732,7 @@
         "step": "14",
         "type": "notify",
         "description": "Inform user the workflow requires a capability that does not yet exist.",
-        "message_template": "🚫 *Cannot build this workflow yet*\n\n{{gap_analysis.blocked_reason}}\n\nThis capability has been noted for future implementation.",
+        "message_template": "\ud83d\udeab *Cannot build this workflow yet*\n\n{{gap_analysis.blocked_reason}}\n\nThis capability has been noted for future implementation.",
         "on_success": "end"
       },
       {
@@ -757,7 +757,7 @@
         "step": "17",
         "type": "human_gate",
         "gate_type": "confirm",
-        "description": "Schema gap decision — create missing table first, build without it, or cancel.",
+        "description": "Schema gap decision \u2014 create missing table first, build without it, or cancel.",
         "message_template": "{{schema_gap_message}}",
         "options": [
           {
@@ -818,7 +818,7 @@
       {
         "step": "21",
         "type": "llm_call",
-        "description": "Left brain pass 2: design step sequence and state map. No dialogs — those are designed separately.",
+        "description": "Left brain pass 2: design step sequence and state map. No dialogs \u2014 those are designed separately.",
         "input": {
           "prompt": "design_workflow_process",
           "userInput": "{{input.userInput}}",
@@ -851,7 +851,7 @@
       {
         "step": "23",
         "type": "llm_call",
-        "description": "Translate the three-part design spec into a step array. Translation only — no design decisions.",
+        "description": "Translate the three-part design spec into a step array. Translation only \u2014 no design decisions.",
         "input": {
           "prompt": "generate_workflow_steps",
           "process_design": "{{process_spec.process_design}}",
@@ -911,7 +911,7 @@
       {
         "step": "25",
         "type": "simulate",
-        "description": "Level 1 static analysis — routing, dead targets, missing templates, gate structure.",
+        "description": "Level 1 static analysis \u2014 routing, dead targets, missing templates, gate structure.",
         "input": {
           "steps_key": "draft_workflow.steps"
         },
@@ -1036,7 +1036,7 @@
         "description": "Format Level 2 path simulation failures into a readable summary for display.",
         "input_key": "simulation_result",
         "output_key": "path_error_summary",
-        "expression": "(function(){var r=items&&items.path_results;if(!Array.isArray(r)||r.length===0)return\"Level 2 simulation failed - no path results reported.\";var paths=(local_state.simulation_paths&&local_state.simulation_paths.simulation_paths)||[];var failed=r.filter(function(p){return!p.passed;});if(failed.length===0)return\"Level 2 simulation failed - no specific path failures reported.\";var lines=failed.slice(0,6).map(function(p){var base=\"- Path \\\"\"+p.path_name+\"\\\": \"+p.failure_reason;if(p.failure_step!==\"end\"&&p.failure_step!==\"cancel\")return base;var pathDef=paths.find(function(pd){return pd.path_name===p.path_name;})||{};var decisions=pathDef.decisions||[];var cancelDec=decisions.find(function(d){return d.on_select===\"cancel\";});if(cancelDec)return base+\" — step \"+cancelDec.step+\" has on_select:\\\"cancel\\\"; verify the cancel option routes to cancel termination and not a named step\";var ts=p.local_state_transitions||[];var prev=ts.length>=2?ts[ts.length-2]:null;if(prev)return base+\" (preceding step: \"+prev.step+\", type=\"+prev.type+\")\";return base;});var extra=failed.length-6;if(extra>0)lines.push(\"...and \"+extra+\" more paths\");return lines.join(\"\\n\");})()",
+        "expression": "(function(){var r=items&&items.path_results;if(!Array.isArray(r)||r.length===0)return\"Level 2 simulation failed - no path results reported.\";var paths=(local_state.simulation_paths&&local_state.simulation_paths.simulation_paths)||[];var failed=r.filter(function(p){return!p.passed;});if(failed.length===0)return\"Level 2 simulation failed - no specific path failures reported.\";var lines=failed.slice(0,6).map(function(p){var base=\"- Path \\\"\"+p.path_name+\"\\\": \"+p.failure_reason;if(p.failure_step!==\"end\"&&p.failure_step!==\"cancel\")return base;var pathDef=paths.find(function(pd){return pd.path_name===p.path_name;})||{};var decisions=pathDef.decisions||[];var cancelDec=decisions.find(function(d){return d.on_select===\"cancel\";});if(cancelDec)return base+\" \u2014 step \"+cancelDec.step+\" has on_select:\\\"cancel\\\"; verify the cancel option routes to cancel termination and not a named step\";var ts=p.local_state_transitions||[];var prev=ts.length>=2?ts[ts.length-2]:null;if(prev)return base+\" (preceding step: \"+prev.step+\", type=\"+prev.type+\")\";return base;});var extra=failed.length-6;if(extra>0)lines.push(\"...and \"+extra+\" more paths\");return lines.join(\"\\n\");})()",
         "on_success": "step:31a",
         "on_failure": "cancel"
       },
@@ -1182,7 +1182,7 @@
         "step": "37",
         "type": "notify",
         "description": "Confirm the workflow is registered and ready.",
-        "message_template": "✅ Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:* {{gap_analysis.deferred.length}} item(s) noted for future improvement.",
+        "message_template": "\u2705 Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:* {{gap_analysis.deferred.length}} item(s) noted for future improvement.",
         "on_success": "end"
       },
       {
@@ -1194,7 +1194,7 @@
   {
     "name": "fix_workflow",
     "domain": null,
-    "description": "Tier 1 reactive repair — LLM diagnoses static analysis issues in a registered workflow, proposes corrected steps, validates them, presents a human confirmation gate, writes the fix to PGC_Workflow, updates PGC_SystemContext if needed, and cancels affected runs.",
+    "description": "Tier 1 reactive repair \u2014 LLM diagnoses static analysis issues in a registered workflow, proposes corrected steps, validates them, presents a human confirmation gate, writes the fix to PGC_Workflow, updates PGC_SystemContext if needed, and cancels affected runs.",
     "intent_keywords": [
       "fix workflow",
       "repair workflow",
@@ -1244,7 +1244,7 @@
       {
         "step": "4",
         "type": "llm_call",
-        "description": "Right-brain repair call — diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
+        "description": "Right-brain repair call \u2014 diagnose root cause, produce corrected step array and optional PGC_SystemContext updates. PGC_SystemContext rows injected automatically via inject_for=fix_workflow_steps.",
         "input": {
           "prompt": "fix_workflow_steps",
           "workflow_name": "{{fix_context.workflowName}}",
@@ -1259,7 +1259,7 @@
       {
         "step": "4b",
         "type": "js_transform",
-        "description": "Merge corrected steps back into the full workflow step array. LLM only returns the fixed steps — this patches them into the complete array so downstream steps and the DB write always work with the full workflow.",
+        "description": "Merge corrected steps back into the full workflow step array. LLM only returns the fixed steps \u2014 this patches them into the complete array so downstream steps and the DB write always work with the full workflow.",
         "input_key": "workflow_row",
         "output_key": "merged_steps",
         "on_success": "next",
@@ -1269,7 +1269,7 @@
       {
         "step": "5",
         "type": "simulate",
-        "description": "Level 1 static analysis on the full merged step array — validates routing, dead targets, templates, gate structure across all steps. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
+        "description": "Level 1 static analysis on the full merged step array \u2014 validates routing, dead targets, templates, gate structure across all steps. On failure routes to review gate so user sees both the diagnosis and the remaining issues.",
         "input": {
           "steps_key": "merged_steps"
         },
@@ -1282,7 +1282,7 @@
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "Show diagnosis, proposed changes, and (on failure path) remaining validation issues. User confirms to apply the fix or requests another LLM attempt.",
-        "message_template": "🔧 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} → v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}} | *Validation issues remaining:* {{post_fix_validation.static_analysis.issues.length}}",
+        "message_template": "\ud83d\udd27 *Fix ready for {{fix_context.workflowName}}* (v{{fix_context.workflowVersion}} \u2192 v{{fix_context.workflowVersion}}+1)\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes proposed:* {{fix_result.changes_applied.length}} | *Validation issues remaining:* {{post_fix_validation.static_analysis.issues.length}}",
         "context_key": "fix_result.changes_applied",
         "options": [
           {
@@ -1304,12 +1304,12 @@
         "on_success": "next",
         "on_failure": "cancel",
         "item_secondary_key": "after",
-        "item_label_template": "step {{step}} — {{field}}"
+        "item_label_template": "step {{step}} \u2014 {{field}}"
       },
       {
         "step": "7",
         "type": "js_transform",
-        "description": "Compute the new version number — workflowVersion + 1.",
+        "description": "Compute the new version number \u2014 workflowVersion + 1.",
         "input_key": "fix_context",
         "output_key": "new_version",
         "on_success": "next",
@@ -1349,7 +1349,7 @@
       {
         "step": "10",
         "type": "iterator",
-        "description": "Apply each PGC_SystemContext update produced by the LLM — Tier 2 improvement, prevents the same error class from recurring in future workflow generation.",
+        "description": "Apply each PGC_SystemContext update produced by the LLM \u2014 Tier 2 improvement, prevents the same error class from recurring in future workflow generation.",
         "items_key": "fix_result.context_updates",
         "item_step": {
           "type": "serv_update",
@@ -1463,7 +1463,7 @@
         "step": "16",
         "type": "notify",
         "description": "Confirm the fix was applied. Report version bump, number of context rows updated, and number of runs cancelled.",
-        "message_template": "✅ *{{fix_context.workflowName}}* repaired (v{{fix_context.workflowVersion}} → v{{new_version}})\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes applied:* {{fix_result.changes_applied.length}}\n*Runs cancelled:* {{runs_to_cancel.length}}\n\nYou can try again now.",
+        "message_template": "\u2705 *{{fix_context.workflowName}}* repaired (v{{fix_context.workflowVersion}} \u2192 v{{new_version}})\n\n*Diagnosis:* {{fix_result.diagnosis}}\n\n*Changes applied:* {{fix_result.changes_applied.length}}\n*Runs cancelled:* {{runs_to_cancel.length}}\n\nYou can try again now.",
         "on_success": "end"
       },
       {
@@ -1475,7 +1475,7 @@
   {
     "name": "get_entity",
     "domain": null,
-    "description": "Find and display a domain entity record by id or name search including all child data. Generic — works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
+    "description": "Find and display a domain entity record by id or name search including all child data. Generic \u2014 works for any domain. Requires input.entity_name and either input.id (exact lookup) or input.search (LIKE filter).",
     "intent_keywords": [
       "get",
       "show",
@@ -1535,7 +1535,7 @@
         "max_rows": 5,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  var rootLine = '• ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    ◦ ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '—'); });    acc.push('    ◦ ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  var rootLine = '\u2022 ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    \u25e6 ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '\u2014'); });    acc.push('    \u25e6 ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "5",
@@ -1552,7 +1552,7 @@
   {
     "name": "list_entity",
     "domain": null,
-    "description": "List all records for a domain entity with root columns and ids. Generic — works for any domain. Requires input.entity_name.",
+    "description": "List all records for a domain entity with root columns and ids. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "list",
       "show all",
@@ -1579,13 +1579,13 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "Format list results — root columns only, child arrays suppressed.",
+        "description": "Format list results \u2014 root columns only, child arrays suppressed.",
         "input_key": "results",
         "max_rows": 20,
         "root_only": true,
         "output_key": "results_display",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  return '• ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '\u2014');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '\u2014' : String(val)); });  return '\u2022 ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
         "step": "3",
@@ -1602,7 +1602,7 @@
   {
     "name": "add_entity",
     "domain": null,
-    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic — works for any domain. Requires input.entity_name.",
+    "description": "Add a new domain entity record from natural language input. LLM parses description into structured data. User confirms before DB write. Generic \u2014 works for any domain. Requires input.entity_name.",
     "intent_keywords": [
       "add",
       "create",
@@ -1714,7 +1714,7 @@
   {
     "name": "update_entity",
     "domain": null,
-    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic — works for any domain.",
+    "description": "Update a domain entity root record by id. Requires input.entity_name, input.id, and input.updates. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "update",
       "edit",
@@ -1799,7 +1799,7 @@
   {
     "name": "delete_entity",
     "domain": null,
-    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic — works for any domain.",
+    "description": "Delete a domain entity root record by id. CASCADE on FK removes child rows. Requires input.entity_name and input.id. Generic \u2014 works for any domain.",
     "intent_keywords": [
       "delete",
       "remove"
@@ -1881,12 +1881,12 @@
     "name": "diagnose_prompt_schema",
     "version": 4,
     "domain": null,
-    "description": "Tier 1b reactive repair — deterministic R1–R7 output_schema and model compatibility fix. Each rule is an independent js_transform step.",
+    "description": "Tier 1b reactive repair \u2014 deterministic R1\u2013R7 output_schema and model compatibility fix. Each rule is an independent js_transform step.",
     "steps": [
       {
         "step": "1",
         "type": "js_transform",
-        "description": "R1 — array union types → anyOf",
+        "description": "R1 \u2014 array union types \u2192 anyOf",
         "input_key": "input.repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(Array.isArray(node.type)){var nonNull=node.type.filter(function(t){return t!=='null';});var hasNull=node.type.indexOf('null')!==-1;var anyOf=nonNull.map(function(t){return{type:t};});if(hasNull)anyOf.push({type:'null'});rs.violations.push({path:path,rule:'R1',description:'array union type ['+node.type.join(',')+'] replaced with anyOf'});delete node.type;node.anyOf=anyOf;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1895,16 +1895,16 @@
       {
         "step": "2",
         "type": "js_transform",
-        "description": "R2 — object-typed additionalProperties → false (boolean true/false are valid; only object schemas are rejected)",
+        "description": "R2 \u2014 object-typed additionalProperties \u2192 false (boolean true/false are valid; only object schemas are rejected)",
         "input_key": "repair_state",
         "output_key": "repair_state",
-        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&typeof node.additionalProperties==='object'&&node.additionalProperties!==null){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is object schema '+JSON.stringify(node.additionalProperties)+' — set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
+        "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if('additionalProperties'in node&&typeof node.additionalProperties==='object'&&node.additionalProperties!==null){rs.violations.push({path:path,rule:'R2',description:'additionalProperties is object schema '+JSON.stringify(node.additionalProperties)+' \u2014 set to false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
         "on_success": "next"
       },
       {
         "step": "3",
         "type": "js_transform",
-        "description": "R3 — add missing additionalProperties:false to objects",
+        "description": "R3 \u2014 add missing additionalProperties:false to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('additionalProperties'in node)){rs.violations.push({path:path,rule:'R3',description:'object missing additionalProperties: false'});node.additionalProperties=false;}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1913,7 +1913,7 @@
       {
         "step": "4",
         "type": "js_transform",
-        "description": "R4 — add missing properties:{} to objects",
+        "description": "R4 \u2014 add missing properties:{} to objects",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&!('properties'in node)){rs.violations.push({path:path,rule:'R4',description:'object missing properties key'});node.properties={};}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1922,7 +1922,7 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "R5 — add missing required entries",
+        "description": "R5 \u2014 add missing required entries",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;if(node.type==='object'&&node.additionalProperties===false&&node.properties){var defined=Object.keys(node.properties);var existing=Array.isArray(node.required)?node.required:[];var missing=defined.filter(function(k){return existing.indexOf(k)===-1;});if(missing.length>0){rs.violations.push({path:path,rule:'R5',description:'properties not in required: ['+missing.join(', ')+']'});node.required=existing.concat(missing);}}var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1931,7 +1931,7 @@
       {
         "step": "6",
         "type": "js_transform",
-        "description": "R6 — apply R3+R4 to anyOf/oneOf/allOf object members",
+        "description": "R6 \u2014 apply R3+R4 to anyOf/oneOf/allOf object members",
         "input_key": "repair_state",
         "output_key": "repair_state",
         "expression": "(function(){var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice()};function walk(node,path){if(typeof node!=='object'||node===null)return;['anyOf','oneOf','allOf'].forEach(function(kw){if(!Array.isArray(node[kw]))return;node[kw].forEach(function(m,i){if(typeof m!=='object'||m===null||m.type==='null')return;if(m.type==='object'&&!('additionalProperties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing additionalProperties: false'});m.additionalProperties=false;}if(m.type==='object'&&!('properties'in m)){rs.violations.push({path:path+'.'+kw+'['+i+']',rule:'R6',description:kw+' object member missing properties key'});m.properties={};}});});var p=node.properties;if(p&&typeof p==='object')Object.keys(p).forEach(function(k){walk(p[k],path+'.properties.'+k);});if(node.items&&typeof node.items==='object')walk(node.items,path+'.items');['anyOf','oneOf','allOf'].forEach(function(kw){if(Array.isArray(node[kw]))node[kw].forEach(function(m,i){walk(m,path+'.'+kw+'['+i+']');});});}walk(rs.schema,'schema');return rs;})()",
@@ -1940,10 +1940,10 @@
       {
         "step": "7",
         "type": "js_transform",
-        "description": "R7 — unsupported model name → anthropic/claude-sonnet-4-5",
+        "description": "R7 \u2014 unsupported model name \u2192 anthropic/claude-sonnet-4-5",
         "input_key": "repair_state",
         "output_key": "repair_state",
-        "expression": "(function(){var SUPPORTED=['anthropic/claude-sonnet-4-5','perplexity/sonar'];var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice(),model:items.model};var m=items.model;if(m&&SUPPORTED.indexOf(m)===-1){rs.violations.push({path:'model',rule:'R7',description:'model \"'+m+'\" is not supported by the Perplexity gateway — must be one of: '+SUPPORTED.join(', '),fixedModel:'anthropic/claude-sonnet-4-5'});rs.model='anthropic/claude-sonnet-4-5';}return rs;})()",
+        "expression": "(function(){var SUPPORTED=['anthropic/claude-sonnet-4-5','perplexity/sonar'];var rs={schema:JSON.parse(JSON.stringify(items.schema)),violations:items.violations.slice(),model:items.model};var m=items.model;if(m&&SUPPORTED.indexOf(m)===-1){rs.violations.push({path:'model',rule:'R7',description:'model \"'+m+'\" is not supported by the Perplexity gateway \u2014 must be one of: '+SUPPORTED.join(', '),fixedModel:'anthropic/claude-sonnet-4-5'});rs.model='anthropic/claude-sonnet-4-5';}return rs;})()",
         "on_success": "next"
       },
       {
@@ -1952,7 +1952,7 @@
         "description": "Aggregate violations, build gate message. Reads repair_state; writes gate_payload.",
         "input_key": "repair_state",
         "output_key": "gate_payload",
-        "expression": "(function(){var rs=items;var v=rs.violations;if(v.length===0)return{hasViolations:false,gateMessage:'',repairedSchema:rs.schema,violationCount:0};var lines=v.slice(0,10).map(function(x){return '• `'+x.path+'` ['+x.rule+']: '+x.description;});if(v.length>10)lines.push('• …and '+(v.length-10)+' more');var msg=['🔧 *Schema compatibility repair — `'+local_state.input.intentCategory+'`*','','Found *'+v.length+'* violation'+(v.length!==1?'s':'')+':',lines.join('\\n'),'','Repair is deterministic. Confirm to apply and retry your workflow.'].join('\\n');return{hasViolations:true,gateMessage:msg,repairedSchema:rs.schema,violationCount:v.length};})()",
+        "expression": "(function(){var rs=items;var v=rs.violations;if(v.length===0)return{hasViolations:false,gateMessage:'',repairedSchema:rs.schema,violationCount:0};var lines=v.slice(0,10).map(function(x){return '\u2022 `'+x.path+'` ['+x.rule+']: '+x.description;});if(v.length>10)lines.push('\u2022 \u2026and '+(v.length-10)+' more');var msg=['\ud83d\udd27 *Schema compatibility repair \u2014 `'+local_state.input.intentCategory+'`*','','Found *'+v.length+'* violation'+(v.length!==1?'s':'')+':',lines.join('\\n'),'','Repair is deterministic. Confirm to apply and retry your workflow.'].join('\\n');return{hasViolations:true,gateMessage:msg,repairedSchema:rs.schema,violationCount:v.length};})()",
         "on_success": "next"
       },
       {
@@ -1986,7 +1986,7 @@
       {
         "step": "10",
         "type": "serv_update",
-        "description": "Write repaired schema to PGC_Prompt — bump version, clear error_log",
+        "description": "Write repaired schema to PGC_Prompt \u2014 bump version, clear error_log",
         "input": {
           "tableName": "PGC_Prompt",
           "filters": [
@@ -2039,19 +2039,19 @@
       {
         "step": "11b",
         "type": "notify",
-        "message_template": "✅ *Schema repaired* — `{{input.intentCategory}}` output_schema updated (v{{input.promptVersion}} → v{{input.promptVersionNext}}). Fixed {{gate_payload.violationCount}} violation(s).\n\nPlease retry your workflow.",
+        "message_template": "\u2705 *Schema repaired* \u2014 `{{input.intentCategory}}` output_schema updated (v{{input.promptVersion}} \u2192 v{{input.promptVersionNext}}). Fixed {{gate_payload.violationCount}} violation(s).\n\nPlease retry your workflow.",
         "on_success": "end"
       },
       {
         "step": "12",
         "type": "notify",
-        "message_template": "ℹ️ `{{input.intentCategory}}` output_schema has no R1–R7 violations.\n\nKnown causes of HTTP 400 when no schema violations are found:\n• *Wrong model* — check `PGC_Prompt.model` is `anthropic/claude-sonnet-4-5` or `perplexity/sonar`\n• *response_format sent to non-sonar model* — check `llm-client.mjs` has the `isSonar` guard deployed\n\nCheck CloudWatch logs for the exact request body.",
+        "message_template": "\u2139\ufe0f `{{input.intentCategory}}` output_schema has no R1\u2013R7 violations.\n\nKnown causes of HTTP 400 when no schema violations are found:\n\u2022 *Wrong model* \u2014 check `PGC_Prompt.model` is `anthropic/claude-sonnet-4-5` or `perplexity/sonar`\n\u2022 *response_format sent to non-sonar model* \u2014 check `llm-client.mjs` has the `isSonar` guard deployed\n\nCheck CloudWatch logs for the exact request body.",
         "on_success": "end"
       },
       {
         "step": "13",
         "type": "notify",
-        "message_template": "❌ *Schema repair failed* — could not write repaired schema for `{{input.intentCategory}}`. Check CloudWatch logs. The original schema is unchanged.",
+        "message_template": "\u274c *Schema repair failed* \u2014 could not write repaired schema for `{{input.intentCategory}}`. Check CloudWatch logs. The original schema is unchanged.",
         "on_success": "end"
       },
       {
@@ -2063,7 +2063,7 @@
   {
     "name": "ping_core",
     "domain": null,
-    "description": "Slack UI integration test workflow. Exercises all human_gate types (choice, text_input, review_object, reveal), modal special_button, js_transform validation, condition routing, follow-up prompt, and notify. Self-directing — each step instructs the user exactly what to click or type, and validates the response before proceeding. Launched by /ping core.",
+    "description": "Slack UI integration test workflow. Exercises all human_gate types (choice, text_input, review_object, reveal), modal special_button, js_transform validation, condition routing, follow-up prompt, and notify. Self-directing \u2014 each step instructs the user exactly what to click or type, and validates the response before proceeding. Launched by /ping core.",
     "state_strategy": "sequential",
     "intent_keywords": [],
     "steps": [
@@ -2071,7 +2071,7 @@
         "step": "1",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do, and will verify your response before proceeding.\n\nTests:\n  1. Choice gate — click the correct button\n  2. Text input — single-line\n  3. Multiline input — multiline\n  4. Modal via button — special_button modal trigger\n  5. Text input special button — Skip routes without text\n  6. Reveal gate — show definition button\n  7. Review object — structured data display\n  8. Condition step — routing test\n  9. Follow-up button — ask follow-up modal\n  10. Notify — completion message\n\nClick Start to begin.",
+        "message_template": "Slack UI Integration Test\n\nThis workflow tests all dialog types in sequence. Each step will instruct you exactly what to do, and will verify your response before proceeding.\n\nTests:\n  1. Choice gate \u2014 click the correct button\n  2. Text input \u2014 single-line\n  3. Multiline input \u2014 multiline\n  4. Modal via button \u2014 special_button modal trigger\n  5. Text input special button \u2014 Skip routes without text\n  6. Reveal gate \u2014 show definition button\n  7. Review object \u2014 structured data display\n  8. Condition step \u2014 routing test\n  9. Follow-up button \u2014 ask follow-up modal\n  10. Notify \u2014 completion message\n\nClick Start to begin.",
         "options": [
           {
             "value": "start",
@@ -2094,7 +2094,7 @@
         "step": "2",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 1 of 10 — Choice Gate\n\nCHOICE GATE TEST: Three buttons are shown below. Only one is correct.\n\nClick the button labelled B.",
+        "message_template": "Test 1 of 10 \u2014 Choice Gate\n\nCHOICE GATE TEST: Three buttons are shown below. Only one is correct.\n\nClick the button labelled B.",
         "output_key": "ping_choice",
         "options": [
           {
@@ -2106,7 +2106,7 @@
           {
             "value": "b",
             "label": "B",
-            "description": "Click here — this is the correct button.",
+            "description": "Click here \u2014 this is the correct button.",
             "on_select": "step:3"
           },
           {
@@ -2130,7 +2130,7 @@
         "step": "2e",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong button — you clicked {{ping_choice}} but the correct button was B.\n\nClick Try Again to repeat the test.",
+        "message_template": "Wrong button \u2014 you clicked {{ping_choice}} but the correct button was B.\n\nClick Try Again to repeat the test.",
         "options": [
           {
             "label": "Try Again",
@@ -2150,7 +2150,7 @@
         "step": "3",
         "type": "human_gate",
         "gate_type": "text_input",
-        "message_template": "Test 2 of 10 — Single-Line Text Input\n\nTEXT INPUT TEST: Click *Open Text Input* below. A single-line modal will open.\n\nIn the modal, type exactly:  Hello World\n\nThen click Submit in the modal.",
+        "message_template": "Test 2 of 10 \u2014 Single-Line Text Input\n\nTEXT INPUT TEST: Click *Open Text Input* below. A single-line modal will open.\n\nIn the modal, type exactly:  Hello World\n\nThen click Submit in the modal.",
         "output_key": "ping_text",
         "options": [
           {
@@ -2189,7 +2189,7 @@
         "step": "3e",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong input — you entered '{{ping_text}}' but the expected value was 'Hello World'.\n\nClick Try Again to repeat the test.",
+        "message_template": "Wrong input \u2014 you entered '{{ping_text}}' but the expected value was 'Hello World'.\n\nClick Try Again to repeat the test.",
         "options": [
           {
             "label": "Try Again",
@@ -2209,7 +2209,7 @@
         "step": "4",
         "type": "human_gate",
         "gate_type": "text_input",
-        "message_template": "Test 3 of 10 — Multiline Text Input\n\nType exactly these three lines in the field below, then click Submit:",
+        "message_template": "Test 3 of 10 \u2014 Multiline Text Input\n\nType exactly these three lines in the field below, then click Submit:",
         "output_key": "ping_multiline",
         "multiline": true,
         "options": [
@@ -2250,7 +2250,7 @@
         "step": "4e",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong input — the multiline text did not match expected content.\n\nYou entered:\n{{ping_multiline}}\n\nExpected all three lines:\n  Line 1: This is a test\n  Line 2: Of multiline input\n  Line 3: Working correctly\n\nClick Try Again to repeat the test.",
+        "message_template": "Wrong input \u2014 the multiline text did not match expected content.\n\nYou entered:\n{{ping_multiline}}\n\nExpected all three lines:\n  Line 1: This is a test\n  Line 2: Of multiline input\n  Line 3: Working correctly\n\nClick Try Again to repeat the test.",
         "options": [
           {
             "label": "Try Again",
@@ -2270,7 +2270,7 @@
         "step": "5",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 4 of 10 — Modal via special_button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
+        "message_template": "Test 4 of 10 \u2014 Modal via special_button\n\nMODAL BUTTON TEST: Click Open Modal below. A Slack modal dialog will appear.\n\nIn the modal, type exactly:  Modal Works\n\nThen click Submit in the modal.",
         "output_key": "ping_modal",
         "options": [],
         "special_buttons": [
@@ -2316,7 +2316,7 @@
         "step": "5e",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong input — you entered '{{ping_modal}}' but the expected value was 'Modal Works'.\n\nClick Try Again to repeat the test.",
+        "message_template": "Wrong input \u2014 you entered '{{ping_modal}}' but the expected value was 'Modal Works'.\n\nClick Try Again to repeat the test.",
         "options": [
           {
             "label": "Try Again",
@@ -2337,7 +2337,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "Test text_input with Skip special_button. Verifies that special_buttons render and route independently from Submit on text_input gate types.",
-        "message_template": "Test 5 of 10 — Text Input Special Button\n\nSPECIAL BUTTON TEST: An inline text field appears below alongside a *Skip* button.\n\nDo NOT type anything and do NOT click Submit. Click *Skip* — this verifies that a special_button on a text_input gate routes without requiring text input.",
+        "message_template": "Test 5 of 10 \u2014 Text Input Special Button\n\nSPECIAL BUTTON TEST: An inline text field appears below alongside a *Skip* button.\n\nDo NOT type anything and do NOT click Submit. Click *Skip* \u2014 this verifies that a special_button on a text_input gate routes without requiring text input.",
         "output_key": "ping_text_special",
         "multiline": false,
         "options": [
@@ -2367,7 +2367,7 @@
         "step": "5be",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong button — this test requires clicking *Skip*, not Submit.\n\nThe Skip special_button should appear in the actions row alongside Submit. Click Try Again.",
+        "message_template": "Wrong button \u2014 this test requires clicking *Skip*, not Submit.\n\nThe Skip special_button should appear in the actions row alongside Submit. Click Try Again.",
         "options": [
           {
             "label": "Try Again",
@@ -2387,7 +2387,7 @@
         "step": "6r",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 6 of 10 — Reveal Gate\n\nREVEAL GATE TEST: The definition is shown below. Pick the correct answer.",
+        "message_template": "Test 6 of 10 \u2014 Reveal Gate\n\nREVEAL GATE TEST: The definition is shown below. Pick the correct answer.",
         "reveal": {
           "button_label": "Show Definition",
           "content": "A *workflow* is a reusable sequence of declarative steps stored in PGC_Workflow. The engine executes it without calling an LLM once it is saved."
@@ -2427,7 +2427,7 @@
         "step": "6re",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong answer — you selected '{{ping_reveal}}'. Click *Show Definition* to read the definition again, then pick the correct answer.\n\nClick Try Again.",
+        "message_template": "Wrong answer \u2014 you selected '{{ping_reveal}}'. Click *Show Definition* to read the definition again, then pick the correct answer.\n\nClick Try Again.",
         "options": [
           {
             "label": "Try Again",
@@ -2448,7 +2448,7 @@
         "type": "js_transform",
         "description": "Build review summary from all collected test results.",
         "input_key": "ping_text",
-        "expression": "(function(){ return { 'Test 1 - Choice': 'PASS — clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS — entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS — ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS — entered: ' + (local_state.ping_modal || ''), 'Test 5 - Text input special button': 'PASS — skip routed', 'Test 6 - Reveal gate': 'PASS — selected: ' + (local_state.ping_reveal || '?'), 'Tests 7-10': 'Pending — review object, condition, follow-up, notify' }; })()",
+        "expression": "(function(){ return { 'Test 1 - Choice': 'PASS \u2014 clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS \u2014 entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS \u2014 ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS \u2014 entered: ' + (local_state.ping_modal || ''), 'Test 5 - Text input special button': 'PASS \u2014 skip routed', 'Test 6 - Reveal gate': 'PASS \u2014 selected: ' + (local_state.ping_reveal || '?'), 'Tests 7-10': 'Pending \u2014 review object, condition, follow-up, notify' }; })()",
         "output_key": "ping_summary",
         "on_success": "next",
         "on_failure": "cancel"
@@ -2457,7 +2457,7 @@
         "step": "7",
         "type": "human_gate",
         "gate_type": "review_object",
-        "message_template": "Test 7 of 10 — Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
+        "message_template": "Test 7 of 10 \u2014 Review Object\n\nREVIEW OBJECT TEST: Verify the test results collected so far appear correctly below, then click Confirm.",
         "context_key": "ping_summary",
         "options": [
           {
@@ -2478,7 +2478,7 @@
         "step": "8p",
         "type": "human_gate",
         "gate_type": "choice",
-        "message_template": "Test 8 of 10 — Condition Step\n\nCONDITION ROUTING TEST: Pick True or False below. The engine will convert your choice to a boolean and route to the matching confirmation path. Both paths converge at step 9.\n\nPick whichever you like — both pass this test.",
+        "message_template": "Test 8 of 10 \u2014 Condition Step\n\nCONDITION ROUTING TEST: Pick True or False below. The engine will convert your choice to a boolean and route to the matching confirmation path. Both paths converge at step 9.\n\nPick whichever you like \u2014 both pass this test.",
         "output_key": "ping_condition_input",
         "options": [
           {
@@ -2526,7 +2526,7 @@
         "step": "8y",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "TRUE path confirmed — condition routing worked correctly.\n\nYou picked True and the condition routed to the truthy branch. Click Continue.",
+        "message_template": "TRUE path confirmed \u2014 condition routing worked correctly.\n\nYou picked True and the condition routed to the truthy branch. Click Continue.",
         "options": [
           {
             "label": "Continue",
@@ -2546,7 +2546,7 @@
         "step": "8n",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "FALSE path confirmed — condition routing worked correctly.\n\nYou picked False and the condition routed to the falsy branch. Click Continue.",
+        "message_template": "FALSE path confirmed \u2014 condition routing worked correctly.\n\nYou picked False and the condition routed to the falsy branch. Click Continue.",
         "options": [
           {
             "label": "Continue",
@@ -2566,7 +2566,7 @@
         "step": "9f",
         "type": "human_gate",
         "gate_type": "followup_prompt",
-        "message_template": "Test 9 of 10 — Follow-up Button\n\nFOLLOW-UP BUTTON TEST: Click *Ask follow-up* below — a modal will open.\n\nIn the modal, type exactly:  follow-up works\n\nThen click Ask in the modal.",
+        "message_template": "Test 9 of 10 \u2014 Follow-up Button\n\nFOLLOW-UP BUTTON TEST: Click *Ask follow-up* below \u2014 a modal will open.\n\nIn the modal, type exactly:  follow-up works\n\nThen click Ask in the modal.",
         "output_key": "ping_followup",
         "options": [],
         "special_buttons": [
@@ -2601,7 +2601,7 @@
         "step": "9fe",
         "type": "human_gate",
         "gate_type": "confirm",
-        "message_template": "Wrong input — you entered '{{ping_followup}}' but the expected value was 'follow-up works'.\n\nClick Try Again to repeat the test.",
+        "message_template": "Wrong input \u2014 you entered '{{ping_followup}}' but the expected value was 'follow-up works'.\n\nClick Try Again to repeat the test.",
         "options": [
           {
             "label": "Try Again",
@@ -2620,7 +2620,7 @@
       {
         "step": "9",
         "type": "notify",
-        "message_template": "Test 10 of 10 — Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Text input special button: PASS (skip routed)\n- Reveal gate: PASS (selected {{ping_reveal}})\n- Review object: PASS\n- Condition step: PASS ({{ping_condition_input}} path confirmed)\n- Follow-up button: PASS (entered {{ping_followup}})\n- Notify step: PASS (this message)\n\nAll 10 dialog types verified.",
+        "message_template": "Test 10 of 10 \u2014 Notify\n\nSlack UI integration tests complete.\n\nResults:\n- Choice gate: PASS (clicked {{ping_choice}})\n- Text input: PASS (entered {{ping_text}})\n- Multiline input: PASS\n- Modal button: PASS (entered {{ping_modal}})\n- Text input special button: PASS (skip routed)\n- Reveal gate: PASS (selected {{ping_reveal}})\n- Review object: PASS\n- Condition step: PASS ({{ping_condition_input}} path confirmed)\n- Follow-up button: PASS (entered {{ping_followup}})\n- Notify step: PASS (this message)\n\nAll 10 dialog types verified.",
         "notify_type": "HUMAN_NOTIFICATION",
         "on_success": "end"
       },
