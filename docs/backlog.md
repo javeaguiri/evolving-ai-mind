@@ -46,6 +46,7 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 | Item | Notes |
 |---|---|
+| `PGC_Prompt.input_probe` column | Add `input_probe jsonb nullable` to `PGC_Prompt`. Steps: (1) `POST /api/v1/serv/table/addColumn` with `tableName: "PGC_Prompt", columnName: "input_probe", type: "jsonb", nullable: true` (also registers the column in `PGC_Schema`). (2) Add an `input_probe` object to each row in `seed_PGC_Prompt.json` — the canonical test input exercising that prompt's required variables. (3) Run `node dev_scripts/upsert-prompt.mjs`. Why: gives simulation, `/troubleshoot`, and dev scripts a stable probe input per prompt without constructing one ad-hoc; enables automated prompt regression testing. |
 | `domain: null` on `create_workflow` runs | `input.domain` is null throughout — intent preprocessor passes only `userInput`. Fix: resolve domain before CREATE_WORKFLOW SQS dispatch and inject `domain_schema` into `research_workflow_domain` input |
 | `research_workflow_domain` receives no domain schema | Prompt only receives `workflow_description` and `domain` (the latter is null). Without schema context the right brain cannot surface domain-specific preference questions. Fix: add `domain_schema` as an input variable |
 | `fix_workflow_steps` prompt text says "complete array" | Prompt still instructs LLM to return the full corrected step array. Should say "return only the steps you changed". Reduces output tokens, eliminates risk of unrequested steps |
