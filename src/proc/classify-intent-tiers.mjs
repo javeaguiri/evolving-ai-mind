@@ -458,6 +458,12 @@ export function resolveTier3Route(intentCategory) {
   if (/create.workflow|new.workflow/i.test(intentCategory)) {
     return { sqsType: 'CREATE_WORKFLOW', notifyText: null };
   }
+  if (/delete.domain|remove.domain/i.test(intentCategory)) {
+    return { sqsType: 'DELETE_DOMAIN', notifyText: null };
+  }
+  if (/delete.workflow|remove.workflow/i.test(intentCategory)) {
+    return { sqsType: 'DELETE_WORKFLOW', notifyText: null };
+  }
   return {
     sqsType:    'HUMAN_NOTIFICATION',
     notifyText: 'I understood this but have no workflow for it yet. Use /create-workflow to build one.',

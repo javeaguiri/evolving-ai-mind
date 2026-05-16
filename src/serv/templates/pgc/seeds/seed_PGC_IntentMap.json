@@ -10,6 +10,16 @@
     "action_type": "heavy_lift"
   },
   {
+    "pattern": "delete.domain|remove.domain",
+    "intent_category": "delete_domain",
+    "action_type": "heavy_lift"
+  },
+  {
+    "pattern": "delete.workflow|remove.workflow",
+    "intent_category": "delete_workflow",
+    "action_type": "heavy_lift"
+  },
+  {
     "pattern": "list.domains|show.domains",
     "intent_category": "list_domains",
     "action_type": "crud"

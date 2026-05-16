@@ -522,28 +522,33 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
       return;
     }
 
-    // For CREATE_WORKFLOW: Pass 1 matched the heavy_lift intent_category but did
-    // not run Pass 2 alias lookup, so result.domain is null even when userInput
-    // contains a recognisable domain (e.g. "create workflow Spanish vocabulary quiz"
-    // → domain "spanish_flashcards"). Run alias lookup now so create-workflow.mjs
-    // receives input.domain populated and its serv_query schema load works correctly.
-    // CREATE_DOMAIN does the same — it creates the domain from scratch, so domain
-    // is always null there, but we pass null explicitly rather than guessing.
+    // For CREATE_WORKFLOW and DELETE_DOMAIN: Pass 1 matched the heavy_lift
+    // intent_category but did not run Pass 2 alias lookup, so result.domain is null
+    // even when userInput contains a recognisable domain. Run alias lookup now.
+    // CREATE_DOMAIN creates the domain from scratch — domain is always null there.
+    // DELETE_WORKFLOW: strip the verb prefix to extract the workflow name.
     let domain = result.domain ?? null;
-    if (sqsType === 'CREATE_WORKFLOW' && !domain && domainRows?.length) {
+    if ((sqsType === 'CREATE_WORKFLOW' || sqsType === 'DELETE_DOMAIN') && !domain && domainRows?.length) {
       const domainMatch = matchDomainAlias(userInput, domainRows);
       domain = domainMatch?.domain ?? null;
       if (domain) {
-        console.info('classify-intent: CREATE_WORKFLOW domain resolved from alias lookup', {
+        console.info(`classify-intent: ${sqsType} domain resolved from alias lookup`, {
           domain, traceId,
         });
       }
+    }
+
+    let name = null;
+    if (sqsType === 'DELETE_WORKFLOW') {
+      const stripped = userInput.replace(/^(?:delete|remove)\s+(?:workflow|wf)\s*/i, '').trim();
+      name = stripped || null;
     }
 
     await enqueueWorkflow({
       type:      sqsType,
       userInput,
       domain,
+      ...(name !== null ? { name } : {}),
       traceId,
       callback,
     });
