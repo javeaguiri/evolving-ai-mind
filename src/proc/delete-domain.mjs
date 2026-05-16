@@ -21,11 +21,9 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK imports.
 // req.source determines response path only.
 
-import { ok, err }         from '../shared/lambda-utils.mjs';
-import { enqueueCallback } from '../shared/sqs-callback.mjs';
-import { getRows }         from '../shared/serv-client.mjs';
-
-const SERV_URL = process.env.SERV_API_URL;
+import { ok, err }                    from '../shared/lambda-utils.mjs';
+import { enqueueCallback }            from '../shared/sqs-callback.mjs';
+import { getRows, deleteRows, servPost } from '../shared/serv-client.mjs';
 
 export async function handle(req) {
   const { domain } = req.body ?? {};
@@ -90,7 +88,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // --- Step 2: Drop each PGD table ---
   // serv/schema/deleteTable handles: DROP TABLE CASCADE + PGC_Schema row + PGC_TableMap row
   for (const tableName of tableNames) {
-    const resp = await servPost('/api/v1/serv/schema/deleteTable', { tableName }, traceId);
+    const resp = await servPost('/api/v1/serv/schema/deleteTable', { tableName });
     if (!resp.success) {
       console.warn('delete-domain: deleteTable failed (continuing)', { tableName, error: resp.error, traceId });
     } else {
@@ -104,10 +102,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // still exist. The old root_table IN filter was unreliable when tableNames was empty.
   // PGC_TableMap.allow_delete must be true for PGC_EntitySchema (set in seed).
   let deletedEntityCount = 0;
-  const entityResp = await servPost('/api/v1/serv/table/deleteRows', {
-    tableName: 'PGC_EntitySchema',
-    filters:   [{ column: 'domain', op: 'eq', value: domain }],
-  }, traceId);
+  const entityResp = await deleteRows('PGC_EntitySchema', [{ column: 'domain', op: 'eq', value: domain }]);
 
   if (!entityResp.success) {
     console.warn('delete-domain: PGC_EntitySchema delete failed', { domain, error: entityResp.error, traceId });
@@ -120,10 +115,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // Needed to filter PGC_WorkflowRun and PGC_WorkflowRunStep by workflow before
   // deleting the workflow rows themselves.
   let workflowIds = [];
-  const workflowIdResp = await servPost('/api/v1/serv/table/getRows', {
-    tableName: 'PGC_Workflow',
-    filters:   [{ column: 'domain', op: 'eq', value: domain }],
-  }, traceId);
+  const workflowIdResp = await getRows('PGC_Workflow', [{ column: 'domain', op: 'eq', value: domain }]);
 
   if (workflowIdResp.success && workflowIdResp.count > 0) {
     workflowIds = workflowIdResp.rows.map(r => r.id);
@@ -136,20 +128,14 @@ async function runDeleteDomain({ domain, traceId }) {
   // PGC_TableMap.allow_delete must be true for PGC_WorkflowRunStep.
   let deletedRunStepCount = 0;
   if (workflowIds.length > 0) {
-    const runIdResp = await servPost('/api/v1/serv/table/getRows', {
-      tableName: 'PGC_WorkflowRun',
-      filters:   [{ column: 'workflow_id', op: 'in', value: workflowIds }],
-    }, traceId);
+    const runIdResp = await getRows('PGC_WorkflowRun', [{ column: 'workflow_id', op: 'in', value: workflowIds }]);
 
     const runIds = (runIdResp.success && runIdResp.count > 0)
       ? runIdResp.rows.map(r => r.id)
       : [];
 
     if (runIds.length > 0) {
-      const runStepResp = await servPost('/api/v1/serv/table/deleteRows', {
-        tableName: 'PGC_WorkflowRunStep',
-        filters:   [{ column: 'run_id', op: 'in', value: runIds }],
-      }, traceId);
+      const runStepResp = await deleteRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'in', value: runIds }]);
 
       if (!runStepResp.success) {
         console.warn('delete-domain: PGC_WorkflowRunStep delete failed', { domain, error: runStepResp.error, traceId });
@@ -167,10 +153,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // PGC_TableMap.allow_delete must be true for PGC_WorkflowRun.
   let deletedRunCount = 0;
   if (workflowIds.length > 0) {
-    const runResp = await servPost('/api/v1/serv/table/deleteRows', {
-      tableName: 'PGC_WorkflowRun',
-      filters:   [{ column: 'workflow_id', op: 'in', value: workflowIds }],
-    }, traceId);
+    const runResp = await deleteRows('PGC_WorkflowRun', [{ column: 'workflow_id', op: 'in', value: workflowIds }]);
 
     if (!runResp.success) {
       console.warn('delete-domain: PGC_WorkflowRun delete failed', { domain, error: runResp.error, traceId });
@@ -186,10 +169,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // Must be deleted before PGC_IntentMap (FK constraint: workflow_id → PGC_Workflow.id).
   // PGC_TableMap.allow_delete must be true for PGC_Workflow (set in seed).
   let deletedWorkflowCount = 0;
-  const workflowResp = await servPost('/api/v1/serv/table/deleteRows', {
-    tableName: 'PGC_Workflow',
-    filters:   [{ column: 'domain', op: 'eq', value: domain }],
-  }, traceId);
+  const workflowResp = await deleteRows('PGC_Workflow', [{ column: 'domain', op: 'eq', value: domain }]);
 
   if (!workflowResp.success) {
     console.warn('delete-domain: PGC_Workflow delete failed', { domain, error: workflowResp.error, traceId });
@@ -205,10 +185,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // Matching on pattern LIKE '%<domain>%' correctly targets all five rows.
   // PGC_TableMap.allow_delete must be true for PGC_IntentMap (set in seed).
   let deletedIntentCount = 0;
-  const intentResp = await servPost('/api/v1/serv/table/deleteRows', {
-    tableName: 'PGC_IntentMap',
-    filters:   [{ column: 'pattern', op: 'like', value: `%${domain}%` }],
-  }, traceId);
+  const intentResp = await deleteRows('PGC_IntentMap', [{ column: 'pattern', op: 'like', value: `%${domain}%` }]);
 
   if (!intentResp.success) {
     console.warn('delete-domain: PGC_IntentMap delete failed', { domain, error: intentResp.error, traceId });
@@ -219,10 +196,7 @@ async function runDeleteDomain({ domain, traceId }) {
 
   // --- Step 6: Remove PGC_DomainHelp row ---
   // PGC_TableMap.allow_delete must be true for PGC_DomainHelp (set in seed).
-  const domainHelpResp = await servPost('/api/v1/serv/table/deleteRows', {
-    tableName: 'PGC_DomainHelp',
-    filters:   [{ column: 'domain', op: 'eq', value: domain }],
-  }, traceId);
+  const domainHelpResp = await deleteRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }]);
 
   let domainHelpRemoved = false;
   if (!domainHelpResp.success) {
@@ -268,19 +242,3 @@ async function runDeleteDomain({ domain, traceId }) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// SERV HTTP client (proc→serv rule, Section 3.5a)
-// ---------------------------------------------------------------------------
-
-async function servPost(path, body, traceId) {
-  try {
-    const resp = await fetch(`${SERV_URL}${path}`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-correlation-id': traceId },
-      body:    JSON.stringify(body),
-    });
-    return await resp.json();
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-}
