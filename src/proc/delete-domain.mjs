@@ -27,12 +27,10 @@ import { getRows, deleteRows, servPost } from '../shared/serv-client.mjs';
 
 export async function handle(req) {
   const rawDomain = (req.body?.domain ?? '').trim();
-  // Normalise user-supplied domain: "Spanish flashcards" → "spanish_flashcards"
-  const domain   = rawDomain.toLowerCase().replace(/\s+/g, '_');
-  const callback = req.callback ?? req.body?.callback ?? null;
-  const traceId  = req.traceId ?? req.correlationId;
+  const callback  = req.callback ?? req.body?.callback ?? null;
+  const traceId   = req.traceId ?? req.correlationId;
 
-  if (!domain) {
+  if (!rawDomain) {
     if (req.source === 'sqs' && callback) {
       await enqueueCallback(callback, {
         type:    'HUMAN_NOTIFICATION',
@@ -43,6 +41,11 @@ export async function handle(req) {
     }
     return err(400, 'domain is required', req.correlationId);
   }
+
+  // Resolve raw user input to canonical domain key via alias match + pgvector.
+  // "Spanish flashcards" → "spanish_flashcards" without hard-coded normalisation.
+  const domain = await resolveDomainName(rawDomain, traceId);
+  console.info('delete-domain: resolved domain', { rawDomain, domain, traceId });
 
   try {
     const result = await runDeleteDomain({ domain, traceId });
@@ -61,6 +64,42 @@ export async function handle(req) {
     if (req.source === 'http') return err(500, `delete-domain failed: ${error.message}`, req.correlationId);
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Domain resolution — alias match + pgvector fallback
+// ---------------------------------------------------------------------------
+
+const DOMAIN_SIMILARITY_THRESHOLD = 0.40;
+
+async function resolveDomainName(rawDomain, traceId) {
+  // Step 1: exact match or alias scan against PGC_DomainHelp rows
+  const domainResp = await getRows('PGC_DomainHelp');
+  if (domainResp.success && domainResp.rows?.length) {
+    const input = rawDomain.toLowerCase();
+    for (const row of domainResp.rows) {
+      if (input === row.domain.toLowerCase()) return row.domain;
+      const aliases = Array.isArray(row.aliases) ? row.aliases : [];
+      if (aliases.some(a => input.includes(a.toLowerCase()))) return row.domain;
+    }
+  }
+
+  // Step 2: pgvector semantic match — same threshold as classify-intent
+  const vectorResp = await getRows('PGC_DomainHelp', [], null, 1, {
+    column:    'embedding',
+    queryText: rawDomain,
+    threshold: DOMAIN_SIMILARITY_THRESHOLD,
+    limit:     1,
+  });
+  if (vectorResp.success && vectorResp.rows?.length) {
+    console.info('delete-domain: domain resolved via pgvector', {
+      rawDomain, domain: vectorResp.rows[0].domain, similarity: vectorResp.rows[0].similarity, traceId,
+    });
+    return vectorResp.rows[0].domain;
+  }
+
+  // Step 3: return raw input as-is — runDeleteDomain will report domain-absent
+  return rawDomain;
 }
 
 // ---------------------------------------------------------------------------
