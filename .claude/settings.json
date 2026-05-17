@@ -14,7 +14,7 @@
       "Bash(git push origin main*)",
       "Bash(sam build*)",
       "Bash(sam deploy --no-confirm-changeset*)",
-      "Bash(aws logs tail *)"
+      "Bash(aws logs *)"
     ]
   }
 }
