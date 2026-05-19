@@ -1245,5 +1245,6 @@ function resolveNextAction(onSuccess, _localState) {
   if (onSuccess === 'end')               return 'end';
   if (onSuccess === 'cancel')            return 'cancel';
   if (onSuccess.startsWith('step:'))     return onSuccess;
-  return 'next';
+  // Bare step key — pass through so resolveNextStep can handle the direct jump.
+  return onSuccess;
 }

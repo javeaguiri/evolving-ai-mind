@@ -2436,7 +2436,7 @@
   },
   {
     "intent_category": "research_domain_schema",
-    "version": 4,
+    "version": 5,
     "model": "anthropic/claude-haiku-4-5",
     "description": "RIGHT BRAIN — researches data-modelling best practices for a new domain and surfaces structural preference questions before schema design.",
     "input_variables": [
@@ -2514,6 +2514,7 @@
             "required": [
               "id",
               "question",
+              "rationale",
               "affects",
               "default",
               "options"
@@ -2526,6 +2527,10 @@
               },
               "question": {
                 "type": "string"
+              },
+              "rationale": {
+                "type": "string",
+                "description": "One sentence explaining why this is a user decision rather than an automatic choice"
               },
               "affects": {
                 "type": "string"
@@ -2565,6 +2570,185 @@
     "probe_input": {
       "user_input": "stock portfolio"
     },
-    "prompt_text": "You are the right brain of evolving-mind-ai -- a schema research agent. Your job is to research data-modelling best practices for a new domain BEFORE the schema is designed, and surface the small number of structural decisions the user must make.\n\nThe user wants to create a new data domain. Their description is: \"{{user_input}}\"\n\nFrom this description, research:\n1. Canonical table structures and normalization patterns for this domain\n2. Common design pitfalls and how to avoid them\n3. Industry-standard fields, naming conventions, and relationships\n4. Structural decisions where different choices produce meaningfully different schemas\n\nYour output has two parts:\n\nFINDINGS -- design decisions where best practice is clear. Record these so the left brain can implement them without guessing.\nGood finding topics: normalization level, audit trail requirements, time-series vs snapshot patterns, standard lookup tables.\n\nPREFERENCE QUESTIONS -- structural choices where different answers produce meaningfully different table structures. The user must choose.\nBefore adding a question, apply ALL four tests:\n1. Would different answers produce different tables or columns? If no -- skip it.\n2. Is this a structural schema decision (not a UI or workflow preference)? If no -- skip it.\n3. Can a reasonable default be inferred from the domain description? If yes -- put it in findings instead.\n4. Is this answerable by selecting one of 2-4 options (not open-ended)? If no -- skip it.\n\nMAX 3 preference_questions. Fewer is better. Zero is valid.\n\nNever ask:\n- What columns or fields to include (infer from best practice and put in findings)\n- What data types to use (these follow from the column purpose)\n- How to name tables (use the domain description and PGD_ convention)\n- Anything answerable from the domain description alone\n\nReturn ONLY a valid JSON object -- no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<short label for this design decision>\",\n      \"what_is_known\": \"<what best practice says about this topic>\",\n      \"options\": [\n        {\n          \"label\": \"<short option name>\",\n          \"description\": \"<one sentence: what this option means structurally>\",\n          \"tradeoffs\": \"<one sentence: the main trade-off of choosing this>\"\n        }\n      ],\n      \"recommendation\": \"<which option best practice recommends>\",\n      \"rationale\": \"<one sentence: why>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_identifier>\",\n      \"question\": \"<the question to ask the user>\",\n      \"affects\": \"<which tables or columns this decision affects>\",\n      \"default\": \"<snake_case value of the recommended default option>\",\n      \"options\": [\n        {\n          \"label\": \"<short display label>\",\n          \"value\": \"<snake_case_identifier>\",\n          \"description\": \"<one sentence: what this means for the schema>\"\n        }\n      ]\n    }\n  ]\n}\n\nCRITICAL FIELD RULES -- read before generating output:\n\nROOT OBJECT: must contain ONLY the keys \"findings\" and \"preference_questions\". Do not add any other root-level key such as \"domain_type\", \"summary\", \"domain\", \"category\", or anything else.\n\nFINDINGS items: each item MUST use exactly these keys: \"topic\", \"what_is_known\", \"options\", \"recommendation\", \"rationale\".\n  The required key name is \"topic\" -- not \"decision\", not \"subject\", not \"name\", not \"category\", not \"area\". It is \"topic\".\n\nTWO DIFFERENT options SHAPES -- do not mix them:\n\n  findings[].options items use EXACTLY: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n    The third key is \"tradeoffs\". Do NOT use \"value\" here.\n\n  preference_questions[].options items use EXACTLY: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n    The second key is \"value\". Do NOT use \"tradeoffs\" here.\n\n- preference_questions may be an empty array [] if no structural choices are needed\n- Return ONLY the JSON object, nothing else"
+    "max_output_tokens": null,
+    "prompt_text": "You are the right brain of evolving-mind-ai -- a schema research agent. Your job is to research data-modelling best practices for a new domain BEFORE the schema is designed, and surface the small number of structural decisions the user must make.\n\nThe user wants to create a new data domain. Their description is: \"{{user_input}}\"\n\nFrom this description, research:\n1. Canonical table structures and normalization patterns for this domain\n2. Common design pitfalls and how to avoid them\n3. Industry-standard fields, naming conventions, and relationships\n4. Structural decisions where different choices produce meaningfully different schemas\n\nYour output has two parts:\n\nFINDINGS -- design decisions where best practice is clear. Record these so the left brain can implement them without guessing.\nGood finding topics: normalization level, audit trail requirements, time-series vs snapshot patterns, standard lookup tables.\n\nPREFERENCE QUESTIONS -- structural choices where different answers produce meaningfully different table structures. The user must choose.\nBefore adding a question, apply ALL four tests:\n1. Would different answers produce different tables or columns? If no -- skip it.\n2. Is this a structural schema decision (not a UI or workflow preference)? If no -- skip it.\n3. Can a reasonable default be inferred from the domain description? If yes -- put it in findings instead.\n4. Is this answerable by selecting one of 2-4 options (not open-ended)? If no -- skip it.\n\nMAX 3 preference_questions. Fewer is better. Zero is valid.\n\nNever ask:\n- What columns or fields to include (infer from best practice and put in findings)\n- What data types to use (these follow from the column purpose)\n- How to name tables (use the domain description and PGD_ convention)\n- Anything answerable from the domain description alone\n\nReturn ONLY a valid JSON object -- no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"findings\": [\n    {\n      \"topic\": \"<short label for this design decision>\",\n      \"what_is_known\": \"<what best practice says about this topic>\",\n      \"options\": [\n        {\n          \"label\": \"<short option name>\",\n          \"description\": \"<one sentence: what this option means structurally>\",\n          \"tradeoffs\": \"<one sentence: the main trade-off of choosing this>\"\n        }\n      ],\n      \"recommendation\": \"<which option best practice recommends>\",\n      \"rationale\": \"<one sentence: why>\"\n    }\n  ],\n  \"preference_questions\": [\n    {\n      \"id\": \"<snake_case_identifier>\",\n      \"question\": \"<the question to ask the user>\",\n      \"rationale\": \"<one sentence: why this is a user choice rather than an automatic decision>\",\n      \"affects\": \"<which tables or columns this decision affects>\",\n      \"default\": \"<snake_case value of the recommended default option>\",\n      \"options\": [\n        {\n          \"label\": \"<short display label>\",\n          \"value\": \"<snake_case_identifier>\",\n          \"description\": \"<one sentence: what this means for the schema>\"\n        }\n      ]\n    }\n  ]\n}\n\nCRITICAL FIELD RULES -- read before generating output:\n\nROOT OBJECT: must contain ONLY the keys \"findings\" and \"preference_questions\". Do not add any other root-level key such as \"domain_type\", \"summary\", \"domain\", \"category\", or anything else.\n\nFINDINGS items: each item MUST use exactly these keys: \"topic\", \"what_is_known\", \"options\", \"recommendation\", \"rationale\".\n  The required key name is \"topic\" -- not \"decision\", not \"subject\", not \"name\", not \"category\", not \"area\". It is \"topic\".\n\nTWO DIFFERENT options SHAPES -- do not mix them:\n\n  findings[].options items use EXACTLY: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n    The third key is \"tradeoffs\". Do NOT use \"value\" here.\n\n  preference_questions[].options items use EXACTLY: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n    The second key is \"value\". Do NOT use \"tradeoffs\" here.\n\n- preference_questions may be an empty array [] if no structural choices are needed\n- Return ONLY the JSON object, nothing else"
+  },
+  {
+    "intent_category": "revise_domain_schema",
+    "version": 1,
+    "model": "anthropic/claude-sonnet-4-5",
+    "was_successful": null,
+    "input_variables": [
+      {
+        "name": "user_input",
+        "required": true,
+        "description": "User's original natural language description of the domain"
+      },
+      {
+        "name": "proposed_scaffold",
+        "required": true,
+        "description": "Current proposed schema as JSON object with domain and tables"
+      },
+      {
+        "name": "user_preferences",
+        "required": false,
+        "description": "JSON array of user preference selections from pre-design gates"
+      },
+      {
+        "name": "research_findings",
+        "required": false,
+        "description": "JSON array of research findings from right brain — design decisions resolved by best practice"
+      },
+      {
+        "name": "design_feedback",
+        "required": true,
+        "description": "Free-form feedback from the user describing desired schema changes"
+      }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": [
+        "domain",
+        "tables"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "minLength": 1,
+          "description": "Short lowercase snake_case domain name — must match the original domain"
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "tableName",
+              "target",
+              "description",
+              "columns",
+              "foreignKeys",
+              "constraints",
+              "triggers"
+            ],
+            "properties": {
+              "target": {
+                "type": "string",
+                "const": "pgd"
+              },
+              "columns": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "type"
+                  ],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "type": {
+                      "enum": [
+                        "serial", "bigserial", "text", "varchar", "integer", "bigint",
+                        "smallint", "boolean", "numeric", "decimal", "real", "jsonb",
+                        "timestamptz", "timestamp", "date", "uuid", "vector(1536)"
+                      ],
+                      "type": "string"
+                    },
+                    "unique": { "type": "boolean" },
+                    "default": { "type": "string" },
+                    "nullable": { "type": "boolean" },
+                    "primaryKey": { "type": "boolean" },
+                    "embed_source": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "minItems": 1
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 3
+              },
+              "triggers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "timing", "function"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "timing": {
+                      "enum": ["BEFORE UPDATE", "AFTER UPDATE", "BEFORE INSERT", "AFTER INSERT"],
+                      "type": "string"
+                    },
+                    "function": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              },
+              "tableName": {
+                "type": "string",
+                "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$",
+                "description": "Must start with PGD_ followed by PascalCase"
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type", "name", "columns"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "type": { "enum": ["unique", "check"], "type": "string" },
+                    "columns": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 },
+                      "minItems": 1
+                    },
+                    "expression": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "description": { "type": "string", "minLength": 1 },
+              "foreignKeys": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "column", "references", "onDelete"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "column": { "type": "string", "minLength": 1 },
+                    "onDelete": {
+                      "enum": ["CASCADE", "RESTRICT", "SET NULL", "NO ACTION"],
+                      "type": "string"
+                    },
+                    "references": {
+                      "type": "object",
+                      "required": ["table", "column"],
+                      "properties": {
+                        "table": { "type": "string", "pattern": "^PGD_[A-Z][a-zA-Z0-9]+$" },
+                        "column": { "type": "string", "minLength": 1 }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "maxItems": 6,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "probe_input": {
+      "user_input": "stock portfolio",
+      "proposed_scaffold": "{\"domain\":\"stock_portfolio\",\"tables\":[{\"tableName\":\"PGD_Stock\",\"target\":\"pgd\",\"description\":\"Stocks\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\",\"primaryKey\":true},{\"name\":\"ticker\",\"type\":\"text\"},{\"name\":\"created_at\",\"type\":\"timestamptz\"},{\"name\":\"updated_at\",\"type\":\"timestamptz\"}],\"foreignKeys\":[],\"constraints\":[],\"triggers\":[{\"name\":\"trg_pgd_stock_updated_at\",\"timing\":\"BEFORE UPDATE\",\"function\":\"set_updated_at()\"}]}]}",
+      "design_feedback": "Add a holdings table to track how many shares I own of each stock"
+    },
+    "max_output_tokens": 2000,
+    "prompt_text": "You are the LEFT BRAIN of evolving-mind-ai — a PostgreSQL schema designer. The user has reviewed the proposed schema and requested changes.\n\nOriginal domain description: \"{{user_input}}\"\n\nCURRENT SCHEMA:\n{{proposed_scaffold}}\n\nUSER PREFERENCES (structural decisions the user has already answered — keep these):\n{{user_preferences}}\n\nRESEARCH FINDINGS (best-practice decisions already made — keep these):\n{{research_findings}}\n\nUSER FEEDBACK (apply these changes exactly):\n{{design_feedback}}\n\nApply the user feedback to produce a revised schema. Keep the domain name unchanged. Keep tables and columns that are not affected by the feedback. Apply only the changes the user requested.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"domain\": \"<same snake_case domain name as before>\",\n  \"tables\": [\n    {\n      \"tableName\": \"<PGD_TableName>\",\n      \"target\": \"pgd\",\n      \"description\": \"<what this table stores>\",\n      \"columns\": [\n        { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n        { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n        { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n      ],\n      \"foreignKeys\": [],\n      \"constraints\": [],\n      \"triggers\": [\n        { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n      ]\n    }\n  ]\n}\n\nRules:\n- \"domain\" must be unchanged from the input schema\n- Table names must start with PGD_ followed by PascalCase\n- Column types must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536)\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger with timing BEFORE UPDATE\n- Foreign key \"column\" field is REQUIRED and must be an actual column name in the child table\n- Foreign key \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- Foreign key \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\"\n- Constraint \"name\" field is REQUIRED\n- Check constraint condition MUST use the key \"expression\" — e.g. { \"type\": \"check\", \"name\": \"chk_table_col\", \"columns\": [\"col\"], \"expression\": \"col >= 0 AND col <= 5\" }\n- Tables with no foreign keys must have an empty foreignKeys array: []\n- Tables with no constraints must have an empty constraints array: []\n- This is a single-user system — never add user_id, tenant_id, or FKs to tables outside this domain\n- Generate 2-4 tables appropriate for the domain\n- Return ONLY the JSON object, nothing else"
   }
 ]

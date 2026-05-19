@@ -135,22 +135,28 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
-  it('create_domain step 12 seed carries modal descriptor on add_table option', () => {
-    // Guard: catches any future seed edit that accidentally drops the modal field
+  it('create_domain step 12 is a choice gate with all expected routing options', () => {
+    // Guard: step 12 is the schema review gate — must offer Approve, Request changes, Add a table, Cancel
     const step = getStep('create_domain', '12');
-    const addTableOpt = step.options.find(o => o.action === 'add_table');
-    assert.ok(addTableOpt, 'add_table option must exist on step 12');
-    assert.ok(addTableOpt.modal,                    'modal field must be present');
-    assert.ok(addTableOpt.modal.title,               'modal.title must be present');
-    assert.ok(addTableOpt.modal.input_label,         'modal.input_label must be present');
-    assert.ok(typeof addTableOpt.modal.multiline === 'boolean', 'modal.multiline must be boolean');
+    assert.equal(step.gate_type, 'choice', 'step 12 must be a choice gate');
+    assert.ok(step.reveal, 'step 12 must have a reveal field for the schema overview');
 
-    const localState = { proposed_scaffold: { domain: 'spanish_flashcards', tables: [] } };
-    const dialog = buildDialog(step, localState);
-    const actionsField = dialog.fields.find(f => f.type === 'actions');
-    const btn = actionsField.buttons.find(b => b.action === 'add_table');
-    assert.ok(btn.modal, 'modal must survive buildDialog()');
-    assert.equal(btn.modal.title, addTableOpt.modal.title);
+    const approveOpt = step.options.find(o => o.value === 'approve');
+    assert.ok(approveOpt,                            'approve option must exist');
+    assert.equal(approveOpt.on_select, '15',         'approve must route to step 15');
+
+    const changesOpt = step.options.find(o => o.value === 'request_changes');
+    assert.ok(changesOpt,                            'request_changes option must exist');
+    assert.equal(changesOpt.on_select, '12a',        'request_changes must route to step 12a');
+
+    const addTableOpt = step.options.find(o => o.value === 'add_table');
+    assert.ok(addTableOpt,                           'add_table option must exist');
+    assert.equal(addTableOpt.on_select, '13',        'add_table must route to step 13');
+
+    // Step 12a must be the text_input gate for design feedback
+    const step12a = getStep('create_domain', '12a');
+    assert.equal(step12a.gate_type, 'text_input',    'step 12a must be a text_input gate');
+    assert.equal(step12a.output_key, 'design_feedback', 'step 12a must write to design_feedback');
   });
 });
 
