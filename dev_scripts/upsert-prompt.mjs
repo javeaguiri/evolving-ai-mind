@@ -106,6 +106,7 @@ function fingerprint(entry) {
     entry.model ?? '',
     JSON.stringify(sortKeys(entry.output_schema ?? null)),
     JSON.stringify(sortKeys(entry.input_variables ?? null)),
+    String(entry.max_output_tokens ?? ''),
   ].join('\x00');
   return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }

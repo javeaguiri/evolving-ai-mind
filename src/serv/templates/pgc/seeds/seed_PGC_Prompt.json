@@ -1,7 +1,7 @@
 [
   {
     "intent_category": "create_domain",
-    "version": 8,
+    "version": 9,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -253,7 +253,7 @@
     "probe_input": {
       "userInput": "golf scores"
     },
-    "max_output_tokens": 2000
+    "max_output_tokens": 4000
   },
   {
     "intent_category": "design_table",
@@ -2575,7 +2575,7 @@
   },
   {
     "intent_category": "revise_domain_schema",
-    "version": 1,
+    "version": 2,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -2748,7 +2748,7 @@
       "proposed_scaffold": "{\"domain\":\"stock_portfolio\",\"tables\":[{\"tableName\":\"PGD_Stock\",\"target\":\"pgd\",\"description\":\"Stocks\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\",\"primaryKey\":true},{\"name\":\"ticker\",\"type\":\"text\"},{\"name\":\"created_at\",\"type\":\"timestamptz\"},{\"name\":\"updated_at\",\"type\":\"timestamptz\"}],\"foreignKeys\":[],\"constraints\":[],\"triggers\":[{\"name\":\"trg_pgd_stock_updated_at\",\"timing\":\"BEFORE UPDATE\",\"function\":\"set_updated_at()\"}]}]}",
       "design_feedback": "Add a holdings table to track how many shares I own of each stock"
     },
-    "max_output_tokens": 2000,
+    "max_output_tokens": 4000,
     "prompt_text": "You are the LEFT BRAIN of evolving-mind-ai — a PostgreSQL schema designer. The user has reviewed the proposed schema and requested changes.\n\nOriginal domain description: \"{{user_input}}\"\n\nCURRENT SCHEMA:\n{{proposed_scaffold}}\n\nUSER PREFERENCES (structural decisions the user has already answered — keep these):\n{{user_preferences}}\n\nRESEARCH FINDINGS (best-practice decisions already made — keep these):\n{{research_findings}}\n\nUSER FEEDBACK (apply these changes exactly):\n{{design_feedback}}\n\nApply the user feedback to produce a revised schema. Keep the domain name unchanged. Keep tables and columns that are not affected by the feedback. Apply only the changes the user requested.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\nThe JSON must match this exact shape:\n\n{\n  \"domain\": \"<same snake_case domain name as before>\",\n  \"tables\": [\n    {\n      \"tableName\": \"<PGD_TableName>\",\n      \"target\": \"pgd\",\n      \"description\": \"<what this table stores>\",\n      \"columns\": [\n        { \"name\": \"id\",         \"type\": \"serial\",      \"primaryKey\": true },\n        { \"name\": \"created_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" },\n        { \"name\": \"updated_at\", \"type\": \"timestamptz\", \"nullable\": false, \"default\": \"now()\" }\n      ],\n      \"foreignKeys\": [],\n      \"constraints\": [],\n      \"triggers\": [\n        { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\n      ]\n    }\n  ]\n}\n\nRules:\n- \"domain\" must be unchanged from the input schema\n- Table names must start with PGD_ followed by PascalCase\n- Column types must be one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536)\n- Every table must have id (serial, primaryKey), created_at, and updated_at columns\n- Every table must have the set_updated_at() trigger with timing BEFORE UPDATE\n- Foreign key \"column\" field is REQUIRED and must be an actual column name in the child table\n- Foreign key \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- Foreign key \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- Constraint \"type\" must be lowercase: \"unique\" or \"check\"\n- Constraint \"name\" field is REQUIRED\n- Check constraint condition MUST use the key \"expression\" — e.g. { \"type\": \"check\", \"name\": \"chk_table_col\", \"columns\": [\"col\"], \"expression\": \"col >= 0 AND col <= 5\" }\n- Tables with no foreign keys must have an empty foreignKeys array: []\n- Tables with no constraints must have an empty constraints array: []\n- This is a single-user system — never add user_id, tenant_id, or FKs to tables outside this domain\n- Generate 2-4 tables appropriate for the domain\n- Return ONLY the JSON object, nothing else"
   }
 ]
