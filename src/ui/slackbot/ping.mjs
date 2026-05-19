@@ -83,7 +83,11 @@ async function pingSync(procRoute, traceId, label) {
     const url = `${process.env.PROC_API_URL}/api/v1/${procRoute}`;
     const res = await fetch(url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'x-correlation-id': traceId },
+      headers: {
+        'Content-Type':     'application/json',
+        'x-correlation-id': traceId,
+        'x-api-key':        process.env.INTERNAL_API_KEY ?? '',
+      },
       body:    JSON.stringify({ source: 'slack', correlationId: traceId }),
     });
     if (!res.ok) throw new Error(`Proc HTTP ${res.status}: ${await res.text()}`);

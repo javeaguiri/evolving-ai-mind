@@ -481,6 +481,7 @@ Resources:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
           PROC_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching

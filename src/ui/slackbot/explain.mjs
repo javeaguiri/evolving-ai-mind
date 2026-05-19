@@ -13,6 +13,16 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { err }                           from '../../shared/lambda-utils.mjs';
 
+// Slack slash command validation errors must return 200 so the message renders in-channel.
+// Non-200 responses produce a generic Slack error that hides the usage hint.
+function slackErr(message) {
+  return {
+    statusCode: 200,
+    headers:    { 'Content-Type': 'application/json' },
+    body:       JSON.stringify({ response_type: 'ephemeral', text: message }),
+  };
+}
+
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -35,10 +45,10 @@ export async function handle(req) {
   const prompt   = spaceIdx === -1 ? '' : text.slice(spaceIdx + 1).trim();
 
   if (!UUID_RE.test(queryId)) {
-    return err(400, 'Usage: /explain <query_id> <your question>  (query_id must be a UUID)', req.correlationId);
+    return slackErr('Usage: /explain <query_id> <your question>  (query_id must be a UUID)');
   }
   if (!prompt) {
-    return err(400, 'Usage: /explain <query_id> <your question>', req.correlationId);
+    return slackErr('Usage: /explain <query_id> <your question>');
   }
 
   console.info('slackbot/explain: received', { traceId, queryId, slackUser, slackChannel });
