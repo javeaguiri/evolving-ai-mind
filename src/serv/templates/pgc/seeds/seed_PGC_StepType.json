@@ -7,7 +7,7 @@
         "type": "string",
         "field": "input.prompt",
         "required": true,
-        "description": "intent_category key into PGC_Prompt \u2014 identifies which prompt to use"
+        "description": "intent_category key into PGC_Prompt — identifies which prompt to use"
       },
       {
         "type": "string",
@@ -19,19 +19,19 @@
         "type": "any",
         "field": "input.*",
         "required": false,
-        "description": "Additional keys in input (beyond prompt) become {{key}} substitution variables in the prompt text. Key name must match the placeholder exactly \u2014 snake_case user_input matches {{user_input}}, NOT {{userInput}}. user_input is also sent as the LLM's human/user message."
+        "description": "Additional keys in input (beyond prompt) become {{key}} substitution variables in the prompt text. Key name must match the placeholder exactly — snake_case user_input matches {{user_input}}, NOT {{userInput}}. user_input is also sent as the LLM's human/user message."
       },
       {
         "type": "string",
         "field": "on_success",
         "required": false,
-        "description": "Routing token \u2014 defaults to \"next\""
+        "description": "Routing token — defaults to \"next\""
       },
       {
         "type": "string",
         "field": "on_failure",
         "required": false,
-        "description": "Routing token \u2014 use \"cancel\" for unrecoverable failures"
+        "description": "Routing token — use \"cancel\" for unrecoverable failures"
       }
     ],
     "output_contract": [
@@ -55,7 +55,7 @@
   },
   {
     "step_type": "js_transform",
-    "description": "Runs a pure synchronous JS IIFE expression via acorn AST gate + vm.runInNewContext(200ms timeout). Two sandbox bindings: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation.",
+    "description": "Runs a pure synchronous JS IIFE expression via acorn AST gate + vm.runInNewContext(200ms timeout). Two sandbox bindings: (1) items — the resolved value of input_key from local_state. (2) local_state — the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation.",
     "input_contract": [
       {
         "type": "string",
@@ -79,7 +79,7 @@
         "type": "string",
         "field": "on_success",
         "required": false,
-        "description": "Routing token \u2014 supports step:N for backward loops"
+        "description": "Routing token — supports step:N for backward loops"
       }
     ],
     "output_contract": [
@@ -103,7 +103,7 @@
   },
   {
     "step_type": "human_gate",
-    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button \u2014 output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in an inline Slack input block \u2014 output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines \u2014 output_key written with selected value; when a choice button opens a modal, output_key receives the typed modal text instead of the button value), followup_prompt (shows a message with an \u201cAsk follow-up\u201d button that opens a free-text modal \u2014 no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only \u2014 never in description lists \u2014 and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to render a peek-only button that opens a read-only Slack modal showing resolved content \u2014 does NOT advance the workflow (gate stays suspended).",
+    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button — output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in an inline Slack input block — output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines — output_key written with selected value; when a choice option carries a modal descriptor, the typed modal text is written to the option's own output_key if declared, or to the step-level output_key if not), followup_prompt (shows a message with an \"Ask follow-up\" button that opens a free-text modal — no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only — never in description lists — and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to render a single inline task_card above the gate buttons — does NOT advance the workflow (gate stays suspended). Optional reveals field: array version of reveal — one task_card per entry (e.g. one per table). Each entry is { button_label, content }. Supports an inline array or a {{template}} reference to a local_state array.",
     "input_contract": [
       {
         "type": "string",
@@ -115,37 +115,37 @@
         "type": "string",
         "field": "message_template",
         "required": true,
-        "description": "Message shown to user \u2014 supports {{template}} substitution"
+        "description": "Message shown to user — supports {{template}} substitution"
       },
       {
         "type": "string",
         "field": "context_key",
         "required": false,
-        "description": "Dot-path into local_state for the data shown in the dialog. Required for edit_list and review_object. Optional for confirm \u2014 when present, the selected action value is written to output_key."
+        "description": "Dot-path into local_state for the data shown in the dialog. Required for edit_list and review_object. Optional for confirm — when present, the selected action value is written to output_key."
       },
       {
         "type": "array",
         "field": "options",
         "required": true,
-        "description": "Array of option objects \u2014 must include at least one with action/value: \"cancel\" in either options or special_buttons. Shape varies by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key (or overridden by modal inputValue), label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } \u2014 clicking the button opens a Slack overlay modal; the typed value is written to output_key on submit."
+        "description": "Array of option objects — must include at least one with action/value: \"cancel\" in either options or special_buttons. Shape varies by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } — clicking the button opens a Slack overlay modal; the typed value is written to the option's own output_key if declared, otherwise to the step-level output_key on submit."
       },
       {
         "type": "array",
         "field": "special_buttons",
         "required": false,
-        "description": "Optional array of action buttons that appear after options buttons but are never rendered in description_list or content fields. Same shape as options per gate_type. Use for Cancel, Other, or modal-trigger buttons that should not appear in the displayed option list. Supports modal descriptor: { title, input_label, placeholder, multiline } \u2014 clicking opens a Slack overlay modal; typed value is written to output_key on submit, overriding the button value. The cancel obligation can be satisfied here instead of in options."
+        "description": "Optional array of action buttons that appear after options buttons but are never rendered in description_list or content fields. Same shape as options per gate_type. Use for Cancel, Other, or modal-trigger buttons that should not appear in the displayed option list. Supports modal descriptor: { title, input_label, placeholder, multiline } — clicking opens a Slack overlay modal; typed value is written to output_key on submit, overriding the button value. The cancel obligation can be satisfied here instead of in options."
       },
       {
         "type": "string",
         "field": "input_label",
         "required": false,
-        "description": "text_input gate only \u2014 short label shown above the inline Slack input element. Defaults to \"Your input\". Keep concise (2-5 words). The full instructions go in message_template."
+        "description": "text_input gate only — short label shown above the inline Slack input element. Defaults to \"Your input\". Keep concise (2-5 words). The full instructions go in message_template."
       },
       {
         "type": "string",
         "field": "output_key",
         "required": false,
-        "description": "For text_input: local_state key where the typed value is written on submit. For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written \u2014 when the option carries a modal descriptor, the modal typed text (inputValue) is written instead of the button value."
+        "description": "For text_input: local_state key where the typed value is written on submit. For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written — when the option carries a modal descriptor, the modal typed text (inputValue) is written instead of the button value."
       },
       {
         "type": "string",
@@ -157,13 +157,19 @@
         "type": "string",
         "field": "on_failure",
         "required": false,
-        "description": "Routing on gate execution error \u2014 not user cancellation"
+        "description": "Routing on gate execution error — not user cancellation"
       },
       {
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional peek-only reveal button. Composable with any gate_type. Shape: { button_label: string, content: string }. Renders a button (e.g. \"Show Definition\") that opens a read-only Slack modal with the resolved content text. Does NOT advance the workflow \u2014 the gate stays suspended after the user closes the modal. content supports {{template}} substitution resolved at suspension time. Both button_label and content must be non-empty strings."
+        "description": "Optional single task_card block shown inline above the gate buttons. Composable with any gate_type. Shape: { button_label: string, content: string }. Does NOT advance the workflow — the gate stays suspended. content supports {{template}} substitution resolved at suspension time. Both button_label and content must be non-empty strings. Use reveals (array) instead when you need one card per data item."
+      },
+      {
+        "type": "array_or_string",
+        "field": "reveals",
+        "required": false,
+        "description": "Array version of reveal — renders one task_card per entry (e.g. one per table). Each entry is { button_label: string, content: string }. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of cards is determined at runtime. Does NOT advance the workflow — gate stays suspended."
       }
     ],
     "output_contract": null,
@@ -187,7 +193,7 @@
         "type": "object",
         "field": "input",
         "required": true,
-        "description": "Full table definition object \u2014 tableName, target, columns, foreignKeys, constraints, triggers. May be \"{{item}}\" inside an iterator."
+        "description": "Full table definition object — tableName, target, columns, foreignKeys, constraints, triggers. May be \"{{item}}\" inside an iterator."
       },
       {
         "type": "string",
@@ -223,13 +229,13 @@
         "type": "string",
         "field": "input.tableName",
         "required": true,
-        "description": "Table name \u2014 must be registered in PGC_TableMap"
+        "description": "Table name — must be registered in PGC_TableMap"
       },
       {
         "type": "object",
         "field": "input.row",
         "required": true,
-        "description": "Row object \u2014 system columns (id, created_at, updated_at) are populated automatically. Supports {{template}} \u2014 a template resolving to a full object is passed as the row directly."
+        "description": "Row object — system columns (id, created_at, updated_at) are populated automatically. Supports {{template}} — a template resolving to a full object is passed as the row directly."
       },
       {
         "type": "string",
@@ -271,13 +277,13 @@
   },
   {
     "step_type": "serv_query",
-    "description": "Reads rows from a PGC or PGD table with optional filters, ordering, and limit. Writes the rows array to output_key. Empty result (no matching rows) is not an error \u2014 returns an empty array.",
+    "description": "Reads rows from a PGC or PGD table with optional filters, ordering, and limit. Writes the rows array to output_key. Empty result (no matching rows) is not an error — returns an empty array.",
     "input_contract": [
       {
         "type": "string",
         "field": "input.tableName",
         "required": true,
-        "description": "Table name \u2014 must be registered in PGC_TableMap"
+        "description": "Table name — must be registered in PGC_TableMap"
       },
       {
         "type": "array",
@@ -289,7 +295,7 @@
         "type": "object",
         "field": "input.orderBy",
         "required": false,
-        "description": "{ column, direction } \u2014 direction is \"asc\" or \"desc\""
+        "description": "{ column, direction } — direction is \"asc\" or \"desc\""
       },
       {
         "type": "integer",
@@ -337,25 +343,25 @@
   },
   {
     "step_type": "serv_update",
-    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass updates are rejected. Returns updatedCount and updated rows.",
+    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty — unfiltered mass updates are rejected. Returns updatedCount and updated rows.",
     "input_contract": [
       {
         "type": "string",
         "field": "input.tableName",
         "required": true,
-        "description": "Table name \u2014 must be registered in PGC_TableMap with allow_update: true"
+        "description": "Table name — must be registered in PGC_TableMap with allow_update: true"
       },
       {
         "type": "array",
         "field": "input.filters",
         "required": true,
-        "description": "Non-empty array of { column, op, value } filter objects \u2014 must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
+        "description": "Non-empty array of { column, op, value } filter objects — must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
       },
       {
         "type": "object",
         "field": "input.updates",
         "required": true,
-        "description": "Object of column \u2192 new value pairs"
+        "description": "Object of column → new value pairs"
       },
       {
         "type": "string",
@@ -397,19 +403,19 @@
   },
   {
     "step_type": "serv_delete",
-    "description": "Deletes rows from a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass deletes are rejected. Best practice: precede with serv_query + human_gate confirm so the user confirms which records are deleted.",
+    "description": "Deletes rows from a PGC or PGD table matching the given filters. Filters must be non-empty — unfiltered mass deletes are rejected. Best practice: precede with serv_query + human_gate confirm so the user confirms which records are deleted.",
     "input_contract": [
       {
         "type": "string",
         "field": "input.tableName",
         "required": true,
-        "description": "Table name \u2014 must be registered in PGC_TableMap with allow_delete: true"
+        "description": "Table name — must be registered in PGC_TableMap with allow_delete: true"
       },
       {
         "type": "array",
         "field": "input.filters",
         "required": true,
-        "description": "Non-empty array of { column, op, value } filter objects \u2014 must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
+        "description": "Non-empty array of { column, op, value } filter objects — must scope to specific rows. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
       },
       {
         "type": "string",
@@ -451,7 +457,7 @@
         "type": "string",
         "field": "input.entityName",
         "required": true,
-        "description": "Entity name matching PGC_EntitySchema.entity_name \u2014 e.g. \"Recipe\""
+        "description": "Entity name matching PGC_EntitySchema.entity_name — e.g. \"Recipe\""
       },
       {
         "type": "array",
@@ -488,7 +494,7 @@
       {
         "type": "array",
         "field": "output_key",
-        "description": "Array of assembled entity objects \u2014 root columns plus child arrays keyed by aggregation outputKey"
+        "description": "Array of assembled entity objects — root columns plus child arrays keyed by aggregation outputKey"
       }
     ],
     "on_success_options": [
@@ -511,7 +517,7 @@
         "type": "string",
         "field": "input.entityName",
         "required": true,
-        "description": "Entity name matching PGC_EntitySchema.entity_name \u2014 e.g. \"Recipe\""
+        "description": "Entity name matching PGC_EntitySchema.entity_name — e.g. \"Recipe\""
       },
       {
         "type": "integer",
@@ -542,7 +548,7 @@
       {
         "type": "object",
         "field": "output_key",
-        "description": "Assembled entity object \u2014 root columns plus child arrays. Single object, not an array."
+        "description": "Assembled entity object — root columns plus child arrays. Single object, not an array."
       }
     ],
     "on_success_options": [
@@ -565,7 +571,7 @@
         "type": "string",
         "field": "input.entityName",
         "required": true,
-        "description": "Entity name matching PGC_EntitySchema.entity_name \u2014 e.g. \"Recipe\". Supports {{template}} substitution."
+        "description": "Entity name matching PGC_EntitySchema.entity_name — e.g. \"Recipe\". Supports {{template}} substitution."
       },
       {
         "type": "string",
@@ -607,13 +613,13 @@
   },
   {
     "step_type": "condition",
-    "description": "Evaluates a template expression against local_state and routes to one of two named steps without performing any I/O or writing to local_state. Truthy: non-empty string, non-zero number, non-null object. Falsy: empty string, \"null\", \"undefined\", \"0\", \"false\". on_truthy and on_falsy are bare step keys (e.g. \"2\", \"3a\") \u2014 same rule as all other routing fields.",
+    "description": "Evaluates a template expression against local_state and routes to one of two named steps without performing any I/O or writing to local_state. Truthy: non-empty string, non-zero number, non-null object. Falsy: empty string, \"null\", \"undefined\", \"0\", \"false\". on_truthy and on_falsy are bare step keys (e.g. \"2\", \"3a\") — same rule as all other routing fields.",
     "input_contract": [
       {
         "type": "string",
         "field": "expression",
         "required": true,
-        "description": "{{template}} expression resolved against local_state \u2014 e.g. \"{{quiz_done}}\". Must resolve to a scalar truthy/falsy value. For complex conditions, pre-compute a boolean flag in a prior js_transform."
+        "description": "{{template}} expression resolved against local_state — e.g. \"{{quiz_done}}\". Must resolve to a scalar truthy/falsy value. For complex conditions, pre-compute a boolean flag in a prior js_transform."
       },
       {
         "type": "string",
@@ -636,7 +642,7 @@
   },
   {
     "step_type": "simulate",
-    "description": "Dry-runs a workflow step array through three validation levels without calling real services. Level 1: static analysis \u2014 routing values, dead targets, missing templates, gate structure. Level 2: path execution using mock_outputs and simulation_paths decision scripts. Level 3: skip-path analysis (advisory). Used by create_workflow to validate generated steps before registration.",
+    "description": "Dry-runs a workflow step array through three validation levels without calling real services. Level 1: static analysis — routing values, dead targets, missing templates, gate structure. Level 2: path execution using mock_outputs and simulation_paths decision scripts. Level 3: skip-path analysis (advisory). Used by create_workflow to validate generated steps before registration.",
     "input_contract": [
       {
         "type": "string",
@@ -648,13 +654,13 @@
         "type": "string",
         "field": "input.mock_outputs_key",
         "required": false,
-        "description": "Dot-path to mock_outputs object \u2014 required for Level 2. If absent, runs Level 1 only."
+        "description": "Dot-path to mock_outputs object — required for Level 2. If absent, runs Level 1 only."
       },
       {
         "type": "string",
         "field": "input.paths_key",
         "required": false,
-        "description": "Dot-path to simulation_paths array \u2014 required for Level 2. If absent, runs Level 1 only."
+        "description": "Dot-path to simulation_paths array — required for Level 2. If absent, runs Level 1 only."
       },
       {
         "type": "string",
@@ -666,20 +672,20 @@
         "type": "string",
         "field": "on_success",
         "required": false,
-        "description": "Routing token \u2014 taken when all levels pass"
+        "description": "Routing token — taken when all levels pass"
       },
       {
         "type": "string",
         "field": "on_failure",
         "required": false,
-        "description": "Routing token \u2014 taken when any level fails. Typically \"step:N\" to route back to a review gate."
+        "description": "Routing token — taken when any level fails. Typically \"step:N\" to route back to a review gate."
       }
     ],
     "output_contract": [
       {
         "type": "object",
         "field": "output_key",
-        "description": "SimulateWorkflowResponse \u2014 { passed, paths_run, paths_passed, paths_failed, static_analysis, path_results, skip_path_warnings }"
+        "description": "SimulateWorkflowResponse — { passed, paths_run, paths_passed, paths_failed, static_analysis, path_results, skip_path_warnings }"
       }
     ],
     "on_success_options": [
@@ -696,25 +702,25 @@
   },
   {
     "step_type": "notify",
-    "description": "Sends a message to the user via the callback channel (Slack or any UI). The message_template is resolved against local_state. Does not block \u2014 fire and forget. No on_failure field \u2014 errors are silently discarded. Typically the second-to-last step before end.",
+    "description": "Sends a message to the user via the callback channel (Slack or any UI). The message_template is resolved against local_state. Does not block — fire and forget. No on_failure field — errors are silently discarded. Typically the second-to-last step before end.",
     "input_contract": [
       {
         "type": "string",
         "field": "message_template",
         "required": true,
-        "description": "Message text \u2014 supports {{template}} substitution from local_state"
+        "description": "Message text — supports {{template}} substitution from local_state"
       },
       {
         "type": "string",
         "field": "notify_type",
         "required": false,
-        "description": "SQS message type \u2014 defaults to HUMAN_NOTIFICATION"
+        "description": "SQS message type — defaults to HUMAN_NOTIFICATION"
       },
       {
         "type": "string",
         "field": "on_success",
         "required": false,
-        "description": "Routing token \u2014 typically \"end\" on the final notify step. Only next and end are valid."
+        "description": "Routing token — typically \"end\" on the final notify step. Only next and end are valid."
       }
     ],
     "output_contract": null,
@@ -728,7 +734,7 @@
   },
   {
     "step_type": "iterator",
-    "description": "Executes a single item_step once per element of an array in local_state. Always sequential \u2014 one item at a time. Collects results into output_key array after all items complete. execution_mode must always be \"sequential\". The item_step runs with the parent frame local_state plus the injected item binding.",
+    "description": "Executes a single item_step once per element of an array in local_state. Always sequential — one item at a time. Collects results into output_key array after all items complete. execution_mode must always be \"sequential\". The item_step runs with the parent frame local_state plus the injected item binding.",
     "input_contract": [
       {
         "type": "string",
@@ -740,7 +746,7 @@
         "type": "object",
         "field": "item_step",
         "required": true,
-        "description": "Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. All parent local_state keys are also readable. Two categories: non-suspending item_steps (serv_schema, serv_insert, serv_update, serv_delete, serv_query, llm_call, js_transform) run inline within a single Lambda invocation. Suspending item_steps (human_gate with gate_type: \"choice\") suspend the iterator after each item and resume on user response \u2014 only gate_type: \"choice\" is valid inside an iterator. Dynamic options pattern: set \"options\": \"{{item.options}}\" on the human_gate item_step \u2014 the single-token template resolves to the current item\u2019s options array at runtime, enabling per-item dynamic choice lists built by a prior js_transform step."
+        "description": "Step definition executed once per item. Use {{item}} or {{item.field}} to reference the current element. All parent local_state keys are also readable. Two categories: non-suspending item_steps (serv_schema, serv_insert, serv_update, serv_delete, serv_query, llm_call, js_transform) run inline within a single Lambda invocation. Suspending item_steps (human_gate with gate_type: \"choice\") suspend the iterator after each item and resume on user response — only gate_type: \"choice\" is valid inside an iterator. Dynamic options pattern: set \"options\": \"{{item.options}}\" on the human_gate item_step — the single-token template resolves to the current item’s options array at runtime, enabling per-item dynamic choice lists built by a prior js_transform step."
       },
       {
         "type": "string",
@@ -758,7 +764,7 @@
         "type": "string",
         "field": "on_complete",
         "required": false,
-        "description": "Routing token after all items complete \u2014 defaults to \"next\""
+        "description": "Routing token after all items complete — defaults to \"next\""
       },
       {
         "type": "string",
@@ -788,7 +794,7 @@
   },
   {
     "step_type": "end",
-    "description": "Terminal step \u2014 marks the workflow run as completed. No input or output fields. No routing fields. Every workflow must have exactly one end step and it must be the last step in the array.",
+    "description": "Terminal step — marks the workflow run as completed. No input or output fields. No routing fields. Every workflow must have exactly one end step and it must be the last step in the array.",
     "input_contract": [],
     "output_contract": null,
     "on_success_options": [],
