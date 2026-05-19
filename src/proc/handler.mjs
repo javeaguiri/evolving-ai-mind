@@ -269,7 +269,7 @@ async function pingDb(req) {
   const traceId = req.traceId ?? req.correlationId;
   try {
     const url = `${process.env.SERV_API_URL}/api/v1/serv/ping-db`;
-    const res = await fetch(url, { headers: { 'x-correlation-id': traceId } });
+    const res = await fetch(url, { headers: { 'x-correlation-id': traceId, 'x-api-key': process.env.INTERNAL_API_KEY ?? '' } });
     if (!res.ok) throw new Error(`Serv HTTP ${res.status}: ${await res.text()}`);
     const body = await res.json();
     return ok({ success: true, message: 'DB ping OK', ...body }, traceId);
@@ -312,7 +312,7 @@ async function handlePingSqs(message) {
  * Replaces the Lambda invoke in step-orchestrator.mjs — uses fetch() instead.
  */
 async function handlePingE2e(message) {
-  const resp    = await fetch(`${process.env.SERV_API_URL}/api/v1/serv/ping-db`);
+  const resp    = await fetch(`${process.env.SERV_API_URL}/api/v1/serv/ping-db`, { headers: { 'x-api-key': process.env.INTERNAL_API_KEY ?? '' } });
   const payload = await resp.json();
   const version = payload?.pgc?.version ?? payload?.pgd?.version ?? 'unknown';
 
