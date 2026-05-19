@@ -640,6 +640,19 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     // to avoid polluting the iterator frame with the item from the completed gate.
     const { item: _item, ...parentScopedState } = localState;
     parentFrame.local_state = parentScopedState;
+    // Collect the gate response into the iterator's results array so that iterator
+    // completion writes the full collected array to output_key (not []).
+    // Human_gate items never reach the frame.results.push() in executeIteratorInline
+    // because they return early on suspend, leaving results empty.
+    const completedItem = parentFrame.items[parentFrame.current_index];
+    const gateResult    = stepRef.output_key
+      ? resolvePath(localState, stepRef.output_key)
+      : userResponse;
+    parentFrame.results.push(
+      completedItem?.id !== undefined
+        ? { id: completedItem.id, value: gateResult }
+        : gateResult
+    );
     parentFrame.current_index++;
     console.info('run-workflow: iterator item gate confirmed — index advanced', {
       workflowRunId: run.id, newIndex: parentFrame.current_index, traceId,
