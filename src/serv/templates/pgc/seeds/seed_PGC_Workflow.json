@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 10,
+    "version": 11,
     "steps": [
       {
         "step": "1",
@@ -89,9 +89,26 @@
         "description": "Build preference_gates array from right brain research output.",
         "input_key": "domain_research",
         "output_key": "preference_gates",
-        "expression": "(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, options: opts }; }); })()",
+        "expression": "(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, rationale: q.rationale || '', options: opts }; }); })()",
         "on_success": "next",
         "on_failure": "cancel"
+      },
+      {
+        "step": "6a",
+        "type": "js_transform",
+        "description": "Build design_assumptions_message from right brain findings to notify user of automatic decisions.",
+        "input_key": "domain_research",
+        "output_key": "design_assumptions_message",
+        "expression": "(function() { var f = items && items.findings || []; if (!f.length) return '_No automatic design decisions — your domain is straightforward._'; var lines = ['ℹ️ *Automatic design decisions from research:*']; f.forEach(function(d) { lines.push('• *' + d.topic + '* → ' + d.recommendation + '. _' + d.rationale + '_'); }); return lines.join('\\n'); })()",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "6b",
+        "type": "notify",
+        "description": "Notify user of automatic design decisions before preference gates begin.",
+        "message_template": "{{design_assumptions_message}}",
+        "on_success": "next"
       },
       {
         "step": "7",
@@ -121,6 +138,10 @@
           "gate_type": "choice",
           "message_template": "{{item.question}}",
           "options": "{{item.options}}",
+          "reveal": {
+            "button_label": "Research rationale",
+            "content": "{{item.rationale}}"
+          },
           "output_key": "user_preferences",
           "on_success": "next",
           "on_failure": "cancel"
@@ -155,38 +176,68 @@
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } return enrich(items, local_state.proposed_scaffold.domain); })()"
       },
       {
+        "step": "11a",
+        "type": "js_transform",
+        "description": "Build schema_summary text for reveal on step 12 choice gate.",
+        "output_key": "schema_summary",
+        "expression": "(function() { var tables = local_state.proposed_scaffold && local_state.proposed_scaffold.tables || []; var domain = local_state.proposed_scaffold && local_state.proposed_scaffold.domain || ''; var lines = ['*' + domain + ' — ' + tables.length + ' table' + (tables.length !== 1 ? 's' : '') + ':*']; tables.forEach(function(t) { lines.push('• *' + t.tableName + '* — ' + (t.columnSummary || '')); }); return lines.join('\\n'); })()",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
         "step": "12",
         "type": "human_gate",
-        "gate_type": "edit_list",
-        "description": "User reviews proposed table list. Child tables may be removed. User may also add a table.",
-        "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}. You can remove child tables you don't need, or add one that's missing.",
-        "context_key": "proposed_scaffold.tables",
-        "item_primary_key": "tableName",
-        "item_secondary_key": "columnSummary",
-        "item_action": {
-          "condition": "item.foreignKeys && item.foreignKeys.length > 0",
-          "action": "remove_item",
-          "action_data_key": "tableName",
-          "confirm_template": "Remove {{item.tableName}} from this domain?"
+        "gate_type": "choice",
+        "description": "User reviews proposed schema and chooses next action: approve, request changes, or add a table.",
+        "message_template": "Here’s my schema plan for *{{proposed_scaffold.domain}}*. Review the summary and choose how to proceed.",
+        "reveal": {
+          "button_label": "Schema overview",
+          "content": "{{schema_summary}}"
         },
         "options": [
           {
-            "label": "Looks good",
-            "action": "confirm",
+            "label": "Approve",
+            "value": "approve",
+            "description": "Proceed to full column review",
             "on_select": "15"
           },
           {
+            "label": "Request changes",
+            "value": "request_changes",
+            "description": "Describe tables, fields, or relationships to adjust",
+            "on_select": "12a"
+          },
+          {
             "label": "Add a table",
-            "action": "add_table",
-            "on_select": "13",
-            "on_modal_close": "12",
-            "modal": {
-              "title": "Add a table",
-              "input_label": "Describe the table",
-              "placeholder": "What it stores and how it relates to the other tables.",
-              "multiline": true
-            },
-            "output_key": "new_table_description"
+            "value": "add_table",
+            "description": "Design a new table to add to this domain",
+            "on_select": "12c"
+          },
+          {
+            "label": "Cancel",
+            "value": "cancel",
+            "description": "Cancel domain creation",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "12a",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Capture free-form schema change request from user.",
+        "message_template": "What would you like to change? Describe adjustments to tables, fields, relationships, or domain scope.",
+        "input_label": "Design changes",
+        "placeholder": "e.g. Add a progress tracking table, change difficulty to a numeric 1–5 scale, or remove the audio column",
+        "multiline": true,
+        "output_key": "design_feedback",
+        "options": [
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "12b"
           },
           {
             "label": "Cancel",
@@ -194,7 +245,48 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "next",
+        "on_success": "12b",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "12c",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Capture description of the new table to add.",
+        "message_template": "Describe the new table — what it stores and how it relates to the existing tables.",
+        "input_label": "Table description",
+        "placeholder": "What it stores and how it relates to the other tables.",
+        "multiline": true,
+        "output_key": "new_table_description",
+        "options": [
+          {
+            "label": "Design it",
+            "action": "confirm",
+            "on_select": "13"
+          },
+          {
+            "label": "Back",
+            "action": "cancel",
+            "on_select": "12"
+          }
+        ],
+        "on_success": "13",
+        "on_failure": "cancel"
+      },
+      {
+        "step": "12b",
+        "type": "llm_call",
+        "description": "LEFT BRAIN: Revise domain schema based on user feedback.",
+        "input": {
+          "prompt": "revise_domain_schema",
+          "user_input": "{{input.userInput}}",
+          "proposed_scaffold": "{{proposed_scaffold}}",
+          "user_preferences": "{{user_preferences}}",
+          "research_findings": "{{domain_research.findings}}",
+          "design_feedback": "{{design_feedback}}"
+        },
+        "output_key": "proposed_scaffold",
+        "on_success": "11",
         "on_failure": "cancel"
       },
       {
