@@ -135,28 +135,30 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
-  it('create_domain step 12 is a choice gate with all expected routing options', () => {
-    // Guard: step 12 is the schema review gate — must offer Approve, Request changes, Add a table, Cancel
+  it('create_domain step 12 is a choice gate with per-table reveals and inline modal', () => {
+    // Step 12 is the schema review gate — per-table task_card reveals, modal for Request changes.
     const step = getStep('create_domain', '12');
     assert.equal(step.gate_type, 'choice', 'step 12 must be a choice gate');
-    assert.ok(step.reveal, 'step 12 must have a reveal field for the schema overview');
+    assert.ok(step.reveals, 'step 12 must have a reveals field for per-table schema cards');
+    assert.ok(!step.reveal, 'step 12 must NOT have the old single reveal field');
 
     const approveOpt = step.options.find(o => o.value === 'approve');
     assert.ok(approveOpt,                            'approve option must exist');
-    assert.equal(approveOpt.on_select, '15',         'approve must route to step 15');
+    assert.equal(approveOpt.on_select, '16',         'approve must route to final confirm (step 16)');
 
     const changesOpt = step.options.find(o => o.value === 'request_changes');
     assert.ok(changesOpt,                            'request_changes option must exist');
-    assert.equal(changesOpt.on_select, '12a',        'request_changes must route to step 12a');
+    assert.equal(changesOpt.on_select, '12b',        'request_changes must route to step 12b');
+    assert.ok(changesOpt.modal,                      'request_changes must carry a modal descriptor');
+    assert.equal(changesOpt.output_key, 'design_feedback', 'request_changes modal must write to design_feedback');
 
     const addTableOpt = step.options.find(o => o.value === 'add_table');
     assert.ok(addTableOpt,                           'add_table option must exist');
-    assert.equal(addTableOpt.on_select, '13',        'add_table must route to step 13');
+    assert.equal(addTableOpt.on_select, '12c',       'add_table must route to step 12c (table description input)');
 
-    // Step 12a must be the text_input gate for design feedback
-    const step12a = getStep('create_domain', '12a');
-    assert.equal(step12a.gate_type, 'text_input',    'step 12a must be a text_input gate');
-    assert.equal(step12a.output_key, 'design_feedback', 'step 12a must write to design_feedback');
+    // Step 12a must no longer exist — collapsed into the step 12 modal
+    const wf = seed.find(w => w.name === 'create_domain');
+    assert.ok(!wf.steps.find(s => s.step === '12a'), 'step 12a must be removed (request_changes is now handled by step 12 modal)');
   });
 });
 

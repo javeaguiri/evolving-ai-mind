@@ -125,6 +125,7 @@
         "value":       { "type": "string", "description": "Machine identifier written to output_key. Used by resume_gate to match the user's selection." },
         "description": { "type": "string", "description": "Explanatory sentence displayed above the buttons in the Slack message." },
         "on_select":   { "$ref": "#/definitions/routingToken" },
+        "output_key":  { "type": "string", "description": "Option-level output_key. When this option carries a modal, the modal inputValue is written to this local_state key on modal submit — instead of the parent step's output_key." },
         "modal":       { "$ref": "#/definitions/modalDescriptor" }
       }
     },
@@ -293,13 +294,31 @@
         },
         "reveal": {
           "type": "object",
-          "description": "Optional peek-only reveal button. Renders a button that opens a read-only Slack modal with resolved content. Does NOT advance or resume the gate. Valid on any gate_type.",
+          "description": "Optional single task_card block shown above the gate buttons. Does NOT advance or resume the gate.",
           "required": ["button_label", "content"],
           "additionalProperties": false,
           "properties": {
-            "button_label": { "type": "string", "description": "Label for the reveal button." },
-            "content":      { "type": "string", "description": "Slack mrkdwn content shown in the modal. Supports {{key}} template substitution resolved at suspension time." }
+            "button_label": { "type": "string", "description": "Title of the task_card." },
+            "content":      { "type": "string", "description": "Slack mrkdwn content. Supports {{key}} template substitution." }
           }
+        },
+        "reveals": {
+          "description": "Array version of reveal — renders one task_card per entry (e.g. one per table). Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["button_label", "content"],
+                "additionalProperties": false,
+                "properties": {
+                  "button_label": { "type": "string" },
+                  "content":      { "type": "string" }
+                }
+              }
+            },
+            { "type": "string", "description": "Template reference, e.g. {{table_review_items}}" }
+          ]
         },
         "on_success": { "$ref": "#/definitions/routingToken" },
         "on_failure": { "$ref": "#/definitions/routingToken" }
