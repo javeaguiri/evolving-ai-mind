@@ -680,13 +680,25 @@ export function buildDialog(step, localState) {
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
 
-  // reveal — optional on any gate type. Renders an inline task_card above the
-  // gate buttons with resolved content. Does NOT resume the gate — peek only.
+  // reveal — optional on any gate type. Single task_card above the gate buttons.
   if (step.reveal) {
     fields.push({
       type:         'reveal',
       button_label: step.reveal.button_label,
       content:      resolveTemplate(step.reveal.content ?? '', localState),
+    });
+  }
+
+  // reveals — array of task_cards, one per entry (e.g. one per table).
+  // Supports an inline array or a {{template}} reference to localState.
+  const revealsArray = typeof step.reveals === 'string'
+    ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])
+    : (Array.isArray(step.reveals) ? step.reveals : []);
+  for (const r of revealsArray) {
+    fields.push({
+      type:         'reveal',
+      button_label: r.button_label,
+      content:      resolveTemplate(r.content ?? '', localState),
     });
   }
 

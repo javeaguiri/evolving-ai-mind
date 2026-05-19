@@ -600,11 +600,11 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
-  // option-level output_key: edit_list (and future gate types) options that carry a
-  // modal descriptor can declare output_key to write the modal's inputValue directly
-  // into local_state, allowing the workflow to route to an llm_call step without a
-  // redundant downstream text_input gate.
-  if (!isChoice && matchedOption?.output_key && hasModalInput) {
+  // option-level output_key: options that carry a modal descriptor can declare
+  // output_key to write the modal's inputValue directly into local_state, allowing
+  // the workflow to route to an llm_call step without a redundant downstream
+  // text_input gate. Applies to all gate types including choice.
+  if (matchedOption?.output_key && hasModalInput) {
     setPath(localState, matchedOption.output_key, responseData.inputValue);
     frame.local_state = localState;
     console.info('run-workflow: option output_key — modal inputValue written to local_state', {
