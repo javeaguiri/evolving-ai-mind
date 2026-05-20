@@ -898,6 +898,15 @@
         "on_failure": "cancel"
       },
       {
+        "step": "22a",
+        "type": "js_transform",
+        "description": "Build step generation context — initialises retry keys on first pass, picks up current values on retry.",
+        "expression": "(function(){return{user_workflow_feedback:local_state.user_workflow_feedback||null,static_analysis_result:local_state.static_analysis_result||null,previous_draft_steps:(local_state.draft_workflow&&Array.isArray(local_state.draft_workflow.steps))?local_state.draft_workflow.steps:[],simulation_error_summary:local_state.simulation_error_summary||null};})()",
+        "output_key": "step_gen_context",
+        "on_success": "next",
+        "on_failure": "cancel"
+      },
+      {
         "step": "23",
         "type": "llm_call",
         "description": "Translate the three-part design spec into a step array. Translation only — no design decisions.",
@@ -907,10 +916,10 @@
           "state_map": "{{process_spec.state_map}}",
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
-          "user_feedback": "{{user_workflow_feedback}}",
-          "static_analysis": "{{static_analysis_result}}",
-          "previous_draft_steps": "{{draft_workflow.steps}}",
-          "simulation_error_summary": "{{simulation_error_summary}}"
+          "user_feedback": "{{step_gen_context.user_workflow_feedback}}",
+          "static_analysis": "{{step_gen_context.static_analysis_result}}",
+          "previous_draft_steps": "{{step_gen_context.previous_draft_steps}}",
+          "simulation_error_summary": "{{step_gen_context.simulation_error_summary}}"
         },
         "output_key": "draft_workflow",
         "on_success": "step:24",
@@ -932,7 +941,7 @@
           {
             "label": "Regenerate with feedback",
             "action": "request_changes",
-            "on_select": "step:23",
+            "on_select": "step:22a",
             "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
@@ -944,7 +953,7 @@
           {
             "label": "Regenerate automatically",
             "action": "regenerate",
-            "on_select": "step:23"
+            "on_select": "step:22a"
           },
           {
             "label": "Cancel",
@@ -1008,7 +1017,7 @@
           {
             "label": "Regenerate with feedback",
             "action": "confirm",
-            "on_select": "step:23",
+            "on_select": "step:22a",
             "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
@@ -1020,7 +1029,7 @@
           {
             "label": "Regenerate automatically",
             "action": "regenerate",
-            "on_select": "step:23"
+            "on_select": "step:22a"
           },
           {
             "label": "Cancel",
@@ -1028,7 +1037,7 @@
             "on_select": "cancel"
           }
         ],
-        "on_success": "step:23",
+        "on_success": "step:22a",
         "on_failure": "cancel"
       },
       {

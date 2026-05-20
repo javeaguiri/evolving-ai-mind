@@ -1,20 +1,24 @@
 {
   "permissions": {
     "allow": [
+      "Read",
       "Edit",
       "Write",
-      "Bash(set -a && source .env.test*)",
-      "Bash(node dev_scripts/upsert-workflow.mjs*)",
-      "Bash(node dev_scripts/upsert-prompt.mjs*)",
-      "Bash(node dev_scripts/upsert-step-type.mjs*)",
-      "Bash(node dev_scripts/upsert-system-context.mjs*)",
-      "Bash(node dev_scripts/pull-prompt.mjs*)",
-      "Bash(node dev_scripts/backfill-embeddings.mjs*)",
+      "Bash(node*)",
+      "Bash(grep*)",
+      "Bash(find*)",
+      "Bash(git*)",
       "Bash(curl * https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod*)",
-      "Bash(git push origin main*)",
       "Bash(sam build*)",
       "Bash(sam deploy --no-confirm-changeset*)",
-      "Bash(aws logs *)"
+      "Bash(aws logs *)",
+      "Bash(aws sqs *)",
+      "Bash(cat*)",
+      "Bash(ls*)",
+      "Bash(sed*)",
+      "Bash(truncate*)",
+      "Bash(nohup*)",
+      "Bash(tail*)"
     ]
   }
 }
