@@ -56,7 +56,7 @@
     "routingToken": {
       "type": "string",
       "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*|[a-zA-Z0-9][a-zA-Z0-9_]*)$",
-      "description": "Valid routing value for on_success, on_failure, on_select, on_complete. Canonical values: 'next' (advance to next step), 'end' (complete run), 'cancel' (cancel run), or a bare step key (e.g. '3', '3a', '1R'). step:N format is also accepted for backwards compatibility."
+      "description": "Valid routing value for on_success, on_failure, on_select, on_complete. Canonical values: 'next' (advance to next step), 'end' (complete run), 'cancel' (cancel run), or a bare step key (e.g. '3', '3a', '1R'). step:N format is also accepted for backwards compatibility. SYNC NOTE: this pattern must be kept identical to the routingToken pattern inside PGC_Prompt.output_schema for generate_workflow_steps (seed_PGC_Prompt.json). When updating either, update both."
     },
 
     "bareStepKey": {
