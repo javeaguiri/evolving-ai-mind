@@ -321,7 +321,8 @@
           ]
         },
         "on_success": { "$ref": "#/definitions/routingToken" },
-        "on_failure": { "$ref": "#/definitions/routingToken" }
+        "on_failure": { "$ref": "#/definitions/routingToken" },
+        "on_cancel":  { "$ref": "#/definitions/routingToken", "description": "Routing when the user cancels. Use \"cancel\" to end the workflow immediately, or a step key (e.g. \"step:cleanup\") to route to a cleanup step first." }
       }
     },
 

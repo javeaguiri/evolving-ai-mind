@@ -222,6 +222,15 @@ export function runLevel1StaticAnalysis(steps) {
         });
       }
 
+      if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
+        issues.push({
+          check:         'missing_on_cancel',
+          step:          stepKey,
+          failure_class: 'missing_on_cancel',
+          detail:        `human_gate step "${stepKey}" is missing on_cancel at the step level. Set on_cancel to "cancel" or a valid step routing token (e.g. "step:cleanup") if cancellation requires a cleanup step first.`,
+        });
+      }
+
       // reveal field — both button_label and content must be non-empty strings
       if (s.reveal !== undefined && s.reveal !== null) {
         if (!s.reveal.button_label || typeof s.reveal.button_label !== 'string' || !s.reveal.button_label.trim()) {
