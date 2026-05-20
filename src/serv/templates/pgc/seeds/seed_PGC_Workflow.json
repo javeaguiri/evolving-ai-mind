@@ -69,7 +69,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "5",
@@ -144,7 +145,8 @@
           },
           "output_key": "user_preferences",
           "on_success": "next",
-          "on_failure": "cancel"
+          "on_failure": "cancel",
+          "on_cancel": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "user_preferences",
@@ -225,7 +227,8 @@
         ],
         "on_success": "next",
         "on_failure": "cancel",
-        "reveals": "{{table_review_items}}"
+        "reveals": "{{table_review_items}}",
+        "on_cancel": "cancel"
       },
       {
         "step": "12c",
@@ -250,7 +253,8 @@
           }
         ],
         "on_success": "13",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "12b",
@@ -311,7 +315,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "17",
@@ -358,7 +363,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "20",
@@ -480,7 +486,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "4",
@@ -517,7 +524,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "6",
@@ -611,7 +619,8 @@
         ],
         "output_key": "workflow_mode",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3",
@@ -667,7 +676,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "7",
@@ -689,7 +699,8 @@
           "options": "{{item.options}}",
           "output_key": "user_preferences",
           "on_success": "next",
-          "on_failure": "cancel"
+          "on_failure": "cancel",
+          "on_cancel": "cancel"
         },
         "output_key": "user_preferences",
         "execution_mode": "sequential",
@@ -721,7 +732,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "10",
@@ -826,7 +838,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "18",
@@ -964,7 +977,8 @@
         "on_success": "step:25",
         "on_failure": "cancel",
         "item_label_template": "Step {{step}} ({{type}}): {{description}}",
-        "item_secondary_key": "on_success"
+        "item_secondary_key": "on_success",
+        "on_cancel": "cancel"
       },
       {
         "step": "25",
@@ -1038,7 +1052,8 @@
           }
         ],
         "on_success": "step:22a",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "28",
@@ -1149,7 +1164,8 @@
           }
         ],
         "on_success": "step:33a",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "33a",
@@ -1188,7 +1204,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "34a",
@@ -1361,6 +1378,7 @@
         ],
         "on_success": "next",
         "on_failure": "cancel",
+        "on_cancel": "cancel",
         "item_secondary_key": "after",
         "item_label_template": "step {{step}} — {{field}}"
       },
@@ -1715,7 +1733,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "4",
@@ -1821,7 +1840,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3",
@@ -1904,7 +1924,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3",
@@ -2039,7 +2060,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "10",
@@ -2146,7 +2168,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "2",
@@ -2182,7 +2205,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "2e",
@@ -2202,7 +2226,8 @@
           }
         ],
         "on_success": "step:2",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3",
@@ -2223,7 +2248,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3v",
@@ -2261,7 +2287,8 @@
           }
         ],
         "on_success": "step:3",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "4",
@@ -2284,7 +2311,8 @@
         ],
         "on_success": "next",
         "on_failure": "cancel",
-        "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly"
+        "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
+        "on_cancel": "cancel"
       },
       {
         "step": "4v",
@@ -2322,7 +2350,8 @@
           }
         ],
         "on_success": "step:4",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "5",
@@ -2350,7 +2379,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "5v",
@@ -2388,7 +2418,8 @@
           }
         ],
         "on_success": "step:5",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "5b",
@@ -2419,7 +2450,8 @@
           }
         ],
         "on_success": "step:6r",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "5be",
@@ -2439,7 +2471,8 @@
           }
         ],
         "on_success": "step:5b",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "6r",
@@ -2479,7 +2512,8 @@
           }
         ],
         "on_success": "step:6",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "6re",
@@ -2499,7 +2533,8 @@
           }
         ],
         "on_success": "step:6r",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "6",
@@ -2530,7 +2565,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "8p",
@@ -2560,7 +2596,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "8t",
@@ -2598,7 +2635,8 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "8n",
@@ -2618,7 +2656,8 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "9f",
@@ -2635,7 +2674,8 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "9fv",
@@ -2673,7 +2713,8 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "9",

@@ -833,7 +833,7 @@ describe('runSimulation — L1 reveal field validation', () => {
         { value: 'a', label: 'A', description: '', on_select: 'end' },
         { value: 'cancel', label: 'Cancel', on_select: 'cancel' },
       ],
-      on_success: 'end',
+      on_success: 'end', on_cancel: 'cancel',
     };
   }
 
@@ -1108,7 +1108,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel',
+        on_success: 'next', on_failure: 'cancel', on_cancel: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
@@ -1147,7 +1147,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel',
+        on_success: 'next', on_failure: 'cancel', on_cancel: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
