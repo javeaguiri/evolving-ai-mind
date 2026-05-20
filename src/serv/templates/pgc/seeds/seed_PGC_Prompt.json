@@ -1774,7 +1774,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 15,
+    "version": 16,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -1886,7 +1886,7 @@
             "patternProperties": {
               "^(on_success|on_failure|on_select|on_truthy|on_falsy)$": {
                 "type": "string",
-                "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*)$",
+                "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*|[a-zA-Z0-9][a-zA-Z0-9_]*)$",
                 "description": "Routing token. Bare step keys (e.g. \"8\") are invalid — always use step:<key> (e.g. \"step:8\")."
               }
             },
