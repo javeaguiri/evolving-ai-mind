@@ -129,14 +129,24 @@ Bootstrap (install-time only, NOT on Lambda cold start): `POST /api/v1/serv/boot
 
 ### Monitoring (tail all Lambda logs live)
 
-Run as a **single command** (all four tails in one Bash call — avoids multiple permission prompts):
+**Step 1** — Start tailing (single Bash call, all four lambdas → `/tmp/lambda-logs.txt`):
 
 ```bash
-truncate -s 0 /tmp/lambda-logs.txt 2>/dev/null || touch /tmp/lambda-logs.txt; nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short 2>&1 | sed "s/^/[slackbot] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short 2>&1 | sed "s/^/[proc] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short 2>&1 | sed "s/^/[serv] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short 2>&1 | sed "s/^/[callback] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 &
-
-# Read latest output
-tail -f /tmp/lambda-logs.txt
+truncate -s 0 /tmp/lambda-logs.txt 2>/dev/null || touch /tmp/lambda-logs.txt; nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short --region us-east-2 2>&1 | sed "s/^/[slackbot] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short --region us-east-2 2>&1 | sed "s/^/[proc] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short --region us-east-2 2>&1 | sed "s/^/[serv] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short --region us-east-2 2>&1 | sed "s/^/[callback] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 &
 ```
+
+**Step 2** — Start a Monitor on the file (use the Monitor tool with `persistent: true`):
+
+```
+command: tail -f /tmp/lambda-logs.txt | grep --line-buffered -E "<pattern>"
+```
+
+Use a grep pattern that covers both success and failure signals, e.g.:
+```
+step-executor|run-workflow|HUMAN_GATE|WORKFLOW_ERROR|workflow.*complete|failed|error|step [0-9]|workflowRunId
+```
+
+This produces per-event notifications in the conversation as each matching log line arrives.
 
 ---
 
