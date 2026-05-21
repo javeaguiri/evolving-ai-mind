@@ -57,13 +57,24 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     };
   }
 
-  // Level 1 passed — if no paths supplied, return Level 1 result only.
-  // mockOutputs is optional — Level 2 runs whenever simulationPaths is present,
-  // injecting null mock output for steps that have no entry in mockOutputs.
+  // ── Level 2a — Routing matrix (static graph reachability + terminal check) ─
+  const routingMatrix = runRoutingMatrix(steps, traceId);
+
+  // ── Level 2b — js_transform smoke test ──────────────────────────────────
+  const smokeTest = runJsTransformSmokeTest(steps, traceId);
+
+  const l2Passed = routingMatrix.passed && smokeTest.passed;
+
+  // Level 1 + 2a + 2b passed check — if no paths supplied, skip legacy path execution.
   if (!Array.isArray(simulationPaths) || simulationPaths.length === 0) {
-    console.info('simulation-engine: runSimulation — Level 1 only (no paths provided)', { traceId });
+    console.info('simulation-engine: runSimulation — routing matrix + smoke test complete (no legacy paths)', {
+      l2Passed,
+      routingMatrixPassed: routingMatrix.passed,
+      smokeTestPassed:     smokeTest.passed,
+      traceId,
+    });
     return {
-      passed:              true,
+      passed:              l2Passed,
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -71,11 +82,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
       state_flow:          stateFlow,
       unreferenced_writes: unrefWrites,
       path_results:        [],
+      routing_matrix:      routingMatrix,
+      smoke_test:          smokeTest,
     };
   }
 
-  // ── Level 2 — Path execution ─────────────────────────────────────────────
-  // Deduplicate paths by path_name — the LLM may generate duplicate entries.
+  // ── Level 2c — Legacy path execution (kept for diagnostics reference) ────
+  // path_results is informational — result.passed is determined by routing_matrix + smoke_test.
   const seenPathNames = new Set();
   const uniquePaths   = simulationPaths.filter(path => {
     if (seenPathNames.has(path.path_name)) return false;
@@ -86,12 +99,11 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     path => executeSimPath(steps, path, mockOutputs, runInput)
   );
 
-  const pathsPassed  = pathResults.filter(r => r.passed).length;
-  const pathsFailed  = pathResults.filter(r => !r.passed).length;
-  const level2Passed = pathsFailed === 0;
+  const pathsPassed = pathResults.filter(r => r.passed).length;
+  const pathsFailed = pathResults.filter(r => !r.passed).length;
 
   const result = {
-    passed:              level2Passed,
+    passed:              l2Passed,
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
@@ -99,10 +111,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     state_flow:          stateFlow,
     unreferenced_writes: unrefWrites,
     path_results:        pathResults,
+    routing_matrix:      routingMatrix,
+    smoke_test:          smokeTest,
   };
 
   console.info('simulation-engine: runSimulation — complete', {
-    passed: result.passed, pathsRun: result.paths_run,
+    passed: result.passed, routingMatrixPassed: routingMatrix.passed,
+    smokeTestPassed: smokeTest.passed, pathsRun: result.paths_run,
     pathsPassed, pathsFailed, traceId,
   });
 
@@ -816,6 +831,234 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
     failure_step:            passed ? undefined : (transitions.findLast(t => t.type !== 'end') ?? transitions[transitions.length - 1])?.step ?? currentKey,
     failure_reason:          passed ? undefined : `Path ended at "${terminal}" but expected "${path.expected_terminal}"`,
     local_state_transitions: transitions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Level 2a — Routing matrix
+// ---------------------------------------------------------------------------
+
+function runRoutingMatrix(steps, traceId) {
+  const issues  = [];
+  const stepKeys = new Set(steps.map(s => String(s.step)));
+
+  // Resolve a single routing value to a concrete target key.
+  const resolveTarget = (stepKey, value) => {
+    if (!value) return null;
+    const sv = String(value);
+    if (sv === 'end' || sv === 'cancel') return sv;
+    if (sv === 'next') {
+      const idx = steps.findIndex(s => String(s.step) === stepKey);
+      if (idx !== -1 && idx < steps.length - 1) return String(steps[idx + 1].step);
+      return 'end';
+    }
+    if (sv.startsWith('step:')) return sv.slice(5);
+    return sv; // bare step key or dead target — L1 validates existence separately
+  };
+
+  // Build adjacency list
+  const edges = {};
+  for (const s of steps) {
+    const key     = String(s.step);
+    const targets = new Set();
+
+    if (s.type === 'end') {
+      targets.add('end');
+    } else if (s.type === 'condition') {
+      const tt = resolveTarget(key, s.on_truthy);
+      const ft = resolveTarget(key, s.on_falsy);
+      if (tt) targets.add(tt);
+      if (ft) targets.add(ft);
+    } else if (s.type === 'human_gate') {
+      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+        const ot = resolveTarget(key, opt.on_select);
+        if (ot) targets.add(ot);
+      }
+      const ct = resolveTarget(key, s.on_cancel);
+      if (ct) targets.add(ct);
+    } else {
+      const st = resolveTarget(key, s.on_success ?? 'next');
+      if (st) targets.add(st);
+      for (const field of ['on_failure', 'on_complete', 'on_empty', 'on_error']) {
+        if (s[field]) {
+          const t = resolveTarget(key, s[field]);
+          if (t) targets.add(t);
+        }
+      }
+    }
+
+    edges[key] = targets;
+  }
+
+  // BFS from first step to find reachable set
+  const startKey = String(steps[0].step);
+  const reachable = new Set([startKey]);
+  const queue     = [startKey];
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const target of (edges[cur] ?? [])) {
+      if (!reachable.has(target)) {
+        reachable.add(target);
+        if (stepKeys.has(target)) queue.push(target);
+      }
+    }
+  }
+
+  // Flag unreachable non-end steps
+  for (const s of steps) {
+    const key = String(s.step);
+    if (s.type === 'end') continue; // dead end steps are harmless dead code
+    if (!reachable.has(key)) {
+      issues.push({
+        check:         'unreachable_step',
+        step:          key,
+        failure_class: 'unreachable_step',
+        detail:        `Step "${key}" is not reachable from the workflow entry point. No execution path leads to this step.`,
+      });
+    }
+  }
+
+  // Iterative fixpoint: which steps can reach a terminal ('end' or 'cancel')?
+  const canReachTerminal = new Set(['end', 'cancel']);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const key of stepKeys) {
+      if (canReachTerminal.has(key)) continue;
+      if ([...(edges[key] ?? [])].some(t => canReachTerminal.has(t))) {
+        canReachTerminal.add(key);
+        changed = true;
+      }
+    }
+  }
+
+  // Flag reachable steps with no path to a terminal
+  for (const s of steps) {
+    const key = String(s.step);
+    if (!reachable.has(key)) continue; // already flagged unreachable
+    if (!canReachTerminal.has(key)) {
+      issues.push({
+        check:         'no_terminal_path',
+        step:          key,
+        failure_class: 'no_terminal_path',
+        detail:        `Step "${key}" is reachable but has no execution path that leads to a terminal state ("end" or "cancel"). Check routing on this step and its successors for cycles.`,
+      });
+    }
+  }
+
+  const reachableCount = [...reachable].filter(k => stepKeys.has(k)).length;
+
+  return {
+    passed:            issues.length === 0,
+    reachable_count:   reachableCount,
+    unreachable_count: steps.length - reachableCount,
+    issues,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Level 2b — js_transform smoke test
+// ---------------------------------------------------------------------------
+
+function mockValueForType(stepType) {
+  if (stepType === 'serv_query')        return [{ id: 1 }];
+  if (stepType === 'serv_entity_query') return { id: 1 };
+  if (stepType === 'serv_insert')       return { id: 1 };
+  if (stepType === 'serv_update')       return { updated: 1 };
+  if (stepType === 'serv_delete')       return { deleted: 1 };
+  if (stepType === 'llm_call')          return {};
+  if (stepType === 'human_gate')        return 'mock_value';
+  return {};
+}
+
+function runJsTransformSmokeTest(steps, traceId) {
+  const issues    = [];
+  let stepsTested = 0;
+  const mockState = { input: {} };
+
+  for (const s of steps) {
+    const key = String(s.step);
+
+    if (s.type === 'js_transform') {
+      const expr = s.expression;
+      if (typeof expr === 'string' && expr.trim()) {
+        stepsTested++;
+        let result;
+        let threwSyntax  = false;
+        let threwRuntime = false;
+
+        try {
+          // eslint-disable-next-line no-new-func
+          const fn = new Function('local_state', `"use strict";\nreturn (${expr})`);
+          result = fn(mockState);
+        } catch (err) {
+          if (err instanceof SyntaxError) {
+            threwSyntax = true;
+            issues.push({
+              check:         'js_transform_syntax_error',
+              step:          key,
+              failure_class: 'js_transform_syntax_error',
+              detail:        `js_transform step "${key}" expression has a syntax error: ${err.message}`,
+            });
+          } else {
+            threwRuntime = true;
+            issues.push({
+              check:         'js_transform_runtime_error',
+              step:          key,
+              failure_class: 'js_transform_runtime_error',
+              severity:      'warning',
+              detail:        `js_transform step "${key}" threw a runtime error against mock state: ${err.message}. This may be a false positive if the expression relies on real data shapes.`,
+            });
+          }
+        }
+
+        if (!threwSyntax && !threwRuntime && result === undefined) {
+          issues.push({
+            check:         'js_transform_void_return',
+            step:          key,
+            failure_class: 'js_transform_void_return',
+            detail:        `js_transform step "${key}" expression returned undefined with mock state. Ensure the expression evaluates to a value, not a statement.`,
+          });
+        }
+
+        // Propagate result to mockState for downstream steps
+        if (s.output_key && typeof s.output_key === 'string') {
+          const useVal = (!threwSyntax && result !== undefined) ? result : {};
+          for (const rawKey of s.output_key.split(',')) {
+            const baseOut = rawKey.trim().split('.')[0];
+            if (!(baseOut in mockState)) mockState[baseOut] = useVal;
+          }
+        }
+      }
+    } else {
+      // Write mock values for non-transform steps so downstream transforms can reference them
+      if (s.output_key && typeof s.output_key === 'string') {
+        for (const rawKey of s.output_key.split(',')) {
+          const baseOut = rawKey.trim().split('.')[0];
+          if (!(baseOut in mockState)) mockState[baseOut] = mockValueForType(s.type);
+        }
+      }
+      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+        if (opt.output_key && typeof opt.output_key === 'string') {
+          const baseOut = opt.output_key.split('.')[0];
+          if (!(baseOut in mockState)) mockState[baseOut] = 'mock_value';
+        }
+      }
+    }
+  }
+
+  // Hard failures (affect passed): syntax errors and void returns.
+  // Runtime errors are soft warnings — mock state may not match real data shapes.
+  const hardFailures = issues.filter(i =>
+    i.failure_class === 'js_transform_syntax_error' ||
+    i.failure_class === 'js_transform_void_return'
+  );
+
+  return {
+    passed:       hardFailures.length === 0,
+    steps_tested: stepsTested,
+    issues,
   };
 }
 

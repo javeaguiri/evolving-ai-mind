@@ -527,7 +527,157 @@ describe('fix_workflow workflow definition — structural validity', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. End-to-end: detect → correct → validate cycle
+// 6. Level 2a — Routing matrix
+// ---------------------------------------------------------------------------
+
+describe('Level 2a — routing matrix', () => {
+
+  const UNREACHABLE_STEP_STEPS = [
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '3', on_failure: 'cancel' },
+    { step: '2', type: 'notify', message_template: 'orphan', on_success: 'end' }, // nothing routes to step 2
+    { step: '3', type: 'end' },
+  ];
+
+  const SELF_LOOP_STEPS = [
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '2', on_failure: 'cancel' },
+    { step: '2', type: 'notify', message_template: 'loop', on_success: '2' }, // self-loop, no way to 'end'
+  ];
+
+  test('passes on HEALTHY_STEPS — all steps reachable, all can reach terminal', () => {
+    const result = runSimulation({ steps: HEALTHY_STEPS });
+    assert.ok(result.routing_matrix, 'routing_matrix must be present in result');
+    assert.equal(result.routing_matrix.passed, true);
+    assert.equal(result.routing_matrix.issues.length, 0);
+  });
+
+  test('routing_matrix field present in result after L1 passes', () => {
+    const result = runSimulation({ steps: FIXED_CONDITION_STEPS });
+    assert.ok(result.routing_matrix, 'routing_matrix missing from result');
+    assert.equal(typeof result.routing_matrix.passed, 'boolean');
+    assert.ok(Array.isArray(result.routing_matrix.issues));
+    assert.equal(typeof result.routing_matrix.reachable_count, 'number');
+  });
+
+  test('detects unreachable_step for non-end step with no incoming routes', () => {
+    const result = runSimulation({ steps: UNREACHABLE_STEP_STEPS });
+    const issue = (result.routing_matrix?.issues ?? []).find(i => i.failure_class === 'unreachable_step' && i.step === '2');
+    assert.ok(issue, 'Expected unreachable_step issue on step 2');
+    assert.equal(result.routing_matrix.passed, false);
+    assert.equal(result.passed, false);
+  });
+
+  test('unreachable end-type step is skipped (dead end steps are harmless)', () => {
+    // HEALTHY_STEPS step 5 is type:end with no incoming routes — should not be flagged
+    const result = runSimulation({ steps: HEALTHY_STEPS });
+    const unreachableIssues = (result.routing_matrix?.issues ?? []).filter(i => i.failure_class === 'unreachable_step');
+    assert.equal(unreachableIssues.length, 0);
+  });
+
+  test('detects no_terminal_path for step in a self-loop', () => {
+    const result = runSimulation({ steps: SELF_LOOP_STEPS });
+    const issue = (result.routing_matrix?.issues ?? []).find(i => i.failure_class === 'no_terminal_path' && i.step === '2');
+    assert.ok(issue, 'Expected no_terminal_path issue on step 2');
+    assert.equal(result.routing_matrix.passed, false);
+  });
+
+  test('reachable_count and unreachable_count are consistent with step array length', () => {
+    const result = runSimulation({ steps: UNREACHABLE_STEP_STEPS });
+    const rm = result.routing_matrix;
+    assert.equal(rm.reachable_count + rm.unreachable_count, UNREACHABLE_STEP_STEPS.length);
+  });
+
+  test('routing_matrix absent when L1 fails (short-circuit)', () => {
+    const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
+    assert.equal(result.static_analysis.passed, false);
+    assert.equal(result.routing_matrix, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Level 2b — js_transform smoke test
+// ---------------------------------------------------------------------------
+
+describe('Level 2b — js_transform smoke test', () => {
+
+  const SYNTAX_ERROR_STEPS = [
+    { step: '1', type: 'js_transform', expression: 'if (', output_key: 'x', on_success: 'end' },
+    { step: '2', type: 'end' },
+  ];
+
+  const VOID_RETURN_STEPS = [
+    { step: '1', type: 'js_transform', expression: 'void 0', output_key: 'x', on_success: 'end' },
+    { step: '2', type: 'end' },
+  ];
+
+  const RUNTIME_ERROR_STEPS = [
+    { step: '1', type: 'js_transform', expression: 'local_state.nonexistent.property', output_key: 'x', on_success: 'end' },
+    { step: '2', type: 'end' },
+  ];
+
+  const VALID_TRANSFORM_STEPS = [
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: 'next', on_failure: 'cancel' },
+    { step: '2', type: 'js_transform', expression: '(function(){ return local_state.rows.length > 0; })()', output_key: 'has_rows', on_success: 'end' },
+    { step: '3', type: 'end' },
+  ];
+
+  test('smoke_test field present in result after L1 passes', () => {
+    const result = runSimulation({ steps: HEALTHY_STEPS });
+    assert.ok(result.smoke_test, 'smoke_test missing from result');
+    assert.equal(typeof result.smoke_test.passed, 'boolean');
+    assert.ok(Array.isArray(result.smoke_test.issues));
+    assert.equal(typeof result.smoke_test.steps_tested, 'number');
+  });
+
+  test('no js_transform steps gives steps_tested:0 and passed:true', () => {
+    const result = runSimulation({ steps: HEALTHY_STEPS });
+    assert.equal(result.smoke_test.steps_tested, 0);
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  test('syntax error in expression is a hard failure — smoke_test.passed = false', () => {
+    const result = runSimulation({ steps: SYNTAX_ERROR_STEPS });
+    const issue = (result.smoke_test?.issues ?? []).find(i => i.failure_class === 'js_transform_syntax_error');
+    assert.ok(issue, 'Expected js_transform_syntax_error issue');
+    assert.equal(result.smoke_test.passed, false);
+    assert.equal(result.passed, false);
+  });
+
+  test('undefined return is a hard failure — smoke_test.passed = false', () => {
+    const result = runSimulation({ steps: VOID_RETURN_STEPS });
+    const issue = (result.smoke_test?.issues ?? []).find(i => i.failure_class === 'js_transform_void_return');
+    assert.ok(issue, 'Expected js_transform_void_return issue');
+    assert.equal(result.smoke_test.passed, false);
+  });
+
+  test('runtime error is a soft warning — smoke_test.passed stays true', () => {
+    const result = runSimulation({ steps: RUNTIME_ERROR_STEPS });
+    const issue = (result.smoke_test?.issues ?? []).find(i => i.failure_class === 'js_transform_runtime_error');
+    assert.ok(issue, 'Expected js_transform_runtime_error issue');
+    assert.equal(issue.severity, 'warning');
+    assert.equal(result.smoke_test.passed, true); // runtime errors are warnings, not failures
+  });
+
+  test('valid expression using mock state passes', () => {
+    const result = runSimulation({ steps: VALID_TRANSFORM_STEPS });
+    assert.equal(result.smoke_test.passed, true);
+    assert.equal(result.smoke_test.steps_tested, 1);
+    assert.equal(result.smoke_test.issues.length, 0);
+  });
+
+  test('smoke_test counts only js_transform steps', () => {
+    const result = runSimulation({ steps: FIXED_CONDITION_STEPS }); // has exactly one js_transform
+    assert.equal(result.smoke_test.steps_tested, 1);
+  });
+
+  test('smoke_test absent when L1 fails (short-circuit)', () => {
+    const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
+    assert.equal(result.static_analysis.passed, false);
+    assert.equal(result.smoke_test, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. End-to-end: detect → correct → validate cycle
 // ---------------------------------------------------------------------------
 
 describe('detect → correct → validate cycle', () => {
