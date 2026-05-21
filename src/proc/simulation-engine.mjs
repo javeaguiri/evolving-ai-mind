@@ -988,10 +988,16 @@ function runJsTransformSmokeTest(steps, traceId) {
         let threwSyntax  = false;
         let threwRuntime = false;
 
+        // When input_key is set, step-executor binds local_state[input_key] as 'items'.
+        // Mirror that here so expressions using 'items' don't throw spurious ReferenceErrors.
+        const itemsVal = (s.input_key && typeof s.input_key === 'string')
+          ? mockState[s.input_key]
+          : undefined;
+
         try {
           // eslint-disable-next-line no-new-func
-          const fn = new Function('local_state', `"use strict";\nreturn (${expr})`);
-          result = fn(mockState);
+          const fn = new Function('local_state', 'items', `"use strict";\nreturn (${expr})`);
+          result = fn(mockState, itemsVal);
         } catch (err) {
           if (err instanceof SyntaxError) {
             threwSyntax = true;
