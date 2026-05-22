@@ -303,28 +303,28 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Recently Completed
 
+**Sprint 2 (2026-05-22) — create_workflow Reliability:**
+- `create_workflow` generates working domain workflows end-to-end in prod. Validated with flashcard quiz domain (run 365 completed).
+- Routing matrix (`runRoutingMatrix`) + js_transform smoke test (`runJsTransformSmokeTest`) replace broken L2 path execution in `simulation-engine.mjs`. Both run after every L1 pass; `result.passed = routingMatrix.passed && smokeTest.passed`.
+- `generate_workflow_steps` prompt (v22): routing token format rule (`on_success`/`on_failure`/`on_cancel`/`on_select` must be `next`, `end`, `cancel`, or `step:<key>`); explicit ban on `{{#if}}`, `{{/if}}`, `{{else}}` with js_transform ternary pattern as substitute; loop back-edge format rule (bare numbers only valid in condition routing).
+- L1 iterator-scope fix: `human_gate` options with `iterator` field skip the unresolved-key check — tokens resolve against iterator items at runtime, not `local_state`.
+- 246 unit tests pass.
+
 **Sprint 1 (2026-05-14) — Engine Expressiveness:**
 - `reveal` field on `human_gate` steps: renders an inline `task_card` block (Slack partner block) above the gate buttons — no click required. `button_label` → card title, resolved `content` → rich_text output. L1 validates both fields non-empty. `callback.mjs` + `step-executor.mjs`.
 - Post-write L1 validation: `create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` before persisting to `PGC_Workflow`. Blocks invalid workflows at write time with structured 422 error. `dev_scripts/upsert-workflow.mjs` surfaces errors clearly.
 - `ping_core` v16: 10 numbered tests (Test X of 10), condition step with true/false branch verification, reveal gate test (step 6r). Validated end-to-end in prod.
 - `simulation-engine.mjs` extracted from `simulate-workflow.mjs` — shared by HTTP adapter and `step-executor.mjs`.
 - Condition step seed fix: stripped `step:` prefix from `on_truthy`/`on_falsy` in all seed workflows — aligns with `workflow-schema.json` `bareStepKey` contract. 225/225 unit tests pass.
-- `docs/slack-block-kit.md`: partner block types section added (`task_card` reference).
-
-**Session 33 (2026-05-04):**
-- `/chat` and `/explain` endpoints — `src/proc/chat.mjs`, `src/proc/explain.mjs`, `src/ui/slackbot/chat.mjs`, `src/ui/slackbot/explain.mjs`
-- `PGC_Session` + `PGC_SessionEntry` tables bootstrapped and seeded via `POST /api/v1/serv/bootstrap`
-- `callLlmWithMessages` added to `src/shared/llm-client.mjs` for multi-turn chat
-- `LLM_DIAGNOSTIC` SQS result type: step-executor writes diagnostics non-blocking, run-workflow enqueues, callback.mjs posts to channel root (no thread)
-- API key security: `INTERNAL_API_KEY` env var on ProcFunction + ServFunction; `ApiKeyRequired: true` on ProcProxy + ServProxy events; `InternalApiKey` + `InternalApiUsagePlan` in `template.yaml`; `x-api-key` header in `serv-client.mjs`
-- `docs/security-architecture.md` extracted from architecture.md §12
 
 ### Immediate Open Work
 
-1. **PGC_SystemContext.content → JSONB** — complete (session 35). `content` column is now `jsonb`; `format` column dropped. New SERV endpoints: `modifyColumn`, `dropColumn`. Seed rewritten to `{sections:[{id,data}]}` schema. Task 9 is next.
+1. Deduplicate shared routing rules from `generate_workflow_steps` + `fix_workflow_routing` into `PGC_SystemContext` via `inject_for` — drift between these prompts caused two routing bugs in Sprint 2.
+2. Validate `analyze_and_design_workflow` field name fix (prompt id 25, v10 deployed but not yet validated).
 
 ### Medium Priority
 
+- Deduplicate shared routing rules from `generate_workflow_steps` + `fix_workflow_routing` into `PGC_SystemContext` via `inject_for` — drift between these prompts caused two routing bugs in Sprint 2.
 - Review `PGC_Prompt.output_schema`: evaluate separate table, cross-prompt sharing, `review-output.mjs` validation integration
 - `PGC_WorkflowRun.session_id` FK column (nullable integer FK → `PGC_Session.id`): migration script needed, column did not exist at bootstrap
 - Active bug: `analyze_and_design_workflow` (prompt id 25) produces wrong field names — `response_format` + v10 deployed session 23, not yet validated

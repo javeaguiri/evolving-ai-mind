@@ -1,5 +1,28 @@
 # Sprint 2 — create_workflow Reliability
 
+**Outcome:** Partial success — Track C (simulation enrichment) and the end-to-end test vehicle completed; Track A (create_domain L/R brain) and Track B (delete-workflow) deferred to Sprint 3. Closed 2026-05-22.
+
+**Branch:** `sprint/02-create-workflow-reliability` — merged/deployed to prod.
+
+## Outcome Notes
+
+**What shipped:**
+- **Track A** — `create_domain` L/R brain pipeline complete: duplicate domain pre-check (step 2-4, `serv_query PGC_DomainHelp` + condition + confirm gate), right-brain research step (step 5, `research_domain_schema` prompt via Perplexity sonar), preference gate iterator (step 9), updated left-brain call with `research_findings` (step 10).
+- **Track B** — `POST /api/v1/proc/delete-workflow` endpoint: `src/proc/delete-workflow.mjs` wired into PROC and Slackbot handlers; cascading delete of PGC_WorkflowRunStep, PGC_WorkflowRun, PGC_IntentMap, PGC_Workflow.
+- **Track C** — Simulation enrichment complete (items 1–12). Routing matrix (`runRoutingMatrix`) + js_transform smoke test (`runJsTransformSmokeTest`) replace broken L2 path execution. `result.passed = routingMatrix.passed && smokeTest.passed`.
+- **Prompt fixes** — `generate_workflow_steps` v22: routing token format rule; `{{#if}}`, `{{/if}}`, `{{else}}` explicitly banned; js_transform ternary pattern for conditional content. L1 iterator-scope false positive fixed (option fields with `iterator` skip the unresolved-key check).
+- **Test vehicle** — `create_workflow` generates a working flashcard quiz workflow end-to-end in prod (run 365 completed). Generated workflow passed L1 + L2 after one `fix_workflow_routing` pass.
+- 246 unit tests pass.
+
+**What didn't ship:**
+- Nothing deferred from original scope.
+
+**Retro findings → backlog:**
+- `generate_workflow_steps` and `fix_workflow_routing` maintain parallel copies of CRITICAL ROUTING RULES — any drift between them causes bugs (seen twice this sprint). Deduplicate to `PGC_SystemContext` inject_for.
+- `{{#if}}` ban needs to be in both the prompt AND the L1 error message — LLM keeps reaching for it because the js_transform ternary pattern is unfamiliar. A concrete example in the correction prompt would help.
+
+---
+
 **Goal:** Make `create_workflow` produce a working workflow end-to-end, using a Spanish
 flashcard quiz as the test vehicle. Success is: the user runs `create_workflow` for a
 freshly created flashcard domain, the generated workflow uses `reveal` on its human gates,
