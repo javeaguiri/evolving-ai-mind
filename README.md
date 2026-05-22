@@ -34,15 +34,22 @@ The left brain is what we are currently building:
 The left brain is deterministic by design. It stores everything in PostgreSQL. It reuses what it knows. It costs almost nothing per operation.
 
 ### Right Brain — Creative, Associative, Self-Correcting
-The right brain is designed but not yet built. It is not simply "more features" — it is the feedback and reasoning layer that makes the left brain reliable:
 
-- **Output validation** — reviews LLM-generated schemas, workflows, and prompts before they are stored or executed. Catches structural errors, ambiguity, and drift from the system's own rules.
-- **Self-correction** — when the left brain produces malformed output (wrong FK shape, invalid column types, schema contradictions), the right brain reasons about the error and corrects it — not with a regex, but with genuine understanding.
-- **Pattern recognition** — identifies when a new user intent is semantically similar to an existing workflow even when the wording is completely different.
-- **Prompt evolution** — analyses `PGC_Prompt.error_log` and `output_sample` to suggest prompt improvements. The left brain stores what happened; the right brain understands why and what to change.
-- **Analogy and ideation** — when asked to design a new domain, the right brain draws on knowledge of existing domains to propose better schema structures than a left-brain-only LLM call would produce.
+The right brain is partially operational. Within `create_workflow`, the full L/R brain pipeline now runs end-to-end:
 
-**The critical insight:** Many "code problems" we encounter today — FK normalisation, JSON schema enforcement, defensive validation — are symptoms of the left brain working without the right brain. The correct fix is not more defensive code. It is building the feedback loop between the two sides so the system can reason about and correct its own outputs.
+1. **Right brain research** (`research_workflow_domain` — Perplexity sonar model) retrieves domain-specific best practices, canonical data patterns, and surfaces preference questions relevant to the domain the workflow will operate on.
+2. **Preference gates** surface from research output — the user answers structured questions before the left brain generates a single step.
+3. **Left brain generation** (`generate_workflow_steps`) receives the research findings and confirmed preferences, producing a structurally sound step array that implements known user choices rather than LLM guesses.
+4. **Post-generation simulation** (routing matrix + js_transform smoke test) validates the generated workflow structurally before registration. If issues are found, `fix_workflow_routing` corrects them and re-simulates.
+
+This pattern — right brain research → preference elicitation → left brain execution → self-correction — is now validated in production.
+
+**What the right brain does not yet do:**
+- **Prompt evolution** — analyse `PGC_Prompt.error_log` and `output_sample` to suggest prompt improvements autonomously. The left brain records what happened; the right brain does not yet reason about why or what to change.
+- **Pattern recognition across domains** — identify when a new user intent is semantically similar to an existing workflow even when the wording is completely different (requires pgvector).
+- **Schema analogy** — draw on existing domains to propose better schema structures for new ones.
+
+**The critical insight:** Many "code problems" encountered today — FK normalisation, JSON schema enforcement, defensive validation — are symptoms of the left brain working without the right brain. The correct fix is not more defensive code. It is building the feedback loop between the two sides so the system can reason about and correct its own outputs. That loop is now beginning to close.
 
 The scaffolding for this feedback loop is already in the schema:
 - `PGC_Prompt.input_variables` — documents what the prompt expects
@@ -273,9 +280,14 @@ evolving-mind-ai/
 | `/create-domain` | ✅ Working | Full Step Processor flow: LLM → js_transform → edit_list gate → confirm gate → DDL iterator → register → notify |
 | `/help` | ✅ Working | confirm gate → notify — proven end-to-end through Step Processor |
 | `/shutdown` | ✅ Working | Cancels active WorkflowRuns, enqueues cancel to WorkflowQueue |
+| `create_workflow` | ✅ Working | End-to-end workflow generation: R/L brain pipeline (research → preference gates → step generation → simulation → fix loop → register). Generates working domain workflows from a natural language description. Validated in prod with flashcard quiz domain. |
 | Human gate — confirm | ✅ Working | Suspend, resume, advance |
+| Human gate — choice | ✅ Working | Single-select with `reveal` inline card support; iterator option expansion |
+| Human gate — text_input | ✅ Working | Modal text input; result written to `output_key` |
 | Human gate — edit_list | ✅ Working | Table removal with in-place chat.update re-render |
-| Block Kit dialog rendering | ✅ Working | `dialogToBlocks()` in callback.mjs — confirm + edit_list gate types |
+| Block Kit dialog rendering | ✅ Working | `dialogToBlocks()` in callback.mjs — all gate types including reveal/task_card |
+| Condition step | ✅ Working | Expression evaluation, branching via bare step keys |
+| Routing matrix + smoke test | ✅ Working | Post-L1 simulation: BFS reachability + iterative terminal check + js_transform expression execution. Replaces broken L2 path execution. |
 | Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
 | Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
 | Workflow versioning | ✅ Working | `dev_scripts/upsert-workflow.mjs` — push new versions without deploy |
@@ -284,19 +296,20 @@ evolving-mind-ai/
 
 | Type | Status | Notes |
 |---|---|---|
-| `llm_call` | ✅ Implemented | Loads prompt from PGC_Prompt, calls LLM, runs review-output validation |
-| `js_transform` | ✅ Implemented | Built-in `columnSummary` enrichment only — generic sandboxed JS deferred to Phase 3 |
-| `human_gate` | ✅ Implemented | confirm + edit_list gate types proven |
+| `llm_call` | ✅ Implemented | Loads prompt from PGC_Prompt, calls LLM, runs review-output validation with 2-attempt correction loop |
+| `js_transform` | ✅ Implemented | Generic sandboxed JS via `new Function()` — executes arbitrary expressions against `local_state`; items wired from `input_key` |
+| `human_gate` | ✅ Implemented | Gate types: `choice`, `text_input`, `confirm`, `review_object`; `reveal` field renders inline `task_card` above buttons |
+| `condition` | ✅ Implemented | Evaluates `{{expression}}`; routes via `on_truthy`/`on_falsy` bare step keys |
+| `iterator` | ✅ Implemented | Sequential only — one SQS hop per item; inline sequential and gate-suspending item bodies both supported |
 | `serv_schema` | ✅ Implemented | createTable via SERV |
 | `serv_insert` | ✅ Implemented | insertRow via SERV |
-| `notify` | ✅ Implemented | Resolves `message_template`, enqueues `WORKFLOW_NOTIFY` |
+| `serv_query` | ✅ Implemented | getRows with filter array via SERV; results written to `output_key` |
+| `serv_update` | ✅ Implemented | updateRows with filter + updates via SERV |
+| `serv_delete` | ✅ Implemented | deleteRows with filter array via SERV |
+| `serv_entity_query` | ✅ Implemented | Multi-table jsonb_agg entity query via SERV |
+| `notify` | ✅ Implemented | Resolves `message_template`, enqueues `HUMAN_NOTIFICATION` |
 | `end` | ✅ Implemented | Marks run completed |
-| `iterator` | ✅ Implemented | Sequential only — one SQS hop per item |
-| `serv_query` | ⏳ Deferred | Phase 3 |
-| `serv_update` | ⏳ Deferred | Phase 3 |
-| `serv_delete` | ⏳ Deferred | Phase 3 |
 | `sub_workflow` | ⏳ Deferred | Phase 3 |
-| `condition` | ⏳ Deferred | Phase 3 |
 
 ### Known Limitations
 
@@ -471,6 +484,7 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 | `/create-domain` end-to-end with CRUD | `v3.2-create-domain-with-crud` | ✅ Done |
 | `create_workflow` workflow | `v3.2-create-workflow-complete` | ✅ Done |
 | Gap 1 (interactive `/help`) + Gap 4 (entity schema) + structural refactoring | `v3.2-create-domain-complete-w-help` | ✅ Done |
+| Sprint 2 — create_workflow generates working domain workflows end-to-end; R/L brain pipeline operational; routing matrix + smoke test replace broken L2 path execution | `sprint/02-create-workflow-reliability` | ✅ Done |
 
 ---
 
