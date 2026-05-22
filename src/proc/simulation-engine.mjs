@@ -295,7 +295,10 @@ export function runLevel1StaticAnalysis(steps) {
     if (s.type === 'condition' && s.expression) templatesToCheck.push(s.expression);
     // Scan option and special_button description fields — choice gate descriptions
     // are resolved via resolveTemplate at runtime; unresolved refs must be caught here.
+    // Skip iterator-scoped options: their tokens resolve against iterator items at runtime,
+    // not against local_state, so L1 cannot validate them statically.
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      if (opt.iterator) continue;
       if (typeof opt.description === 'string' && opt.description) templatesToCheck.push(opt.description);
     }
 
