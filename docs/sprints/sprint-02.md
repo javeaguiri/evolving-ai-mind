@@ -1,8 +1,8 @@
 # Sprint 2 — create_workflow Reliability
 
-**Outcome:** Partial success — Track C (simulation enrichment) and the end-to-end test vehicle completed; Track A (create_domain L/R brain) and Track B (delete-workflow) deferred to Sprint 3. Closed 2026-05-22.
+**Outcome:** All three tracks complete. Closed 2026-05-22.
 
-**Branch:** `sprint/02-create-workflow-reliability` — merged/deployed to prod.
+**Branch:** `sprint/02-create-workflow-reliability` — merged to main, deployed to prod.
 
 ## Outcome Notes
 
@@ -14,12 +14,35 @@
 - **Test vehicle** — `create_workflow` generates a working flashcard quiz workflow end-to-end in prod (run 365 completed). Generated workflow passed L1 + L2 after one `fix_workflow_routing` pass.
 - 246 unit tests pass.
 
-**What didn't ship:**
-- Nothing deferred from original scope.
+---
 
-**Retro findings → backlog:**
-- `generate_workflow_steps` and `fix_workflow_routing` maintain parallel copies of CRITICAL ROUTING RULES — any drift between them causes bugs (seen twice this sprint). Deduplicate to `PGC_SystemContext` inject_for.
-- `{{#if}}` ban needs to be in both the prompt AND the L1 error message — LLM keeps reaching for it because the js_transform ternary pattern is unfamiliar. A concrete example in the correction prompt would help.
+## Retrospective
+
+### What worked well
+
+**Routing matrix replacing L2 path execution** — the cleanest architectural win of the sprint. L2 path execution was fundamentally broken: condition steps had no handler and always advanced, giving the repair LLM structurally incorrect failure data and causing the fix_workflow_routing loop to oscillate. The routing matrix (BFS reachability + iterative fixpoint terminal check) gives a real answer without needing mock execution. No regressions from the replacement.
+
+**Explicit over general in prompt rules** — every time vague language ("or any Handlebars block helpers") was replaced with an explicit enumeration with examples, the LLM complied on the next attempt. Rule 8 (routing token format: only `next`, `end`, `cancel`, `step:<key>`) worked first attempt after it was added. The lesson is consistent: general rules are ignored, specific ones are followed.
+
+**Fixing false positives at the source** — the iterator-scope issue (L1 flagging `{{description}}` in iterator-scoped options) was L1's misunderstanding of runtime resolution context, not the LLM's error. Fixing it in the validator rather than forcing the LLM to write awkward workarounds was the right call per the bug fix philosophy. False positives in L1 are more dangerous than false negatives because `fix_workflow_routing` actively tries to correct them, potentially introducing new bugs.
+
+**Real-time log monitoring** — piping all four Lambda log streams into a single file and running a Monitor on it made it easy to follow multi-step workflow runs and catch failures at the exact step they occurred. The pattern of tailing to `/tmp/lambda-logs.txt` + Monitor is worth keeping.
+
+### What didn't work well
+
+**Same errors across multiple runs** — `{{#if}}`, bare numbers in `on_success`, and `{{description}}` in iterator options appeared run after run before the root causes were understood. The retro-to-fix loop was slower than it should have been because each failure looked like a one-off until the pattern was clear.
+
+**Parallel routing rules in two prompts** — `generate_workflow_steps` and `fix_workflow_routing` maintain the same CRITICAL ROUTING RULES block in two places. Drift between them caused at least two routing bugs this sprint (a rule correct in one prompt contradicted the other). Every prompt fix made to one must be made to the other manually — this is fragile and not obvious during development.
+
+**Side questions lost during active monitoring** — a `/btw` question ("do you find any useful data in PGC_WorkflowRunSteps?") was asked during a log monitoring session and never answered. It ended up as a pending unresolved question in the UI that blocked scrolling for the remainder of the session. Pattern to apply: treat asides as a queue item to address at the next natural pause (gate wait, deploy wait).
+
+**`domain: null` limiting right-brain research quality** — `create_workflow` receives `domain` as null throughout because the intent preprocessor only passes `userInput`. The `research_workflow_domain` step runs with no schema context. The right brain is researching in a vacuum — it can ask general domain questions but can't surface preference questions tied to the actual table structures.
+
+### Retro → Sprint 3 scope
+
+- Deduplicate shared CRITICAL ROUTING RULES from both prompts into `PGC_SystemContext` with `inject_for` → Sprint 3 Track C
+- Fix `domain: null` + inject `domain_schema` into `generate_workflow_steps` → Sprint 3 Track B
+- Run the generated flashcard quiz end-to-end to validate create_workflow output is actually usable → Sprint 3 Track A
 
 ---
 
