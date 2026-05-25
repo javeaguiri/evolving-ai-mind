@@ -1393,11 +1393,6 @@
         "nullable": true
       },
       {
-        "name": "embedding",
-        "type": "real[]",
-        "nullable": true
-      },
-      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
