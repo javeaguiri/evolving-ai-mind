@@ -100,9 +100,9 @@ Sprint 2.
 3. Strip the duplicated block from both prompt texts.
 
 **Acceptance criteria:**
-- [ ] CRITICAL ROUTING RULES exist in exactly one place (PGC_SystemContext)
-- [ ] Both prompts receive the rules via inject_for
-- [ ] 246 unit tests still pass after prompt changes
+- [x] CRITICAL ROUTING RULES exist in exactly one place (PGC_SystemContext)
+- [x] Both prompts receive the rules via inject_for
+- [x] 246 unit tests still pass after prompt changes
 
 ---
 
@@ -163,9 +163,9 @@ Unit tests: write_memory resolves scope templates, computes token_estimate,
 calls SERV insertRow with correct payload. Failure path does not throw.
 
 **Acceptance criteria:**
-- [ ] PGC_Memory table exists in prod, registered in PGC_Schema + PGC_TableMap
-- [ ] `write_memory` step type passes unit tests
-- [ ] All 246 existing unit tests still pass
+- [x] PGC_Memory table exists in prod, registered in PGC_Schema + PGC_TableMap
+- [x] `write_memory` step type passes unit tests
+- [x] All 246 existing unit tests still pass
 
 ---
 
@@ -262,12 +262,12 @@ Migrate all "should-auto-upgrade" prompt rows to use `smart` or `cheap` alias.
 Leave only deliberately-pinned prompts with literal IDs.
 
 **Acceptance criteria:**
-- [ ] `memory-client.mjs` unit tests pass with mock SERV rows
-- [ ] `llm-harness.mjs` unit tests verify context assembly order
-- [ ] All 246 existing unit tests still pass (empty memory corpus = no behaviour change)
-- [ ] `memory_config` column exists on PGC_Prompt in prod
-- [ ] `llm_model_aliases` in PGC_SystemContext; harness resolves aliases at call time
-- [ ] `audit-model-ids.mjs` runs without error
+- [x] `memory-client.mjs` unit tests pass with mock SERV rows
+- [x] `llm-harness.mjs` unit tests verify context assembly order
+- [x] All 293 unit tests pass (empty memory corpus = no behaviour change)
+- [ ] `memory_config` column exists on PGC_Prompt in prod (run migrate-add-memory-config.mjs)
+- [x] `llm_model_aliases` in PGC_SystemContext; harness resolves aliases at call time
+- [x] `audit-model-ids.mjs` runs without error
 
 ---
 
