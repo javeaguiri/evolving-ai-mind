@@ -138,5 +138,14 @@
     "allow_update": false,
     "allow_delete": false,
     "views": []
+  },
+  {
+    "table_name": "PGC_Memory",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": false,
+    "allow_delete": false,
+    "views": []
   }
 ]

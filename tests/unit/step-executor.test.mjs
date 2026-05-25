@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 
 // ---------------------------------------------------------------------------
@@ -1164,5 +1164,87 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
     });
     const path = result.path_results[0];
     assert.equal(path.passed, true, `path must pass; got: ${path.failure_reason}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// write_memory — buildMemoryRow pure function
+// ---------------------------------------------------------------------------
+
+describe('buildMemoryRow — scope template resolution', () => {
+  it('resolves {{template}} tokens in scope values against local_state', () => {
+    const step = {
+      input: {
+        memory_type: 'semantic',
+        scope: { domain: '{{input.domain}}', workflow: '{{wf_name}}' },
+        content_key: 'design_reasoning',
+        tags: ['schema'],
+        priority: 2,
+      },
+    };
+    const localState = {
+      input: { domain: 'recipes' },
+      wf_name: 'add_recipe',
+      design_reasoning: 'The table stores recipe metadata.',
+    };
+    const row = buildMemoryRow(step, localState);
+    assert.equal(row.scope.domain, 'recipes');
+    assert.equal(row.scope.workflow, 'add_recipe');
+    assert.equal(row.memory_type, 'semantic');
+    assert.equal(row.content, 'The table stores recipe metadata.');
+    assert.deepEqual(row.tags, ['schema']);
+    assert.equal(row.priority, 2);
+  });
+
+  it('computes token_estimate as Math.ceil(content.length / 4)', () => {
+    const content = 'a'.repeat(100);
+    const step = {
+      input: { memory_type: 'episodic', scope: {}, content_key: 'my_content' },
+    };
+    const row = buildMemoryRow(step, { my_content: content });
+    assert.equal(row.token_estimate, 25);
+  });
+
+  it('computes token_estimate rounds up for non-divisible lengths', () => {
+    const step = {
+      input: { memory_type: 'procedural', scope: {}, content_key: 'txt' },
+    };
+    const row = buildMemoryRow(step, { txt: 'hello' });
+    assert.equal(row.token_estimate, 2);
+  });
+
+  it('produces empty content string when content_key is missing from local_state', () => {
+    const step = {
+      input: { memory_type: 'semantic', scope: {}, content_key: 'nonexistent' },
+    };
+    const row = buildMemoryRow(step, {});
+    assert.equal(row.content, '');
+    assert.equal(row.token_estimate, 0);
+  });
+
+  it('applies defaults for tags, priority when absent from step input', () => {
+    const step = {
+      input: { memory_type: 'episodic', scope: {}, content_key: 'val' },
+    };
+    const row = buildMemoryRow(step, { val: 'x' });
+    assert.deepEqual(row.tags, []);
+    assert.equal(row.priority, 5);
+    assert.equal(row.source_workflow, null);
+    assert.equal(row.source_step, null);
+  });
+
+  it('passes source_workflow and source_step through to the row', () => {
+    const step = {
+      input: {
+        memory_type: 'procedural',
+        scope: {},
+        content_key: 'v',
+        source_workflow: 'create_domain',
+        source_step: '18',
+      },
+    };
+    const row = buildMemoryRow(step, { v: 'some content' });
+    assert.equal(row.source_workflow, 'create_domain');
+    assert.equal(row.source_step, '18');
   });
 });

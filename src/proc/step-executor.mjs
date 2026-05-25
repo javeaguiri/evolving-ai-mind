@@ -80,6 +80,7 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
+    case 'write_memory': return executeWriteMemory({ step, localState, run, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
     case 'condition':    return executeCondition({ step, localState, traceId });
@@ -1259,4 +1260,52 @@ function resolveNextAction(onSuccess, _localState) {
   if (onSuccess.startsWith('step:'))     return onSuccess;
   // Bare step key — pass through so resolveNextStep can handle the direct jump.
   return onSuccess;
+}
+
+// ---------------------------------------------------------------------------
+// write_memory — persist a memory record to PGC_Memory (never fails the run)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the PGC_Memory row from a write_memory step and current local_state.
+ * Pure — no I/O. Exported for unit testing.
+ *
+ * @param {object} step       write_memory step definition
+ * @param {object} localState Current frame local_state
+ * @returns {object}          Row ready for insertRow('PGC_Memory', row)
+ */
+export function buildMemoryRow(step, localState) {
+  const input = resolveInput(step.input ?? {}, localState);
+  const {
+    memory_type     = 'semantic',
+    scope           = {},
+    content_key,
+    tags            = [],
+    priority        = 5,
+    source_workflow = null,
+    source_step     = null,
+  } = input;
+  const content        = content_key ? String(localState[content_key] ?? '') : '';
+  const token_estimate = Math.ceil(content.length / 4);
+  return { memory_type, scope, content, tags, priority, token_estimate, source_workflow, source_step };
+}
+
+async function executeWriteMemory({ step, localState, run, traceId }) {
+  try {
+    const row = buildMemoryRow(step, localState);
+    row.source_run_id = run?.id ?? null;
+
+    console.info('step-executor: write_memory', { memory_type: row.memory_type, traceId });
+
+    const resp = await insertRow('PGC_Memory', row);
+    if (!resp.success) {
+      console.warn('step-executor: write_memory insert failed (non-fatal)', { error: resp.error, traceId });
+    }
+  } catch (e) {
+    console.warn('step-executor: write_memory error (non-fatal)', { error: e.message, traceId });
+  }
+  return {
+    outputValue: null,
+    nextAction:  resolveNextAction(step.on_success ?? 'end', null),
+  };
 }
