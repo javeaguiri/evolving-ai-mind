@@ -1,8 +1,13 @@
-# Sprint 3 — Run Generated Workflows
+# Sprint 3 — Run Generated Workflows + Usability Baseline
 
-**Goal:** Close the loop from workflow *generation* to workflow *execution*. Sprint 2 proved
-`create_workflow` can generate a structurally valid workflow. Sprint 3 proves the generated
-workflow actually runs correctly for users.
+**Goal:** Close the loop from workflow *generation* to workflow *execution*, and establish a
+usability baseline that makes daily use viable. Sprint 2 proved `create_workflow` can generate
+a structurally valid workflow. Sprint 3 proves the generated workflow actually runs and that
+the experience using it is coherent. The flashcard quiz is the test vehicle; its failure mode
+is the signal — not just "fix the quiz", but understand *why* a generated workflow is broken
+before memory and domain context are in place.
+
+**README.md must be updated at sprint close.**
 
 **Branch:** `sprint/03-run-generated-workflows`
 
@@ -69,6 +74,51 @@ Acceptance criteria:
   diagnostic session
 - [ ] A test create_workflow run generates steps with correct routing tokens on first attempt
 
+### Track D — Usability analysis and flashcard domain repair
+
+The flashcard quiz is dead on arrival in its current form. This track diagnoses *why* and
+fixes what can be fixed without the memory layer. It also establishes a repeatable usability
+review practice so we don't keep building on a broken foundation.
+
+**User findings (2026-05-25):**
+
+1. **`/help` is domain-blind**: `/help` does not surface flashcard quiz usage. A user who
+   created the flashcard domain cannot discover how to start a quiz from help. Root cause:
+   `PGC_DomainHelp.commands` entries and the help workflow may not include domain-specific
+   workflows generated after `create_domain`. Investigate and fix.
+
+2. **Intent mapping is fragile — singular vs. plural**: `/m add flashcard set…` fails but
+   `/m add flashcards set…` succeeds. The alias matching requires an exact plural token.
+   This is a `PGC_DomainHelp.aliases` or `PGC_IntentMap.pattern` gap. Fix: broaden alias
+   coverage to include common singular/plural variants. Audit other domains for the same gap.
+
+3. **Post-creation help message is hostile UX**: After `flashcard_quiz_session` was registered,
+   the response was:
+   > "✅ Workflow flashcard_quiz_session is registered and ready. Try: /m Interactive
+   > flashcard quiz with spaced repetition tracking until all cards are mastered.
+   > Deferred enhancements: 3 item(s) noted for future improvement."
+   Two problems: (a) the "Try" suggestion is the raw intent_keywords string — too long and
+   not a usable command; (b) "Deferred enhancements: 3 item(s)" leaks internal generation
+   metadata to the user. Fix `create_workflow`'s final notification step to produce a concise,
+   actionable reply. Deferred items should be logged internally (not surfaced to user) unless
+   they block usage.
+
+4. **`{{name}}` tokens unresolved in human_gate options**: Starting the quiz produced:
+   > "Select a Card Set to Study. … {{name}} — {{name}} Cancel — Cancel"
+   Two buttons: `{{name}}` and `Cancel`. This means the `serv_query` step that fetches card
+   sets either (a) did not run, (b) returned zero rows despite data existing, or (c) the
+   iterator/options binding wrote the wrong key into `local_state`. Track B's domain context
+   fix (injecting `domain_schema` so the LLM knows correct table/column names) is the likely
+   root cause — the generated `serv_query` step was probably querying wrong columns. Diagnose
+   via WorkflowRun inspection and fix either the workflow or the generation prompt.
+
+**Track D acceptance criteria:**
+- [ ] `/help` explains flashcard domain commands including how to start a quiz
+- [ ] `/m add flashcard set…` (singular) resolves to the correct intent without manual alias editing
+- [ ] Post-create workflow notification shows a short, usable command and no internal metadata
+- [ ] Quiz card set selection gate renders actual set names from the database
+- [ ] Root cause of `{{name}}` token failure documented (query failure vs. binding failure vs. column name hallucination)
+
 ---
 
 ## Out of Scope
@@ -108,5 +158,7 @@ Acceptance criteria:
 - [ ] Flashcard quiz runs end-to-end in prod
 - [ ] `CLAUDE.md` Current State updated
 - [ ] `docs/architecture.md` updated if any `.mjs` files added/removed
+- [ ] `docs/data-architecture.md` updated if schema changes
 - [ ] `docs/backlog.md` updated
+- [ ] `README.md` updated
 - [ ] This file renamed to `docs/sprints/sprint-03.md` with outcome notes
