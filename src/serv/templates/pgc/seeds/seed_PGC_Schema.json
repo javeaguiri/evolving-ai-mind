@@ -770,6 +770,16 @@
         "nullable": true
       },
       {
+        "name": "probe_input",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "memory_config",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
