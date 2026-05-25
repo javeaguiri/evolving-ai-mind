@@ -343,10 +343,13 @@ async function insertRow(req) {
     }
 
     // --- Build parameterised INSERT ---
-    const cols         = Object.keys(effectiveRow);
-    const vals         = Object.values(effectiveRow).map(v =>
-      (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
-    );
+    const cols       = Object.keys(effectiveRow);
+    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
+    const vals       = Object.values(effectiveRow).map((v, i) => {
+      if (v !== null && typeof v === 'object') return JSON.stringify(v);
+      if (typeof v === 'string' && colTypeMap[cols[i]] === 'jsonb') return JSON.stringify(v);
+      return v;
+    });
     const colList      = cols.map(c => `"${c}"`).join(', ');
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
 
@@ -483,9 +486,12 @@ async function updateRows(req) {
     // --- Build parameterised SET and WHERE clauses ---
     // SET clause params are $1..$n; WHERE clause params start at $n+1.
     const updateCols = Object.keys(effectiveUpdates);
-    const updateVals = Object.values(effectiveUpdates).map(v =>
-      (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
-    );
+    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
+    const updateVals = Object.values(effectiveUpdates).map((v, i) => {
+      if (v !== null && typeof v === 'object') return JSON.stringify(v);
+      if (typeof v === 'string' && colTypeMap[updateCols[i]] === 'jsonb') return JSON.stringify(v);
+      return v;
+    });
     const setClause = updateCols
       .map((col, i) => `"${col}" = $${i + 1}`)
       .join(', ');
