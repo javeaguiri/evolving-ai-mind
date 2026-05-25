@@ -801,5 +801,67 @@
     "on_failure_options": [],
     "requires_capability": null,
     "status": "live"
+  },
+  {
+    "step_type": "write_memory",
+    "description": "Persists a memory record to PGC_Memory. content_key points to a local_state key containing a plain-text string. scope values support {{template}} substitution. token_estimate is computed automatically as Math.ceil(content.length / 4). Must be the last step after notify. Never fails the workflow run — errors are logged and execution continues.",
+    "input_contract": [
+      {
+        "type": "string",
+        "field": "memory_type",
+        "required": true,
+        "description": "episodic | semantic | procedural"
+      },
+      {
+        "type": "object",
+        "field": "scope",
+        "required": true,
+        "description": "JSONB scope object — values support {{template}} substitution. e.g. {\"domain\": \"{{input.domain}}\"}"
+      },
+      {
+        "type": "string",
+        "field": "content_key",
+        "required": true,
+        "description": "local_state key containing the plain-text content string to persist"
+      },
+      {
+        "type": "array",
+        "field": "tags",
+        "required": false,
+        "description": "Array of string tags for filtering. e.g. [\"schema\", \"design_decision\"]"
+      },
+      {
+        "type": "integer",
+        "field": "priority",
+        "required": false,
+        "description": "Integer priority — lower = higher priority. Default 5."
+      },
+      {
+        "type": "string",
+        "field": "source_workflow",
+        "required": false,
+        "description": "Name of the workflow writing this memory (for attribution)"
+      },
+      {
+        "type": "string",
+        "field": "source_step",
+        "required": false,
+        "description": "Step key inside the workflow (for attribution)"
+      },
+      {
+        "type": "string",
+        "field": "on_success",
+        "required": false,
+        "description": "Routing token — typically \"end\". Defaults to \"end\"."
+      }
+    ],
+    "output_contract": null,
+    "on_success_options": [
+      "end",
+      "next"
+    ],
+    "on_failure_options": [],
+    "requires_capability": null,
+    "status": "live"
   }
 ]
