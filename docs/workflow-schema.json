@@ -203,6 +203,17 @@
           "description": "All fields other than 'prompt' are passed as template variables into the LLM prompt text via {{variable}} substitution."
         },
         "output_key":  { "type": "string", "description": "local_state key where the parsed LLM JSON response is written." },
+        "save_to_memory": {
+          "type": "object",
+          "description": "When present, the harness appends a reasoning instruction to the prompt, strips the 'reasoning' field from the LLM output before validation, and writes it to PGC_Memory. Step never fails if the memory write fails.",
+          "additionalProperties": false,
+          "properties": {
+            "memory_type": { "type": "string", "enum": ["episodic", "semantic", "procedural"] },
+            "scope":       { "type": "object", "additionalProperties": { "type": "string" }, "description": "Scope keys (domain, workflow, topic). May contain {{template}} tokens resolved against local_state." },
+            "tags":        { "type": "array", "items": { "type": "string" } },
+            "priority":    { "type": "integer", "minimum": 1, "maximum": 10 }
+          }
+        },
         "on_success":  { "$ref": "#/definitions/routingToken" },
         "on_failure":  { "$ref": "#/definitions/routingToken" }
       }

@@ -167,9 +167,19 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     });
   }
 
-  const instructions = assembleInstructions(
+  let instructions = assembleInstructions(
     promptRow, resolvedInput, contextRows, memories, intentCategory
   );
+
+  // When save_to_memory is set on the step, ask the LLM to include a reasoning
+  // field. The field is stripped before schema validation and written to PGC_Memory.
+  const saveMemCfg = step.save_to_memory
+    ? resolveInput(step.save_to_memory, localState)
+    : null;
+  if (saveMemCfg) {
+    instructions +=
+      '\n\nAlso include a "reasoning" field (string) in your JSON response with 1–3 sentences summarizing the key decisions you made. Keep it under 80 words. This field is for system memory and is not shown to the user.';
+  }
 
   const userInput = resolveTemplate(step.input?.user_input ?? '', localState);
 
@@ -230,6 +240,16 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     }
   }
   const llmMs = Date.now() - t0;
+
+  // Extract and strip reasoning before schema validation.
+  // The base output_schema has additionalProperties: false — reasoning would
+  // fail validation if left in. We keep it separately for the memory write.
+  let memoryReasoning = null;
+  if (saveMemCfg && rawOutput && typeof rawOutput === 'object' && 'reasoning' in rawOutput) {
+    memoryReasoning = String(rawOutput.reasoning ?? '').trim();
+    rawOutput = { ...rawOutput };
+    delete rawOutput.reasoning;
+  }
 
   console.info('step-executor: llm_call completed', { llmMs, traceId });
 
@@ -299,6 +319,26 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     );
     if (diagnosticPayload) validationError.diagnosticPayload = diagnosticPayload;
     throw validationError;
+  }
+
+  // Memory write — non-fatal; Option B: await but swallow errors so the
+  // step never fails due to a memory write. Swap to SQS enqueue when G3 ships.
+  if (saveMemCfg && memoryReasoning) {
+    try {
+      await insertRow('PGC_Memory', {
+        memory_type:     saveMemCfg.memory_type ?? 'semantic',
+        scope:           saveMemCfg.scope ?? {},
+        content:         memoryReasoning,
+        tags:            saveMemCfg.tags ?? [],
+        priority:        saveMemCfg.priority ?? 5,
+        token_estimate:  Math.ceil(memoryReasoning.length / 4),
+        source_workflow: run?.workflow_name ?? null,
+        source_step:     step.step ?? null,
+      });
+      console.info('step-executor: memory written from llm_call', { intentCategory, traceId });
+    } catch (memErr) {
+      console.warn('step-executor: memory write failed (non-fatal)', memErr.message);
+    }
   }
 
   return {

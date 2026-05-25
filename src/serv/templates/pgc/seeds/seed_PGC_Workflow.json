@@ -164,6 +164,12 @@
           "user_preferences": "{{user_preferences}}"
         },
         "output_key": "proposed_scaffold",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": {},
+          "tags": ["domain_design"],
+          "priority": 3
+        },
         "on_success": "next",
         "on_failure": "cancel"
       },
@@ -935,6 +941,12 @@
           "simulation_error_summary": "{{step_gen_context.simulation_error_summary}}"
         },
         "output_key": "draft_workflow",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": {},
+          "tags": ["workflow_design"],
+          "priority": 3
+        },
         "on_success": "step:24",
         "on_failure": "cancel"
       },

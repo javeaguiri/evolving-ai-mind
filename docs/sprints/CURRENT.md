@@ -265,7 +265,7 @@ Leave only deliberately-pinned prompts with literal IDs.
 - [x] `memory-client.mjs` unit tests pass with mock SERV rows
 - [x] `llm-harness.mjs` unit tests verify context assembly order
 - [x] All 293 unit tests pass (empty memory corpus = no behaviour change)
-- [ ] `memory_config` column exists on PGC_Prompt in prod (run migrate-add-memory-config.mjs)
+- [x] `memory_config` column exists on PGC_Prompt in prod (added via SERV addColumn)
 - [x] `llm_model_aliases` in PGC_SystemContext; harness resolves aliases at call time
 - [x] `audit-model-ids.mjs` runs without error
 
@@ -278,13 +278,16 @@ system usage. This is the track that makes Tracks B+C+E+F pay off — after
 Track G, a second `create_workflow` run for the same domain will carry the
 design decisions from the first.
 
-**G1. `write_memory` steps in create_domain and create_workflow**
+**G1. `save_to_memory` flag on create_domain and create_workflow llm_call steps** ✅
 
-Add as final steps (after `notify`) in each workflow's seed JSON.
-`create_domain` writes a semantic memory scoped to the new domain — the LLM's
-schema design reasoning. `create_workflow` writes a procedural memory scoped
-to the new workflow — what it is designed to accomplish.
-Upsert both via `upsert-workflow.mjs`. Validate in prod.
+Implemented as a flag on the llm_call step rather than separate write_memory steps.
+When set, the harness: (1) appends a reasoning instruction to the prompt, (2) strips
+`reasoning` from raw LLM output before schema validation, (3) writes to PGC_Memory
+(non-fatal await — Option B). PGC_Memory table created in prod. workflow-schema.json
+and workflow seeds updated. Both workflows upserted (create_domain v31, create_workflow v48).
+
+Not yet validated end-to-end in prod (next session: run a create_domain and verify
+a PGC_Memory row appears).
 
 **G2. Wire memory into fix_workflow**
 
@@ -319,8 +322,9 @@ runs with `reasoning` fields in `local_state`: cheap sonar call distils to
 2–3 sentences.
 
 **Acceptance criteria:**
-- [ ] A create_domain run writes a semantic memory record to PGC_Memory in prod
-- [ ] A create_workflow run writes a procedural memory record to PGC_Memory in prod
+- [x] PGC_Memory table created and registered in PGC_Schema + PGC_TableMap
+- [ ] A create_domain run writes a semantic memory record to PGC_Memory in prod (validate next session)
+- [ ] A create_workflow run writes a procedural memory record to PGC_Memory in prod (validate next session)
 - [ ] A second create_workflow run for the same domain has that semantic memory injected
 - [ ] fix_workflow receives procedural memory for the target workflow via harness injection
 - [ ] A domain CRUD workflow run triggers a MEMORY_WRITE SQS message; episodic record written
