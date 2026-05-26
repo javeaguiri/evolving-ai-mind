@@ -286,8 +286,14 @@ When set, the harness: (1) appends a reasoning instruction to the prompt, (2) st
 (non-fatal await — Option B). PGC_Memory table created in prod. workflow-schema.json
 and workflow seeds updated. Both workflows upserted (create_domain v31, create_workflow v48).
 
-Not yet validated end-to-end in prod (next session: run a create_domain and verify
-a PGC_Memory row appears).
+G1 still not validated end-to-end — blocked by prompt bugs discovered during validation:
+- `create_domain` output_schema `maxItems: 6` → 10 (LLM generated 7 tables, failed validation) ✅ fixed
+- `research_domain_schema` missing `{{single_user_constraint}}` placeholder — constraint never injected ✅ fixed
+- `single_user_constraint` inject_for had phantom `create_domain_research` category → fixed to `research_domain_schema` ✅
+- `create_domain` column `default` must-be-string rule missing — LLM returned `false`/`0` as native JSON types ✅ fixed
+- `create_domain` max_output_tokens was DB-stale at 2000 (seed: 4000) — truncation on every run ✅ fixed via upsert
+- `revise_domain_schema` same two fixes applied ✅
+Next session: re-run create_domain (run 380+) to confirm schema validates and PGC_Memory row is written.
 
 **G2. Wire memory into fix_workflow**
 
