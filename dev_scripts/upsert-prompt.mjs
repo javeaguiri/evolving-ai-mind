@@ -193,10 +193,12 @@ for (const prompt of targets) {
       { column: 'version', op: 'eq', value: targetVersion },
     ],
     updates: {
-      prompt_text:     prompt.prompt_text,
-      model:           prompt.model ?? null,
-      input_variables: prompt.input_variables ?? null,
-      output_schema:   prompt.output_schema ?? null,
+      prompt_text:       prompt.prompt_text,
+      model:             prompt.model ?? null,
+      input_variables:   prompt.input_variables ?? null,
+      output_schema:     prompt.output_schema ?? null,
+      max_output_tokens: prompt.max_output_tokens ?? null,
+      probe_input:       prompt.probe_input ?? null,
     },
   });
 

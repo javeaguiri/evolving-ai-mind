@@ -92,6 +92,13 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
   });
 
   // --- Attempt 2 — inject errors into correction prompt ---
+  // Double the token budget — correction rewrites the full JSON and needs at least as
+  // much headroom as attempt 1. Without this the response truncates before the closing
+  // fence and the fence-strip regex fails, causing a spurious parse error.
+  const correctionTokenBudget = promptRow.max_output_tokens
+    ? Math.min(parseInt(promptRow.max_output_tokens, 10) * 2, 8000)
+    : undefined;
+
   let correctedOutput;
   try {
     correctedOutput = await callLlmWithCorrection(
@@ -102,14 +109,16 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
       attempt1Errors,
       output,
       traceId,
-      promptRow.max_output_tokens ?? undefined,
+      correctionTokenBudget,
     );
   } catch (error) {
-    // LLM call itself failed — log and return invalid
+    // LLM call itself failed — log attempt1 context so we can inspect what went wrong
     await logPromptError(promptRow.id, {
-      error_type:     'llm_correction_failed',
-      error_message:  error.message,
-      recovery_action: 'halt',
+      error_type:              'llm_correction_failed',
+      error_message:           error.message,
+      attempt1_errors:         attempt1Errors,
+      attempt1_output_excerpt: JSON.stringify(output).slice(0, 800),
+      recovery_action:         'halt',
     });
     return {
       valid:       false,
@@ -144,10 +153,11 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
 
   const errorType = priorErrorType ?? classifyAjvErrors(attempt2Errors);
   await logPromptError(promptRow.id, {
-    error_type:      errorType,
-    error_message:   `Validation failed after 2 attempts — ${attempt2Errors.length} error(s)`,
-    ajv_errors:      attempt2Errors,
-    recovery_action: 'halt',
+    error_type:              errorType,
+    error_message:           `Validation failed after 2 attempts — ${attempt2Errors.length} error(s)`,
+    ajv_errors:              attempt2Errors,
+    attempt1_output_excerpt: JSON.stringify(output).slice(0, 800),
+    recovery_action:         'halt',
   });
 
   // Fire-and-forget — prompt_quality_monitor analyses the error_log and auto-patches
