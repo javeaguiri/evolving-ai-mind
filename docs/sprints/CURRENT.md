@@ -55,8 +55,8 @@ which fixes belong in Track B vs the memory layer vs the workflow itself.
 **Acceptance criteria:**
 - [ ] `/help` surfaces flashcard domain commands including how to start a quiz
 - [ ] `/m add flashcard set…` (singular) resolves correctly without manual alias editing
-- [ ] Post-create workflow notification is concise and contains no internal metadata
-- [ ] Root cause of `{{name}}` token failure documented
+- [x] Post-create workflow notification is concise and contains no internal metadata (create_workflow step 37 message_template fixed, v50)
+- [x] `{{name}}` token failure fixed: iterator field on human_gate options eliminates js_transform-before-gate pattern; generate_workflow_steps Rule 7 added so new workflows use iterator directly
 
 ---
 
@@ -295,18 +295,13 @@ G1 still not validated end-to-end — blocked by prompt bugs discovered during v
 - `revise_domain_schema` same two fixes applied ✅
 Next session: re-run create_domain (run 380+) to confirm schema validates and PGC_Memory row is written.
 
-**G2. Wire memory into fix_workflow**
+**G2. Wire memory into fix_workflow** ✅
 
-`fix_workflow` and `fix_workflow_routing` must read the procedural memory for
-the target workflow before the repair LLM runs. Two options:
-(a) Add a `serv_query` step fetching `PGC_Memory` WHERE `scope @> '{"workflow":"<name>"}'`
-    and memory_type = 'procedural', writing to `local_state.procedural_memory`.
-    The generation prompt then receives it via template substitution.
-(b) Let the harness inject it automatically via `memory_config` on the prompt.
-
-Option (b) is preferred — it uses the harness and requires no workflow step
-change. Set `memory_config` on `fix_workflow` and `fix_workflow_routing` prompts
-with `memory_types: ["procedural"]` and `scope` derived from `input.workflowName`.
+`fix_workflow_steps` and `fix_workflow_routing` now have `memory_config` with
+`scope_additions: {"workflow": "{{input.workflow_name}}"}` so the harness retrieves
+procedural memories scoped to the target workflow being repaired.
+`llm-harness.mjs` `scope_additions` support implemented: template-resolved additions
+merged into the auto-derived scope before retrieval. Deployed in session 2026-05-26.
 
 **G3. Episodic fire-and-forget writes**
 
@@ -327,12 +322,24 @@ CRUD runs: deterministic distillation (zero LLM cost). For rich multi-step
 runs with `reasoning` fields in `local_state`: cheap sonar call distils to
 2–3 sentences.
 
+**G3. iterator field on human_gate options** ✅
+
+Added `iterator: '<local_state_key>'` support on `choice` gate options.
+`buildDialog` in `step-executor.mjs` expands it into one button per array item,
+resolving `label`/`value`/`description` against `{...localState, ...item}`. L1
+validation already skips unresolved-key check for options carrying `iterator`.
+Eliminates the need for a preceding `js_transform` when buttons come from a
+variable-length array. `generate_workflow_steps` prompt v24 updated: Rule 6
+clarified (message_template only), Rule 7 added (iterator preference for buttons).
+`seed_PGC_StepType.json` and `seed_PGC_SystemContext.json` (step_usage_patterns)
+updated. `docs/architecture.md` updated with iterator-on-options subsection.
+
 **Acceptance criteria:**
 - [x] PGC_Memory table created and registered in PGC_Schema + PGC_TableMap
 - [ ] A create_domain run writes a semantic memory record to PGC_Memory in prod (validate next session)
 - [ ] A create_workflow run writes a procedural memory record to PGC_Memory in prod (validate next session)
 - [ ] A second create_workflow run for the same domain has that semantic memory injected
-- [ ] fix_workflow receives procedural memory for the target workflow via harness injection
+- [x] fix_workflow receives procedural memory for the target workflow via harness injection
 - [ ] A domain CRUD workflow run triggers a MEMORY_WRITE SQS message; episodic record written
 
 ---

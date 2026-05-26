@@ -235,86 +235,56 @@ export async function handle(req) {
     ? `❌ Cancelled.${gateContext}`
     : `✅ ${userResponse}.${gateContext}`;
 
+  // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up.
+  // Do this before returning so the workflow resumes even if the response body
+  // is somehow not processed by Slack.
+  if (userResponse !== 'remove_item') {
+    try {
+      await sqs.send(new SendMessageCommand({
+        QueueUrl:    process.env.SQS_WORKFLOW_URL,
+        MessageBody: JSON.stringify({
+          type:          'WORKFLOW_STEP',
+          action:        'resume_gate',
+          workflowRunId,
+          userResponse,
+          ...(mergedResponseData && { responseData: mergedResponseData }),
+          // message_ts is the ts of the gate message being interacted with.
+          // Forwarded so run-workflow can pass it to the re-render HUMAN_GATE
+          // payload, enabling callback.mjs to chat.update in-place on remove_item.
+          message_ts:    threadId,
+          slackUserId,
+          callback: {
+            provider: 'slack',
+            channel,
+            threadId,
+          },
+          traceId,
+          enqueuedAt: new Date().toISOString(),
+        }),
+      }));
+    } catch (error) {
+      console.error('interactive: SQS enqueue failed', { error: error.message, traceId });
+      return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
+    }
+  }
+
   if (userResponse === 'remove_item') {
-    // Keep gate open — Step Processor re-enqueues updated HUMAN_GATE.
-  } else if (buttonValue.gateType === 'text_input') {
-    // Delete the original message (removes input block + stale buttons),
-    // then post a clean confirmation reply in the same thread.
-    try {
-      await slack.chat.delete({ channel, ts: threadId });
-      await slack.chat.postMessage({
-        channel,
-        thread_ts: payload.message?.thread_ts ?? threadId,
-        text:      confirmationText,
-        blocks:    [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
-      });
-    } catch (error) {
-      console.warn('interactive: text_input delete+reply failed (non-fatal)', {
-        error:     error.message,
-        errorCode: error.data?.error,
-        channel,
-        ts:        threadId,
-        traceId,
-      });
-    }
-  } else {
-    const updatePayload = {
-      channel,
-      ts:     threadId,
-      text:   confirmationText,
-      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
-    };
-    try {
-      await slack.chat.update(updatePayload);
-    } catch (error) {
-      const slackCode = error.data?.error;
-      console.warn('interactive: chat.update failed, retrying once', {
-        error: error.message, slackCode, channel, ts: threadId, traceId,
-      });
-      // Single retry after 1s — handles transient Slack rate-limit responses.
-      if (slackCode === 'ratelimited') await new Promise(r => setTimeout(r, 1000));
-      try {
-        await slack.chat.update(updatePayload);
-      } catch (retryError) {
-        console.warn('interactive: chat.update retry failed (non-fatal)', {
-          error: retryError.message, slackCode: retryError.data?.error, channel, ts: threadId, traceId,
-        });
-      }
-    }
+    // Keep gate open — Step Processor re-enqueues updated HUMAN_GATE. Return
+    // empty body so Slack leaves the message as-is.
+    return { statusCode: 200, body: '' };
   }
 
-  // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up
-  try {
-    await sqs.send(new SendMessageCommand({
-      QueueUrl:    process.env.SQS_WORKFLOW_URL,
-      MessageBody: JSON.stringify({
-        type:          'WORKFLOW_STEP',
-        action:        'resume_gate',
-        workflowRunId,
-        userResponse,
-        ...(mergedResponseData && { responseData: mergedResponseData }),
-        // message_ts is the ts of the gate message being interacted with.
-        // Forwarded so run-workflow can pass it to the re-render HUMAN_GATE
-        // payload, enabling callback.mjs to chat.update in-place on remove_item.
-        message_ts:    threadId,
-        slackUserId,
-        callback: {
-          provider: 'slack',
-          channel,
-          threadId,
-        },
-        traceId,
-        enqueuedAt: new Date().toISOString(),
-      }),
-    }));
-  } catch (error) {
-    console.error('interactive: SQS enqueue failed', { error: error.message, traceId });
-    return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
-  }
-
-  // Return empty 200 — Slack does not display this response body
-  // The workflow result will arrive via SlackCallbackListenerFunction as a thread reply
-  return { statusCode: 200, body: '' };
+  // Replace buttons by returning confirmation blocks in the HTTP response body.
+  // Slack updates the message synchronously on its own servers — no chat.update
+  // API call needed, eliminating rate-limit races and client render delays.
+  // text_input gates open a modal (views.open path) so this body targets the
+  // original button message, which is correct for cancel confirmations too.
+  const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
+  return {
+    statusCode: 200,
+    headers:    { 'Content-Type': 'application/json' },
+    body:       JSON.stringify({ text: confirmationText, blocks: confirmationBlocks }),
+  };
 }
 
 // ---------------------------------------------------------------------------

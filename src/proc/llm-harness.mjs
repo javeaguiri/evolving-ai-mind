@@ -155,7 +155,11 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
   const budgetTokens = memCfg.memory_budget_tokens ?? 0;
   let memories = [];
   if (budgetTokens > 0) {
-    const callScope    = memCfg.scope_override ?? deriveCallScope(run, resolvedInput);
+    const baseScope    = memCfg.scope_override ?? deriveCallScope(run, resolvedInput);
+    const additions    = memCfg.scope_additions
+      ? resolveInput(memCfg.scope_additions, localState)
+      : {};
+    const callScope    = { ...baseScope, ...additions };
     const memoryTypes  = memCfg.memory_types ?? ['episodic', 'semantic', 'procedural'];
     const callContext  = memCfg.include_persona ? 'chat' : 'generation';
     memories = await retrieveMemories({
