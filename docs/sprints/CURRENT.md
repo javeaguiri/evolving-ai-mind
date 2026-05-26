@@ -80,8 +80,8 @@ Two coupled fixes:
    domain table structure — this fixes that too.
 
 **Acceptance criteria:**
-- [ ] `domain` is non-null in create_workflow WorkflowRun inputs
-- [ ] `domain_schema` is available in `local_state` when `generate_workflow_steps` fires
+- [x] `domain` is non-null in create_workflow WorkflowRun inputs
+- [x] `domain_schema` is available in `local_state` when `generate_workflow_steps` fires
 - [ ] A test create_workflow run references correct table and column names on first attempt
 
 ---

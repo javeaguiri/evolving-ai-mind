@@ -507,6 +507,23 @@ export function buildDialog(step, localState) {
     ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
     : (step.options ?? []);
 
+  // Expand options that carry an iterator field — one button per row in
+  // localState[o.iterator]. label and value are resolved against a merged
+  // state (localState + item) so {{name}}, {{id}} etc. bind to the row.
+  const expandedOptions = resolvedOptions.flatMap(o => {
+    if (!o.iterator) return [o];
+    const items = Array.isArray(localState[o.iterator]) ? localState[o.iterator] : [];
+    return items.map(item => {
+      const itemState = { ...localState, ...item };
+      return {
+        ...o,
+        label:    resolveTemplate(String(o.label  ?? ''), itemState),
+        value:    resolveTemplate(String(o.value  ?? ''), itemState),
+        iterator: undefined,
+      };
+    });
+  });
+
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
   const isChoice = step.gate_type === 'choice';
@@ -516,7 +533,7 @@ export function buildDialog(step, localState) {
     // o.modal forwarded so callback.mjs encodes it into button value for interactive.mjs.
     // special_buttons appended after options — appear in actions block only,
     // never in description_list or other content fields.
-    buttons: [...resolvedOptions, ...resolvedSpecialButtons].map(o => ({
+    buttons: [...expandedOptions, ...resolvedSpecialButtons].map(o => ({
       action: isChoice ? o.value : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),

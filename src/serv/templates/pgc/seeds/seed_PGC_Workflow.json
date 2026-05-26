@@ -553,7 +553,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 22,
+    "version": 23,
     "steps": [
       {
         "step": "1",
@@ -1269,7 +1269,7 @@
         "step": "37",
         "type": "notify",
         "description": "Confirm the workflow is registered and ready.",
-        "message_template": "✅ Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:* {{gap_analysis.deferred.length}} item(s) noted for future improvement.",
+        "message_template": "✅ *{{draft_workflow.name}}* is ready.\n\nTry: `/m {{draft_workflow.intent_keywords.0}}`",
         "on_success": "end"
       },
       {

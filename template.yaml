@@ -243,10 +243,13 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSWorkflow
-      # Must exceed ProcFunction Timeout (60s) — prevents SQS redelivery while a
-      # long-running step (e.g. generate_crud_workflows LLM call ~45s) is in flight.
-      # Default 30s caused duplicate step execution on the same workflowRunId.
-      VisibilityTimeout: 90
+      # Must exceed ProcFunction Timeout (120s) — prevents SQS redelivery while a
+      # long-running step (LLM call + correction loop can reach ~105s) is in flight.
+      # 90s caused duplicate step execution when correction loop exceeded the timeout
+      # (run 384: 55s LLM + 48s correction = 103s). Set to 300s (2.5× Lambda timeout)
+      # to give comfortable headroom. Trade-off: a hard-killed Lambda waits up to 300s
+      # before SQS retries, but application-level catch handles all normal failures.
+      VisibilityTimeout: 300
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
         maxReceiveCount: 3

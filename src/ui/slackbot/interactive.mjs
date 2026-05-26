@@ -258,21 +258,28 @@ export async function handle(req) {
       });
     }
   } else {
+    const updatePayload = {
+      channel,
+      ts:     threadId,
+      text:   confirmationText,
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
+    };
     try {
-      await slack.chat.update({
-        channel,
-        ts:     threadId,
-        text:   confirmationText,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }],
-      });
+      await slack.chat.update(updatePayload);
     } catch (error) {
-      console.warn('interactive: chat.update failed (non-fatal)', {
-        error:     error.message,
-        errorCode: error.data?.error,
-        channel,
-        ts:        threadId,
-        traceId,
+      const slackCode = error.data?.error;
+      console.warn('interactive: chat.update failed, retrying once', {
+        error: error.message, slackCode, channel, ts: threadId, traceId,
       });
+      // Single retry after 1s — handles transient Slack rate-limit responses.
+      if (slackCode === 'ratelimited') await new Promise(r => setTimeout(r, 1000));
+      try {
+        await slack.chat.update(updatePayload);
+      } catch (retryError) {
+        console.warn('interactive: chat.update retry failed (non-fatal)', {
+          error: retryError.message, slackCode: retryError.data?.error, channel, ts: threadId, traceId,
+        });
+      }
     }
   }
 
