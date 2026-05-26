@@ -12,6 +12,21 @@ gate: it must run end-to-end using the new memory-aware system.
 
 ---
 
+## Session Notes
+
+**2026-05-26 (session 2):** Track G coding complete and deployed (commit 66803ea).
+- `scope_additions` on memory_config — fix_workflow now retrieves memories for the target workflow
+- `iterator` field on human_gate options — one button per array item, no preceding js_transform needed
+- `generate_workflow_steps` v24: Rule 6 updated, Rule 7 added
+- `create_workflow` step 23 memory scope fixed (procedural, scoped to workflow name), DB v50
+- All 5 create/fix workflow prompts have `memory_config` in DB
+- Stale button fix: HTTP response body replaces chat.update
+- SQS VisibilityTimeout 90→300s (distributed lost update fix)
+- 293 unit tests pass
+- **Next session: retest** — run create_workflow, validate iterator buttons render correctly, confirm PGC_Memory write, confirm no stale buttons
+
+---
+
 ## Scope — Execution Order
 
 Tracks are sequenced. Each track must be complete before the next starts.
