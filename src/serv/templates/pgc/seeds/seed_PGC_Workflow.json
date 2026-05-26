@@ -553,7 +553,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 23,
+    "version": 24,
     "steps": [
       {
         "step": "1",
@@ -942,8 +942,8 @@
         },
         "output_key": "draft_workflow",
         "save_to_memory": {
-          "memory_type": "semantic",
-          "scope": {},
+          "memory_type": "procedural",
+          "scope": {"workflow": "{{draft_workflow.name}}"},
           "tags": ["workflow_design"],
           "priority": 3
         },
