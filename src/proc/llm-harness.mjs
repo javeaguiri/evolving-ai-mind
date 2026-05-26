@@ -325,13 +325,21 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
   // step never fails due to a memory write. Swap to SQS enqueue when G3 ships.
   if (saveMemCfg && memoryReasoning) {
     try {
+      // Scope: base from run context, enriched with LLM output domain when
+      // the domain isn't known until the LLM responds (e.g. create_domain),
+      // then any explicit overrides from the step's save_to_memory config.
+      const baseScope = deriveCallScope(run, resolvedInput);
+      if (!baseScope.domain && finalOutput?.domain) baseScope.domain = finalOutput.domain;
+      const memoryScope = { ...baseScope, ...(saveMemCfg.scope ?? {}) };
+
       await insertRow('PGC_Memory', {
         memory_type:     saveMemCfg.memory_type ?? 'semantic',
-        scope:           saveMemCfg.scope ?? {},
+        scope:           memoryScope,
         content:         memoryReasoning,
         tags:            saveMemCfg.tags ?? [],
         priority:        saveMemCfg.priority ?? 5,
         token_estimate:  Math.ceil(memoryReasoning.length / 4),
+        source_run_id:   run?.id ?? null,
         source_workflow: run?.workflow_name ?? null,
         source_step:     step.step ?? null,
       });
