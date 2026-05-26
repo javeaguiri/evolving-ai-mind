@@ -989,8 +989,8 @@
     "key": "single_user_constraint",
     "section": "domain_design",
     "inject_always": false,
-    "inject_for": ["create_domain", "create_domain_research"],
-    "version": 1,
+    "inject_for": ["create_domain", "research_domain_schema", "revise_domain_schema"],
+    "version": 2,
     "content": "evolving-mind-ai is a single-user personal system, not a multi-user SaaS product. Never design multi-user schemas. Prohibited columns and tables: owner_id, user_id, user_fk, created_by, assigned_to, sharing tables, permission tables, access control tables, tenant_id, account_id. All data implicitly belongs to the single user running the system. If the user asks for ownership or sharing features, note that multi-user support is out of scope."
   }
 ]
