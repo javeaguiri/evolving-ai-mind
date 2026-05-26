@@ -144,8 +144,8 @@
     "target": "pgc",
     "domain": null,
     "allow_insert": true,
-    "allow_update": false,
-    "allow_delete": false,
+    "allow_update": true,
+    "allow_delete": true,
     "views": []
   }
 ]

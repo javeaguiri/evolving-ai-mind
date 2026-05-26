@@ -243,7 +243,7 @@
             },
             "additionalProperties": false
           },
-          "maxItems": 6,
+          "maxItems": 10,
           "minItems": 2
         }
       },
@@ -2825,7 +2825,7 @@
             },
             "additionalProperties": false
           },
-          "maxItems": 6,
+          "maxItems": 10,
           "minItems": 2
         }
       },
