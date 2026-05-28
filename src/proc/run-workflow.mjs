@@ -38,6 +38,7 @@ import { getRows, insertRow, updateRows }
 import { executeStep, buildDialog }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
+import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
@@ -460,6 +461,15 @@ async function executeTop({ workflowRunId, traceId, source }) {
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
+    if (shouldWriteEpisodicMemory(run)) {
+      await enqueueWorkflow({
+        type:         'MEMORY_WRITE',
+        runId:        run.id,
+        workflowName: run.workflow_name,
+        domain:       run.input?.domain ?? null,
+        traceId,
+      });
+    }
     return { action: 'completed' };
   }
 
