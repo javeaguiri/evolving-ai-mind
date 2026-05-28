@@ -40,7 +40,7 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { servPost, getRows, insertRow, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
 import { executeLlmCall }               from './llm-harness.mjs';
 import {
   resolvePath,
@@ -965,12 +965,11 @@ async function executeServEntityInsert({ step, localState, traceId }) {
       ? (insertedByAlias[parent] ?? [])
       : [{ id: rootId }];
 
-    const insertedRows = [];
-    for (let i = 0; i < childRows.length; i++) {
-      const row = { ...childRows[i] };
+    // Prepare all rows with FK injected, then bulk-insert in one SQL statement
+    const preparedRows = childRows.map((childRow, i) => {
+      const row = { ...childRow };
 
       if (fk_columns && fk_columns.length > 1) {
-        // Multiple FKs — inject each one from its respective parent
         for (const fkDef of fk_columns) {
           const fkParentRows = fkDef.parent
             ? (insertedByAlias[fkDef.parent] ?? [])
@@ -980,21 +979,21 @@ async function executeServEntityInsert({ step, localState, traceId }) {
           row[fkDef.column] = fkRow.id;
         }
       } else if (fk_column) {
-        // Single FK — inject from primary parent
         const parentRow = parentRows[i] ?? parentRows[parentRows.length - 1] ?? { id: rootId };
         delete row[fk_column];
         row[fk_column] = parentRow.id;
       }
 
-      const result = await insertRow(table, row);
-      if (!result.success) {
-        throw new Error(`serv_entity_insert failed for "${table}" row ${i}: ${result.error}`);
-      }
-      insertedRows.push(result.row);
+      return row;
+    });
+
+    const result = await insertRows(table, preparedRows);
+    if (!result.success) {
+      throw new Error(`serv_entity_insert failed for "${table}": ${result.error}`);
     }
 
-    insertedByAlias[alias] = insertedRows;
-    insertedCounts[alias]  = insertedRows.length;
+    insertedByAlias[alias] = result.rows ?? [];
+    insertedCounts[alias]  = (result.rows ?? []).length;
   }
 
   console.info('step-executor: serv_entity_insert complete', {
@@ -1058,19 +1057,25 @@ async function entityInsertSelfRef({ table, childRows, fkColumn, matchKey, trace
   const keyToId  = {};
   const inserted = [];
 
-  // Pass 1: insert without FK
-  for (const rawRow of childRows) {
-    const row       = { ...rawRow };
-    const parentRef = row[`parent_${matchKey}`] ?? null;
+  // Pass 1: strip self-ref fields and bulk-insert all rows without the FK
+  const parentRefs = [];
+  const preparedRows = childRows.map(rawRow => {
+    const row = { ...rawRow };
+    parentRefs.push(row[`parent_${matchKey}`] ?? null);
     delete row[fkColumn];
     delete row[`parent_${matchKey}`];
+    return row;
+  });
 
-    const result = await insertRow(table, row);
-    if (!result.success) {
-      throw new Error(`serv_entity_insert (self-ref) failed for "${table}": ${result.error}`);
-    }
-    keyToId[rawRow[matchKey]] = result.row.id;
-    inserted.push({ id: result.row.id, parentRef });
+  const batchResult = await insertRows(table, preparedRows);
+  if (!batchResult.success) {
+    throw new Error(`serv_entity_insert (self-ref) failed for "${table}": ${batchResult.error}`);
+  }
+
+  for (let i = 0; i < batchResult.rows.length; i++) {
+    const id = batchResult.rows[i].id;
+    keyToId[childRows[i][matchKey]] = id;
+    inserted.push({ id, parentRef: parentRefs[i] });
   }
 
   // Pass 2: update FK for rows that reference a parent
