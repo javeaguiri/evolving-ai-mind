@@ -436,15 +436,21 @@ export function buildDialog(step, localState) {
         });
       } else {
         // Flat object — each non-system property is one pair.
-        // Nested objects and arrays are JSON-stringified for display — prevents
-        // '[object Object]' when a review_object gate receives structured data
-        // (e.g. parsed_entity: { root: {...}, children: {...} }).
+        // Plain nested objects are expanded one level (e.g. parsed_entity.children →
+        // children › cards, children › cardsides) so callback.mjs can apply smart
+        // array summarisation (collapse empty {}, skip empty arrays) per sub-key.
+        // Scalar and array values are passed through as-is.
         items = Object.entries(ctx)
           .filter(([k, v]) => !SYSTEM_KEYS.has(k) && v !== null && v !== undefined)
-          .map(([k, v]) => ({
-            key:   k,
-            value: (v !== null && typeof v === 'object') ? JSON.stringify(v, null, 2) : v,
-          }));
+          .flatMap(([k, v]) => {
+            if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+              // Expand one level — each child key becomes "parent › child"
+              return Object.entries(v)
+                .filter(([, sv]) => sv !== null && sv !== undefined)
+                .map(([sk, sv]) => ({ key: `${k} › ${sk}`, value: sv }));
+            }
+            return [{ key: k, value: v }];
+          });
       }
 
       if (items.length > 0) {
