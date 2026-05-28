@@ -91,9 +91,11 @@ async function getRows(req) {
     const filterError = validateFilters(filters, validColumns);
     if (filterError) return err(400, filterError, req.correlationId);
 
-    // --- Validate orderBy column ---
-    if (orderBy && !validColumns.has(orderBy.column)) {
-      return err(400, `orderBy column "${orderBy.column}" not found in schema`, req.correlationId);
+    // --- Normalize and validate orderBy ---
+    // Accept both object { column, direction } and string "col ASC" / "col DESC".
+    const normalizedOrderBy = normalizeOrderBy(orderBy);
+    if (normalizedOrderBy && !validColumns.has(normalizedOrderBy.column)) {
+      return err(400, `orderBy column "${normalizedOrderBy.column}" not found in schema`, req.correlationId);
     }
 
     // --- Validate vectorSearch if present ---
@@ -156,8 +158,8 @@ async function getRows(req) {
       // --- Standard parameterised SELECT ---
       const { whereClause, values } = buildWhereClause(filters);
 
-      const orderClause = orderBy
-        ? `ORDER BY "${orderBy.column}" ${orderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
+      const orderClause = normalizedOrderBy
+        ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
         : '';
 
       const sql = `
@@ -598,6 +600,20 @@ async function deleteRows(req) {
 // ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Normalise orderBy to { column, direction } regardless of input form.
+ * Accepts object { column, direction } or string "col_name ASC" / "col_name".
+ */
+function normalizeOrderBy(orderBy) {
+  if (!orderBy) return null;
+  if (typeof orderBy === 'object') return orderBy;
+  const parts = String(orderBy).trim().split(/\s+/);
+  return {
+    column:    parts[0],
+    direction: (parts[1] ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+  };
+}
 
 /**
  * Validate filter array — operators and column names.

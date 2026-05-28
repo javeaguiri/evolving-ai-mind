@@ -11,9 +11,7 @@
 //   {{input.userInput}}               — dot-path into local_state
 //   {{proposed_scaffold.domain}}      — nested object access
 //   {{proposed_scaffold.tables.length}} — .length on arrays
-//
-// Does NOT support arbitrary expressions — only dot-path property
-// access and the special .length suffix.
+//   {{all_cards.*.id}}                — wildcard: extract named field from every array element
 
 /**
  * Resolve a dot-path string against an object.
@@ -27,9 +25,19 @@ export function resolvePath(obj, path) {
   const parts = path.split('.');
   let cur = obj;
 
-  for (const key of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const key = parts[i];
     if (cur == null) return undefined;
-    // Support numeric index access for arrays
+
+    // Wildcard: map over array, extracting the remaining path from each element.
+    // {{all_cards.*.id}} → all_cards.map(item => item.id)
+    if (key === '*') {
+      if (!Array.isArray(cur)) return undefined;
+      const remaining = parts.slice(i + 1).join('.');
+      return remaining ? cur.map(item => resolvePath(item, remaining)) : cur;
+    }
+
+    // Numeric index access for arrays
     if (Array.isArray(cur) && /^\d+$/.test(key)) {
       cur = cur[parseInt(key, 10)];
     } else {

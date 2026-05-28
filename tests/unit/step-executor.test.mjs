@@ -17,6 +17,7 @@ import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
 import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
+import { resolvePath, resolveInput }          from '../../src/proc/template-resolver.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1246,5 +1247,66 @@ describe('buildMemoryRow — scope template resolution', () => {
     const row = buildMemoryRow(step, { v: 'some content' });
     assert.equal(row.source_workflow, 'create_domain');
     assert.equal(row.source_step, '18');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// template-resolver — resolvePath wildcard + resolveInput integration
+// ---------------------------------------------------------------------------
+
+describe('resolvePath — wildcard (*) field extraction', () => {
+  const state = {
+    cards: [
+      { id: 10, name: 'Alpha', deck_id: 1 },
+      { id: 20, name: 'Beta',  deck_id: 1 },
+      { id: 30, name: 'Gamma', deck_id: 1 },
+    ],
+    nested: {
+      items: [{ key: 'a' }, { key: 'b' }],
+    },
+  };
+
+  it('extracts a single field from every array element', () => {
+    assert.deepEqual(resolvePath(state, 'cards.*.id'), [10, 20, 30]);
+  });
+
+  it('extracts a string field from every array element', () => {
+    assert.deepEqual(resolvePath(state, 'cards.*.name'), ['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('works with nested path after wildcard', () => {
+    assert.deepEqual(resolvePath(state, 'nested.items.*.key'), ['a', 'b']);
+  });
+
+  it('returns undefined when wildcard applied to non-array', () => {
+    assert.equal(resolvePath(state, 'nested.*.key'), undefined);
+  });
+
+  it('bare wildcard on array returns the array itself', () => {
+    assert.deepEqual(resolvePath(state, 'cards.*'), state.cards);
+  });
+});
+
+describe('resolveInput — wildcard token resolves to array (serv_query in filter)', () => {
+  const state = {
+    all_cards: [
+      { id: 1, front: 'Q1' },
+      { id: 2, front: 'Q2' },
+      { id: 3, front: 'Q3' },
+    ],
+  };
+
+  it('{{all_cards.*.id}} single token resolves to array of ids', () => {
+    assert.deepEqual(resolveInput('{{all_cards.*.id}}', state), [1, 2, 3]);
+  });
+
+  it('filter object with wildcard value produces array suitable for op:in', () => {
+    const input = {
+      tableName: 'PGD_CardSides',
+      filters: [{ op: 'in', value: '{{all_cards.*.id}}', column: 'card_id' }],
+    };
+    const resolved = resolveInput(input, state);
+    assert.deepEqual(resolved.filters[0].value, [1, 2, 3]);
+    assert.ok(Array.isArray(resolved.filters[0].value));
   });
 });
