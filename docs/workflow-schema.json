@@ -176,6 +176,7 @@
         { "$ref": "#/definitions/servEntityQueryStep" },
         { "$ref": "#/definitions/servEntityGetStep" },
         { "$ref": "#/definitions/servEntitySchemaStep" },
+        { "$ref": "#/definitions/servEntityInsertStep" },
         { "$ref": "#/definitions/conditionStep" },
         { "$ref": "#/definitions/iteratorStep" },
         { "$ref": "#/definitions/notifyStep" },
@@ -545,7 +546,31 @@
             "entityName": { "type": "string", "description": "PascalCase singular name. Supports {{template}} substitution." }
           }
         },
-        "output_key":  { "type": "string", "description": "Receives { entity_name, description, root: { table, columns }, children: [{ table, alias, fk_column, columns }] }." },
+        "output_key":  { "type": "string", "description": "Receives { entity_name, description, root: { table, columns }, children: [{ table, alias, fk_column, parent, match_by, columns }] }." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "servEntityInsertStep": {
+      "type": "object",
+      "description": "Inserts a multi-level entity in topological order with automatic FK threading. Handles n-level hierarchies and self-referential tables. Use after serv_entity_schema + parse_entity_input.",
+      "required": ["step", "type", "input", "output_key"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "serv_entity_insert" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["entitySchema", "parsedEntity"],
+          "additionalProperties": false,
+          "properties": {
+            "entitySchema": { "type": "string", "description": "{{template}} resolving to entity schema from serv_entity_schema output." },
+            "parsedEntity": { "type": "string", "description": "{{template}} resolving to parsed entity from parse_entity_input llm_call output." }
+          }
+        },
+        "output_key":  { "type": "string", "description": "Receives { root_id, root_record, inserted_counts: { <alias>: number } }." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
         "on_failure":  { "$ref": "#/definitions/routingToken" }
       }
