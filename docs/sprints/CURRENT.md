@@ -10,6 +10,8 @@ gate: it must run end-to-end using the new memory-aware system.
 
 **Branch:** `sprint/03-run-generated-workflows`
 
+**Time-box:** If remaining scope cannot be completed in two full sessions, close the sprint early and move to Sprint 4. Do not over-extend.
+
 ---
 
 ## Session Notes
