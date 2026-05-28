@@ -478,14 +478,31 @@ function dialogToBlocks(dialog, workflowRunId) {
           let valueText;
           if (Array.isArray(item.value)) {
             if (item.value.length === 0) {
-              valueText = '(none)';
+              // Skip empty arrays entirely \u2014 they add no value to the review
+              continue;
             } else if (typeof item.value[0] === 'object') {
-              valueText = '\n' + item.value
-                .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
-                .join('\n');
+              // Check if all objects are empty {} \u2014 collapse to a count summary
+              const allEmpty = item.value.every(v => Object.keys(v).length === 0);
+              if (allEmpty) {
+                valueText = `${item.value.length} entries _(metadata auto-assigned by DB)_`;
+              } else {
+                // Check if all objects are identical \u2014 collapse repeats
+                const first = JSON.stringify(item.value[0]);
+                const allSame = item.value.every(v => JSON.stringify(v) === first);
+                if (allSame && item.value.length > 3) {
+                  valueText = `${item.value.length}\u00d7 ${first}`;
+                } else {
+                  valueText = '\n' + item.value
+                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                    .join('\n');
+                }
+              }
             } else {
               valueText = item.value.join(', ');
             }
+          } else if (item.value !== null && typeof item.value === 'object') {
+            // Plain object (not array) — render as compact JSON
+            valueText = JSON.stringify(item.value, null, 2);
           } else {
             valueText = String(item.value ?? '');
           }
