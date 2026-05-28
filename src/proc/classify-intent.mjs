@@ -49,7 +49,12 @@ export async function handle(req) {
     return err(400, 'userInput is required', traceId);
   }
 
-  console.info('classify-intent: start', { traceId, userInput, sessionId });
+  console.info('classify-intent: start', {
+    traceId,
+    sessionId,
+    inputLen: userInput.length,
+    inputPreview: userInput.slice(0, 80) + (userInput.length > 80 ? '…' : ''),
+  });
 
   let result, entitySchemaRows, domainRows;
   try {

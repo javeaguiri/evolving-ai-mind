@@ -39,7 +39,14 @@ export async function handle(req) {
     return err(400, 'Usage: /mind <what you want to do>', req.correlationId);
   }
 
-  console.info('mind start', { traceId, userInput, slackUser, slackChannel, threadTs });
+  console.info('mind start', {
+    traceId,
+    slackUser,
+    slackChannel,
+    threadTs,
+    inputLen:     userInput.length,
+    inputPreview: userInput.slice(0, 80) + (userInput.length > 80 ? '…' : ''),
+  });
 
   // Phase 3 — session lookup:
   // If threadTs is present, query PGC_Session by callback->>'threadId' = threadTs.
