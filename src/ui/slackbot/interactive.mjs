@@ -203,14 +203,18 @@ export async function handle(req) {
     ...(selectedValue ? { selectedValue } : {}),
   };
 
-  const slackUserId = payload.user?.id;
-  const channel     = payload.channel?.id;
+  const slackUserId   = payload.user?.id;
+  const channel       = payload.channel?.id;
   // container.message_ts is always the ts of the message containing the clicked button.
   // payload.message?.ts can resolve to the parent thread ts in threaded message contexts.
-  const threadId    = payload.container?.message_ts ?? payload.message?.ts;
+  const threadId      = payload.container?.message_ts ?? payload.message?.ts;
+  // response_url is a pre-authorized webhook for updating the source message.
+  // Prefer this over chat.update — it works for all gate types including text_input
+  // (chat.update silently fails on messages containing input blocks).
+  const responseUrl   = payload.response_url ?? null;
   // Original gate message text — included in the ack so the user sees which step was confirmed.
-  const gateText    = payload.message?.text ?? '';
-  const traceId     = req.correlationId || randomUUID();
+  const gateText      = payload.message?.text ?? '';
+  const traceId       = req.correlationId || randomUUID();
 
   console.info('interactive: resume_gate enqueuing', {
     workflowRunId,
@@ -220,12 +224,6 @@ export async function handle(req) {
     traceId,
   });
 
-  // Replace buttons with a static confirmation — prevents duplicate clicks.
-  //
-  // text_input gates: Slack silently ignores chat.update on messages containing
-  // input blocks. Use chat.delete + new reply instead to clear the stale UI.
-  // For all other gate types: chat.update replaces in-place.
-  // For remove_item: keep the gate open — Step Processor re-enqueues HUMAN_GATE.
   const gateContext    = gateText ? `\n> _${gateText}_` : '';
   const confirmationText = userResponse === 'confirm'
     ? `✅ Confirmed.${gateContext}`
@@ -274,17 +272,25 @@ export async function handle(req) {
     return { statusCode: 200, body: '' };
   }
 
-  // Replace buttons by returning confirmation blocks in the HTTP response body.
-  // Slack updates the message synchronously on its own servers — no chat.update
-  // API call needed, eliminating rate-limit races and client render delays.
-  // text_input gates open a modal (views.open path) so this body targets the
-  // original button message, which is correct for cancel confirmations too.
-  const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
-  return {
-    statusCode: 200,
-    headers:    { 'Content-Type': 'application/json' },
-    body:       JSON.stringify({ text: confirmationText, blocks: confirmationBlocks }),
-  };
+  // Replace the gate message with a confirmation via response_url (replace_original: true).
+  // response_url is the Slack-recommended mechanism for updating the source message —
+  // it works for all gate types including text_input (unlike chat.update which silently
+  // ignores messages with input blocks). Per Slack docs, the 200 acknowledgment body
+  // is not used to update messages; only response_url POST or chat.update are effective.
+  if (responseUrl) {
+    const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
+    try {
+      await fetch(responseUrl, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ replace_original: true, text: confirmationText, blocks: confirmationBlocks }),
+      });
+    } catch (fetchErr) {
+      console.warn('interactive: response_url POST failed (non-fatal)', { error: fetchErr.message, traceId });
+    }
+  }
+
+  return { statusCode: 200, body: '' };
 }
 
 // ---------------------------------------------------------------------------
