@@ -16,6 +16,17 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 
 ## Session Notes
 
+**2026-05-28 (session 5):** create_workflow retest run 386 completed — quiz_flashcards generated, L1+L2+routing+smoke all passed on attempt 2. Three flashcard decks loaded (59/39/67 cards). Framework improvements shipped this session:
+- `serv_entity_insert` n-level entity hierarchy step type — topological FK threading, self-ref two-pass. `add_entity` v10 using it.
+- `insertRows` bulk insert — 119 SERV calls → 3 for a 59-card deck (confirmed in run 393).
+- `{{key.*.field}}` wildcard in template-resolver; `orderBy` string normalization in SERV.
+- `response_url` stale button fix deployed (HTTP response body approach didn't work per Slack docs).
+- `parse_entity_input` → smart model (Sonnet 4.6) + 16384 max_output_tokens; `minProperties` removed from output_schema.
+- Review gate display: nested objects expanded, empty arrays skipped, all-empty object arrays collapsed to count summary.
+- PII log truncation: `classify-intent` + `mind.mjs` now log inputLen + 80-char preview only.
+- Pre-Sprint 5 design session added to backlog §2.0: workflow/step/skill/tool taxonomy.
+- Quiz test (Track A) deferred to next session — decks loaded, workflow ready.
+
 **2026-05-28 (session 4):** G1 validated (create_domain + create_workflow both write to PGC_Memory in prod). G3 implemented and deployed: `memory-writer.mjs` + MEMORY_WRITE SQS type + enqueue on qualifying run completion; 308 unit tests pass. `/explain-run` added to backlog tied to G3 via `source_run_id` FK. `generate_workflow_steps` v24 (Rule 7 + on_select) confirmed live in DB. Workflow testing convention added to memory (user tests from Slack, Claude does not trigger via curl). Ready for create_workflow retest this afternoon.
 
 **2026-05-28 (session 3):** Diagnosed run 385 generate_workflow_steps failures. Fixed step 26 simulation_error_summary bug (only read static_analysis.issues, never smoke_test — always showed vague fallback). create_workflow v51 deployed. Scope assessment: Track H → Sprint 4, Track I → Sprint 5, Track A still in scope (no Novia dependency). Backlog item added for skeleton-first generation redesign. Sprint time-boxed to 2 sessions.
