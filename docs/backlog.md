@@ -128,6 +128,21 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 
 Features designed but deferred — require the Step Processor to exist first, or represent meaningful scope expansion.
 
+### 2.0 Pre-Sprint 5 Design Session — Primitive Taxonomy
+
+**Do this during Sprint 5 planning before scoping any agentic loop work.**
+
+Define clear boundaries between: **workflow**, **workflow step**, **skill**, and **tool**. These terms are currently used informally and the distinctions will matter once agents can compose capabilities dynamically. The agentic loop (Novia, Sprint 5) requires the taxonomy to be decided first — otherwise the architecture will drift as soon as agents start generating or selecting their own execution paths.
+
+Questions to resolve:
+- What makes something a workflow vs a single step? (atomicity boundary, SQS envelope, human gate eligibility)
+- What is a skill? Is it a named workflow, a named capability in `PGC_Capability`, or something else entirely?
+- What is a tool? Is it a `capability_call` step, an MCP-style callable, or a pre-built `serv_*` step type?
+- Which of these can an agentic loop generate at runtime vs which must be pre-registered?
+- How does the static/evolving artifact boundary apply to each primitive?
+
+Output: a 1-page decision record added to `docs/architecture.md` before any Sprint 5 implementation starts.
+
 ### 2.1 External API Registry — capability_call Step Type
 
 #### The problem
