@@ -75,6 +75,7 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_entity_query': return executeServEntityQuery({ step, localState, traceId });
     case 'serv_entity_get':    return executeServEntityGet({ step, localState, traceId });
     case 'serv_entity_schema': return executeServEntitySchema({ step, localState, traceId });
+    case 'serv_entity_insert': return executeServEntityInsert({ step, localState, traceId });
     case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
@@ -752,7 +753,13 @@ async function executeServEntityGet({ step, localState, traceId }) {
  *   {
  *     entity_name, description,
  *     root:     { table, columns: [{ name, type }] },
- *     children: [{ table, alias, fk_column, output_key, columns: [{ name, type }] }]
+ *     children: [{
+ *       table, alias, fk_column, output_key, columns: [{ name, type }],
+ *       parent,      // null = direct child of root; alias string = grandchild; 'self' = self-ref
+ *       match_by,    // 'index' (cardsides[i] ↔ cards[i]) | 'self' (self-referential two-pass)
+ *       fk_columns,  // present only when table has >1 FK: [{column, parent}]
+ *       match_key,   // present only for self-ref: column used to resolve parent_<match_key>
+ *     }]
  *   }
  *
  * System columns (id, created_at, updated_at) and FK columns are excluded from
@@ -809,23 +816,68 @@ async function executeServEntitySchema({ step, localState, traceId }) {
 
   const rootColumns = userColumns(rootTable);
 
-  const children = joins.map(join => {
-    const agg = aggregations.find(a => a.alias === join.alias) ?? {};
+  // table → alias lookup — used to resolve FK references to parent aliases
+  const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
 
-    // FK column from PGC_Schema foreign_keys, or parsed from join.on expression
+  const children = joins.map(join => {
+    const agg            = aggregations.find(a => a.alias === join.alias) ?? {};
     const childSchemaRow = (schemaResp.rows ?? []).find(r => r.table_name === join.table);
-    const fkCols = (childSchemaRow?.foreign_keys ?? []).map(fk => fk.column);
-    if (fkCols.length === 0 && join.on) {
+
+    // Collect all FK definitions with their referenced table
+    let fkDefs = (childSchemaRow?.foreign_keys ?? []).map(fk => ({
+      column:     fk.column,
+      references: fk.references?.table ?? null,
+    }));
+    if (fkDefs.length === 0 && join.on) {
       const onMatch = join.on.match(/(\w+)\.(\w+)\s*=\s*r\.id/);
-      if (onMatch) fkCols.push(onMatch[2]);
+      if (onMatch) fkDefs.push({ column: onMatch[2], references: rootTable });
     }
 
+    // Resolve parent alias for each FK:
+    //   references root table → parent = null  (direct child of root)
+    //   references self table → parent = 'self'  (self-referential)
+    //   references another join table → parent = alias of that table
+    const fkColumns = fkDefs.map(fk => {
+      let parent;
+      if (!fk.references || fk.references === rootTable) {
+        parent = null;
+      } else if (fk.references === join.table) {
+        parent = 'self';
+      } else {
+        parent = tableToAlias[fk.references] ?? null;
+      }
+      return { column: fk.column, parent };
+    });
+
+    // Primary FK: prefer the one pointing to root, otherwise the first one
+    const primaryFk = fkColumns.find(f => f.parent === null) ?? fkColumns[0] ?? null;
+    const isSelfRef = fkColumns.some(f => f.parent === 'self');
+    const matchBy   = isSelfRef ? 'self' : 'index';
+
+    // For self-referential: use aggregation match_key if provided, else first non-system column
+    let matchKey;
+    if (isSelfRef) {
+      matchKey = agg.match_key ?? null;
+      if (!matchKey) {
+        const nonFk = (childSchemaRow?.columns ?? [])
+          .filter(c => !['id', 'created_at', 'updated_at'].includes(c.name) &&
+                       !fkDefs.map(f => f.column).includes(c.name));
+        matchKey = nonFk[0]?.name ?? 'name';
+      }
+    }
+
+    const allFkCols = fkDefs.map(f => f.column);
+
     return {
-      table:      join.table,
-      alias:      join.alias,
-      fk_column:  fkCols[0] ?? null,
-      output_key: agg.outputKey ?? join.alias,
-      columns:    userColumns(join.table, fkCols),
+      table:                join.table,
+      alias:                join.alias,
+      fk_column:            primaryFk?.column ?? null,
+      ...(fkColumns.length > 1 ? { fk_columns: fkColumns } : {}),
+      parent:               isSelfRef ? 'self' : (primaryFk?.parent ?? null),
+      match_by:             matchBy,
+      ...(matchKey ? { match_key: matchKey } : {}),
+      output_key:           agg.outputKey ?? join.alias,
+      columns:              userColumns(join.table, allFkCols),
     };
   });
 
@@ -847,6 +899,194 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     outputValue: result,
     nextAction:  resolveNextAction(step.on_success, null),
   };
+}
+
+// ---------------------------------------------------------------------------
+// serv_entity_insert — insert a multi-level entity with FK threading
+// ---------------------------------------------------------------------------
+//
+// Handles n-level hierarchies and self-referential tables without any
+// workflow-level glue. The entity schema (from serv_entity_schema) carries
+// parent, match_by, fk_column(s) derived from PGC_Schema.foreign_keys.
+//
+// Step input shape:
+//   {
+//     "entitySchema": "{{full_entity_schema}}",  // from serv_entity_schema step
+//     "parsedEntity": "{{parsed_entity}}"         // from parse_entity_input llm_call
+//   }
+//
+// Output shape written to output_key:
+//   { root_id, root_record, inserted_counts: { <alias>: <count>, ... } }
+
+async function executeServEntityInsert({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { entitySchema, parsedEntity } = resolvedInput;
+
+  if (!entitySchema) throw new Error('serv_entity_insert: entitySchema is required in input');
+  if (!parsedEntity) throw new Error('serv_entity_insert: parsedEntity is required in input');
+
+  // Insert root row
+  const rootResult = await insertRow(entitySchema.root.table, parsedEntity.root ?? {});
+  if (!rootResult.success) {
+    throw new Error(`serv_entity_insert root insert failed for "${entitySchema.root.table}": ${rootResult.error}`);
+  }
+  const rootId = rootResult.row.id;
+
+  // Map alias → inserted rows (needed to resolve FK chains)
+  const insertedByAlias = {};
+  const insertedCounts  = {};
+
+  // Process children in dependency order
+  const children = entitySchema.children ?? [];
+  const ordered  = entityInsertTopoSort(children);
+
+  for (const child of ordered) {
+    const { table, alias, output_key, parent, match_by, fk_column, fk_columns, match_key } = child;
+    const childRows = (parsedEntity.children ?? {})[output_key] ?? [];
+
+    if (childRows.length === 0) {
+      insertedByAlias[alias] = [];
+      insertedCounts[alias]  = 0;
+      continue;
+    }
+
+    // Self-referential: two-pass insert + update
+    if (match_by === 'self' && fk_column) {
+      const rows = await entityInsertSelfRef({
+        table, childRows, fkColumn: fk_column, matchKey: match_key ?? 'name', traceId,
+      });
+      insertedByAlias[alias] = rows;
+      insertedCounts[alias]  = rows.length;
+      continue;
+    }
+
+    // Resolve primary parent rows for index-based FK injection
+    const parentRows = parent
+      ? (insertedByAlias[parent] ?? [])
+      : [{ id: rootId }];
+
+    const insertedRows = [];
+    for (let i = 0; i < childRows.length; i++) {
+      const row = { ...childRows[i] };
+
+      if (fk_columns && fk_columns.length > 1) {
+        // Multiple FKs — inject each one from its respective parent
+        for (const fkDef of fk_columns) {
+          const fkParentRows = fkDef.parent
+            ? (insertedByAlias[fkDef.parent] ?? [])
+            : [{ id: rootId }];
+          const fkRow = fkParentRows[i] ?? fkParentRows[fkParentRows.length - 1] ?? { id: rootId };
+          delete row[fkDef.column];
+          row[fkDef.column] = fkRow.id;
+        }
+      } else if (fk_column) {
+        // Single FK — inject from primary parent
+        const parentRow = parentRows[i] ?? parentRows[parentRows.length - 1] ?? { id: rootId };
+        delete row[fk_column];
+        row[fk_column] = parentRow.id;
+      }
+
+      const result = await insertRow(table, row);
+      if (!result.success) {
+        throw new Error(`serv_entity_insert failed for "${table}" row ${i}: ${result.error}`);
+      }
+      insertedRows.push(result.row);
+    }
+
+    insertedByAlias[alias] = insertedRows;
+    insertedCounts[alias]  = insertedRows.length;
+  }
+
+  console.info('step-executor: serv_entity_insert complete', {
+    rootTable: entitySchema.root.table,
+    rootId,
+    insertedCounts,
+    traceId,
+  });
+
+  return {
+    outputValue: {
+      root_id:         rootId,
+      root_record:     rootResult.row,
+      inserted_counts: insertedCounts,
+    },
+  };
+}
+
+/**
+ * Topologically sort children by parent dependency.
+ * A child is ready when ALL of its parent aliases are already placed.
+ */
+function entityInsertTopoSort(children) {
+  const result  = [];
+  const placed  = new Set([null]);   // null = root is always available
+  const pending = [...children];
+
+  while (pending.length > 0) {
+    const before = pending.length;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const child = pending[i];
+      // Collect all parent aliases this child depends on
+      const parents = [
+        child.parent ?? null,
+        ...((child.fk_columns ?? []).map(f => f.parent ?? null)),
+      ].filter(p => p !== 'self'); // self-ref depends only on itself
+      if (parents.every(p => placed.has(p))) {
+        result.push(child);
+        placed.add(child.alias);
+        pending.splice(i, 1);
+      }
+    }
+    // Cycle or unresolvable dependency — append remainder to avoid infinite loop
+    if (pending.length === before) {
+      result.push(...pending);
+      break;
+    }
+  }
+  return result;
+}
+
+/**
+ * Two-pass insert for self-referential tables.
+ * Pass 1: insert all rows without the self-reference FK.
+ * Pass 2: resolve parent references by match_key and update the FK.
+ *
+ * Each row may carry a `parent_<matchKey>` field containing the match_key
+ * value of its parent row. The framework strips it and resolves the real FK.
+ */
+async function entityInsertSelfRef({ table, childRows, fkColumn, matchKey, traceId }) {
+  const keyToId  = {};
+  const inserted = [];
+
+  // Pass 1: insert without FK
+  for (const rawRow of childRows) {
+    const row       = { ...rawRow };
+    const parentRef = row[`parent_${matchKey}`] ?? null;
+    delete row[fkColumn];
+    delete row[`parent_${matchKey}`];
+
+    const result = await insertRow(table, row);
+    if (!result.success) {
+      throw new Error(`serv_entity_insert (self-ref) failed for "${table}": ${result.error}`);
+    }
+    keyToId[rawRow[matchKey]] = result.row.id;
+    inserted.push({ id: result.row.id, parentRef });
+  }
+
+  // Pass 2: update FK for rows that reference a parent
+  for (const { id, parentRef } of inserted) {
+    if (!parentRef) continue;
+    const parentId = keyToId[parentRef];
+    if (!parentId) {
+      console.warn('step-executor: serv_entity_insert self-ref parent not found', {
+        table, fkColumn, parentRef, traceId,
+      });
+      continue;
+    }
+    await updateRows(table, [{ column: 'id', op: 'eq', value: id }], { [fkColumn]: parentId });
+  }
+
+  return inserted.map(({ id }) => ({ id }));
 }
 
 // ---------------------------------------------------------------------------

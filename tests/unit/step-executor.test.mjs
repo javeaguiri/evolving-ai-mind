@@ -456,80 +456,25 @@ describe('list_entity step 2 — formatRecordList expression (root only)', () =>
 });
 
 // ---------------------------------------------------------------------------
-// add_entity step 5 — buildChildInserts expression
+// add_entity — serv_entity_insert workflow step present
 // ---------------------------------------------------------------------------
 
-describe('add_entity step 5 — buildChildInserts expression', () => {
-  const ENTITY_SCHEMA = {
-    children: [
-      { table: 'PGD_ReviewLogs', fk_column: 'flashcard_id', output_key: 'review_logs' },
-    ],
-  };
-  const PARSED_ENTITY = {
-    root:     { front_text: 'hola', back_text: 'hello' },
-    children: { review_logs: [{ result: 'pass', notes: 'good' }] },
-  };
-  const NEW_RECORD = { id: 42 };
-
-  it('builds flat child insert array with FK injected', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(
-      step.expression,
-      ENTITY_SCHEMA,
-      { parsed_entity: PARSED_ENTITY, new_record: NEW_RECORD },
-      'test'
-    );
-    assert.equal(result.length, 1);
-    assert.equal(result[0].tableName, 'PGD_ReviewLogs');
-    assert.equal(result[0].row.flashcard_id, 42, 'FK must be injected as root record id');
-    assert.equal(result[0].row.result, 'pass');
+describe('add_entity workflow — uses serv_entity_insert (steps 4-6 replaced)', () => {
+  it('add_entity step 4 is serv_entity_insert', () => {
+    const step = getStep('add_entity', '4');
+    assert.equal(step.type, 'serv_entity_insert');
   });
 
-  it('returns empty array when child rows array is empty', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(
-      step.expression,
-      ENTITY_SCHEMA,
-      {
-        parsed_entity: { root: {}, children: { review_logs: [] } },
-        new_record: { id: 1 },
-      },
-      'test'
-    );
-    assert.equal(result.length, 0, 'empty child rows must produce empty inserts array');
+  it('add_entity step 4 passes entitySchema and parsedEntity', () => {
+    const step = getStep('add_entity', '4');
+    assert.ok(step.input.entitySchema, 'entitySchema input required');
+    assert.ok(step.input.parsedEntity, 'parsedEntity input required');
   });
 
-  it('returns empty array when required local_state keys are missing', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(step.expression, ENTITY_SCHEMA, {}, 'test');
-    assert.equal(result.length, 0, 'missing local_state keys must produce empty inserts array');
-  });
-
-  it('handles multiple child tables', () => {
-    const step = getStep('add_entity', '5');
-    const schema = {
-      children: [
-        { table: 'PGD_Ingredients', fk_column: 'recipe_id', output_key: 'ingredients' },
-        { table: 'PGD_Steps',       fk_column: 'recipe_id', output_key: 'steps' },
-      ],
-    };
-    const parsed = {
-      root:     { name: 'Pasta' },
-      children: {
-        ingredients: [{ name: 'pasta', quantity: 200 }, { name: 'egg', quantity: 2 }],
-        steps:       [{ order: 1, instruction: 'Boil water' }],
-      },
-    };
-    const result = runSandboxedExpression(
-      step.expression,
-      schema,
-      { parsed_entity: parsed, new_record: { id: 7 } },
-      'test'
-    );
-    assert.equal(result.length, 3);
-    assert.ok(result.every(r => r.row.recipe_id === 7));
-    assert.equal(result.filter(r => r.tableName === 'PGD_Ingredients').length, 2);
-    assert.equal(result.filter(r => r.tableName === 'PGD_Steps').length, 1);
+  it('add_entity has no step 5 with js_transform child-insert expression', () => {
+    const wf    = seed.find(w => w.name === 'add_entity');
+    const step5 = wf?.steps?.find(s => s.step === '5');
+    assert.ok(!step5 || step5.type !== 'js_transform', 'old flat-insert js_transform must be gone');
   });
 });
 
