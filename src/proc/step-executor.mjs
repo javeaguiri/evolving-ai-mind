@@ -1256,12 +1256,25 @@ async function executeSimulate({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Pure control-flow step — resolves a template expression against local_state
- * and routes to on_truthy or on_falsy without performing any I/O.
+ * Pure control-flow step — evaluates an expression against local_state and
+ * routes to on_truthy or on_falsy without performing any I/O.
  *
- * Truthy: resolved value is non-empty string, not "null", not "undefined", not "0".
- * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is also
- * accepted for compatibility — both normalise to a bare key before return.
+ * Two evaluation paths determined by whether the expression contains '{{':
+ *
+ *   Template path  (expression contains '{{'):
+ *     Resolved via resolveTemplate. Truthy when non-empty and not one of the
+ *     canonical falsy strings: "null", "undefined", "0", "false", or an
+ *     unresolved "{{token}}". Preserves backwards-compatible behaviour for all
+ *     existing {{token}} condition steps.
+ *
+ *   JS path (no '{{' in expression):
+ *     Evaluated in the same sandboxed vm context as js_transform — local_state
+ *     is available. Accepts any valid JS boolean expression the LLM naturally
+ *     produces, e.g. local_state.items.length === 0 or count > 5 && active.
+ *     If evaluation throws the step routes to on_falsy and logs the error.
+ *
+ * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is
+ * also accepted — both normalise to a bare key before return.
  *
  * No output_key is written — condition steps produce no state output.
  */
@@ -1270,28 +1283,49 @@ function executeCondition({ step, localState, traceId }) {
   if (!step.on_truthy)  throw new Error('condition step missing on_truthy');
   if (!step.on_falsy)   throw new Error('condition step missing on_falsy');
 
-  const resolved = resolveTemplate(step.expression, localState);
-  // Treat unresolved template literals as falsy — resolveTemplate returns the
-  // original {{token}} when the path is absent from local_state. A condition
-  // step must not route truthy on a key that was never set.
-  const isTruthy = resolved !== ''
-    && resolved !== 'null'
-    && resolved !== 'undefined'
-    && resolved !== '0'
-    && resolved !== 'false'
-    && !resolved.includes('{{');
+  const usesTemplate = step.expression.includes('{{');
+  let isTruthy;
+
+  if (usesTemplate) {
+    const resolved = resolveTemplate(step.expression, localState);
+    isTruthy = resolved !== ''
+      && resolved !== 'null'
+      && resolved !== 'undefined'
+      && resolved !== '0'
+      && resolved !== 'false'
+      && !resolved.includes('{{');
+
+    console.info('step-executor: condition', {
+      expression: step.expression,
+      resolved,
+      isTruthy,
+      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      traceId,
+    });
+  } else {
+    try {
+      const result = runSandboxedExpression(step.expression, null, localState, traceId);
+      isTruthy = Boolean(result);
+    } catch (err) {
+      console.warn('step-executor: condition js eval failed — routing falsy', {
+        expression: step.expression,
+        error: err.message,
+        traceId,
+      });
+      isTruthy = false;
+    }
+
+    console.info('step-executor: condition', {
+      expression: step.expression,
+      evalMode:   'js',
+      isTruthy,
+      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      traceId,
+    });
+  }
 
   const rawNext  = isTruthy ? step.on_truthy : step.on_falsy;
-  // Normalise to bare key — handles both step:N (canonical) and bare keys (legacy).
   const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
-
-  console.info('step-executor: condition', {
-    expression: step.expression,
-    resolved,
-    isTruthy,
-    nextStep: bareNext,
-    traceId,
-  });
 
   return { outputValue: null, nextAction: `step:${bareNext}` };
 }
