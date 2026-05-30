@@ -1331,7 +1331,7 @@ function executeCondition({ step, localState, traceId }) {
 }
 
 async function executeNotify({ step, localState, traceId }) {
-  const message = resolveTemplate(step.message_template ?? '', localState);
+  const message = resolveTemplate(step.message_template ?? step.message ?? '', localState);
 
   console.info('step-executor: notify', { traceId });
 
