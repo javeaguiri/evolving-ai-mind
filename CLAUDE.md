@@ -29,6 +29,20 @@ Rules:
 - **When unclear whether something belongs in system code or an artifact: ask, or default to treating it as an evolving artifact.**
 - **User domain data must never appear in system artifacts.** Labels, placeholders, examples, and descriptions in system-level workflows (`create_workflow`, `create_domain`, `ping_core`), prompts, and seed files must be generic. References to specific user domains, table names, entity types, or workflow subjects (e.g. "Spanish flashcard", "Holdings", "Recipes") belong only in `PGD_*` tables and user-created `PGC_Workflow` rows — never in the system's own seed data or code.
 
+### Extending the Harness to Accept Standard LLM Output
+
+As generated workflows are tested in production, LLMs will produce outputs that are logically valid but in a form the harness does not yet accept. The correct response is to **extend system code to accept the standard form** — not to add prompt rules forcing LLMs to produce a proprietary format.
+
+**The test:** Is the LLM's output an instance of an established standard — JSONPath, SQL syntax, standard JSON structures? If yes, extend the harness.
+
+Examples of correct extensions:
+- `orderBy: "col ASC"` — standard SQL `ORDER BY` syntax → `normalizeOrderBy` accepts both string and object forms
+- `{{cards[*].id}}` — standard JSONPath wildcard → `tokenizePath` normalises bracket notation before path resolution
+
+**The violation pattern** is the inverse: inventing a custom syntax or proprietary object shape, then adding prompt rules to force LLMs to use it. If you find yourself writing a new prompt rule to constrain LLM output format, ask first: should the harness accept what the LLM naturally produces instead?
+
+This principle extends to all system code boundaries: `step-executor.mjs`, `template-resolver.mjs`, `table.mjs`, `review-output.mjs`, `serv-client.mjs`. When a generated workflow hits an unexpected format error, the diagnosis question is: **is the LLM's output reasonable and standard?** If yes, fix the harness, not the prompt.
+
 ### Bug Fix Philosophy
 
 Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
