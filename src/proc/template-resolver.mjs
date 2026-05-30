@@ -105,6 +105,7 @@ export function resolveInput(input, localState) {
     if (singleToken) {
       const val = resolvePath(localState, singleToken[1].trim());
       if (val !== undefined && val !== null) return val;
+      if (val === null) return null;
     }
     return resolveTemplate(input, localState);
   }

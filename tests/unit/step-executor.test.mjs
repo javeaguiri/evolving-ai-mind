@@ -1276,6 +1276,26 @@ describe('resolvePath — JSONPath [*] wildcard field extraction', () => {
   });
 });
 
+describe('resolveInput — null field value passes through as null (serv_insert nullable columns)', () => {
+  it('single token resolving to null returns null, not the unresolved token string', () => {
+    const state = { current_card: { card_id: 60, next_review_date: null } };
+    assert.strictEqual(resolveInput('{{current_card.next_review_date}}', state), null);
+  });
+
+  it('row object with null field produces null value, not unresolved string', () => {
+    const state = { current_card: { card_id: 60, next_review_date: null } };
+    const row = { card_id: '{{current_card.card_id}}', next_review_date: '{{current_card.next_review_date}}' };
+    const resolved = resolveInput(row, state);
+    assert.strictEqual(resolved.card_id, 60);
+    assert.strictEqual(resolved.next_review_date, null);
+  });
+
+  it('undefined path still leaves token unresolved', () => {
+    const state = { current_card: { card_id: 60 } };
+    assert.strictEqual(resolveInput('{{current_card.missing_field}}', state), '{{current_card.missing_field}}');
+  });
+});
+
 describe('resolveInput — JSONPath wildcard token resolves to array (serv_query in filter)', () => {
   const state = {
     all_cards: [
