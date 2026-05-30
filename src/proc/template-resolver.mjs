@@ -7,37 +7,49 @@
 // Used by the Step Processor to resolve {{variable}} references
 // in step definitions against the current local_state.
 //
-// Supports:
-//   {{input.userInput}}               — dot-path into local_state
-//   {{proposed_scaffold.domain}}      — nested object access
+// Supports standard JSONPath subset — no $ root prefix needed:
+//   {{input.userInput}}                 — dot-path into local_state
+//   {{proposed_scaffold.domain}}        — nested object access
 //   {{proposed_scaffold.tables.length}} — .length on arrays
-//   {{all_cards.*.id}}                — wildcard: extract named field from every array element
+//   {{all_cards[*].id}}                 — JSONPath wildcard: extract field from every array element
+//   {{entity_schema_rows[0].root_table}} — bracket index access
 
 /**
- * Resolve a dot-path string against an object.
- * Handles .length as a terminal operation on arrays.
+ * Normalise a path string to a plain dot-separated token list.
+ * Converts JSONPath bracket notation — [*] and [n] — to dot segments
+ * so the walker below handles a single unified format.
+ *
+ * "cards[*].id"   → ["cards", "*", "id"]
+ * "rows[0].name"  → ["rows", "0", "name"]
+ * "input.domain"  → ["input", "domain"]
+ */
+function tokenizePath(path) {
+  return path.replace(/\[(\*|\d+)\]/g, '.$1').split('.').filter(Boolean);
+}
+
+/**
+ * Resolve a path string against an object.
+ * Accepts dot-path and JSONPath bracket notation (see tokenizePath).
+ * Handles [*] wildcard and numeric index access.
  *
  * @param {object} obj   The root object (local_state)
- * @param {string} path  Dot-separated key path e.g. "proposed_scaffold.tables.length"
+ * @param {string} path  Path string e.g. "cards[*].id" or "input.domain"
  * @returns {*}          The resolved value, or undefined if not found
  */
 export function resolvePath(obj, path) {
-  const parts = path.split('.');
+  const parts = tokenizePath(path);
   let cur = obj;
 
   for (let i = 0; i < parts.length; i++) {
     const key = parts[i];
     if (cur == null) return undefined;
 
-    // Wildcard: map over array, extracting the remaining path from each element.
-    // {{all_cards.*.id}} → all_cards.map(item => item.id)
     if (key === '*') {
       if (!Array.isArray(cur)) return undefined;
       const remaining = parts.slice(i + 1).join('.');
       return remaining ? cur.map(item => resolvePath(item, remaining)) : cur;
     }
 
-    // Numeric index access for arrays
     if (Array.isArray(cur) && /^\d+$/.test(key)) {
       cur = cur[parseInt(key, 10)];
     } else {
