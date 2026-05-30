@@ -16,6 +16,12 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 
 ## Session Notes
 
+**2026-05-30 (session 7):** Two harness fixes for quiz run 397/398. Quiz not yet passing — retry in session 8.
+- Harness fix: `resolveInput` in `template-resolver.mjs` — single-token path resolving to `null` now returns `null` instead of falling through to `resolveTemplate` (which left the raw token unresolved). Fixes `serv_insert` failing with `invalid input syntax for type timestamp` when a nullable DB column has a null value. 3 unit tests added.
+- Schema fix: `schema.mjs` `modifyColumn` extended to accept optional `nullable` boolean — runs `ALTER COLUMN DROP NOT NULL` / `SET NOT NULL` and syncs `PGC_Schema`. Applied immediately: `PGD_Reviews.next_review_date` NOT NULL constraint dropped (SRS field added by `create_domain` beyond quiz spec; null on all first-review cards).
+- Root cause analysis: `create_domain` added SRS scaffolding (`ease_factor`, `interval_days`, `next_review_date NOT NULL`) beyond the quiz spec; `create_workflow` faithfully used those fields. Mismatch between generators. Backlog item added: validate memory bridge catches this class of problem — `create_domain` memory should inform `create_workflow` about schema assumptions so the generated workflow handles them correctly.
+- Memory: hello convention + curl cheat sheet updated — env vars (`$INTERNAL_API_KEY` etc.) are already exported via `.bashrc`; never read any `.env` file at session start.
+
 **2026-05-30 (session 6):** Track D complete + two harness extensions. Quiz partially tested — stalled on two issues now fixed; retry in session 7.
 - JSONPath `[*]` bracket notation in template-resolver (`tokenizePath`) replaces custom `.*` wildcard — LLMs use standard syntax, no custom prompt rules needed.
 - `normalizeOrderBy` confirmed correct: `"col ASC"` is standard SQL, harness accepts it alongside `{column,direction}`.
