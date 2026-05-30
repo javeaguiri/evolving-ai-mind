@@ -1196,6 +1196,46 @@ describe('buildMemoryRow — scope template resolution', () => {
 });
 
 // ---------------------------------------------------------------------------
+// executeCondition — JS expression evaluation path
+// ---------------------------------------------------------------------------
+
+describe('executeCondition — JS expression path (no {{ in expression)', () => {
+  // Access via runSimulation which exercises the full step executor pipeline.
+  // For direct unit testing we exercise runSandboxedExpression (the same
+  // sandbox used by the JS eval path) with representative condition expressions.
+
+  it('length === 0 is falsy when array has items', () => {
+    const localState = { unmastered_cards: [60, 61, 62] };
+    const result = runSandboxedExpression('local_state.unmastered_cards.length === 0', null, localState, 'test');
+    assert.equal(Boolean(result), false);
+  });
+
+  it('length === 0 is truthy when array is empty', () => {
+    const localState = { unmastered_cards: [] };
+    const result = runSandboxedExpression('local_state.unmastered_cards.length === 0', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('compound && expression evaluates correctly', () => {
+    const localState = { count: 5, active: true };
+    const result = runSandboxedExpression('local_state.count > 3 && local_state.active', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('comparison against threshold routes correctly', () => {
+    const localState = { mastered_count: 10, total_cards: 10 };
+    const result = runSandboxedExpression('local_state.mastered_count >= local_state.total_cards', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('negation of property', () => {
+    const localState = { quiz_complete: false };
+    const result = runSandboxedExpression('!local_state.quiz_complete', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // template-resolver — resolvePath JSONPath bracket notation + resolveInput integration
 // ---------------------------------------------------------------------------
 
