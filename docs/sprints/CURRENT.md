@@ -16,7 +16,7 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 
 ## Session Notes
 
-**2026-05-30 (session 6):** Track D complete. Framework correctness work:
+**2026-05-30 (session 6):** Track D complete + two harness extensions. Quiz partially tested — stalled on two issues now fixed; retry in session 7.
 - JSONPath `[*]` bracket notation in template-resolver (`tokenizePath`) replaces custom `.*` wildcard — LLMs use standard syntax, no custom prompt rules needed.
 - `normalizeOrderBy` confirmed correct: `"col ASC"` is standard SQL, harness accepts it alongside `{column,direction}`.
 - CLAUDE.md: "Extending the Harness to Accept Standard LLM Output" section added — codifies when to extend system code vs add prompt rules.
@@ -24,7 +24,10 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 - D2: create_domain step 10 save_to_memory scope fixed `{}` → `{domain}`.
 - D1: create_workflow steps 36a–36d — updates PGC_DomainHelp.commands after workflow registration; non-blocking (all routes to notify on failure).
 - Memory bridge: `generate_workflow_steps` prompt v25 — `scope_additions {domain}` added so step generator reads domain schema + alias memories.
-- Track A (quiz run end-to-end) is the remaining sprint gate.
+- Harness fix: condition step now evaluates JS boolean expressions (e.g. `local_state.items.length === 0`) via vm sandbox when no `{{` present; template path unchanged for backward compat. Fixes quiz run 396 routing-to-end-immediately bug.
+- Harness fix: notify step accepts `"message"` field alongside `"message_template"` — fixes silent completion message in quiz.
+- Backlog: two new Sprint 4 tracks — skeleton-first generation and domain data initialization conventions.
+- Track A (quiz end-to-end) is the remaining sprint gate; retry in session 7.
 
 **2026-05-28 (session 5):** create_workflow retest run 386 completed — quiz_flashcards generated, L1+L2+routing+smoke all passed on attempt 2. Three flashcard decks loaded (59/39/67 cards). Framework improvements shipped this session:
 - `serv_entity_insert` n-level entity hierarchy step type — topological FK threading, self-ref two-pass. `add_entity` v10 using it.
