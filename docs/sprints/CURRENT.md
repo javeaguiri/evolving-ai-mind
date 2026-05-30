@@ -16,6 +16,16 @@ Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4
 
 ## Session Notes
 
+**2026-05-30 (session 6):** Track D complete. Framework correctness work:
+- JSONPath `[*]` bracket notation in template-resolver (`tokenizePath`) replaces custom `.*` wildcard — LLMs use standard syntax, no custom prompt rules needed.
+- `normalizeOrderBy` confirmed correct: `"col ASC"` is standard SQL, harness accepts it alongside `{column,direction}`.
+- CLAUDE.md: "Extending the Harness to Accept Standard LLM Output" section added — codifies when to extend system code vs add prompt rules.
+- D2: `generate_domain_aliases` prompt (sonar v1) + create_domain step 17b — LLM generates singular/plural/synonym aliases; saved to PGC_Memory scoped to domain.
+- D2: create_domain step 10 save_to_memory scope fixed `{}` → `{domain}`.
+- D1: create_workflow steps 36a–36d — updates PGC_DomainHelp.commands after workflow registration; non-blocking (all routes to notify on failure).
+- Memory bridge: `generate_workflow_steps` prompt v25 — `scope_additions {domain}` added so step generator reads domain schema + alias memories.
+- Track A (quiz run end-to-end) is the remaining sprint gate.
+
 **2026-05-28 (session 5):** create_workflow retest run 386 completed — quiz_flashcards generated, L1+L2+routing+smoke all passed on attempt 2. Three flashcard decks loaded (59/39/67 cards). Framework improvements shipped this session:
 - `serv_entity_insert` n-level entity hierarchy step type — topological FK threading, self-ref two-pass. `add_entity` v10 using it.
 - `insertRows` bulk insert — 119 SERV calls → 3 for a 59-card deck (confirmed in run 393).
@@ -84,8 +94,8 @@ which fixes belong in Track B vs the memory layer vs the workflow itself.
    generation time (Track B). Document the exact failure path before fixing.
 
 **Acceptance criteria:**
-- [ ] `/help` surfaces flashcard domain commands including how to start a quiz
-- [ ] `/m add flashcard set…` (singular) resolves correctly without manual alias editing
+- [x] `/help` surfaces flashcard domain commands including how to start a quiz (create_workflow steps 36a-36d update PGC_DomainHelp.commands after registration, session 6)
+- [x] `/m add flashcard set…` (singular) resolves correctly without manual alias editing (generate_domain_aliases prompt + create_domain step 17b, session 6)
 - [x] Post-create workflow notification is concise and contains no internal metadata (create_workflow step 37 message_template fixed, v50)
 - [x] `{{name}}` token failure fixed: iterator field on human_gate options eliminates js_transform-before-gate pattern; generate_workflow_steps Rule 7 added so new workflows use iterator directly
 
