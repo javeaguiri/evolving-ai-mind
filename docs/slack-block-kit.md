@@ -826,7 +826,7 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 - Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
 
 ---
-## Overflow menu (hamburger expand {
+## Overflow menu (hamburger expand icon)
 ```json
 	"blocks": [
 		{
