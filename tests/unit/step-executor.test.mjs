@@ -1319,3 +1319,32 @@ describe('resolveInput — JSONPath wildcard token resolves to array (serv_query
     assert.ok(Array.isArray(resolved.filters[0].value));
   });
 });
+
+describe('resolveInput — arithmetic expression in {{}} token', () => {
+  const state = { current_card: { card_id: 7, total_reviews: 4 }, offset: 2 };
+
+  it('resolves integer arithmetic and returns native number', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews + 1}}', state), 5);
+  });
+
+  it('resolves subtraction', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews - 1}}', state), 3);
+  });
+
+  it('resolves expression using two local_state keys', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews + offset}}', state), 6);
+  });
+
+  it('interpolates arithmetic result mid-string via resolveTemplate', () => {
+    const result = resolveInput('reviewed {{current_card.total_reviews + 1}} times', state);
+    assert.strictEqual(result, 'reviewed 5 times');
+  });
+
+  it('leaves unresolvable path unchanged (no operators)', () => {
+    assert.strictEqual(resolveInput('{{current_card.missing_field}}', state), '{{current_card.missing_field}}');
+  });
+
+  it('leaves token unchanged when expression throws', () => {
+    assert.strictEqual(resolveInput('{{undefined_var + 1}}', state), '{{undefined_var + 1}}');
+  });
+});
