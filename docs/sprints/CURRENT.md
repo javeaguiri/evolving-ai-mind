@@ -132,7 +132,7 @@ Two coupled fixes:
 **Acceptance criteria:**
 - [x] `domain` is non-null in create_workflow WorkflowRun inputs
 - [x] `domain_schema` is available in `local_state` when `generate_workflow_steps` fires
-- [ ] A test create_workflow run references correct table and column names on first attempt
+- [ ] A test create_workflow run references correct table and column names on first attempt → **deferred to Sprint 4**
 
 ---
 
