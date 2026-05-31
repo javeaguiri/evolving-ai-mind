@@ -913,3 +913,32 @@ will expire the `trigger_id` before the modal can be opened.
 ### Reading block_actions vs view_submission
 - `block_actions`: selected value at `payload.actions[0].value`; typed input at `payload.state.values[block_id][action_id].value`
 - `view_submission`: typed input at `payload.view.state.values[block_id][action_id].value`; modal identity at `payload.view.callback_id`
+
+## Table of Block Elements
+
+| Name | Description | Blocks | Surfaces |
+|---|---|---|---|
+| Button | Allows users a direct path to performing basic actions. | Section, Actions | Modals, Messages, Home tabs |
+| Checkboxes | Allows users to choose multiple items from a list of options. | Section, Actions, Input | Modals, Messages, Home tabs |
+| Date picker | Allows users to select a date from a calendar style UI. | Section, Actions, Input | Modals, Messages, Home tabs |
+| Datetime picker | Allows users to select both a date and a time of day. | Actions, Input | Modals, Messages |
+| Email input | Allows user to enter an email into a single-line field. | Input | Modals |
+| Feedback buttons | Buttons to indicate positive or negative feedback. | Context actions | Messages |
+| File input | Allows user to upload files. | Input | Modals |
+| Icon button | An icon button to perform actions. | Context actions | Messages |
+| Image | Displays an image as part of a larger block of content. | Section, Context | Modals, Messages, Home tabs |
+| Multi-select menu | Allows users to select multiple items from a list of options. | Section, Actions, Input | Modals, Messages, Home tabs |
+| Number input | Allows user to enter a number into a single-line field. | Input | Modals |
+| Overflow menu | Allows users to press a button to view a list of options. | Section, Actions | Modals, Messages, Home tabs |
+| Plain-text input | Allows users to enter freeform text data into a single-line or multi-line field. | Input | Modals, Messages, Home tabs |
+| Radio button group | Allows users to choose one item from a list of possible options. | Section, Actions, Input | Modals, Messages, Home tabs |
+| Rich text input | Allows users to enter formatted text in a WYSIWYG composer, offering the same messaging writing experience as in Slack. | Input, Table | Modals, Home tabs |
+| Select menu | Allows users to choose an option from a drop down menu. | Section, Actions, Input | Modals, Messages, Home tabs |
+| Time picker | Allows users to enter numerical data into a single-line field. | Section, Actions, Input | Modals, Messages, Home tabs |
+| URL input | Allows user to enter a URL into a single-line field. | Input | Modals |
+| URL source | Displays a URL source for referencing within a task card block. | Task card | Messages |
+| Workflow button | Allows users to run a link trigger with customizable inputs. | Section, Actions | Messages |
+
+
+
+© 2026 Slack Technologies, LLC, a Salesforce company. All rights reserved. Various trademarks held by their respective owners.
