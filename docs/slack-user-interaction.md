@@ -44,6 +44,7 @@ To configure a Request URL for your app:
 
 You'll see a few new options appear. The ones
 relevant to us are:
+
 - *Request URL:* the URL we'll send the request payload to when interactive components or shortcuts are used. You'll need to set up a URL to handle these payloads, as we'll describe below. Save your changes after you've added one.
   - 
 If you are distributing your app, this request URL needs to be an HTTPS URL (self-signed certificates are not allowed). If you're just building a single-workspace app, it can be plain HTTP.
