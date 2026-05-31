@@ -44,16 +44,13 @@ To configure a Request URL for your app:
 
 You'll see a few new options appear. The ones
 relevant to us are:
-
-- *Request URL:* the URL we'll send the request payload to when interactive components or shortcuts are used. You'll need to set up a URL to handle these payloads, as we'll describe below. Save your changes after you've added one.
-  - 
-If you are distributing your app, this request URL needs to be an HTTPS URL (self-signed certificates are not allowed). If you're just building a single-workspace app, it can be plain HTTP.
-  -
-This Request URL is also used by modals for view_submission event payloads. Your app can distinguish between the different types of payload using the type field as explained below.
-- *Options Load URL:* this is a setting used by some Block Kit interactive components, i.e. select menus and multi-select menus. These components can load menu options from an external source, and Options Load URL determines which URL is queried to return those menu options.
-  - 
++ Request URL: the URL we'll send the request payload to when interactive components or shortcuts are used. You'll need to set up a URL to handle these payloads, as we'll describe below. Save your changes after you've added one.
+  + If you are distributing your app, this request URL needs to be an HTTPS URL (self-signed certificates are not allowed). If you're just building a single-workspace app, it can be plain HTTP.
+  + This Request URL is also used by modals for view_submission event payloads. Your app can distinguish between the different types of payload using the type field as explained below.
++ Options Load URL: this is a setting used by some Block Kit interactive components, i.e. select menus and multi-select menus. These components can load menu options from an external source, and Options Load URL determines which URL is queried to return those menu options.
+  +
 You can leave Options Load URL blank for now. We recommend reading the reference guide for this component.
-  -
+  +
 If you create Slash Commands for your app, you'll find that each command has its own Request URL. Read our guide to creating Slash Commands to learn more. 
 
 You're all set! Your app can start receiving payloads. Now let's see how to process them.
@@ -174,13 +171,13 @@ message responses.
 By default, a message published via
 response_url will be sent as an ephemeral
 message:
-'''
+```
 POST https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXX
 Content-type: application/json
 {
 "text": "Oh hey, this is a nifty ephemeral message response!"
 }
-'''
+```
 ### Publishing responses in channel
 If you want to publish a message to the same
 conversation as the interaction source, include
@@ -201,7 +198,7 @@ thread_ts.
 Also, be sure to set replace_original to false
 or you'll overwrite the message you're wanting to
 respond to!
-'''
+```
 POST https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXX
 Content-type: application/json
 {
@@ -210,7 +207,7 @@ Content-type: application/json
 "replace_original": "false",
 "thread_ts": "1234567890"
 }
-'''
+```
 ### Updating a source message in response
 If your app received an interaction payload after
 an interactive component was used inside of a
@@ -218,14 +215,14 @@ message, you can use response_url to update
 that source message.
 Include an attribute replace_original and set
 it to true:
-'''
+```
 POST https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXX
 Content-type: application/json
 {
 "replace_original": "true",
 "text": "Thanks for your request, we'll process it and get back
 }
-'''
+```
 Feel free to include blocks in your response_url
 update.
 Non-ephemeral messages can also be updated
@@ -242,13 +239,13 @@ interaction entirely using response_url.
 Include delete_original as the sole attribute
 in your response_url JSON, with the value set
 to true:
-'''
+```
 POST https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXX
 Content-type: application/json
 {
 "delete_original": "true"
 }
-'''
+```
 Non-ephemeral messages can also be deleted
 using chat.delete.
 If you include a new message payload and
