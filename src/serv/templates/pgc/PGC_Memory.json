@@ -1,0 +1,39 @@
+{
+  "table_name": "PGC_Memory",
+  "target": "pgc",
+  "description": "Persistent memory store. Holds episodic, semantic, and procedural memories scoped by domain, workflow, topic, or global. Injected into LLM calls by the memory harness based on scope and budget.",
+  "columns": [
+    { "name": "id",              "type": "serial",       "primaryKey": true },
+    { "name": "memory_type",     "type": "varchar(20)",  "nullable": false },
+    { "name": "scope",           "type": "jsonb",        "nullable": false, "default": "'{}'::jsonb" },
+    { "name": "content",         "type": "text",         "nullable": false },
+    { "name": "tags",            "type": "jsonb",        "nullable": false, "default": "'[]'::jsonb" },
+    { "name": "priority",        "type": "integer",      "nullable": false, "default": "5" },
+    { "name": "token_estimate",  "type": "integer",      "nullable": false, "default": "0" },
+    { "name": "source_run_id",   "type": "integer",      "nullable": true },
+    { "name": "source_workflow", "type": "varchar(100)", "nullable": true },
+    { "name": "source_step",     "type": "varchar(50)",  "nullable": true },
+    { "name": "expires_at",      "type": "timestamptz",  "nullable": true },
+    { "name": "embedding",       "type": "real[]",       "nullable": true },
+    { "name": "created_at",      "type": "timestamptz",  "nullable": false, "default": "now()" },
+    { "name": "updated_at",      "type": "timestamptz",  "nullable": false, "default": "now()" }
+  ],
+  "foreign_keys": [
+    {
+      "name": "fk_pgc_memory_source_run_id",
+      "column": "source_run_id",
+      "references": { "table": "PGC_WorkflowRun", "column": "id" },
+      "onDelete": "SET NULL"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "check",
+      "name": "chk_pgc_memory_type",
+      "expression": "memory_type IN ('episodic','semantic','procedural')"
+    }
+  ],
+  "triggers": [
+    { "name": "trg_pgc_memory_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+  ]
+}

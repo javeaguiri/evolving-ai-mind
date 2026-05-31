@@ -91,9 +91,11 @@ async function getRows(req) {
     const filterError = validateFilters(filters, validColumns);
     if (filterError) return err(400, filterError, req.correlationId);
 
-    // --- Validate orderBy column ---
-    if (orderBy && !validColumns.has(orderBy.column)) {
-      return err(400, `orderBy column "${orderBy.column}" not found in schema`, req.correlationId);
+    // --- Normalize and validate orderBy ---
+    // Accept both object { column, direction } and string "col ASC" / "col DESC".
+    const normalizedOrderBy = normalizeOrderBy(orderBy);
+    if (normalizedOrderBy && !validColumns.has(normalizedOrderBy.column)) {
+      return err(400, `orderBy column "${normalizedOrderBy.column}" not found in schema`, req.correlationId);
     }
 
     // --- Validate vectorSearch if present ---
@@ -156,8 +158,8 @@ async function getRows(req) {
       // --- Standard parameterised SELECT ---
       const { whereClause, values } = buildWhereClause(filters);
 
-      const orderClause = orderBy
-        ? `ORDER BY "${orderBy.column}" ${orderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
+      const orderClause = normalizedOrderBy
+        ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
         : '';
 
       const sql = `
@@ -289,15 +291,31 @@ function getEmbedColumns(schemaColumns) {
 // ---------------------------------------------------------------------------
 
 async function insertRow(req) {
-  const { tableName, row } = req.body;
+  const { tableName, row, rows } = req.body;
 
-  if (!tableName)            return err(400, 'tableName is required', req.correlationId);
-  if (!row || typeof row !== 'object' || Array.isArray(row)) {
-    return err(400, 'row must be a non-null object', req.correlationId);
+  // Accept either a single row object or an array of rows for bulk insert.
+  // Bulk path: all rows must have the same column set (derived from the first row).
+  const isBatch = Array.isArray(rows) && rows.length > 0;
+
+  if (!tableName) return err(400, 'tableName is required', req.correlationId);
+
+  if (isBatch) {
+    if (rows.some(r => !r || typeof r !== 'object' || Array.isArray(r))) {
+      return err(400, 'rows must be an array of non-null objects', req.correlationId);
+    }
+    if (Object.keys(rows[0]).length === 0) {
+      return err(400, 'rows must have at least one field', req.correlationId);
+    }
+  } else {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return err(400, 'row must be a non-null object', req.correlationId);
+    }
+    if (Object.keys(row).length === 0) {
+      return err(400, 'row must have at least one field', req.correlationId);
+    }
   }
-  if (Object.keys(row).length === 0) {
-    return err(400, 'row must have at least one field', req.correlationId);
-  }
+
+  const rowsToInsert = isBatch ? rows : [row];
 
   const pgcClient = getClient(process.env.PGC_DATABASE_URL);
 
@@ -321,34 +339,49 @@ async function insertRow(req) {
       return err(403, `INSERT not permitted on "${tableName}"`, req.correlationId);
     }
 
-    // --- Validate row column names against PGC_Schema ---
+    // --- Validate column names against PGC_Schema (use first row as template) ---
     const validColumns = new Set(schemaColumns.map(c => c.name));
-    for (const col of Object.keys(row)) {
+    for (const col of Object.keys(rowsToInsert[0])) {
       if (!validColumns.has(col)) {
         return err(400, `Column "${col}" not found in schema for "${tableName}"`, req.correlationId);
       }
     }
 
-    // --- Compute embeddings for vector columns with embed_source ---
-    // Caller does not provide these — SERV always computes them from source fields.
-    const effectiveRow = { ...row };
-    const embedCols = getEmbedColumns(schemaColumns);
-    for (const vc of embedCols) {
-      try {
-        effectiveRow[vc.name] = await resolveEmbedding(vc, effectiveRow, req.correlationId);
-      } catch (embErr) {
-        console.error(`table insertRow: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
-        return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
+    // --- Compute embeddings and build effective rows ---
+    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
+    const embedCols  = getEmbedColumns(schemaColumns);
+    const effectiveRows = [];
+
+    for (const rawRow of rowsToInsert) {
+      const effectiveRow = { ...rawRow };
+      for (const vc of embedCols) {
+        try {
+          effectiveRow[vc.name] = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+        } catch (embErr) {
+          console.error(`table insertRow: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
+          return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
+        }
       }
+      effectiveRows.push(effectiveRow);
     }
 
-    // --- Build parameterised INSERT ---
-    const cols         = Object.keys(effectiveRow);
-    const vals         = Object.values(effectiveRow).map(v =>
-      (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
-    );
-    const colList      = cols.map(c => `"${c}"`).join(', ');
-    const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+    // --- Build parameterised INSERT (single or multi-row) ---
+    const cols    = Object.keys(effectiveRows[0]);
+    const colList = cols.map(c => `"${c}"`).join(', ');
+
+    let paramIdx  = 1;
+    const valueSets = [];
+    const allVals   = [];
+    for (const effectiveRow of effectiveRows) {
+      const placeholders = cols.map(() => `$${paramIdx++}`);
+      valueSets.push(`(${placeholders.join(', ')})`);
+      for (const col of cols) {
+        const v = effectiveRow[col];
+        if (v !== null && typeof v === 'object') allVals.push(JSON.stringify(v));
+        else if (typeof v === 'string' && colTypeMap[col] === 'jsonb') allVals.push(JSON.stringify(v));
+        else allVals.push(v);
+      }
+    }
 
     const dbClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
@@ -357,14 +390,23 @@ async function insertRow(req) {
     if (target === 'pgd') await dbClient.connect();
 
     const result = await dbClient.query(
-      `INSERT INTO "${tableName}" (${colList}) VALUES (${placeholders}) RETURNING *`,
-      vals
+      `INSERT INTO "${tableName}" (${colList}) VALUES ${valueSets.join(', ')} RETURNING *`,
+      allVals
     );
 
     if (target === 'pgd') await dbClient.end();
 
-    console.info(`table: inserted row into ${tableName}`);
+    if (isBatch) {
+      console.info(`table: inserted ${result.rowCount} row(s) into ${tableName}`);
+      return ok({
+        success:       true,
+        tableName,
+        rows:          result.rows,
+        correlationId: req.correlationId,
+      }, req.correlationId);
+    }
 
+    console.info(`table: inserted row into ${tableName}`);
     return ok({
       success:       true,
       tableName,
@@ -483,9 +525,12 @@ async function updateRows(req) {
     // --- Build parameterised SET and WHERE clauses ---
     // SET clause params are $1..$n; WHERE clause params start at $n+1.
     const updateCols = Object.keys(effectiveUpdates);
-    const updateVals = Object.values(effectiveUpdates).map(v =>
-      (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
-    );
+    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
+    const updateVals = Object.values(effectiveUpdates).map((v, i) => {
+      if (v !== null && typeof v === 'object') return JSON.stringify(v);
+      if (typeof v === 'string' && colTypeMap[updateCols[i]] === 'jsonb') return JSON.stringify(v);
+      return v;
+    });
     const setClause = updateCols
       .map((col, i) => `"${col}" = $${i + 1}`)
       .join(', ');
@@ -592,6 +637,20 @@ async function deleteRows(req) {
 // ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Normalise orderBy to { column, direction } regardless of input form.
+ * Accepts object { column, direction } or string "col_name ASC" / "col_name".
+ */
+function normalizeOrderBy(orderBy) {
+  if (!orderBy) return null;
+  if (typeof orderBy === 'object') return orderBy;
+  const parts = String(orderBy).trim().split(/\s+/);
+  return {
+    column:    parts[0],
+    direction: (parts[1] ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+  };
+}
 
 /**
  * Validate filter array — operators and column names.

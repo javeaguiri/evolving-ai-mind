@@ -1528,6 +1528,33 @@ must be non-empty strings — L1 validation rejects steps where either is missin
 `callback.mjs` renders the block using `randomUUID()` for `task_id` and
 `status: "complete"` — posted directly in the gate message, not as a thread reply.
 
+###### `iterator` on options (choice gate only)
+
+Any option in a `choice` gate may carry `iterator: '<local_state_key>'`. At runtime
+`buildDialog` expands that option into **one button per item** in
+`localState[iterator]`, resolving `label`, `value`, and `description` tokens against
+`{...localState, ...item}` for each element. Only one option object per gate should
+carry `iterator`. A Cancel option without `iterator` must always appear as a separate
+entry. The `iterator` field is stripped from the rendered buttons.
+
+```json
+{
+  "step": "3", "type": "human_gate", "gate_type": "choice",
+  "message_template": "Select a deck to quiz:\n{{decks_list}}",
+  "output_key": "selected_deck_id",
+  "options": [
+    { "value": "{{id}}", "label": "{{name}}", "description": "{{card_count}} cards",
+      "on_select": "next", "iterator": "decks" },
+    { "value": "cancel", "label": "Cancel", "description": "Stop", "on_select": "cancel" }
+  ],
+  "on_success": "next", "on_failure": "cancel"
+}
+```
+
+Use `iterator` instead of a preceding `js_transform` step when gate options come
+from a variable-length array. L1 validation skips the unresolved-key check for
+options that carry `iterator` (tokens resolve at runtime against each item).
+
 ###### Template syntax
 
 Templates appear in `message_template`, `input` values, and `context_key`. The

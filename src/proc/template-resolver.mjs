@@ -7,29 +7,49 @@
 // Used by the Step Processor to resolve {{variable}} references
 // in step definitions against the current local_state.
 //
-// Supports:
-//   {{input.userInput}}               — dot-path into local_state
-//   {{proposed_scaffold.domain}}      — nested object access
+// Supports standard JSONPath subset — no $ root prefix needed:
+//   {{input.userInput}}                 — dot-path into local_state
+//   {{proposed_scaffold.domain}}        — nested object access
 //   {{proposed_scaffold.tables.length}} — .length on arrays
-//
-// Does NOT support arbitrary expressions — only dot-path property
-// access and the special .length suffix.
+//   {{all_cards[*].id}}                 — JSONPath wildcard: extract field from every array element
+//   {{entity_schema_rows[0].root_table}} — bracket index access
 
 /**
- * Resolve a dot-path string against an object.
- * Handles .length as a terminal operation on arrays.
+ * Normalise a path string to a plain dot-separated token list.
+ * Converts JSONPath bracket notation — [*] and [n] — to dot segments
+ * so the walker below handles a single unified format.
+ *
+ * "cards[*].id"   → ["cards", "*", "id"]
+ * "rows[0].name"  → ["rows", "0", "name"]
+ * "input.domain"  → ["input", "domain"]
+ */
+function tokenizePath(path) {
+  return path.replace(/\[(\*|\d+)\]/g, '.$1').split('.').filter(Boolean);
+}
+
+/**
+ * Resolve a path string against an object.
+ * Accepts dot-path and JSONPath bracket notation (see tokenizePath).
+ * Handles [*] wildcard and numeric index access.
  *
  * @param {object} obj   The root object (local_state)
- * @param {string} path  Dot-separated key path e.g. "proposed_scaffold.tables.length"
+ * @param {string} path  Path string e.g. "cards[*].id" or "input.domain"
  * @returns {*}          The resolved value, or undefined if not found
  */
 export function resolvePath(obj, path) {
-  const parts = path.split('.');
+  const parts = tokenizePath(path);
   let cur = obj;
 
-  for (const key of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const key = parts[i];
     if (cur == null) return undefined;
-    // Support numeric index access for arrays
+
+    if (key === '*') {
+      if (!Array.isArray(cur)) return undefined;
+      const remaining = parts.slice(i + 1).join('.');
+      return remaining ? cur.map(item => resolvePath(item, remaining)) : cur;
+    }
+
     if (Array.isArray(cur) && /^\d+$/.test(key)) {
       cur = cur[parseInt(key, 10)];
     } else {
@@ -61,7 +81,11 @@ export function resolveTemplate(template, localState) {
     }
 
     const val = resolvePath(localState, trimmed);
-    if (val === undefined || val === null) return match; // leave unresolved
+    if (val === undefined || val === null) {
+      const exprVal = evalExpression(trimmed, localState);
+      if (exprVal !== undefined && exprVal !== null) return String(exprVal);
+      return match;
+    }
     if (typeof val === 'object') return JSON.stringify(val);
     return String(val);
   });
@@ -83,8 +107,12 @@ export function resolveInput(input, localState) {
   if (typeof input === 'string') {
     const singleToken = input.match(/^\{\{([^}]+)\}\}$/);
     if (singleToken) {
-      const val = resolvePath(localState, singleToken[1].trim());
+      const trimmed = singleToken[1].trim();
+      const val = resolvePath(localState, trimmed);
       if (val !== undefined && val !== null) return val;
+      if (val === null) return null;
+      const exprVal = evalExpression(trimmed, localState);
+      if (exprVal !== undefined) return exprVal;
     }
     return resolveTemplate(input, localState);
   }
@@ -95,6 +123,28 @@ export function resolveInput(input, localState) {
     );
   }
   return input;
+}
+
+/**
+ * Evaluate a token as a JS expression when path resolution fails.
+ * Only attempted when the token contains arithmetic operators or spaces —
+ * those characters never appear in valid path tokens.
+ * Top-level local_state keys are bound as named variables so that
+ * expressions like "current_card.total_reviews + 1" resolve naturally.
+ *
+ * @param {string} token      Trimmed token (no {{ }})
+ * @param {object} localState Current frame local_state
+ * @returns {*}               Evaluated result, or undefined on failure
+ */
+function evalExpression(token, localState) {
+  if (!/[\s+\-*%]/.test(token)) return undefined;
+  try {
+    const keys = Object.keys(localState);
+    const vals = keys.map(k => localState[k]);
+    return new Function(...keys, `'use strict'; return (${token});`)(...vals);
+  } catch (_) {
+    return undefined;
+  }
 }
 
 /**

@@ -38,6 +38,7 @@ import { getRows, insertRow, updateRows }
 import { executeStep, buildDialog }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
+import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
@@ -232,9 +233,25 @@ async function executeTop({ workflowRunId, traceId, source }) {
       return { skipped: true, reason: 'stuck' };
     }
 
-    // Not yet at limit — record the hit and re-enqueue
-    console.warn('run-workflow: idempotency hit — possible stuck step', {
-      workflowRunId: run.id, step: frame.current_step, stuckCount, traceId,
+    // stuckCount === 1: first idempotency hit on this step.
+    // Two possible causes:
+    //   (A) SQS redelivery — the original Lambda took longer than the queue's
+    //       visibility timeout (e.g. slow LLM call + correction loop), so SQS
+    //       made the message visible again and a second Lambda picked it up.
+    //       The first Lambda already completed and recorded the step; this is a
+    //       harmless duplicate. Signature: source === 'sqs' and the prior
+    //       stuck_step is absent or different.
+    //   (B) Routing loop beginning — the workflow routes back to this step on
+    //       every execution. Will escalate to stuckCount >= 3 on next hits.
+    // Log both fields so CloudWatch can distinguish A from B in future analysis.
+    const likelyCause = (source === 'sqs' && !sameStep) ? 'sqs_redelivery' : 'routing_loop_start';
+    console.warn('run-workflow: idempotency hit', {
+      workflowRunId: run.id,
+      step:          frame.current_step,
+      stuckCount,
+      likelyCause,
+      source,
+      traceId,
     });
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
@@ -444,6 +461,15 @@ async function executeTop({ workflowRunId, traceId, source }) {
       }
     );
     console.info('run-workflow: workflow completed', { workflowRunId: run.id, traceId });
+    if (shouldWriteEpisodicMemory(run)) {
+      await enqueueWorkflow({
+        type:         'MEMORY_WRITE',
+        runId:        run.id,
+        workflowName: run.workflow_name,
+        domain:       run.input?.domain ?? null,
+        traceId,
+      });
+    }
     return { action: 'completed' };
   }
 

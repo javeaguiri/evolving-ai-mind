@@ -80,6 +80,15 @@ export async function insertRow(tableName, row) {
 }
 
 /**
+ * Bulk-insert multiple rows into a PGC/PGD table in a single SQL statement.
+ * All rows must have the same column set. Returns { rows: [...] } with all
+ * inserted rows including generated IDs.
+ */
+export async function insertRows(tableName, rows) {
+  return servPost('/api/v1/serv/table/insertRow', { tableName, rows });
+}
+
+/**
  * Update rows in a PGC/PGD table via SERV-Table updateRows.
  */
 export async function updateRows(tableName, filters, updates) {

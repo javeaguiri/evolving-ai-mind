@@ -38,6 +38,7 @@ import { handle as monitorPromptQuality } from './monitor-prompt-quality.mjs';
 import { handle as chat }               from './chat.mjs';
 import { handle as explain }            from './explain.mjs';
 import { handle as deleteWorkflow }     from './delete-workflow.mjs';
+import { handle as writeMemory }        from './memory-writer.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -177,6 +178,13 @@ async function processSqsBatch(records) {
       if (message.type === 'EXPLAIN_QUERY') {
         const req = buildReqFromSqs(message);
         await explain(req);
+        continue;
+      }
+      // MEMORY_WRITE — fire-and-forget episodic memory write on domain run completion.
+      // Enqueued by run-workflow.mjs after qualifying CRUD workflow run completes.
+      if (message.type === 'MEMORY_WRITE') {
+        const req = buildReqFromSqs(message);
+        await writeMemory(req);
         continue;
       }
 

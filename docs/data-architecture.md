@@ -233,7 +233,7 @@ Rows are seeded at bootstrap for system-level intents, and written at runtime by
 
 These two tables answer different questions and are consulted in a strict order by the Intent Preprocessor (see Section 6.3).
 
-`PGC_IntentMap` answers: "Is this a known system-level or registered workflow intent?" — create domain, create workflow, help, or any user-defined workflow. Its patterns are written by developers (bootstrap seed) or by the brain itself when a new domain is created. It has no FK to `PGC_Workflow` — routing uses `action_type` + `intent_category` name lookup in `handoff()`. Pass 1 in the pipeline — always runs first.
+`PGC_IntentMap` answers: "Is this a known system-level or registered workflow intent?" — create domain, create workflow, help, or any user-defined workflow. Its patterns are written by developers (bootstrap seed) or by the brain itself when a new domain is created. `workflow_id` FK to `PGC_Workflow` is used for cleanup (e.g. `delete_domain`) — routing uses `action_type` + `intent_category` name lookup in `handoff()`. Pass 1 in the pipeline — always runs first.
 
 `PGC_DomainHelp` answers: "Does the user's input mention something in their personal data?" — stocks, recipes, meals, budget. It has no FK to `PGC_Workflow` and no awareness of workflows. It only knows that "stocks", "portfolio", and "holdings" all mean `stock_portfolio`. Pass 2 in the pipeline — only consulted when no `PGC_IntentMap` pattern matched. Once a domain is resolved from `PGC_DomainHelp`, the preprocessor runs a workflow keyword scan against `PGC_Workflow.intent_keywords` for that domain, then falls back to CRUD detection or Tier 2.
 

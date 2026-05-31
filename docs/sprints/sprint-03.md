@@ -1,12 +1,31 @@
 # Sprint 3 — Memory and the Running Quiz
 
+**Outcome: COMPLETED 2026-05-31**
+
 **Goal:** Make the system worth using every day. Two threads:
 (1) diagnose why the flashcard quiz fails and fix its prerequisites;
 (2) build the memory layer so every future LLM call is progressively smarter.
 The quiz is the final acceptance gate: it must run end-to-end in a memory-aware system.
 Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4.
 
-**README.md must be updated at sprint close.**
+---
+
+## Retro
+
+### What worked
+- Memory layer shipped completely and validated end-to-end — semantic, procedural, and episodic paths all writing to PGC_Memory in prod.
+- "Extend harness, not prompts" principle paid off three times this sprint: `evalExpression` for arithmetic tokens, `description_list` suppression, confirm gate fallback removal. Each fix took ~10 lines and covered all future cases permanently.
+- Quiz reached full e2e completion (runs 403–405) after iterative harness fixes. No workflow edits required — the generated workflow was logically correct throughout.
+
+### What required multiple correction cycles
+- **Domain propagation** — surfaced in 3 different forms across 2 sprints. Fixed piecemeal each time. Root cause: domain is not a first-class field with end-to-end test coverage. Backlog task 12 updated with systemic audit item for Sprint 4.
+- **Stale buttons** — two attempts (HTTP response body → response_url → chat.update). Root cause was response_url being null in practice; not diagnosed until Lambda duration analysis in session 8.
+- **G3 episodic memory** — two deploys to get domain into WorkflowRun input; root cause was Pass 1a not resolving domain for freely-named workflows.
+
+### What to carry forward
+- B AC3 (create_workflow first-attempt column name correctness) — deferred to Sprint 4, needs validation against memory bridge.
+- Richer episodic memory content — distillContent writes a one-liner; session outcomes (score, card counts) would make memories actually useful.
+- IntentMap invocation phrasing — add human_gate to create_workflow asking how user wants to invoke the workflow.
 
 **Branch:** `sprint/03-run-generated-workflows`
 

@@ -40,9 +40,8 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { callLlm, callLlmWithCorrection, callLlmWithResumption } from '../shared/llm-client.mjs';
-import { validate, logPromptError }     from './review-output.mjs';
-import { servPost, getRows, insertRow, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { executeLlmCall }               from './llm-harness.mjs';
 import {
   resolvePath,
   resolveTemplate,
@@ -76,10 +75,12 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_entity_query': return executeServEntityQuery({ step, localState, traceId });
     case 'serv_entity_get':    return executeServEntityGet({ step, localState, traceId });
     case 'serv_entity_schema': return executeServEntitySchema({ step, localState, traceId });
+    case 'serv_entity_insert': return executeServEntityInsert({ step, localState, traceId });
     case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
+    case 'write_memory': return executeWriteMemory({ step, localState, run, traceId });
     case 'end':          return { outputValue: null, nextAction: 'end' };
     case 'iterator':     return { outputValue: null, nextAction: 'iterator' };
     case 'condition':    return executeCondition({ step, localState, traceId });
@@ -92,209 +93,7 @@ export async function executeStep({ step, localState, run, traceId }) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// llm_call
-// ---------------------------------------------------------------------------
-
-async function executeLlmCall({ step, localState, run, traceId }) {
-  const intentCategory = step.input?.prompt;
-  if (!intentCategory) throw new Error('llm_call step missing input.prompt');
-
-  const promptResp = await getRows(
-    'PGC_Prompt',
-    [{ column: 'intent_category', op: 'eq', value: intentCategory }],
-    { column: 'version', direction: 'desc' },
-    1
-  );
-  if (!promptResp.success || promptResp.count === 0) {
-    throw new Error(`prompt not found: intent_category="${intentCategory}"`);
-  }
-  const promptRow = promptResp.rows[0];
-
-  // Resolve all template variables in the step input so the prompt has
-  // access to domain, existing_tables, and any other input fields.
-  const resolvedInput = resolveInput(step.input ?? {}, localState);
-
-  // PGC_SystemContext injection — load context rows whose inject_for array
-  // includes this prompt's intent_category. Each row's key becomes a
-  // substitution variable in prompt_text (e.g. {{step_type_contracts}},
-  // {{example}}, {{routing_value_rules}}). step.input values take precedence
-  // over context rows — context only fills placeholders not already present.
-  // Client-side filter: PGC_SystemContext is small; jsonb array containment
-  // (@>) is not a supported SERV op so we filter after fetch.
-  const contextResp = await getRows('PGC_SystemContext');
-  const contextMap = {};
-  if (contextResp.success && contextResp.rows?.length) {
-    for (const row of contextResp.rows) {
-      const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
-      const injectAlways = row.inject_always === true;
-      if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
-        contextMap[row.key] = row.content;
-      }
-    }
-  }
-
-  // Resolve user_input — the primary free-text variable in every llm_call step.
-  const userInput = resolveTemplate(
-    step.input?.user_input ?? '',
-    localState,
-  );
-
-  // Substitute prompt_text placeholders. Priority order:
-  //   1. resolvedInput (step.input fields resolved from local_state)
-  //   2. contextMap (PGC_SystemContext rows for this intent_category)
-  const allSubstitutions = { ...contextMap, ...resolvedInput };
-  const instructions = Object.entries(allSubstitutions).reduce((text, [key, val]) => {
-    const placeholder = `{{${key}}}`;
-    const substitution = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
-    return text.split(placeholder).join(substitution);
-  }, promptRow.prompt_text ?? '');
-
-  console.info('step-executor: llm_call', {
-    intentCategory,
-    promptVersion: promptRow.version,
-    traceId,
-  });
-
-  const t0 = Date.now();
-  let rawOutput;
-  let priorErrorType;
-  try {
-    rawOutput = await callLlm(
-      promptRow.model,
-      instructions,
-      userInput || JSON.stringify(resolvedInput),
-      promptRow.output_schema,
-      traceId,
-      promptRow.max_output_tokens ?? undefined,
-    );
-  } catch (parseErr) {
-    if (!parseErr.rawOutput) throw parseErr;
-    if (parseErr.isTruncated) {
-      // Response was cut at the token ceiling — correction is useless, regenerate from scratch
-      // with a doubled budget. If the resumption also fails, log token_truncation so the
-      // prompt_quality_monitor can auto-raise the ceiling for future runs.
-      console.info('step-executor: llm_call truncated — attempting resumption', { intentCategory, traceId });
-      try {
-        rawOutput = await callLlmWithResumption(
-          promptRow.model,
-          instructions,
-          userInput || JSON.stringify(resolvedInput),
-          promptRow.output_schema,
-          traceId,
-          promptRow.max_output_tokens ?? undefined,
-        );
-      } catch (resumptionErr) {
-        await logPromptError(promptRow.id, {
-          error_type:      'token_truncation',
-          error_message:   `Truncated at ${promptRow.max_output_tokens} tokens; resumption also failed: ${resumptionErr.message}`,
-          recovery_action: 'halt',
-        });
-        throw resumptionErr;
-      }
-      priorErrorType = 'token_truncation';
-    } else {
-      console.info('step-executor: llm_call parse error — attempting correction', { intentCategory, traceId });
-      rawOutput = await callLlmWithCorrection(
-        promptRow.model,
-        instructions,
-        userInput || JSON.stringify(resolvedInput),
-        promptRow.output_schema,
-        [{ message: parseErr.message }],
-        parseErr.rawOutput,
-        traceId,
-        promptRow.max_output_tokens ?? undefined,
-      );
-    }
-  }
-  const llmMs = Date.now() - t0;
-
-  console.info('step-executor: llm_call completed', { llmMs, traceId });
-
-  // Validate output — 2-attempt correction loop.
-  // priorErrorType is forwarded when this validate() call follows a truncation+resumption
-  // so the error_log correctly labels the root cause if validation ultimately fails.
-  const validationResult = await validate({
-    intentCategory,
-    output: rawOutput,
-    traceId,
-    priorErrorType,
-  });
-
-  const finalOutput = validationResult.correctedOutput ?? rawOutput;
-
-  // Diagnostics — written before the validation throw so they are recorded even on failure.
-  // seq 1: system prompt used for this step.
-  // seq 2: first LLM response (rawOutput — before any validation correction).
-  // seq 3: validation correction attempt output (if validate() made a second LLM call).
-  // Non-blocking: failure is logged but does not fail the step.
-  let diagnosticPayload = null;
-  try {
-    const diagnosticsRow    = contextResp.rows?.find(r => r.key === 'diagnostics_config');
-    const diagnosticsConfig = diagnosticsRow?.content ?? null;
-    const enabledWorkflows  = diagnosticsConfig?.enabled_workflows ?? [];
-
-    if (run?.workflow_name && enabledWorkflows.includes(run.workflow_name)) {
-      const sessionResp = await insertRow('PGC_Session', {
-        session_type:    'llm_call_diagnostic',
-        workflow_name:   run.workflow_name,
-        run_id:          run.id,
-        trace_id:        traceId,
-        step_id:         step.step,
-        intent_category: intentCategory,
-      });
-      if (sessionResp.success) {
-        const sessionId = sessionResp.row.id;
-        const queryId   = sessionResp.row.query_id;
-        let seq = 1;
-        await insertRow('PGC_SessionEntry', {
-          session_id: sessionId, sequence_number: seq++, role: 'system', content: instructions,
-        });
-        await insertRow('PGC_SessionEntry', {
-          session_id: sessionId, sequence_number: seq++, role: 'assistant',
-          content: typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : String(rawOutput),
-        });
-        // Record correction prompt + output if validate() made a second attempt.
-        if (validationResult.attempt === 2 && Array.isArray(validationResult.attempt1Errors)) {
-          const errorLines  = validationResult.attempt1Errors.map(e => `- ${e.message}`).join('\n');
-          const attempt1Txt = typeof rawOutput === 'object' ? JSON.stringify(rawOutput, null, 2) : String(rawOutput);
-          await insertRow('PGC_SessionEntry', {
-            session_id: sessionId, sequence_number: seq++, role: 'user',
-            content: `Your previous response had these specific issues that must be fixed:\n${errorLines}\n\nYour previous response was:\n${attempt1Txt}\n\nFix ONLY the issues listed above. Return the complete corrected JSON object — no explanation, no preamble, no markdown fences.`,
-          });
-        }
-        if (validationResult.correctedOutput !== undefined) {
-          const corrected = validationResult.correctedOutput;
-          await insertRow('PGC_SessionEntry', {
-            session_id: sessionId, sequence_number: seq++, role: 'assistant',
-            content: typeof corrected === 'object' ? JSON.stringify(corrected) : String(corrected),
-          });
-        }
-        diagnosticPayload = { queryId, sessionId, intentCategory, traceId };
-        console.info('step-executor: diagnostics session created', { sessionId, queryId, traceId });
-      }
-    }
-  } catch (diagErr) {
-    console.warn('step-executor: diagnostics write failed (non-fatal)', diagErr.message);
-  }
-
-  if (!validationResult.valid) {
-    const validationError = new Error(
-      `llm_call validation failed after ${validationResult.attempt} attempt(s): ` +
-      JSON.stringify(validationResult.errors)
-    );
-    // Attach so run-workflow.mjs can send LLM_DIAGNOSTIC even on failure.
-    if (diagnosticPayload) validationError.diagnosticPayload = diagnosticPayload;
-    throw validationError;
-  }
-
-  return {
-    outputValue:      finalOutput,
-    nextAction:       resolveNextAction(step.on_success, null),
-    meta:             { llmMs, attempt: validationResult.attempt },
-    diagnosticPayload,
-  };
-}
+// llm_call is handled by llm-harness.mjs (executeLlmCall imported above)
 
 // ---------------------------------------------------------------------------
 // js_transform
@@ -581,11 +380,6 @@ export function buildDialog(step, localState) {
               style:  'default',
             })),
           });
-        } else {
-          fields.push({
-            type:  'typography',
-            value: '_(No domains registered yet — use /create-domain to add one)_',
-          });
         }
       }
       // typography for the message is always added first (above the switch)
@@ -637,15 +431,21 @@ export function buildDialog(step, localState) {
         });
       } else {
         // Flat object — each non-system property is one pair.
-        // Nested objects and arrays are JSON-stringified for display — prevents
-        // '[object Object]' when a review_object gate receives structured data
-        // (e.g. parsed_entity: { root: {...}, children: {...} }).
+        // Plain nested objects are expanded one level (e.g. parsed_entity.children →
+        // children › cards, children › cardsides) so callback.mjs can apply smart
+        // array summarisation (collapse empty {}, skip empty arrays) per sub-key.
+        // Scalar and array values are passed through as-is.
         items = Object.entries(ctx)
           .filter(([k, v]) => !SYSTEM_KEYS.has(k) && v !== null && v !== undefined)
-          .map(([k, v]) => ({
-            key:   k,
-            value: (v !== null && typeof v === 'object') ? JSON.stringify(v, null, 2) : v,
-          }));
+          .flatMap(([k, v]) => {
+            if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+              // Expand one level — each child key becomes "parent › child"
+              return Object.entries(v)
+                .filter(([, sv]) => sv !== null && sv !== undefined)
+                .map(([sk, sv]) => ({ key: `${k} › ${sk}`, value: sv }));
+            }
+            return [{ key: k, value: v }];
+          });
       }
 
       if (items.length > 0) {
@@ -664,7 +464,7 @@ export function buildDialog(step, localState) {
         : (step.options ?? []);
       const choiceItems = rawChoiceOptions
         .map(o => ({ value: o.value, label: o.label, description: resolveTemplate(o.description ?? '', localState) }));
-      if (choiceItems.length > 0) {
+      if (choiceItems.length > 0 && choiceItems.some(item => item.description)) {
         fields.push({ type: 'description_list', items: choiceItems });
       }
       // buttons for choice are built below — value used instead of action
@@ -709,6 +509,23 @@ export function buildDialog(step, localState) {
     ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
     : (step.options ?? []);
 
+  // Expand options that carry an iterator field — one button per row in
+  // localState[o.iterator]. label and value are resolved against a merged
+  // state (localState + item) so {{name}}, {{id}} etc. bind to the row.
+  const expandedOptions = resolvedOptions.flatMap(o => {
+    if (!o.iterator) return [o];
+    const items = Array.isArray(localState[o.iterator]) ? localState[o.iterator] : [];
+    return items.map(item => {
+      const itemState = { ...localState, ...item };
+      return {
+        ...o,
+        label:    resolveTemplate(String(o.label  ?? ''), itemState),
+        value:    resolveTemplate(String(o.value  ?? ''), itemState),
+        iterator: undefined,
+      };
+    });
+  });
+
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
   const isChoice = step.gate_type === 'choice';
@@ -718,7 +535,7 @@ export function buildDialog(step, localState) {
     // o.modal forwarded so callback.mjs encodes it into button value for interactive.mjs.
     // special_buttons appended after options — appear in actions block only,
     // never in description_list or other content fields.
-    buttons: [...resolvedOptions, ...resolvedSpecialButtons].map(o => ({
+    buttons: [...expandedOptions, ...resolvedSpecialButtons].map(o => ({
       action: isChoice ? o.value : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
@@ -937,7 +754,13 @@ async function executeServEntityGet({ step, localState, traceId }) {
  *   {
  *     entity_name, description,
  *     root:     { table, columns: [{ name, type }] },
- *     children: [{ table, alias, fk_column, output_key, columns: [{ name, type }] }]
+ *     children: [{
+ *       table, alias, fk_column, output_key, columns: [{ name, type }],
+ *       parent,      // null = direct child of root; alias string = grandchild; 'self' = self-ref
+ *       match_by,    // 'index' (cardsides[i] ↔ cards[i]) | 'self' (self-referential two-pass)
+ *       fk_columns,  // present only when table has >1 FK: [{column, parent}]
+ *       match_key,   // present only for self-ref: column used to resolve parent_<match_key>
+ *     }]
  *   }
  *
  * System columns (id, created_at, updated_at) and FK columns are excluded from
@@ -994,23 +817,68 @@ async function executeServEntitySchema({ step, localState, traceId }) {
 
   const rootColumns = userColumns(rootTable);
 
-  const children = joins.map(join => {
-    const agg = aggregations.find(a => a.alias === join.alias) ?? {};
+  // table → alias lookup — used to resolve FK references to parent aliases
+  const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
 
-    // FK column from PGC_Schema foreign_keys, or parsed from join.on expression
+  const children = joins.map(join => {
+    const agg            = aggregations.find(a => a.alias === join.alias) ?? {};
     const childSchemaRow = (schemaResp.rows ?? []).find(r => r.table_name === join.table);
-    const fkCols = (childSchemaRow?.foreign_keys ?? []).map(fk => fk.column);
-    if (fkCols.length === 0 && join.on) {
+
+    // Collect all FK definitions with their referenced table
+    let fkDefs = (childSchemaRow?.foreign_keys ?? []).map(fk => ({
+      column:     fk.column,
+      references: fk.references?.table ?? null,
+    }));
+    if (fkDefs.length === 0 && join.on) {
       const onMatch = join.on.match(/(\w+)\.(\w+)\s*=\s*r\.id/);
-      if (onMatch) fkCols.push(onMatch[2]);
+      if (onMatch) fkDefs.push({ column: onMatch[2], references: rootTable });
     }
 
+    // Resolve parent alias for each FK:
+    //   references root table → parent = null  (direct child of root)
+    //   references self table → parent = 'self'  (self-referential)
+    //   references another join table → parent = alias of that table
+    const fkColumns = fkDefs.map(fk => {
+      let parent;
+      if (!fk.references || fk.references === rootTable) {
+        parent = null;
+      } else if (fk.references === join.table) {
+        parent = 'self';
+      } else {
+        parent = tableToAlias[fk.references] ?? null;
+      }
+      return { column: fk.column, parent };
+    });
+
+    // Primary FK: prefer the one pointing to root, otherwise the first one
+    const primaryFk = fkColumns.find(f => f.parent === null) ?? fkColumns[0] ?? null;
+    const isSelfRef = fkColumns.some(f => f.parent === 'self');
+    const matchBy   = isSelfRef ? 'self' : 'index';
+
+    // For self-referential: use aggregation match_key if provided, else first non-system column
+    let matchKey;
+    if (isSelfRef) {
+      matchKey = agg.match_key ?? null;
+      if (!matchKey) {
+        const nonFk = (childSchemaRow?.columns ?? [])
+          .filter(c => !['id', 'created_at', 'updated_at'].includes(c.name) &&
+                       !fkDefs.map(f => f.column).includes(c.name));
+        matchKey = nonFk[0]?.name ?? 'name';
+      }
+    }
+
+    const allFkCols = fkDefs.map(f => f.column);
+
     return {
-      table:      join.table,
-      alias:      join.alias,
-      fk_column:  fkCols[0] ?? null,
-      output_key: agg.outputKey ?? join.alias,
-      columns:    userColumns(join.table, fkCols),
+      table:                join.table,
+      alias:                join.alias,
+      fk_column:            primaryFk?.column ?? null,
+      ...(fkColumns.length > 1 ? { fk_columns: fkColumns } : {}),
+      parent:               isSelfRef ? 'self' : (primaryFk?.parent ?? null),
+      match_by:             matchBy,
+      ...(matchKey ? { match_key: matchKey } : {}),
+      output_key:           agg.outputKey ?? join.alias,
+      columns:              userColumns(join.table, allFkCols),
     };
   });
 
@@ -1032,6 +900,199 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     outputValue: result,
     nextAction:  resolveNextAction(step.on_success, null),
   };
+}
+
+// ---------------------------------------------------------------------------
+// serv_entity_insert — insert a multi-level entity with FK threading
+// ---------------------------------------------------------------------------
+//
+// Handles n-level hierarchies and self-referential tables without any
+// workflow-level glue. The entity schema (from serv_entity_schema) carries
+// parent, match_by, fk_column(s) derived from PGC_Schema.foreign_keys.
+//
+// Step input shape:
+//   {
+//     "entitySchema": "{{full_entity_schema}}",  // from serv_entity_schema step
+//     "parsedEntity": "{{parsed_entity}}"         // from parse_entity_input llm_call
+//   }
+//
+// Output shape written to output_key:
+//   { root_id, root_record, inserted_counts: { <alias>: <count>, ... } }
+
+async function executeServEntityInsert({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { entitySchema, parsedEntity } = resolvedInput;
+
+  if (!entitySchema) throw new Error('serv_entity_insert: entitySchema is required in input');
+  if (!parsedEntity) throw new Error('serv_entity_insert: parsedEntity is required in input');
+
+  // Insert root row
+  const rootResult = await insertRow(entitySchema.root.table, parsedEntity.root ?? {});
+  if (!rootResult.success) {
+    throw new Error(`serv_entity_insert root insert failed for "${entitySchema.root.table}": ${rootResult.error}`);
+  }
+  const rootId = rootResult.row.id;
+
+  // Map alias → inserted rows (needed to resolve FK chains)
+  const insertedByAlias = {};
+  const insertedCounts  = {};
+
+  // Process children in dependency order
+  const children = entitySchema.children ?? [];
+  const ordered  = entityInsertTopoSort(children);
+
+  for (const child of ordered) {
+    const { table, alias, output_key, parent, match_by, fk_column, fk_columns, match_key } = child;
+    const childRows = (parsedEntity.children ?? {})[output_key] ?? [];
+
+    if (childRows.length === 0) {
+      insertedByAlias[alias] = [];
+      insertedCounts[alias]  = 0;
+      continue;
+    }
+
+    // Self-referential: two-pass insert + update
+    if (match_by === 'self' && fk_column) {
+      const rows = await entityInsertSelfRef({
+        table, childRows, fkColumn: fk_column, matchKey: match_key ?? 'name', traceId,
+      });
+      insertedByAlias[alias] = rows;
+      insertedCounts[alias]  = rows.length;
+      continue;
+    }
+
+    // Resolve primary parent rows for index-based FK injection
+    const parentRows = parent
+      ? (insertedByAlias[parent] ?? [])
+      : [{ id: rootId }];
+
+    // Prepare all rows with FK injected, then bulk-insert in one SQL statement
+    const preparedRows = childRows.map((childRow, i) => {
+      const row = { ...childRow };
+
+      if (fk_columns && fk_columns.length > 1) {
+        for (const fkDef of fk_columns) {
+          const fkParentRows = fkDef.parent
+            ? (insertedByAlias[fkDef.parent] ?? [])
+            : [{ id: rootId }];
+          const fkRow = fkParentRows[i] ?? fkParentRows[fkParentRows.length - 1] ?? { id: rootId };
+          delete row[fkDef.column];
+          row[fkDef.column] = fkRow.id;
+        }
+      } else if (fk_column) {
+        const parentRow = parentRows[i] ?? parentRows[parentRows.length - 1] ?? { id: rootId };
+        delete row[fk_column];
+        row[fk_column] = parentRow.id;
+      }
+
+      return row;
+    });
+
+    const result = await insertRows(table, preparedRows);
+    if (!result.success) {
+      throw new Error(`serv_entity_insert failed for "${table}": ${result.error}`);
+    }
+
+    insertedByAlias[alias] = result.rows ?? [];
+    insertedCounts[alias]  = (result.rows ?? []).length;
+  }
+
+  console.info('step-executor: serv_entity_insert complete', {
+    rootTable: entitySchema.root.table,
+    rootId,
+    insertedCounts,
+    traceId,
+  });
+
+  return {
+    outputValue: {
+      root_id:         rootId,
+      root_record:     rootResult.row,
+      inserted_counts: insertedCounts,
+    },
+  };
+}
+
+/**
+ * Topologically sort children by parent dependency.
+ * A child is ready when ALL of its parent aliases are already placed.
+ */
+function entityInsertTopoSort(children) {
+  const result  = [];
+  const placed  = new Set([null]);   // null = root is always available
+  const pending = [...children];
+
+  while (pending.length > 0) {
+    const before = pending.length;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const child = pending[i];
+      // Collect all parent aliases this child depends on
+      const parents = [
+        child.parent ?? null,
+        ...((child.fk_columns ?? []).map(f => f.parent ?? null)),
+      ].filter(p => p !== 'self'); // self-ref depends only on itself
+      if (parents.every(p => placed.has(p))) {
+        result.push(child);
+        placed.add(child.alias);
+        pending.splice(i, 1);
+      }
+    }
+    // Cycle or unresolvable dependency — append remainder to avoid infinite loop
+    if (pending.length === before) {
+      result.push(...pending);
+      break;
+    }
+  }
+  return result;
+}
+
+/**
+ * Two-pass insert for self-referential tables.
+ * Pass 1: insert all rows without the self-reference FK.
+ * Pass 2: resolve parent references by match_key and update the FK.
+ *
+ * Each row may carry a `parent_<matchKey>` field containing the match_key
+ * value of its parent row. The framework strips it and resolves the real FK.
+ */
+async function entityInsertSelfRef({ table, childRows, fkColumn, matchKey, traceId }) {
+  const keyToId  = {};
+  const inserted = [];
+
+  // Pass 1: strip self-ref fields and bulk-insert all rows without the FK
+  const parentRefs = [];
+  const preparedRows = childRows.map(rawRow => {
+    const row = { ...rawRow };
+    parentRefs.push(row[`parent_${matchKey}`] ?? null);
+    delete row[fkColumn];
+    delete row[`parent_${matchKey}`];
+    return row;
+  });
+
+  const batchResult = await insertRows(table, preparedRows);
+  if (!batchResult.success) {
+    throw new Error(`serv_entity_insert (self-ref) failed for "${table}": ${batchResult.error}`);
+  }
+
+  for (let i = 0; i < batchResult.rows.length; i++) {
+    const id = batchResult.rows[i].id;
+    keyToId[childRows[i][matchKey]] = id;
+    inserted.push({ id, parentRef: parentRefs[i] });
+  }
+
+  // Pass 2: update FK for rows that reference a parent
+  for (const { id, parentRef } of inserted) {
+    if (!parentRef) continue;
+    const parentId = keyToId[parentRef];
+    if (!parentId) {
+      console.warn('step-executor: serv_entity_insert self-ref parent not found', {
+        table, fkColumn, parentRef, traceId,
+      });
+      continue;
+    }
+    await updateRows(table, [{ column: 'id', op: 'eq', value: id }], { [fkColumn]: parentId });
+  }
+
+  return inserted.map(({ id }) => ({ id }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,12 +1251,25 @@ async function executeSimulate({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 /**
- * Pure control-flow step — resolves a template expression against local_state
- * and routes to on_truthy or on_falsy without performing any I/O.
+ * Pure control-flow step — evaluates an expression against local_state and
+ * routes to on_truthy or on_falsy without performing any I/O.
  *
- * Truthy: resolved value is non-empty string, not "null", not "undefined", not "0".
- * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is also
- * accepted for compatibility — both normalise to a bare key before return.
+ * Two evaluation paths determined by whether the expression contains '{{':
+ *
+ *   Template path  (expression contains '{{'):
+ *     Resolved via resolveTemplate. Truthy when non-empty and not one of the
+ *     canonical falsy strings: "null", "undefined", "0", "false", or an
+ *     unresolved "{{token}}". Preserves backwards-compatible behaviour for all
+ *     existing {{token}} condition steps.
+ *
+ *   JS path (no '{{' in expression):
+ *     Evaluated in the same sandboxed vm context as js_transform — local_state
+ *     is available. Accepts any valid JS boolean expression the LLM naturally
+ *     produces, e.g. local_state.items.length === 0 or count > 5 && active.
+ *     If evaluation throws the step routes to on_falsy and logs the error.
+ *
+ * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is
+ * also accepted — both normalise to a bare key before return.
  *
  * No output_key is written — condition steps produce no state output.
  */
@@ -1204,34 +1278,55 @@ function executeCondition({ step, localState, traceId }) {
   if (!step.on_truthy)  throw new Error('condition step missing on_truthy');
   if (!step.on_falsy)   throw new Error('condition step missing on_falsy');
 
-  const resolved = resolveTemplate(step.expression, localState);
-  // Treat unresolved template literals as falsy — resolveTemplate returns the
-  // original {{token}} when the path is absent from local_state. A condition
-  // step must not route truthy on a key that was never set.
-  const isTruthy = resolved !== ''
-    && resolved !== 'null'
-    && resolved !== 'undefined'
-    && resolved !== '0'
-    && resolved !== 'false'
-    && !resolved.includes('{{');
+  const usesTemplate = step.expression.includes('{{');
+  let isTruthy;
+
+  if (usesTemplate) {
+    const resolved = resolveTemplate(step.expression, localState);
+    isTruthy = resolved !== ''
+      && resolved !== 'null'
+      && resolved !== 'undefined'
+      && resolved !== '0'
+      && resolved !== 'false'
+      && !resolved.includes('{{');
+
+    console.info('step-executor: condition', {
+      expression: step.expression,
+      resolved,
+      isTruthy,
+      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      traceId,
+    });
+  } else {
+    try {
+      const result = runSandboxedExpression(step.expression, null, localState, traceId);
+      isTruthy = Boolean(result);
+    } catch (err) {
+      console.warn('step-executor: condition js eval failed — routing falsy', {
+        expression: step.expression,
+        error: err.message,
+        traceId,
+      });
+      isTruthy = false;
+    }
+
+    console.info('step-executor: condition', {
+      expression: step.expression,
+      evalMode:   'js',
+      isTruthy,
+      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      traceId,
+    });
+  }
 
   const rawNext  = isTruthy ? step.on_truthy : step.on_falsy;
-  // Normalise to bare key — handles both step:N (canonical) and bare keys (legacy).
   const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
-
-  console.info('step-executor: condition', {
-    expression: step.expression,
-    resolved,
-    isTruthy,
-    nextStep: bareNext,
-    traceId,
-  });
 
   return { outputValue: null, nextAction: `step:${bareNext}` };
 }
 
 async function executeNotify({ step, localState, traceId }) {
-  const message = resolveTemplate(step.message_template ?? '', localState);
+  const message = resolveTemplate(step.message_template ?? step.message ?? '', localState);
 
   console.info('step-executor: notify', { traceId });
 
@@ -1259,4 +1354,52 @@ function resolveNextAction(onSuccess, _localState) {
   if (onSuccess.startsWith('step:'))     return onSuccess;
   // Bare step key — pass through so resolveNextStep can handle the direct jump.
   return onSuccess;
+}
+
+// ---------------------------------------------------------------------------
+// write_memory — persist a memory record to PGC_Memory (never fails the run)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the PGC_Memory row from a write_memory step and current local_state.
+ * Pure — no I/O. Exported for unit testing.
+ *
+ * @param {object} step       write_memory step definition
+ * @param {object} localState Current frame local_state
+ * @returns {object}          Row ready for insertRow('PGC_Memory', row)
+ */
+export function buildMemoryRow(step, localState) {
+  const input = resolveInput(step.input ?? {}, localState);
+  const {
+    memory_type     = 'semantic',
+    scope           = {},
+    content_key,
+    tags            = [],
+    priority        = 5,
+    source_workflow = null,
+    source_step     = null,
+  } = input;
+  const content        = content_key ? String(localState[content_key] ?? '') : '';
+  const token_estimate = Math.ceil(content.length / 4);
+  return { memory_type, scope, content, tags, priority, token_estimate, source_workflow, source_step };
+}
+
+async function executeWriteMemory({ step, localState, run, traceId }) {
+  try {
+    const row = buildMemoryRow(step, localState);
+    row.source_run_id = run?.id ?? null;
+
+    console.info('step-executor: write_memory', { memory_type: row.memory_type, traceId });
+
+    const resp = await insertRow('PGC_Memory', row);
+    if (!resp.success) {
+      console.warn('step-executor: write_memory insert failed (non-fatal)', { error: resp.error, traceId });
+    }
+  } catch (e) {
+    console.warn('step-executor: write_memory error (non-fatal)', { error: e.message, traceId });
+  }
+  return {
+    outputValue: null,
+    nextAction:  resolveNextAction(step.on_success ?? 'end', null),
+  };
 }

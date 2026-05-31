@@ -275,6 +275,8 @@ You are a helpful assistant integrated into evolving-mind-ai, a personal cogniti
 
 Schema slot reserved. Will aggregate step outputs across an entire run and seed the session with that context. Table design above supports this via `run_id` on `PGC_Session`.
 
+**G3 dependency (Sprint 3):** `memory-writer.mjs` now writes a `PGC_Memory` episodic record with `source_run_id = run.id` for every qualifying domain run. `/explain-run` should query `PGC_Memory WHERE source_run_id = <run_id>` first to get the pre-distilled narrative anchor, then append the ordered `PGC_WorkflowRunStep` output sequence as supporting context. This gives the explain session a human-readable summary to anchor the conversation, rather than starting cold from raw step records. See `docs/backlog.md` — Medium Priority for full implementation notes.
+
 ---
 
 ## 7. Intent Preprocessor Changes
