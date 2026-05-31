@@ -826,6 +826,65 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 - Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
 
 ---
+## Overflow menu (hamburger expand {
+```json
+	"blocks": [
+		{
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "This is a section block with an overflow menu."
+			},
+			"accessory": {
+				"type": "overflow",
+				"options": [
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "*plain_text option 0*",
+							"emoji": true
+						},
+						"value": "value-0"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "*plain_text option 1*",
+							"emoji": true
+						},
+						"value": "value-1"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "*plain_text option 2*",
+							"emoji": true
+						},
+						"value": "value-2"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "*plain_text option 3*",
+							"emoji": true
+						},
+						"value": "value-3"
+					},
+					{
+						"text": {
+							"type": "plain_text",
+							"text": "*plain_text option 4*",
+							"emoji": true
+						},
+						"value": "value-4"
+					}
+				],
+				"action_id": "overflow-action"
+			}
+		}
+	]
+}
+```
 
 ## Design notes for evolving-mind-ai
 
