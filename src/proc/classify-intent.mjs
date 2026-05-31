@@ -476,6 +476,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
 
     const workflowInput = {
       userInput,
+      ...(result.domain                                                       ? { domain: result.domain }          : {}),
       ...(domainEntity                                                        ? { entity_name: domainEntity }      : {}),
       ...(result.search_term                                                  ? { search: result.search_term }     : {}),
       ...(result.record_id !== null && result.record_id !== undefined         ? { id: result.record_id }           : {}),
