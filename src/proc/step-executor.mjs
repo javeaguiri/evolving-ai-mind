@@ -464,7 +464,7 @@ export function buildDialog(step, localState) {
         : (step.options ?? []);
       const choiceItems = rawChoiceOptions
         .map(o => ({ value: o.value, label: o.label, description: resolveTemplate(o.description ?? '', localState) }));
-      if (choiceItems.length > 0) {
+      if (choiceItems.length > 0 && choiceItems.some(item => item.description)) {
         fields.push({ type: 'description_list', items: choiceItems });
       }
       // buttons for choice are built below — value used instead of action
