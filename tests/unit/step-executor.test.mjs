@@ -15,8 +15,9 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
+import { resolvePath, resolveInput }          from '../../src/proc/template-resolver.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -455,80 +456,25 @@ describe('list_entity step 2 — formatRecordList expression (root only)', () =>
 });
 
 // ---------------------------------------------------------------------------
-// add_entity step 5 — buildChildInserts expression
+// add_entity — serv_entity_insert workflow step present
 // ---------------------------------------------------------------------------
 
-describe('add_entity step 5 — buildChildInserts expression', () => {
-  const ENTITY_SCHEMA = {
-    children: [
-      { table: 'PGD_ReviewLogs', fk_column: 'flashcard_id', output_key: 'review_logs' },
-    ],
-  };
-  const PARSED_ENTITY = {
-    root:     { front_text: 'hola', back_text: 'hello' },
-    children: { review_logs: [{ result: 'pass', notes: 'good' }] },
-  };
-  const NEW_RECORD = { id: 42 };
-
-  it('builds flat child insert array with FK injected', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(
-      step.expression,
-      ENTITY_SCHEMA,
-      { parsed_entity: PARSED_ENTITY, new_record: NEW_RECORD },
-      'test'
-    );
-    assert.equal(result.length, 1);
-    assert.equal(result[0].tableName, 'PGD_ReviewLogs');
-    assert.equal(result[0].row.flashcard_id, 42, 'FK must be injected as root record id');
-    assert.equal(result[0].row.result, 'pass');
+describe('add_entity workflow — uses serv_entity_insert (steps 4-6 replaced)', () => {
+  it('add_entity step 4 is serv_entity_insert', () => {
+    const step = getStep('add_entity', '4');
+    assert.equal(step.type, 'serv_entity_insert');
   });
 
-  it('returns empty array when child rows array is empty', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(
-      step.expression,
-      ENTITY_SCHEMA,
-      {
-        parsed_entity: { root: {}, children: { review_logs: [] } },
-        new_record: { id: 1 },
-      },
-      'test'
-    );
-    assert.equal(result.length, 0, 'empty child rows must produce empty inserts array');
+  it('add_entity step 4 passes entitySchema and parsedEntity', () => {
+    const step = getStep('add_entity', '4');
+    assert.ok(step.input.entitySchema, 'entitySchema input required');
+    assert.ok(step.input.parsedEntity, 'parsedEntity input required');
   });
 
-  it('returns empty array when required local_state keys are missing', () => {
-    const step = getStep('add_entity', '5');
-    const result = runSandboxedExpression(step.expression, ENTITY_SCHEMA, {}, 'test');
-    assert.equal(result.length, 0, 'missing local_state keys must produce empty inserts array');
-  });
-
-  it('handles multiple child tables', () => {
-    const step = getStep('add_entity', '5');
-    const schema = {
-      children: [
-        { table: 'PGD_Ingredients', fk_column: 'recipe_id', output_key: 'ingredients' },
-        { table: 'PGD_Steps',       fk_column: 'recipe_id', output_key: 'steps' },
-      ],
-    };
-    const parsed = {
-      root:     { name: 'Pasta' },
-      children: {
-        ingredients: [{ name: 'pasta', quantity: 200 }, { name: 'egg', quantity: 2 }],
-        steps:       [{ order: 1, instruction: 'Boil water' }],
-      },
-    };
-    const result = runSandboxedExpression(
-      step.expression,
-      schema,
-      { parsed_entity: parsed, new_record: { id: 7 } },
-      'test'
-    );
-    assert.equal(result.length, 3);
-    assert.ok(result.every(r => r.row.recipe_id === 7));
-    assert.equal(result.filter(r => r.tableName === 'PGD_Ingredients').length, 2);
-    assert.equal(result.filter(r => r.tableName === 'PGD_Steps').length, 1);
+  it('add_entity has no step 5 with js_transform child-insert expression', () => {
+    const wf    = seed.find(w => w.name === 'add_entity');
+    const step5 = wf?.steps?.find(s => s.step === '5');
+    assert.ok(!step5 || step5.type !== 'js_transform', 'old flat-insert js_transform must be gone');
   });
 });
 
@@ -1164,5 +1110,241 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
     });
     const path = result.path_results[0];
     assert.equal(path.passed, true, `path must pass; got: ${path.failure_reason}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// write_memory — buildMemoryRow pure function
+// ---------------------------------------------------------------------------
+
+describe('buildMemoryRow — scope template resolution', () => {
+  it('resolves {{template}} tokens in scope values against local_state', () => {
+    const step = {
+      input: {
+        memory_type: 'semantic',
+        scope: { domain: '{{input.domain}}', workflow: '{{wf_name}}' },
+        content_key: 'design_reasoning',
+        tags: ['schema'],
+        priority: 2,
+      },
+    };
+    const localState = {
+      input: { domain: 'recipes' },
+      wf_name: 'add_recipe',
+      design_reasoning: 'The table stores recipe metadata.',
+    };
+    const row = buildMemoryRow(step, localState);
+    assert.equal(row.scope.domain, 'recipes');
+    assert.equal(row.scope.workflow, 'add_recipe');
+    assert.equal(row.memory_type, 'semantic');
+    assert.equal(row.content, 'The table stores recipe metadata.');
+    assert.deepEqual(row.tags, ['schema']);
+    assert.equal(row.priority, 2);
+  });
+
+  it('computes token_estimate as Math.ceil(content.length / 4)', () => {
+    const content = 'a'.repeat(100);
+    const step = {
+      input: { memory_type: 'episodic', scope: {}, content_key: 'my_content' },
+    };
+    const row = buildMemoryRow(step, { my_content: content });
+    assert.equal(row.token_estimate, 25);
+  });
+
+  it('computes token_estimate rounds up for non-divisible lengths', () => {
+    const step = {
+      input: { memory_type: 'procedural', scope: {}, content_key: 'txt' },
+    };
+    const row = buildMemoryRow(step, { txt: 'hello' });
+    assert.equal(row.token_estimate, 2);
+  });
+
+  it('produces empty content string when content_key is missing from local_state', () => {
+    const step = {
+      input: { memory_type: 'semantic', scope: {}, content_key: 'nonexistent' },
+    };
+    const row = buildMemoryRow(step, {});
+    assert.equal(row.content, '');
+    assert.equal(row.token_estimate, 0);
+  });
+
+  it('applies defaults for tags, priority when absent from step input', () => {
+    const step = {
+      input: { memory_type: 'episodic', scope: {}, content_key: 'val' },
+    };
+    const row = buildMemoryRow(step, { val: 'x' });
+    assert.deepEqual(row.tags, []);
+    assert.equal(row.priority, 5);
+    assert.equal(row.source_workflow, null);
+    assert.equal(row.source_step, null);
+  });
+
+  it('passes source_workflow and source_step through to the row', () => {
+    const step = {
+      input: {
+        memory_type: 'procedural',
+        scope: {},
+        content_key: 'v',
+        source_workflow: 'create_domain',
+        source_step: '18',
+      },
+    };
+    const row = buildMemoryRow(step, { v: 'some content' });
+    assert.equal(row.source_workflow, 'create_domain');
+    assert.equal(row.source_step, '18');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// executeCondition — JS expression evaluation path
+// ---------------------------------------------------------------------------
+
+describe('executeCondition — JS expression path (no {{ in expression)', () => {
+  // Access via runSimulation which exercises the full step executor pipeline.
+  // For direct unit testing we exercise runSandboxedExpression (the same
+  // sandbox used by the JS eval path) with representative condition expressions.
+
+  it('length === 0 is falsy when array has items', () => {
+    const localState = { unmastered_cards: [60, 61, 62] };
+    const result = runSandboxedExpression('local_state.unmastered_cards.length === 0', null, localState, 'test');
+    assert.equal(Boolean(result), false);
+  });
+
+  it('length === 0 is truthy when array is empty', () => {
+    const localState = { unmastered_cards: [] };
+    const result = runSandboxedExpression('local_state.unmastered_cards.length === 0', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('compound && expression evaluates correctly', () => {
+    const localState = { count: 5, active: true };
+    const result = runSandboxedExpression('local_state.count > 3 && local_state.active', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('comparison against threshold routes correctly', () => {
+    const localState = { mastered_count: 10, total_cards: 10 };
+    const result = runSandboxedExpression('local_state.mastered_count >= local_state.total_cards', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+
+  it('negation of property', () => {
+    const localState = { quiz_complete: false };
+    const result = runSandboxedExpression('!local_state.quiz_complete', null, localState, 'test');
+    assert.equal(Boolean(result), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// template-resolver — resolvePath JSONPath bracket notation + resolveInput integration
+// ---------------------------------------------------------------------------
+
+describe('resolvePath — JSONPath [*] wildcard field extraction', () => {
+  const state = {
+    cards: [
+      { id: 10, name: 'Alpha', deck_id: 1 },
+      { id: 20, name: 'Beta',  deck_id: 1 },
+      { id: 30, name: 'Gamma', deck_id: 1 },
+    ],
+    nested: {
+      items: [{ key: 'a' }, { key: 'b' }],
+    },
+  };
+
+  it('extracts a single field from every array element', () => {
+    assert.deepEqual(resolvePath(state, 'cards[*].id'), [10, 20, 30]);
+  });
+
+  it('extracts a string field from every array element', () => {
+    assert.deepEqual(resolvePath(state, 'cards[*].name'), ['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('works with nested path after wildcard', () => {
+    assert.deepEqual(resolvePath(state, 'nested.items[*].key'), ['a', 'b']);
+  });
+
+  it('returns undefined when wildcard applied to non-array', () => {
+    assert.equal(resolvePath(state, 'nested[*].key'), undefined);
+  });
+
+  it('bare wildcard on array returns the array itself', () => {
+    assert.deepEqual(resolvePath(state, 'cards[*]'), state.cards);
+  });
+
+  it('bracket index [0] accesses first element', () => {
+    assert.deepEqual(resolvePath(state, 'cards[0].name'), 'Alpha');
+  });
+});
+
+describe('resolveInput — null field value passes through as null (serv_insert nullable columns)', () => {
+  it('single token resolving to null returns null, not the unresolved token string', () => {
+    const state = { current_card: { card_id: 60, next_review_date: null } };
+    assert.strictEqual(resolveInput('{{current_card.next_review_date}}', state), null);
+  });
+
+  it('row object with null field produces null value, not unresolved string', () => {
+    const state = { current_card: { card_id: 60, next_review_date: null } };
+    const row = { card_id: '{{current_card.card_id}}', next_review_date: '{{current_card.next_review_date}}' };
+    const resolved = resolveInput(row, state);
+    assert.strictEqual(resolved.card_id, 60);
+    assert.strictEqual(resolved.next_review_date, null);
+  });
+
+  it('undefined path still leaves token unresolved', () => {
+    const state = { current_card: { card_id: 60 } };
+    assert.strictEqual(resolveInput('{{current_card.missing_field}}', state), '{{current_card.missing_field}}');
+  });
+});
+
+describe('resolveInput — JSONPath wildcard token resolves to array (serv_query in filter)', () => {
+  const state = {
+    all_cards: [
+      { id: 1, front: 'Q1' },
+      { id: 2, front: 'Q2' },
+      { id: 3, front: 'Q3' },
+    ],
+  };
+
+  it('{{all_cards[*].id}} single token resolves to array of ids', () => {
+    assert.deepEqual(resolveInput('{{all_cards[*].id}}', state), [1, 2, 3]);
+  });
+
+  it('filter object with wildcard value produces array suitable for op:in', () => {
+    const input = {
+      tableName: 'PGD_CardSides',
+      filters: [{ op: 'in', value: '{{all_cards[*].id}}', column: 'card_id' }],
+    };
+    const resolved = resolveInput(input, state);
+    assert.deepEqual(resolved.filters[0].value, [1, 2, 3]);
+    assert.ok(Array.isArray(resolved.filters[0].value));
+  });
+});
+
+describe('resolveInput — arithmetic expression in {{}} token', () => {
+  const state = { current_card: { card_id: 7, total_reviews: 4 }, offset: 2 };
+
+  it('resolves integer arithmetic and returns native number', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews + 1}}', state), 5);
+  });
+
+  it('resolves subtraction', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews - 1}}', state), 3);
+  });
+
+  it('resolves expression using two local_state keys', () => {
+    assert.strictEqual(resolveInput('{{current_card.total_reviews + offset}}', state), 6);
+  });
+
+  it('interpolates arithmetic result mid-string via resolveTemplate', () => {
+    const result = resolveInput('reviewed {{current_card.total_reviews + 1}} times', state);
+    assert.strictEqual(result, 'reviewed 5 times');
+  });
+
+  it('leaves unresolvable path unchanged (no operators)', () => {
+    assert.strictEqual(resolveInput('{{current_card.missing_field}}', state), '{{current_card.missing_field}}');
+  });
+
+  it('leaves token unchanged when expression throws', () => {
+    assert.strictEqual(resolveInput('{{undefined_var + 1}}', state), '{{undefined_var + 1}}');
   });
 });

@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 12,
+    "version": 13,
     "steps": [
       {
         "step": "1",
@@ -164,6 +164,16 @@
           "user_preferences": "{{user_preferences}}"
         },
         "output_key": "proposed_scaffold",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": {
+            "domain": "{{proposed_scaffold.domain}}"
+          },
+          "tags": [
+            "domain_design"
+          ],
+          "priority": 3
+        },
         "on_success": "next",
         "on_failure": "cancel"
       },
@@ -334,14 +344,38 @@
         "on_failure": "cancel"
       },
       {
+        "step": "17b",
+        "type": "llm_call",
+        "description": "Generate natural language aliases for the domain — singular/plural, synonyms, informal names.",
+        "input": {
+          "prompt": "generate_domain_aliases",
+          "domain_name": "{{proposed_scaffold.domain}}",
+          "user_input": "{{input.userInput}}"
+        },
+        "output_key": "domain_aliases",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": {
+            "domain": "{{proposed_scaffold.domain}}"
+          },
+          "tags": [
+            "aliases",
+            "vocabulary"
+          ],
+          "priority": 4
+        },
+        "on_success": "next",
+        "on_failure": "next"
+      },
+      {
         "step": "18",
         "type": "js_transform",
-        "description": "Derive domain registration data deterministically from confirmed scaffold — no LLM.",
+        "description": "Derive domain registration data from confirmed scaffold, merging LLM-generated aliases.",
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "on_success": "next",
         "on_failure": "cancel",
-        "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' '), entityName.toLowerCase(), words[words.length - 1]])); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ] }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { return !t.foreignKeys || t.foreignKeys.length === 0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
+        "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const llmAliases = (local_state.domain_aliases && Array.isArray(local_state.domain_aliases.aliases)) ? local_state.domain_aliases.aliases : []; const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' ')].concat(llmAliases))); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ] }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { return !t.foreignKeys || t.foreignKeys.length === 0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
       },
       {
         "step": "19",
@@ -547,7 +581,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 22,
+    "version": 25,
     "steps": [
       {
         "step": "1",
@@ -935,6 +969,16 @@
           "simulation_error_summary": "{{step_gen_context.simulation_error_summary}}"
         },
         "output_key": "draft_workflow",
+        "save_to_memory": {
+          "memory_type": "procedural",
+          "scope": {
+            "workflow": "{{draft_workflow.name}}"
+          },
+          "tags": [
+            "workflow_design"
+          ],
+          "priority": 3
+        },
         "on_success": "step:24",
         "on_failure": "cancel"
       },
@@ -1004,10 +1048,10 @@
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Format Level 1 static analysis issues into a readable summary for display.",
+        "description": "Format simulation issues (L1 static analysis + routing matrix + smoke test hard failures) into a readable summary.",
         "input_key": "static_analysis_result",
         "output_key": "simulation_error_summary",
-        "expression": "(function(){var sa = items && items.static_analysis;var issues = (sa && Array.isArray(sa.issues)) ? sa.issues : [];if(issues.length === 0) return \"Validation failed - no specific issues reported.\";var lines = issues.slice(0, 6).map(function(i){return \"- Step \" + (i.step || \"?\") + \": \" + (i.detail || i.check || \"validation issue\");});if(issues.length > 6) lines.push(\"...and \" + (issues.length - 6) + \" more issues\");return lines.join(\"\\n\");})()",
+        "expression": "(function(){var lines=[];var sa=items&&items.static_analysis;var l1issues=(sa&&Array.isArray(sa.issues))?sa.issues:[];l1issues.slice(0,6).forEach(function(i){lines.push(\"- Step \"+(i.step||\"?\")+\": \"+(i.detail||i.check||\"validation issue\"));});if(l1issues.length>6)lines.push(\"...and \"+(l1issues.length-6)+\" more issues\");var rm=items&&items.routing_matrix;if(rm&&!rm.passed&&Array.isArray(rm.issues)){rm.issues.slice(0,3).forEach(function(i){lines.push(\"- [routing] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"routing issue\"));});}var st=items&&items.smoke_test;if(st&&!st.passed&&Array.isArray(st.issues)){var hard=st.issues.filter(function(i){return i.failure_class===\"js_transform_syntax_error\"||i.failure_class===\"js_transform_void_return\";});hard.slice(0,3).forEach(function(i){lines.push(\"- [js_transform] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"smoke test failed\"));});}if(lines.length===0)return\"Validation failed - no specific issues reported.\";return lines.join(\"\\n\");})()",
         "on_success": "step:26a",
         "on_failure": "cancel"
       },
@@ -1254,10 +1298,67 @@
         "on_failure": "cancel"
       },
       {
+        "step": "36a",
+        "type": "condition",
+        "description": "Only update DomainHelp commands if a domain is associated with this workflow.",
+        "expression": "{{input.domain}}",
+        "on_truthy": "36b",
+        "on_falsy": "37"
+      },
+      {
+        "step": "36b",
+        "type": "serv_query",
+        "description": "Fetch existing PGC_DomainHelp row for the domain.",
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ],
+          "limit": 1
+        },
+        "output_key": "domain_help_row",
+        "on_success": "36c",
+        "on_failure": "37"
+      },
+      {
+        "step": "36c",
+        "type": "js_transform",
+        "description": "Merge new workflow command into existing DomainHelp commands list.",
+        "output_key": "updated_domain_commands",
+        "on_success": "36d",
+        "on_failure": "37",
+        "expression": "(() => { const helpRows = Array.isArray(local_state.domain_help_row) ? local_state.domain_help_row : []; if (helpRows.length === 0) { throw new Error('no_domain_help_row'); } const existingHelp = helpRows[0]; const draft = local_state.draft_workflow; const keyword = Array.isArray(draft.intent_keywords) && draft.intent_keywords.length > 0 ? draft.intent_keywords[0] : draft.name; const newCommand = { syntax: '/m ' + keyword, description: draft.description || ('Run ' + draft.name) }; const existing = Array.isArray(existingHelp.commands) ? existingHelp.commands : []; return existing.filter(function(c) { return c.syntax !== newCommand.syntax; }).concat([newCommand]); })()"
+      },
+      {
+        "step": "36d",
+        "type": "serv_update",
+        "description": "Write updated commands list back to PGC_DomainHelp.",
+        "input": {
+          "tableName": "PGC_DomainHelp",
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ],
+          "updates": {
+            "commands": "{{updated_domain_commands}}"
+          }
+        },
+        "output_key": "domain_help_updated",
+        "on_success": "37",
+        "on_failure": "37"
+      },
+      {
         "step": "37",
         "type": "notify",
         "description": "Confirm the workflow is registered and ready.",
-        "message_template": "✅ Workflow *{{draft_workflow.name}}* is registered and ready.\n\nTry: `/m {{draft_workflow.description}}`\n\n*Deferred enhancements:* {{gap_analysis.deferred.length}} item(s) noted for future improvement.",
+        "message_template": "✅ *{{draft_workflow.name}}* is ready.\n\nTry: `/m {{draft_workflow.intent_keywords.0}}`",
         "on_success": "end"
       },
       {
@@ -1687,12 +1788,12 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 1,
+    "version": 2,
     "steps": [
       {
         "step": "1",
         "type": "serv_entity_schema",
-        "description": "Load full entity schema.",
+        "description": "Load full entity schema with parent-child hierarchy info.",
         "input": {
           "entityName": "{{input.entity_name}}"
         },
@@ -1707,7 +1808,7 @@
         "input": {
           "prompt": "parse_entity_input",
           "userInput": "{{input.userInput}}",
-          "full_entity_schema": "{{full_entity_schema}}"
+          "entity_schema": "{{full_entity_schema}}"
         },
         "output_key": "parsed_entity",
         "on_success": "next",
@@ -1738,52 +1839,24 @@
       },
       {
         "step": "4",
-        "type": "serv_insert",
-        "description": "Insert the root entity row.",
+        "type": "serv_entity_insert",
+        "description": "Insert root and all child rows in topological order with FK threading.",
         "input": {
-          "tableName": "{{full_entity_schema.root.table}}",
-          "row": "{{parsed_entity.root}}"
+          "entitySchema": "{{full_entity_schema}}",
+          "parsedEntity": "{{parsed_entity}}"
         },
-        "output_key": "new_record",
+        "output_key": "insert_result",
         "on_success": "next",
         "on_failure": "cancel"
       },
       {
         "step": "5",
-        "type": "js_transform",
-        "description": "Build flat array of child row inserts from parsed entity, injecting FK.",
-        "output_key": "child_inserts",
-        "on_success": "next",
-        "on_failure": "cancel",
-        "input_key": "full_entity_schema",
-        "expression": "(function() { var entitySchema = items; var parsedEntity = local_state.parsed_entity; var newRecord = local_state.new_record; if (!entitySchema || !parsedEntity || !newRecord) return []; var rootId = newRecord.id; var children = Array.isArray(entitySchema.children) ? entitySchema.children : []; var inserts = []; children.forEach(function(child) {  var table = child.table, fk = child.fk_column, outKey = child.output_key;  if (!table || !fk || !outKey) return;  var childRows = parsedEntity.children && parsedEntity.children[outKey];  if (!Array.isArray(childRows) || childRows.length === 0) return;  childRows.forEach(function(row) {   var r = Object.assign({}, row); r[fk] = rootId;   inserts.push({ tableName: table, row: r });  }); }); return inserts;})()"
+        "type": "notify",
+        "on_success": "end",
+        "message_template": "Added {{input.entity_name}} (id: {{insert_result.root_id}})."
       },
       {
         "step": "6",
-        "type": "iterator",
-        "description": "Insert each child row.",
-        "items_key": "child_inserts",
-        "item_step": {
-          "type": "serv_insert",
-          "input": {
-            "tableName": "{{item.tableName}}",
-            "row": "{{item.row}}"
-          },
-          "on_failure": "cancel"
-        },
-        "execution_mode": "sequential",
-        "output_key": "inserted_children",
-        "on_complete": "next",
-        "on_failure": "cancel"
-      },
-      {
-        "step": "7",
-        "type": "notify",
-        "on_success": "end",
-        "message_template": "Added {{input.entity_name}} record (id: {{new_record.id}})."
-      },
-      {
-        "step": "8",
         "type": "end"
       }
     ]

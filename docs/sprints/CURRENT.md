@@ -1,14 +1,64 @@
-# Sprint 3 — Memory, Novia, and the Running Quiz
+# Sprint 3 — Memory and the Running Quiz
 
-**Goal:** Make the system worth using every day. Three threads run in parallel:
+**Goal:** Make the system worth using every day. Two threads:
 (1) diagnose why the flashcard quiz fails and fix its prerequisites;
-(2) build the memory layer so every future LLM call is progressively smarter;
-(3) ship Novia — the Mode 4 agentic companion. The quiz is the final acceptance
-gate: it must run end-to-end using the new memory-aware system.
+(2) build the memory layer so every future LLM call is progressively smarter.
+The quiz is the final acceptance gate: it must run end-to-end in a memory-aware system.
+Novia (Track I) moves to Sprint 5. History threading (Track H) moves to Sprint 4.
 
 **README.md must be updated at sprint close.**
 
 **Branch:** `sprint/03-run-generated-workflows`
+
+**Time-box:** If remaining scope cannot be completed in two full sessions, close the sprint early and move to Sprint 4. Do not over-extend.
+
+---
+
+## Session Notes
+
+**2026-05-30 (session 7):** Two harness fixes for quiz run 397/398. Quiz not yet passing — retry in session 8.
+- Harness fix: `resolveInput` in `template-resolver.mjs` — single-token path resolving to `null` now returns `null` instead of falling through to `resolveTemplate` (which left the raw token unresolved). Fixes `serv_insert` failing with `invalid input syntax for type timestamp` when a nullable DB column has a null value. 3 unit tests added.
+- Schema fix: `schema.mjs` `modifyColumn` extended to accept optional `nullable` boolean — runs `ALTER COLUMN DROP NOT NULL` / `SET NOT NULL` and syncs `PGC_Schema`. Applied immediately: `PGD_Reviews.next_review_date` NOT NULL constraint dropped (SRS field added by `create_domain` beyond quiz spec; null on all first-review cards).
+- Root cause analysis: `create_domain` added SRS scaffolding (`ease_factor`, `interval_days`, `next_review_date NOT NULL`) beyond the quiz spec; `create_workflow` faithfully used those fields. Mismatch between generators. Backlog item added: validate memory bridge catches this class of problem — `create_domain` memory should inform `create_workflow` about schema assumptions so the generated workflow handles them correctly.
+- Memory: hello convention + curl cheat sheet updated — env vars (`$INTERNAL_API_KEY` etc.) are already exported via `.bashrc`; never read any `.env` file at session start.
+
+**2026-05-30 (session 6):** Track D complete + two harness extensions. Quiz partially tested — stalled on two issues now fixed; retry in session 7.
+- JSONPath `[*]` bracket notation in template-resolver (`tokenizePath`) replaces custom `.*` wildcard — LLMs use standard syntax, no custom prompt rules needed.
+- `normalizeOrderBy` confirmed correct: `"col ASC"` is standard SQL, harness accepts it alongside `{column,direction}`.
+- CLAUDE.md: "Extending the Harness to Accept Standard LLM Output" section added — codifies when to extend system code vs add prompt rules.
+- D2: `generate_domain_aliases` prompt (sonar v1) + create_domain step 17b — LLM generates singular/plural/synonym aliases; saved to PGC_Memory scoped to domain.
+- D2: create_domain step 10 save_to_memory scope fixed `{}` → `{domain}`.
+- D1: create_workflow steps 36a–36d — updates PGC_DomainHelp.commands after workflow registration; non-blocking (all routes to notify on failure).
+- Memory bridge: `generate_workflow_steps` prompt v25 — `scope_additions {domain}` added so step generator reads domain schema + alias memories.
+- Harness fix: condition step now evaluates JS boolean expressions (e.g. `local_state.items.length === 0`) via vm sandbox when no `{{` present; template path unchanged for backward compat. Fixes quiz run 396 routing-to-end-immediately bug.
+- Harness fix: notify step accepts `"message"` field alongside `"message_template"` — fixes silent completion message in quiz.
+- Backlog: two new Sprint 4 tracks — skeleton-first generation and domain data initialization conventions.
+- Track A (quiz end-to-end) is the remaining sprint gate; retry in session 7.
+
+**2026-05-28 (session 5):** create_workflow retest run 386 completed — quiz_flashcards generated, L1+L2+routing+smoke all passed on attempt 2. Three flashcard decks loaded (59/39/67 cards). Framework improvements shipped this session:
+- `serv_entity_insert` n-level entity hierarchy step type — topological FK threading, self-ref two-pass. `add_entity` v10 using it.
+- `insertRows` bulk insert — 119 SERV calls → 3 for a 59-card deck (confirmed in run 393).
+- `{{key.*.field}}` wildcard in template-resolver; `orderBy` string normalization in SERV.
+- `response_url` stale button fix deployed (HTTP response body approach didn't work per Slack docs).
+- `parse_entity_input` → smart model (Sonnet 4.6) + 16384 max_output_tokens; `minProperties` removed from output_schema.
+- Review gate display: nested objects expanded, empty arrays skipped, all-empty object arrays collapsed to count summary.
+- PII log truncation: `classify-intent` + `mind.mjs` now log inputLen + 80-char preview only.
+- Pre-Sprint 5 design session added to backlog §2.0: workflow/step/skill/tool taxonomy.
+- Quiz test (Track A) deferred to next session — decks loaded, workflow ready.
+
+**2026-05-28 (session 4):** G1 validated (create_domain + create_workflow both write to PGC_Memory in prod). G3 implemented and deployed: `memory-writer.mjs` + MEMORY_WRITE SQS type + enqueue on qualifying run completion; 308 unit tests pass. `/explain-run` added to backlog tied to G3 via `source_run_id` FK. `generate_workflow_steps` v24 (Rule 7 + on_select) confirmed live in DB. Workflow testing convention added to memory (user tests from Slack, Claude does not trigger via curl). Ready for create_workflow retest this afternoon.
+
+**2026-05-28 (session 3):** Diagnosed run 385 generate_workflow_steps failures. Fixed step 26 simulation_error_summary bug (only read static_analysis.issues, never smoke_test — always showed vague fallback). create_workflow v51 deployed. Scope assessment: Track H → Sprint 4, Track I → Sprint 5, Track A still in scope (no Novia dependency). Backlog item added for skeleton-first generation redesign. Sprint time-boxed to 2 sessions.
+
+**2026-05-26 (session 2):** Track G coding complete and deployed (commit 66803ea).
+- `scope_additions` on memory_config — fix_workflow now retrieves memories for the target workflow
+- `iterator` field on human_gate options — one button per array item, no preceding js_transform needed
+- `generate_workflow_steps` v24: Rule 6 updated, Rule 7 added
+- `create_workflow` step 23 memory scope fixed (procedural, scoped to workflow name), DB v50
+- All 5 create/fix workflow prompts have `memory_config` in DB
+- Stale button fix: HTTP response body replaces chat.update
+- SQS VisibilityTimeout 90→300s (distributed lost update fix)
+- 293 unit tests pass
 
 ---
 
@@ -53,10 +103,10 @@ which fixes belong in Track B vs the memory layer vs the workflow itself.
    generation time (Track B). Document the exact failure path before fixing.
 
 **Acceptance criteria:**
-- [ ] `/help` surfaces flashcard domain commands including how to start a quiz
-- [ ] `/m add flashcard set…` (singular) resolves correctly without manual alias editing
-- [ ] Post-create workflow notification is concise and contains no internal metadata
-- [ ] Root cause of `{{name}}` token failure documented
+- [x] `/help` surfaces flashcard domain commands including how to start a quiz (create_workflow steps 36a-36d update PGC_DomainHelp.commands after registration, session 6)
+- [x] `/m add flashcard set…` (singular) resolves correctly without manual alias editing (generate_domain_aliases prompt + create_domain step 17b, session 6)
+- [x] Post-create workflow notification is concise and contains no internal metadata (create_workflow step 37 message_template fixed, v50)
+- [x] `{{name}}` token failure fixed: iterator field on human_gate options eliminates js_transform-before-gate pattern; generate_workflow_steps Rule 7 added so new workflows use iterator directly
 
 ---
 
@@ -80,9 +130,9 @@ Two coupled fixes:
    domain table structure — this fixes that too.
 
 **Acceptance criteria:**
-- [ ] `domain` is non-null in create_workflow WorkflowRun inputs
-- [ ] `domain_schema` is available in `local_state` when `generate_workflow_steps` fires
-- [ ] A test create_workflow run references correct table and column names on first attempt
+- [x] `domain` is non-null in create_workflow WorkflowRun inputs
+- [x] `domain_schema` is available in `local_state` when `generate_workflow_steps` fires
+- [ ] A test create_workflow run references correct table and column names on first attempt → **deferred to Sprint 4**
 
 ---
 
@@ -100,9 +150,9 @@ Sprint 2.
 3. Strip the duplicated block from both prompt texts.
 
 **Acceptance criteria:**
-- [ ] CRITICAL ROUTING RULES exist in exactly one place (PGC_SystemContext)
-- [ ] Both prompts receive the rules via inject_for
-- [ ] 246 unit tests still pass after prompt changes
+- [x] CRITICAL ROUTING RULES exist in exactly one place (PGC_SystemContext)
+- [x] Both prompts receive the rules via inject_for
+- [x] 246 unit tests still pass after prompt changes
 
 ---
 
@@ -163,9 +213,9 @@ Unit tests: write_memory resolves scope templates, computes token_estimate,
 calls SERV insertRow with correct payload. Failure path does not throw.
 
 **Acceptance criteria:**
-- [ ] PGC_Memory table exists in prod, registered in PGC_Schema + PGC_TableMap
-- [ ] `write_memory` step type passes unit tests
-- [ ] All 246 existing unit tests still pass
+- [x] PGC_Memory table exists in prod, registered in PGC_Schema + PGC_TableMap
+- [x] `write_memory` step type passes unit tests
+- [x] All 246 existing unit tests still pass
 
 ---
 
@@ -262,12 +312,12 @@ Migrate all "should-auto-upgrade" prompt rows to use `smart` or `cheap` alias.
 Leave only deliberately-pinned prompts with literal IDs.
 
 **Acceptance criteria:**
-- [ ] `memory-client.mjs` unit tests pass with mock SERV rows
-- [ ] `llm-harness.mjs` unit tests verify context assembly order
-- [ ] All 246 existing unit tests still pass (empty memory corpus = no behaviour change)
-- [ ] `memory_config` column exists on PGC_Prompt in prod
-- [ ] `llm_model_aliases` in PGC_SystemContext; harness resolves aliases at call time
-- [ ] `audit-model-ids.mjs` runs without error
+- [x] `memory-client.mjs` unit tests pass with mock SERV rows
+- [x] `llm-harness.mjs` unit tests verify context assembly order
+- [x] All 293 unit tests pass (empty memory corpus = no behaviour change)
+- [x] `memory_config` column exists on PGC_Prompt in prod (added via SERV addColumn)
+- [x] `llm_model_aliases` in PGC_SystemContext; harness resolves aliases at call time
+- [x] `audit-model-ids.mjs` runs without error
 
 ---
 
@@ -278,26 +328,23 @@ system usage. This is the track that makes Tracks B+C+E+F pay off — after
 Track G, a second `create_workflow` run for the same domain will carry the
 design decisions from the first.
 
-**G1. `write_memory` steps in create_domain and create_workflow**
+**G1. `save_to_memory` flag on create_domain and create_workflow llm_call steps** ✅
 
-Add as final steps (after `notify`) in each workflow's seed JSON.
-`create_domain` writes a semantic memory scoped to the new domain — the LLM's
-schema design reasoning. `create_workflow` writes a procedural memory scoped
-to the new workflow — what it is designed to accomplish.
-Upsert both via `upsert-workflow.mjs`. Validate in prod.
+Implemented as a flag on the llm_call step rather than separate write_memory steps.
+When set, the harness: (1) appends a reasoning instruction to the prompt, (2) strips
+`reasoning` from raw LLM output before schema validation, (3) writes to PGC_Memory
+(non-fatal await — Option B). PGC_Memory table created in prod. workflow-schema.json
+and workflow seeds updated. Both workflows upserted (create_domain v31, create_workflow v48).
 
-**G2. Wire memory into fix_workflow**
+Validated end-to-end 2026-05-28: create_domain writes semantic memory to PGC_Memory in prod; create_workflow writes procedural memory. All 5 prompt bugs from session 2 confirmed resolved.
 
-`fix_workflow` and `fix_workflow_routing` must read the procedural memory for
-the target workflow before the repair LLM runs. Two options:
-(a) Add a `serv_query` step fetching `PGC_Memory` WHERE `scope @> '{"workflow":"<name>"}'`
-    and memory_type = 'procedural', writing to `local_state.procedural_memory`.
-    The generation prompt then receives it via template substitution.
-(b) Let the harness inject it automatically via `memory_config` on the prompt.
+**G2. Wire memory into fix_workflow** ✅
 
-Option (b) is preferred — it uses the harness and requires no workflow step
-change. Set `memory_config` on `fix_workflow` and `fix_workflow_routing` prompts
-with `memory_types: ["procedural"]` and `scope` derived from `input.workflowName`.
+`fix_workflow_steps` and `fix_workflow_routing` now have `memory_config` with
+`scope_additions: {"workflow": "{{input.workflow_name}}"}` so the harness retrieves
+procedural memories scoped to the target workflow being repaired.
+`llm-harness.mjs` `scope_additions` support implemented: template-resolved additions
+merged into the auto-derived scope before retrieval. Deployed in session 2026-05-26.
 
 **G3. Episodic fire-and-forget writes**
 
@@ -318,46 +365,35 @@ CRUD runs: deterministic distillation (zero LLM cost). For rich multi-step
 runs with `reasoning` fields in `local_state`: cheap sonar call distils to
 2–3 sentences.
 
+**G3. iterator field on human_gate options** ✅
+
+Added `iterator: '<local_state_key>'` support on `choice` gate options.
+`buildDialog` in `step-executor.mjs` expands it into one button per array item,
+resolving `label`/`value`/`description` against `{...localState, ...item}`. L1
+validation already skips unresolved-key check for options carrying `iterator`.
+Eliminates the need for a preceding `js_transform` when buttons come from a
+variable-length array. `generate_workflow_steps` prompt v24 updated: Rule 6
+clarified (message_template only), Rule 7 added (iterator preference for buttons).
+`seed_PGC_StepType.json` and `seed_PGC_SystemContext.json` (step_usage_patterns)
+updated. `docs/architecture.md` updated with iterator-on-options subsection.
+
 **Acceptance criteria:**
-- [ ] A create_domain run writes a semantic memory record to PGC_Memory in prod
-- [ ] A create_workflow run writes a procedural memory record to PGC_Memory in prod
+- [x] PGC_Memory table created and registered in PGC_Schema + PGC_TableMap
+- [x] A create_domain run writes a semantic memory record to PGC_Memory in prod ✅ 2026-05-28
+- [x] A create_workflow run writes a procedural memory record to PGC_Memory in prod ✅ 2026-05-28
 - [ ] A second create_workflow run for the same domain has that semantic memory injected
-- [ ] fix_workflow receives procedural memory for the target workflow via harness injection
+- [x] fix_workflow receives procedural memory for the target workflow via harness injection
 - [ ] A domain CRUD workflow run triggers a MEMORY_WRITE SQS message; episodic record written
 
 ---
 
-### Track H — Memory: history threading (may defer to Sprint 4)
+### Track H — Memory: history threading → **deferred to Sprint 4**
 
 Allows `llm_call` steps later in a workflow run to see prior LLM outputs from
-the same run — the "cross-LLM pollination" gap. Most valuable for multi-step
-generation workflows where step 3 can build on step 1's reasoning.
+the same run. Threading is valuable but not on the critical path to the quiz.
+Full spec preserved here for Sprint 4 planning.
 
-`use_run_history: true` on an `llm_call` step opts in:
-
-```json
-{
-  "step": "3",
-  "type": "llm_call",
-  "input": {
-    "prompt": "generate_workflow_steps",
-    "use_run_history": true,
-    "userInput": "{{input.userInput}}"
-  }
-}
-```
-
-When set, the harness creates a `PGC_Session` at run start, writes each
-`llm_call` turn to `PGC_SessionEntry`, and reconstructs the messages array
-(budget-aware, newest-first trimming to `history_budget_tokens` default 2000)
-before each subsequent `llm_call` step.
-
-This implements the deferred item from `docs/session-chat-design.md` Section 10.
-
-**Defer if sprint runs long.** The memory layer (Tracks E–G) delivers most
-of the value without history threading. Threading is a Sprint 4 candidate.
-
-**Acceptance criteria (if not deferred):**
+**Acceptance criteria (Sprint 4):**
 - [ ] `use_run_history: true` on a step causes prior turns to be reconstructed
 - [ ] History is budget-trimmed to `history_budget_tokens` (newest-first)
 - [ ] Reasoning field from diagnostic sessions is excluded from reconstructed messages
@@ -365,107 +401,18 @@ of the value without history threading. Threading is a Sprint 4 candidate.
 
 ---
 
-### Track I — Novia: /chat + Mode 4 agentic loop
+### Track I — Novia: /chat + Mode 4 agentic loop → **deferred to Sprint 5**
 
-The companion. Depends on Track F (harness) and Track G (memory corpus exists).
-
-**I1. `callLlmWithTools` in llm-client.mjs**
-
-New function for Mode 4 calls. Returns `{ text, tool_calls }`. Only called by
-`chat.mjs` — not by the workflow engine (which implements its own distributed
-loop via SQS).
-
-Tool call schema follows the OpenAI/Anthropic tool_use format. The Perplexity
-gateway routing must be validated for tool_call support on non-sonar models —
-add this to implementation prep.
-
-**I2. Tool definitions in PGC_Capability**
-
-Add `PGC_Capability` rows for Novia's 15 tools (see `docs/memory-design.md`
-Section 9.3). Key fields:
-
-| Tool key | What it does |
-|---|---|
-| `get_workflow` | Fetch a workflow by name |
-| `list_workflows` | List all workflows (optionally by domain) |
-| `get_domain_schema` | Fetch tables and columns for a domain |
-| `list_domains` | List all registered domains |
-| `analyze_workflow` | Run L1 static analysis |
-| `propose_workflow_fix` | Generate corrected steps via fix_workflow LLM |
-| `apply_workflow_fix` | Persist corrected steps (requires_confirm: true) |
-| `get_prompt` | Fetch a prompt by intent_category |
-| `update_prompt` | Update prompt text or schema (requires_confirm: true) |
-| `serv_query` | Parameterised SELECT against any registered table |
-| `serv_insert` | Insert a row (requires_confirm: true) |
-| `serv_update` | Update rows (requires_confirm: true) |
-| `write_memory` | Persist a memory record |
-| `read_memory` | Query memories by scope + tags |
-| `add_system_context` | Add/update a PGC_SystemContext entry (requires_confirm: true) |
-
-`requires_confirm: true` tools are intercepted by the agentic loop before
-execution and produce a human gate confirmation message.
-
-**I3. `src/proc/chat.mjs` — Mode 4 agentic loop**
-
-SQS types: `CHAT_MESSAGE` (new message or thread continuation).
-
-Core loop (see `docs/memory-design.md` Section 9.4):
-
-```js
-while (true) {
-  const response = await callLlmWithTools(model, messages, tools, traceId);
-  if (!response.tool_calls?.length) {
-    await appendSessionEntry(session.id, 'assistant', response.text);
-    await enqueueCallback('HUMAN_NOTIFICATION', response.text, req.callback);
-    break;
-  }
-  const toolResults = await Promise.all(response.tool_calls.map(executeToolCall));
-  messages = [
-    ...messages,
-    { role: 'assistant', content: null, tool_calls: response.tool_calls },
-    ...toolResults.map(r => ({ role: 'tool', tool_call_id: r.id, content: r.result })),
-  ];
-}
-```
-
-Thread continuation: Slack callback handler looks up `PGC_Session` by
-`slack_thread_ts` and enqueues `CHAT_MESSAGE`.
-
-**I4. Persona memory on first persona-setting message**
-
-When the user says `/chat Please call me Javier and I'll call you Novia`, the
-handler detects the persona-setting intent before the first LLM call and writes:
-
-```json
-[
-  { "memory_type": "semantic", "scope": {"topic":"persona"},
-    "content": "User's name is Javier. Address the user as Javier in all responses.",
-    "tags": ["persona"], "priority": 1 },
-  { "memory_type": "semantic", "scope": {"topic":"persona"},
-    "content": "Companion name is Novia. The user calls the assistant Novia.",
-    "tags": ["persona"], "priority": 1 }
-]
-```
-
-On all subsequent `/chat` calls, persona memories are injected (harness
-`include_persona: true`). Persona memories are never injected into generation
-workflows (`create_workflow`, `create_domain`).
-
-**Acceptance criteria:**
-- [ ] `/chat Hello Novia` returns a response in Slack (basic Mode 2 works)
-- [ ] Novia can call `get_workflow` and return its step count in a reply
-- [ ] Novia proposes a workflow fix and waits for confirmation before applying
-- [ ] `/chat Please call me Javier and I'll call you Novia` writes persona memories
-- [ ] All subsequent /chat calls address the user as Javier
-- [ ] Thread replies in Slack continue the session
+Full spec in `docs/memory-design.md` Section 9. Depends on Track F+G being
+stable in production before the agentic loop is meaningful.
 
 ---
 
 ### Track A — Validate: regenerate and run the flashcard quiz (final gate)
 
-With Track B (domain context), Track E–G (memory), and Track I (Novia) in
-place, regenerate `flashcard_quiz_session` via Novia or directly via
-`create_workflow`. The regenerated workflow now benefits from:
+With Track B (domain context) and Tracks E–G (memory) in place, regenerate
+`flashcard_quiz_session` directly via `create_workflow` (Novia path deferred to
+Sprint 5). The regenerated workflow now benefits from:
 - Correct `domain_schema` at generation time (no more column name hallucination)
 - Semantic memory from the `create_domain` run injected into the generation prompt
 - Procedural memory written after this generation so future fixes preserve intent

@@ -5,24 +5,82 @@
     "domain": null,
     "description": "Registry of all table definitions — system bootstrap and user domain schemas. Every table in the system has a row here.",
     "columns": [
-      { "name": "id",           "type": "serial",      "primaryKey": true },
-      { "name": "table_name",   "type": "text",        "nullable": false, "unique": true },
-      { "name": "target",       "type": "text",        "nullable": false },
-      { "name": "domain",       "type": "text",        "nullable": true },
-      { "name": "description",  "type": "text",        "nullable": true },
-      { "name": "columns",      "type": "jsonb",       "nullable": false },
-      { "name": "foreign_keys", "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "constraints",  "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "triggers",     "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "table_name",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "target",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "columns",
+        "type": "jsonb",
+        "nullable": false
+      },
+      {
+        "name": "foreign_keys",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "constraints",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "triggers",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+      {
+        "type": "check",
+        "name": "chk_target",
+        "expression": "target IN ('pgc', 'pgd')"
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_schema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_schema_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -31,31 +89,93 @@
     "domain": null,
     "description": "Registry of all active tables that SERV-Table is permitted to write to. Acts as a security gatekeeper — tables not listed here are rejected.",
     "columns": [
-      { "name": "id",           "type": "serial",      "primaryKey": true },
-      { "name": "table_name",   "type": "text",        "nullable": false, "unique": true },
-      { "name": "target",       "type": "text",        "nullable": false },
-      { "name": "domain",       "type": "text",        "nullable": true },
-      { "name": "schema_id",    "type": "integer",     "nullable": false },
-      { "name": "allow_insert", "type": "boolean",     "nullable": false, "default": "true" },
-      { "name": "allow_update", "type": "boolean",     "nullable": false, "default": "true" },
-      { "name": "allow_delete", "type": "boolean",     "nullable": false, "default": "false" },
-      { "name": "views",        "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "table_name",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "target",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "schema_id",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "allow_insert",
+        "type": "boolean",
+        "nullable": false,
+        "default": "true"
+      },
+      {
+        "name": "allow_update",
+        "type": "boolean",
+        "nullable": false,
+        "default": "true"
+      },
+      {
+        "name": "allow_delete",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "views",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_tablemap_schema",
         "column": "schema_id",
-        "references": { "table": "PGC_Schema", "column": "id" },
+        "references": {
+          "table": "PGC_Schema",
+          "column": "id"
+        },
         "onDelete": "RESTRICT"
       }
     ],
     "constraints": [
-      { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+      {
+        "type": "check",
+        "name": "chk_target",
+        "expression": "target IN ('pgc', 'pgd')"
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_tablemap_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_tablemap_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -64,22 +184,77 @@
     "domain": null,
     "description": "Defines business entities that span multiple PGD tables. SERV-Entity reads this to build jsonb_agg queries.",
     "columns": [
-      { "name": "id",           "type": "serial",      "primaryKey": true },
-      { "name": "entity_name",  "type": "text",        "nullable": false, "unique": true },
-      { "name": "description",  "type": "text",        "nullable": true },
-      { "name": "root_table",   "type": "text",        "nullable": false },
-      { "name": "joins",        "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "aggregations", "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "filters",      "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "upsert_key",   "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "domain",       "type": "text",        "nullable": true },
-      { "name": "created_at",   "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",   "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "entity_name",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "root_table",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "joins",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "aggregations",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "filters",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "upsert_key",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [],
     "triggers": [
-      { "name": "trg_pgc_entityschema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_entityschema_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -88,23 +263,74 @@
     "domain": null,
     "description": "User-facing command aliases and help text per domain. Populated at runtime when a domain is created. Powers /help {domain} responses.",
     "columns": [
-      { "name": "id",          "type": "serial",      "primaryKey": true },
-      { "name": "domain",      "type": "text",        "nullable": false, "unique": true },
-      { "name": "aliases",     "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "description", "type": "text",        "nullable": true },
-      { "name": "commands",    "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "embedding",   "type": "vector",      "nullable": true,
-        "embed_source": ["domain", "description", "aliases"],
-        "comment": "pgvector 1024-dim embedding computed by SERV from domain+description+aliases. Used for semantic domain resolution in classify-intent Pass 2." },
-      { "name": "created_at",  "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "aliases",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "commands",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "embedding",
+        "type": "vector",
+        "nullable": true,
+        "embed_source": [
+          "domain",
+          "description",
+          "aliases"
+        ],
+        "comment": "pgvector 1024-dim embedding computed by SERV from domain+description+aliases. Used for semantic domain resolution in classify-intent Pass 2."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "unique", "name": "uq_domainhelp_domain", "columns": ["domain"] }
+      {
+        "type": "unique",
+        "name": "uq_domainhelp_domain",
+        "columns": [
+          "domain"
+        ]
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_domainhelp_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_domainhelp_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -113,31 +339,117 @@
     "domain": null,
     "description": "Stores reusable workflow definitions generated by LLM or created manually. Reused across runs — LLM is not called twice for the same workflow.",
     "columns": [
-      { "name": "id",                       "type": "serial",      "primaryKey": true },
-      { "name": "name",                     "type": "text",        "nullable": false, "unique": true },
-      { "name": "domain",                   "type": "text",        "nullable": true },
-      { "name": "description",              "type": "text",        "nullable": true },
-      { "name": "intent_keywords",          "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "intent_embedding",         "type": "vector",      "nullable": true },
-      { "name": "steps",                    "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "state_strategy",           "type": "text",        "nullable": true },
-      { "name": "confirmation_required_at", "type": "jsonb",       "nullable": true,  "default": "'[]'::jsonb" },
-      { "name": "js_extensions",            "type": "jsonb",       "nullable": true },
-      { "name": "model_used",               "type": "text",        "nullable": true },
-      { "name": "quality_score",            "type": "numeric",     "nullable": true },
-      { "name": "max_execution_ms",         "type": "integer",     "nullable": true },
-      { "name": "max_steps_per_window",     "type": "integer",     "nullable": true },
-      { "name": "window_seconds",           "type": "integer",     "nullable": true },
-      { "name": "version",                  "type": "integer",     "nullable": true,  "default": "1" },
-      { "name": "parent_workflow_id",       "type": "integer",     "nullable": true },
-      { "name": "created_at",               "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",               "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "domain",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "intent_keywords",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "intent_embedding",
+        "type": "vector",
+        "nullable": true
+      },
+      {
+        "name": "steps",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "state_strategy",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "confirmation_required_at",
+        "type": "jsonb",
+        "nullable": true,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "js_extensions",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "model_used",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "quality_score",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "max_execution_ms",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "max_steps_per_window",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "window_seconds",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": true,
+        "default": "1"
+      },
+      {
+        "name": "parent_workflow_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_workflow_parent",
         "column": "parent_workflow_id",
-        "references": { "table": "PGC_Workflow", "column": "id" },
+        "references": {
+          "table": "PGC_Workflow",
+          "column": "id"
+        },
         "onDelete": "SET NULL"
       }
     ],
@@ -149,7 +461,11 @@
       }
     ],
     "triggers": [
-      { "name": "trg_pgc_workflow_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_workflow_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -158,31 +474,117 @@
     "domain": null,
     "description": "One row per workflow execution. Holds the execution stack, accumulated state, callback routing, and runtime safety counters.",
     "columns": [
-      { "name": "id",                  "type": "serial",      "primaryKey": true },
-      { "name": "workflow_id",         "type": "integer",     "nullable": false },
-      { "name": "trace_id",            "type": "text",        "nullable": true },
-      { "name": "triggered_by",        "type": "text",        "nullable": true },
-      { "name": "status",              "type": "text",        "nullable": false, "default": "'pending'" },
-      { "name": "input",               "type": "jsonb",       "nullable": true },
-      { "name": "stack",               "type": "jsonb",       "nullable": false, "default": "'[]'::jsonb" },
-      { "name": "state",               "type": "jsonb",       "nullable": true },
-      { "name": "output",              "type": "jsonb",       "nullable": true },
-      { "name": "callback",            "type": "jsonb",       "nullable": true },
-      { "name": "total_execution_ms",  "type": "integer",     "nullable": false, "default": "0" },
-      { "name": "step_count",          "type": "integer",     "nullable": false, "default": "0" },
-      { "name": "steps_in_window",     "type": "integer",     "nullable": false, "default": "0" },
-      { "name": "window_started_at",   "type": "timestamptz", "nullable": true },
-      { "name": "error",               "type": "jsonb",       "nullable": true },
-      { "name": "started_at",          "type": "timestamptz", "nullable": true },
-      { "name": "completed_at",        "type": "timestamptz", "nullable": true },
-      { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "workflow_id",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "trace_id",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "triggered_by",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'pending'"
+      },
+      {
+        "name": "input",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "stack",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "state",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "callback",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "total_execution_ms",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "step_count",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "steps_in_window",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "window_started_at",
+        "type": "timestamptz",
+        "nullable": true
+      },
+      {
+        "name": "error",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "started_at",
+        "type": "timestamptz",
+        "nullable": true
+      },
+      {
+        "name": "completed_at",
+        "type": "timestamptz",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_workflowrun_workflow",
         "column": "workflow_id",
-        "references": { "table": "PGC_Workflow", "column": "id" },
+        "references": {
+          "table": "PGC_Workflow",
+          "column": "id"
+        },
         "onDelete": "RESTRICT"
       }
     ],
@@ -199,7 +601,11 @@
       }
     ],
     "triggers": [
-      { "name": "trg_pgc_workflowrun_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_workflowrun_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -208,25 +614,82 @@
     "domain": null,
     "description": "Append-only audit log — one row per step execution. Never updated after insert. Used for idempotency checks on SQS redelivery and debugging.",
     "columns": [
-      { "name": "id",              "type": "serial",      "primaryKey": true },
-      { "name": "run_id",          "type": "integer",     "nullable": false },
-      { "name": "frame_id",        "type": "text",        "nullable": false },
-      { "name": "step_number",     "type": "integer",     "nullable": false },
-      { "name": "step_type",       "type": "text",        "nullable": false },
-      { "name": "capability_key",  "type": "text",        "nullable": true },
-      { "name": "status",          "type": "text",        "nullable": false },
-      { "name": "retry_count",     "type": "integer",     "nullable": false, "default": "0" },
-      { "name": "input_snapshot",  "type": "jsonb",       "nullable": true },
-      { "name": "output_snapshot", "type": "jsonb",       "nullable": true },
-      { "name": "error",           "type": "jsonb",       "nullable": true },
-      { "name": "duration_ms",     "type": "integer",     "nullable": true },
-      { "name": "executed_at",     "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "run_id",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "frame_id",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "step_number",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "step_type",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "capability_key",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "retry_count",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "input_snapshot",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output_snapshot",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "error",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "duration_ms",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "executed_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_runstep_run",
         "column": "run_id",
-        "references": { "table": "PGC_WorkflowRun", "column": "id" },
+        "references": {
+          "table": "PGC_WorkflowRun",
+          "column": "id"
+        },
         "onDelete": "RESTRICT"
       }
     ],
@@ -245,32 +708,108 @@
     "domain": null,
     "description": "Stores LLM prompts with versioning and quality tracking for self-improvement. Self-referential via parent_prompt_id to track prompt evolution history.",
     "columns": [
-      { "name": "id",               "type": "serial",      "primaryKey": true },
-      { "name": "intent_category",  "type": "text",        "nullable": false },
-      { "name": "prompt_text",      "type": "text",        "nullable": false },
-      { "name": "input_variables",  "type": "jsonb",       "nullable": true },
-      { "name": "output_schema",    "type": "jsonb",       "nullable": true },
-      { "name": "output_sample",    "type": "jsonb",       "nullable": true },
-      { "name": "model",            "type": "text",        "nullable": true },
-      { "name": "version",          "type": "integer",     "nullable": false, "default": "1" },
-      { "name": "parent_prompt_id", "type": "integer",     "nullable": true },
-      { "name": "was_successful",   "type": "boolean",     "nullable": true },
-      { "name": "quality_score",    "type": "numeric",     "nullable": true },
-      { "name": "error_log",        "type": "jsonb",       "nullable": true },
-      { "name": "created_at",       "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",       "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "intent_category",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "prompt_text",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "input_variables",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output_schema",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output_sample",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "model",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false,
+        "default": "1"
+      },
+      {
+        "name": "parent_prompt_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "was_successful",
+        "type": "boolean",
+        "nullable": true
+      },
+      {
+        "name": "quality_score",
+        "type": "numeric",
+        "nullable": true
+      },
+      {
+        "name": "error_log",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "probe_input",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "memory_config",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_prompt_parent",
         "column": "parent_prompt_id",
-        "references": { "table": "PGC_Prompt", "column": "id" },
+        "references": {
+          "table": "PGC_Prompt",
+          "column": "id"
+        },
         "onDelete": "SET NULL"
       }
     ],
     "constraints": [],
     "triggers": [
-      { "name": "trg_pgc_prompt_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_prompt_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -279,19 +818,52 @@
     "domain": null,
     "description": "Maps user input patterns to workflows or action types for the Intent Preprocessor. workflow_id is nullable — some intents are ad-hoc and have no pre-built workflow.",
     "columns": [
-      { "name": "id",              "type": "serial",      "primaryKey": true },
-      { "name": "pattern",         "type": "text",        "nullable": false },
-      { "name": "intent_category", "type": "text",        "nullable": false },
-      { "name": "workflow_id",     "type": "integer",     "nullable": true },
-      { "name": "action_type",     "type": "text",        "nullable": false },
-      { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "pattern",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "intent_category",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "workflow_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "action_type",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_intentmap_workflow",
         "column": "workflow_id",
-        "references": { "table": "PGC_Workflow", "column": "id" },
+        "references": {
+          "table": "PGC_Workflow",
+          "column": "id"
+        },
         "onDelete": "SET NULL"
       }
     ],
@@ -303,7 +875,11 @@
       }
     ],
     "triggers": [
-      { "name": "trg_pgc_intentmap_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_intentmap_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -312,25 +888,64 @@
     "domain": null,
     "description": "Reserved for future parallel execution — optimistic locking. NOT used in sequential mode. Bootstrapped empty.",
     "columns": [
-      { "name": "id",         "type": "serial",      "primaryKey": true },
-      { "name": "run_id",     "type": "integer",     "nullable": false, "unique": true },
-      { "name": "locked_by",  "type": "text",        "nullable": true },
-      { "name": "locked_at",  "type": "timestamptz", "nullable": true },
-      { "name": "version",    "type": "integer",     "nullable": false, "default": "1" },
-      { "name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at", "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "run_id",
+        "type": "integer",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "locked_by",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "locked_at",
+        "type": "timestamptz",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false,
+        "default": "1"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_runlock_run",
         "column": "run_id",
-        "references": { "table": "PGC_WorkflowRun", "column": "id" },
+        "references": {
+          "table": "PGC_WorkflowRun",
+          "column": "id"
+        },
         "onDelete": "CASCADE"
       }
     ],
     "constraints": [],
     "triggers": [
-      { "name": "trg_pgc_workflowrunlock_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_workflowrunlock_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -339,23 +954,77 @@
     "domain": null,
     "description": "Compact runtime self-description of the system. Injected into heavy-lift LLM prompts so the model knows what it is operating inside, what it can do, and what the rules are.",
     "columns": [
-      { "name": "id",            "type": "serial",      "primaryKey": true },
-      { "name": "key",           "type": "text",        "nullable": false, "unique": true },
-      { "name": "section",       "type": "text",        "nullable": false },
-      { "name": "content",       "type": "text",        "nullable": false },
-      { "name": "format",        "type": "text",        "nullable": false, "default": "'prose'" },
-      { "name": "inject_always", "type": "boolean",     "nullable": false, "default": "false" },
-      { "name": "inject_for",    "type": "jsonb",       "nullable": true },
-      { "name": "version",       "type": "integer",     "nullable": false, "default": "1" },
-      { "name": "created_at",    "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",    "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "key",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "section",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "content",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "format",
+        "type": "text",
+        "nullable": false,
+        "default": "'prose'"
+      },
+      {
+        "name": "inject_always",
+        "type": "boolean",
+        "nullable": false,
+        "default": "false"
+      },
+      {
+        "name": "inject_for",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false,
+        "default": "1"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "check", "name": "chk_format", "expression": "format IN ('prose', 'json')" }
+      {
+        "type": "check",
+        "name": "chk_format",
+        "expression": "format IN ('prose', 'json')"
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_systemcontext_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_systemcontext_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -364,24 +1033,80 @@
     "domain": null,
     "description": "Canonical catalogue of all valid workflow step types with their input/output contracts. Seeded on bootstrap.",
     "columns": [
-      { "name": "id",                  "type": "serial",      "primaryKey": true },
-      { "name": "step_type",           "type": "text",        "nullable": false, "unique": true },
-      { "name": "description",         "type": "text",        "nullable": false },
-      { "name": "input_contract",      "type": "jsonb",       "nullable": true },
-      { "name": "output_contract",     "type": "jsonb",       "nullable": true },
-      { "name": "on_success_options",  "type": "jsonb",       "nullable": true },
-      { "name": "on_failure_options",  "type": "jsonb",       "nullable": true },
-      { "name": "requires_capability", "type": "text",        "nullable": true },
-      { "name": "status",              "type": "text",        "nullable": false, "default": "'live'" },
-      { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "step_type",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "input_contract",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output_contract",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "on_success_options",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "on_failure_options",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "requires_capability",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'live'"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "check", "name": "chk_steptype_status", "expression": "status IN ('live', 'planned', 'deprecated')" }
+      {
+        "type": "check",
+        "name": "chk_steptype_status",
+        "expression": "status IN ('live', 'planned', 'deprecated')"
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_steptype_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_steptype_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -390,23 +1115,75 @@
     "domain": null,
     "description": "Registry of what this system can currently do. Injected into heavy-lift prompts so the LLM proposes only feasible workflows.",
     "columns": [
-      { "name": "id",              "type": "serial",      "primaryKey": true },
-      { "name": "capability_key",  "type": "text",        "nullable": false, "unique": true },
-      { "name": "category",        "type": "text",        "nullable": false },
-      { "name": "description",     "type": "text",        "nullable": false },
-      { "name": "status",          "type": "text",        "nullable": false, "default": "'live'" },
-      { "name": "available_in",    "type": "jsonb",       "nullable": true },
-      { "name": "notes",           "type": "text",        "nullable": true },
-      { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
-      { "name": "updated_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "capability_key",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "category",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'live'"
+      },
+      {
+        "name": "available_in",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "check", "name": "chk_capability_status",   "expression": "status IN ('live', 'planned', 'not_supported')" },
-      { "type": "check", "name": "chk_capability_category", "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution')" }
+      {
+        "type": "check",
+        "name": "chk_capability_status",
+        "expression": "status IN ('live', 'planned', 'not_supported')"
+      },
+      {
+        "type": "check",
+        "name": "chk_capability_category",
+        "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution')"
+      }
     ],
     "triggers": [
-      { "name": "trg_pgc_capability_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }
+      {
+        "name": "trg_pgc_capability_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
     ]
   },
   {
@@ -415,20 +1192,67 @@
     "domain": null,
     "description": "One row per LLM session. Tracks general_chat and llm_call_diagnostic sessions. query_id is the user-facing reference used with /explain.",
     "columns": [
-      { "name": "id",              "type": "serial",       "primaryKey": true },
-      { "name": "session_type",    "type": "varchar(30)",  "nullable": false },
-      { "name": "query_id",        "type": "uuid",         "nullable": false, "unique": true, "default": "gen_random_uuid()" },
-      { "name": "slack_thread_ts", "type": "varchar(50)",  "nullable": true },
-      { "name": "workflow_name",   "type": "varchar(100)", "nullable": true },
-      { "name": "run_id",          "type": "integer",      "nullable": true },
-      { "name": "trace_id",        "type": "varchar(100)", "nullable": true },
-      { "name": "step_id",         "type": "varchar(50)",  "nullable": true },
-      { "name": "intent_category", "type": "varchar(100)", "nullable": true },
-      { "name": "created_at",      "type": "timestamptz",  "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "session_type",
+        "type": "varchar(30)",
+        "nullable": false
+      },
+      {
+        "name": "query_id",
+        "type": "uuid",
+        "nullable": false,
+        "unique": true,
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "slack_thread_ts",
+        "type": "varchar(50)",
+        "nullable": true
+      },
+      {
+        "name": "workflow_name",
+        "type": "varchar(100)",
+        "nullable": true
+      },
+      {
+        "name": "run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "trace_id",
+        "type": "varchar(100)",
+        "nullable": true
+      },
+      {
+        "name": "step_id",
+        "type": "varchar(50)",
+        "nullable": true
+      },
+      {
+        "name": "intent_category",
+        "type": "varchar(100)",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [],
     "constraints": [
-      { "type": "check", "name": "chk_pgc_session_type", "expression": "session_type IN ('general_chat', 'llm_call_diagnostic')" }
+      {
+        "type": "check",
+        "name": "chk_pgc_session_type",
+        "expression": "session_type IN ('general_chat', 'llm_call_diagnostic')"
+      }
     ],
     "triggers": []
   },
@@ -438,26 +1262,173 @@
     "domain": null,
     "description": "One row per turn in a session. Reconstructs the LLM messages array by ordering on sequence_number. Append-only — never updated after insert. reasoning is diagnostic metadata, never included in messages array reconstruction.",
     "columns": [
-      { "name": "id",              "type": "serial",      "primaryKey": true },
-      { "name": "session_id",      "type": "integer",     "nullable": false },
-      { "name": "sequence_number", "type": "integer",     "nullable": false },
-      { "name": "role",            "type": "varchar(15)", "nullable": false },
-      { "name": "content",         "type": "text",        "nullable": false },
-      { "name": "reasoning",       "type": "text",        "nullable": true },
-      { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "session_id",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "sequence_number",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "role",
+        "type": "varchar(15)",
+        "nullable": false
+      },
+      {
+        "name": "content",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "reasoning",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
     ],
     "foreign_keys": [
       {
         "name": "fk_pgc_sessionentry_session_id",
         "column": "session_id",
-        "references": { "table": "PGC_Session", "column": "id" },
+        "references": {
+          "table": "PGC_Session",
+          "column": "id"
+        },
         "onDelete": "CASCADE"
       }
     ],
     "constraints": [
-      { "type": "unique", "name": "uq_pgc_sessionentry_session_seq", "columns": ["session_id", "sequence_number"] },
-      { "type": "check",  "name": "chk_pgc_sessionentry_role", "expression": "role IN ('system', 'user', 'assistant')" }
+      {
+        "type": "unique",
+        "name": "uq_pgc_sessionentry_session_seq",
+        "columns": [
+          "session_id",
+          "sequence_number"
+        ]
+      },
+      {
+        "type": "check",
+        "name": "chk_pgc_sessionentry_role",
+        "expression": "role IN ('system', 'user', 'assistant')"
+      }
     ],
     "triggers": []
+  },
+  {
+    "table_name": "PGC_Memory",
+    "target": "pgc",
+    "domain": null,
+    "description": "Persistent memory store. Holds episodic, semantic, and procedural memories scoped by domain, workflow, topic, or global. Injected into LLM calls by the memory harness based on scope and budget.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "memory_type",
+        "type": "varchar(20)",
+        "nullable": false
+      },
+      {
+        "name": "scope",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{}'::jsonb"
+      },
+      {
+        "name": "content",
+        "type": "text",
+        "nullable": false
+      },
+      {
+        "name": "tags",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb"
+      },
+      {
+        "name": "priority",
+        "type": "integer",
+        "nullable": false,
+        "default": "5"
+      },
+      {
+        "name": "token_estimate",
+        "type": "integer",
+        "nullable": false,
+        "default": "0"
+      },
+      {
+        "name": "source_run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "source_workflow",
+        "type": "varchar(100)",
+        "nullable": true
+      },
+      {
+        "name": "source_step",
+        "type": "varchar(50)",
+        "nullable": true
+      },
+      {
+        "name": "expires_at",
+        "type": "timestamptz",
+        "nullable": true
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "foreign_keys": [
+      {
+        "name": "fk_pgc_memory_source_run_id",
+        "column": "source_run_id",
+        "references": {
+          "table": "PGC_WorkflowRun",
+          "column": "id"
+        },
+        "onDelete": "SET NULL"
+      }
+    ],
+    "constraints": [
+      {
+        "type": "check",
+        "name": "chk_pgc_memory_type",
+        "expression": "memory_type IN ('episodic','semantic','procedural')"
+      }
+    ],
+    "triggers": [
+      {
+        "name": "trg_pgc_memory_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
+    ]
   }
 ]

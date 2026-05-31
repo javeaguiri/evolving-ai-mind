@@ -49,7 +49,12 @@ export async function handle(req) {
     return err(400, 'userInput is required', traceId);
   }
 
-  console.info('classify-intent: start', { traceId, userInput, sessionId });
+  console.info('classify-intent: start', {
+    traceId,
+    sessionId,
+    inputLen: userInput.length,
+    inputPreview: userInput.slice(0, 80) + (userInput.length > 80 ? '…' : ''),
+  });
 
   let result, entitySchemaRows, domainRows;
   try {
@@ -192,10 +197,11 @@ async function classify(userInput, sessionId, traceId) {
         const domainMatch = matchDomainAlias(userInput, domainRows);
         domain = domainMatch?.domain ?? null;
       } else {
-        // Strip verb prefix — null if result does not match a registered domain
-        // (e.g. intent_category 'help' → stripped 'help' → no domain row → null).
-        const stripped = intentMatch.intent_category.replace(/^(get|list|add|update|delete|search)_/, '');
-        domain = domainRows.some(r => r.domain === stripped) ? stripped : null;
+        // Find a registered domain name that appears anywhere in the intent_category.
+        // Handles both CRUD-prefixed names (get_recipes → recipes) and freely named
+        // workflows (quiz_flashcards → flashcards, practice_vocabulary → vocabulary).
+        const matched = domainRows.find(r => intentMatch.intent_category.includes(r.domain));
+        domain = matched?.domain ?? null;
       }
 
       const isRetrieval = /^(get|search)_/.test(intentMatch.intent_category);
@@ -471,6 +477,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
 
     const workflowInput = {
       userInput,
+      ...(result.domain                                                       ? { domain: result.domain }          : {}),
       ...(domainEntity                                                        ? { entity_name: domainEntity }      : {}),
       ...(result.search_term                                                  ? { search: result.search_term }     : {}),
       ...(result.record_id !== null && result.record_id !== undefined         ? { id: result.record_id }           : {}),

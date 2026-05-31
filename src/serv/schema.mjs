@@ -253,11 +253,13 @@ async function addColumn(req) {
 // ---------------------------------------------------------------------------
 
 async function modifyColumn(req) {
-  const { tableName, columnName, newType, using: usingExpr = null } = req.body;
+  const { tableName, columnName, newType, nullable, using: usingExpr = null } = req.body;
 
   if (!tableName)  return err(400, 'tableName is required',  req.correlationId);
   if (!columnName) return err(400, 'columnName is required', req.correlationId);
-  if (!newType)    return err(400, 'newType is required',    req.correlationId);
+  if (!newType && nullable === undefined) {
+    return err(400, 'newType or nullable is required', req.correlationId);
+  }
 
   if (!TABLE_NAME_PATTERN.test(tableName)) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
@@ -265,7 +267,7 @@ async function modifyColumn(req) {
   if (!/^[a-z][a-z0-9_]*$/.test(columnName)) {
     return err(400, `Invalid column name "${columnName}" — must be lowercase alphanumeric + underscore`, req.correlationId);
   }
-  if (!ALLOWED_TYPES.has(newType.toLowerCase().split('(')[0].trim())) {
+  if (newType && !ALLOWED_TYPES.has(newType.toLowerCase().split('(')[0].trim())) {
     return err(400, `Column type "${newType}" is not allowed`, req.correlationId);
   }
   if (usingExpr && !/^[a-z][a-z0-9_]*::[a-z][a-z0-9\s]*$/.test(usingExpr)) {
@@ -292,24 +294,40 @@ async function modifyColumn(req) {
       return err(404, `Column "${columnName}" not found in PGC_Schema for "${tableName}"`, req.correlationId);
     }
 
-    const ddlClient  = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
+    const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
     if (target === 'pgd') await ddlClient.connect();
 
-    const usingClause = usingExpr ? ` USING ${usingExpr}` : '';
-    await ddlClient.query(
-      `ALTER TABLE "${tableName}" ALTER COLUMN "${columnName}" TYPE ${newType}${usingClause}`
-    );
-    console.info(`schema: modified column ${columnName} on ${tableName} — type now ${newType}`);
+    if (newType) {
+      const usingClause = usingExpr ? ` USING ${usingExpr}` : '';
+      await ddlClient.query(
+        `ALTER TABLE "${tableName}" ALTER COLUMN "${columnName}" TYPE ${newType}${usingClause}`
+      );
+      console.info(`schema: modified column ${columnName} on ${tableName} — type now ${newType}`);
+    }
+
+    if (nullable !== undefined) {
+      const nullOp = nullable ? 'DROP NOT NULL' : 'SET NOT NULL';
+      await ddlClient.query(
+        `ALTER TABLE "${tableName}" ALTER COLUMN "${columnName}" ${nullOp}`
+      );
+      console.info(`schema: modified column ${columnName} on ${tableName} — nullable now ${nullable}`);
+    }
 
     if (target === 'pgd') await ddlClient.end();
 
-    const updatedCols = colsArray.map(c => c.name === columnName ? { ...c, type: newType } : c);
+    const updatedCols = colsArray.map(c => {
+      if (c.name !== columnName) return c;
+      const updated = { ...c };
+      if (newType) updated.type = newType;
+      if (nullable !== undefined) updated.nullable = nullable;
+      return updated;
+    });
     await client.query(
       `UPDATE "PGC_Schema" SET columns = $1::jsonb, updated_at = now() WHERE id = $2`,
       [JSON.stringify(updatedCols), schemaId]
     );
 
-    return ok({ success: true, tableName, column: columnName, newType, action: 'modified' }, req.correlationId);
+    return ok({ success: true, tableName, column: columnName, newType, nullable, action: 'modified' }, req.correlationId);
 
   } catch (error) {
     console.error('schema modifyColumn error:', error.message);

@@ -32,6 +32,7 @@ import PGC_StepType        from './templates/pgc/PGC_StepType.json'        with 
 import PGC_Capability      from './templates/pgc/PGC_Capability.json'      with { type: 'json' };
 import PGC_Session         from './templates/pgc/PGC_Session.json'         with { type: 'json' };
 import PGC_SessionEntry    from './templates/pgc/PGC_SessionEntry.json'    with { type: 'json' };
+import PGC_Memory          from './templates/pgc/PGC_Memory.json'          with { type: 'json' };
 import seedSchema        from './templates/pgc/seeds/seed_PGC_Schema.json'         with { type: 'json' };
 import seedTableMap      from './templates/pgc/seeds/seed_PGC_TableMap.json'       with { type: 'json' };
 import seedDomainHelp    from './templates/pgc/seeds/seed_PGC_DomainHelp.json'     with { type: 'json' };
@@ -82,6 +83,7 @@ const PGC_TEMPLATES = [
   PGC_Capability,
   PGC_Session,
   PGC_SessionEntry,
+  PGC_Memory,
 ];
 
 // ---------------------------------------------------------------------------
@@ -151,6 +153,9 @@ export async function bootstrap(req) {
 
     // Step 3 — create PGC_WorkflowStats view (depends on PGC_WorkflowRun)
     await installWorkflowStatsView(client);
+
+    // Step 3a — install PGC_Memory indexes (GIN + btree; CREATE INDEX IF NOT EXISTS)
+    await installPGCMemoryIndexes(client);
 
     // Step 4 — seed PGC_Schema self-referential rows
     await seedPGCSchema(client);
@@ -258,6 +263,23 @@ async function installWorkflowStatsView(client) {
   `;
   await client.query(sql);
   console.info('init-brain: PGC_WorkflowStats view installed');
+}
+
+/**
+ * Install GIN and btree indexes on PGC_Memory.
+ * CREATE INDEX IF NOT EXISTS — safe to call on every bootstrap.
+ */
+async function installPGCMemoryIndexes(client) {
+  const sqls = [
+    `CREATE INDEX IF NOT EXISTS idx_pgc_memory_scope  ON "PGC_Memory" USING GIN (scope)`,
+    `CREATE INDEX IF NOT EXISTS idx_pgc_memory_tags   ON "PGC_Memory" USING GIN (tags)`,
+    `CREATE INDEX IF NOT EXISTS idx_pgc_memory_type   ON "PGC_Memory" (memory_type)`,
+    `CREATE INDEX IF NOT EXISTS idx_pgc_memory_expiry ON "PGC_Memory" (expires_at) WHERE expires_at IS NOT NULL`,
+  ];
+  for (const sql of sqls) {
+    await client.query(sql);
+  }
+  console.info('init-brain: PGC_Memory indexes installed');
 }
 
 /**

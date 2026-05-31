@@ -249,7 +249,18 @@ export async function callLlmWithResumption(model, instructions, userMessage, ou
  * @returns {Promise<object>}    Parsed JSON response
  */
 export async function callLlmWithCorrection(model, instructions, userMessage, outputSchema, errors, attempt1Output, traceId, maxOutputTokens) {
-  const errorLines = errors.map(e => `- ${e.message}`).join('\n');
+  const errorLines = errors.map(e => {
+    const location = e.instancePath || (e.table ? `table "${e.table}"` : null);
+    let actualValue = null;
+    if (e.instancePath && attempt1Output) {
+      const parts = e.instancePath.split('/').filter(Boolean);
+      let node = attempt1Output;
+      for (const part of parts) node = node?.[part];
+      if (node !== undefined && node !== null && typeof node !== 'object') actualValue = node;
+    }
+    const valuePart = actualValue !== null ? ` (got: "${actualValue}")` : '';
+    return location ? `- [${location}]${valuePart} ${e.message}` : `- ${e.message}`;
+  }).join('\n');
   const outputText = JSON.stringify(attempt1Output, null, 2);
 
   const correctionMessage = `Your previous response had these specific issues that must be fixed:
