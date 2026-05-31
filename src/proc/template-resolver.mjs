@@ -81,7 +81,11 @@ export function resolveTemplate(template, localState) {
     }
 
     const val = resolvePath(localState, trimmed);
-    if (val === undefined || val === null) return match; // leave unresolved
+    if (val === undefined || val === null) {
+      const exprVal = evalExpression(trimmed, localState);
+      if (exprVal !== undefined && exprVal !== null) return String(exprVal);
+      return match;
+    }
     if (typeof val === 'object') return JSON.stringify(val);
     return String(val);
   });
@@ -103,9 +107,12 @@ export function resolveInput(input, localState) {
   if (typeof input === 'string') {
     const singleToken = input.match(/^\{\{([^}]+)\}\}$/);
     if (singleToken) {
-      const val = resolvePath(localState, singleToken[1].trim());
+      const trimmed = singleToken[1].trim();
+      const val = resolvePath(localState, trimmed);
       if (val !== undefined && val !== null) return val;
       if (val === null) return null;
+      const exprVal = evalExpression(trimmed, localState);
+      if (exprVal !== undefined) return exprVal;
     }
     return resolveTemplate(input, localState);
   }
@@ -116,6 +123,28 @@ export function resolveInput(input, localState) {
     );
   }
   return input;
+}
+
+/**
+ * Evaluate a token as a JS expression when path resolution fails.
+ * Only attempted when the token contains arithmetic operators or spaces —
+ * those characters never appear in valid path tokens.
+ * Top-level local_state keys are bound as named variables so that
+ * expressions like "current_card.total_reviews + 1" resolve naturally.
+ *
+ * @param {string} token      Trimmed token (no {{ }})
+ * @param {object} localState Current frame local_state
+ * @returns {*}               Evaluated result, or undefined on failure
+ */
+function evalExpression(token, localState) {
+  if (!/[\s+\-*%]/.test(token)) return undefined;
+  try {
+    const keys = Object.keys(localState);
+    const vals = keys.map(k => localState[k]);
+    return new Function(...keys, `'use strict'; return (${token});`)(...vals);
+  } catch (_) {
+    return undefined;
+  }
 }
 
 /**
