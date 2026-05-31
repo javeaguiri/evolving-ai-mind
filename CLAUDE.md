@@ -317,6 +317,14 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Recently Completed
 
+**Sprint 3 (2026-05-31) — Memory and the Running Quiz:**
+- `quiz_flashcards` workflow runs end-to-end in prod (runs 403–405). All 13 cards mastered, episodic memory written on completion (G3 confirmed).
+- Memory layer complete: `PGC_Memory` table, `write_memory` step type, `memory-client.mjs`, `llm-harness.mjs`, `memory_config` on `PGC_Prompt`, model aliases in `PGC_SystemContext`. `create_domain` and `create_workflow` write semantic/procedural memories; `fix_workflow` retrieves procedural memories; domain workflow completions write episodic memories via `MEMORY_WRITE` SQS.
+- Harness extensions (extend-not-prompt principle): `evalExpression` in `template-resolver.mjs` evaluates arithmetic `{{expr + 1}}` tokens; `description_list` suppressed when no option descriptions; confirm gate HELP-specific fallback removed; `chat.update` replaces stale buttons on click (response_url was null in practice).
+- Domain propagation fixed in three places: `classify-intent.mjs` now writes `domain` into all WorkflowRun inputs; Pass 1a domain resolution uses substring match for freely-named workflow intents (e.g. `quiz_flashcards` → `flashcards`). Recurring pattern — see backlog task 12 for systemic audit item.
+- IntentMap pattern for `quiz_flashcards` updated to `quiz.*flashcard|flashcard.*quiz` — Pass 1a match, no LLM call on quiz start.
+- 329 unit tests pass.
+
 **Sprint 2 (2026-05-22) — create_workflow Reliability:**
 - `create_workflow` generates working domain workflows end-to-end in prod. Validated with flashcard quiz domain (run 365 completed).
 - Routing matrix (`runRoutingMatrix`) + js_transform smoke test (`runJsTransformSmokeTest`) replace broken L2 path execution in `simulation-engine.mjs`. Both run after every L1 pass; `result.passed = routingMatrix.passed && smokeTest.passed`.
@@ -333,20 +341,25 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Immediate Open Work
 
-1. Deduplicate shared routing rules from `generate_workflow_steps` + `fix_workflow_routing` into `PGC_SystemContext` via `inject_for` — drift between these prompts caused two routing bugs in Sprint 2.
+1. B AC3: validate that a fresh `create_workflow` run for flashcards generates correct column names on first attempt (domain_schema injection working in LLM prompt).
 2. Validate `analyze_and_design_workflow` field name fix (prompt id 25, v10 deployed but not yet validated).
+3. Domain propagation systemic audit — backlog task 12. Three fixes in two sprints; needs a full boundary audit and test coverage.
 
 ### Medium Priority
 
-- Deduplicate shared routing rules from `generate_workflow_steps` + `fix_workflow_routing` into `PGC_SystemContext` via `inject_for` — drift between these prompts caused two routing bugs in Sprint 2.
+- Skeleton-first workflow generation (Sprint 4 Track) — splits `generate_workflow_steps` into routing frame + per-step content fill
+- IntentMap pattern quality — add human_gate to `create_workflow` asking user how they want to invoke the workflow
+- Richer episodic memory content — distil session outcomes (score, card counts) rather than generic one-liners
 - Review `PGC_Prompt.output_schema`: evaluate separate table, cross-prompt sharing, `review-output.mjs` validation integration
-- `PGC_WorkflowRun.session_id` FK column (nullable integer FK → `PGC_Session.id`): migration script needed, column did not exist at bootstrap
-- Active bug: `analyze_and_design_workflow` (prompt id 25) produces wrong field names — `response_format` + v10 deployed session 23, not yet validated
+- `PGC_WorkflowRun.session_id` FK column (nullable integer FK → `PGC_Session.id`): migration script needed
+- Active bug: `analyze_and_design_workflow` (prompt id 25) produces wrong field names — v10 deployed session 23, not yet validated
 
 ### Deferred
 
 - `design-domain.mjs` Phase 4 — HUMAN_GATE refactor (deferred since session 29)
 - Pass 2 keyword scan excludes `domain: null` workflows (causes unnecessary Tier 2 LLM calls)
+- History threading (Track H) — Sprint 4
+- Novia /chat + Mode 4 agentic loop (Track I) — Sprint 5
 
 > Full tech debt register and tangential feature designs: `docs/backlog.md`
 
