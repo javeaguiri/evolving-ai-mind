@@ -197,10 +197,11 @@ async function classify(userInput, sessionId, traceId) {
         const domainMatch = matchDomainAlias(userInput, domainRows);
         domain = domainMatch?.domain ?? null;
       } else {
-        // Strip verb prefix — null if result does not match a registered domain
-        // (e.g. intent_category 'help' → stripped 'help' → no domain row → null).
-        const stripped = intentMatch.intent_category.replace(/^(get|list|add|update|delete|search)_/, '');
-        domain = domainRows.some(r => r.domain === stripped) ? stripped : null;
+        // Find a registered domain name that appears anywhere in the intent_category.
+        // Handles both CRUD-prefixed names (get_recipes → recipes) and freely named
+        // workflows (quiz_flashcards → flashcards, practice_vocabulary → vocabulary).
+        const matched = domainRows.find(r => intentMatch.intent_category.includes(r.domain));
+        domain = matched?.domain ?? null;
       }
 
       const isRetrieval = /^(get|search)_/.test(intentMatch.intent_category);
