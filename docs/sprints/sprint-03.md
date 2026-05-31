@@ -465,11 +465,11 @@ Then run the quiz end-to-end in Slack.
 
 ## Sprint Close Checklist
 
-- [ ] `node --test tests/unit/*.test.mjs` passes
-- [ ] Flashcard quiz runs end-to-end in prod (Track A)
-- [ ] `CLAUDE.md` Current State updated
-- [ ] `docs/architecture.md` updated — new `.mjs` files (memory-client, llm-harness, memory-writer, chat), new SQS types (MEMORY_WRITE, CHAT_MESSAGE), new step type (write_memory)
-- [ ] `docs/data-architecture.md` updated — PGC_Memory schema, memory_config on PGC_Prompt
-- [ ] `docs/backlog.md` updated — completed items removed, new items added
-- [ ] `README.md` updated
-- [ ] This file renamed to `docs/sprints/sprint-03.md` with outcome notes
+- [x] `node --test tests/unit/*.test.mjs` passes
+- [x] Flashcard quiz runs end-to-end in prod (Track A) — runs 403–405
+- [x] `CLAUDE.md` Current State updated
+- [ ] `docs/architecture.md` updated — new `.mjs` files (memory-client, llm-harness, memory-writer), new SQS type (MEMORY_WRITE), new step type (write_memory) → **deferred to Sprint 4 start**
+- [ ] `docs/data-architecture.md` updated — PGC_Memory schema, memory_config on PGC_Prompt → **deferred to Sprint 4 start**
+- [x] `docs/backlog.md` updated
+- [ ] `README.md` updated → **deferred to Sprint 4 start**
+- [x] This file renamed to `docs/sprints/sprint-03.md` with outcome notes
