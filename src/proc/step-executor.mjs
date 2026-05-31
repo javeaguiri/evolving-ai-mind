@@ -380,11 +380,6 @@ export function buildDialog(step, localState) {
               style:  'default',
             })),
           });
-        } else {
-          fields.push({
-            type:  'typography',
-            value: '_(No domains registered yet — use /create-domain to add one)_',
-          });
         }
       }
       // typography for the message is always added first (above the switch)

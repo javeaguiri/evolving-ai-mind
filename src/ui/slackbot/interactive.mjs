@@ -272,21 +272,32 @@ export async function handle(req) {
     return { statusCode: 200, body: '' };
   }
 
-  // Replace the gate message with a confirmation via response_url (replace_original: true).
-  // response_url is the Slack-recommended mechanism for updating the source message —
-  // it works for all gate types including text_input (unlike chat.update which silently
-  // ignores messages with input blocks). Per Slack docs, the 200 acknowledgment body
-  // is not used to update messages; only response_url POST or chat.update are effective.
-  if (responseUrl) {
-    const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
+  // Replace the gate message with a confirmation to clear stale buttons.
+  // chat.update is used directly — response_url is null for most channel message
+  // interactions in practice, and chat.update works for all non-input-block gate
+  // types (confirm, choice). text_input gates are handled above and never reach here.
+  const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
+  if (threadId && channel) {
     try {
-      await fetch(responseUrl, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ replace_original: true, text: confirmationText, blocks: confirmationBlocks }),
+      await slack.chat.update({
+        channel,
+        ts:     threadId,
+        text:   confirmationText,
+        blocks: confirmationBlocks,
       });
-    } catch (fetchErr) {
-      console.warn('interactive: response_url POST failed (non-fatal)', { error: fetchErr.message, traceId });
+    } catch (updateErr) {
+      console.warn('interactive: chat.update failed (non-fatal)', { error: updateErr.message, traceId });
+      if (responseUrl) {
+        try {
+          await fetch(responseUrl, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ replace_original: true, text: confirmationText, blocks: confirmationBlocks }),
+          });
+        } catch (fetchErr) {
+          console.warn('interactive: response_url POST failed (non-fatal)', { error: fetchErr.message, traceId });
+        }
+      }
     }
   }
 
