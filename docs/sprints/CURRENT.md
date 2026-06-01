@@ -1,14 +1,14 @@
-# Sprint 4 — Planning
+# Sprint 4 — Memory Bridge + Skeleton-First Generation
 
 **Sprint 3 closed 2026-05-31. See `docs/sprints/sprint-03.md` for retro.**
 
-**Branch:** TBD — create at sprint open.
+**Branch:** `sprint/04-memory-bridge-skeleton` — create at sprint open.
+
+**Duration:** ~1 week (target close: 2026-06-08)
 
 ---
 
-## Carry-in from Sprint 3 (do before scoping Sprint 4)
-
-These were deferred from the sprint close checklist and must be done at Sprint 4 start:
+## Carry-in from Sprint 3 (complete before sprint implementation begins)
 
 - [ ] `docs/architecture.md` — add memory layer: `memory-client.mjs`, `llm-harness.mjs`, `memory-writer.mjs`, `MEMORY_WRITE` SQS type, `write_memory` step type
 - [ ] `docs/data-architecture.md` — add `PGC_Memory` table schema, `memory_config` column on `PGC_Prompt`
@@ -16,31 +16,147 @@ These were deferred from the sprint close checklist and must be done at Sprint 4
 
 ---
 
-## Sprint 4 Candidate Tracks (not yet scoped)
+## Sprint Goal
 
-From backlog and sprint-03 retro carry-forwards:
+Close the memory bridge between `create_domain` and `create_workflow` so that schema decisions, initial-value conventions, and design rationale written during domain creation reliably inform workflow generation on the first attempt. Simultaneously introduce skeleton-first routing validation into `create_workflow` to eliminate the class of routing bugs caused by simultaneous routing + content generation.
 
-1. **B AC3** — validate fresh `create_workflow` for flashcards references correct column names on first attempt (domain_schema injection working)
-2. **Domain propagation systemic audit** (backlog task 12) — 3 occurrences in 2 sprints; full boundary audit + test coverage
-3. **Skeleton-first workflow generation** — split `generate_workflow_steps` into routing frame + per-step fill (high priority, Sprint 4 track)
-4. **IntentMap invocation phrasing gate** — add human_gate to `create_workflow` asking user how they want to invoke the workflow
-5. **Richer episodic memory content** — distil session outcomes (score, card counts) in `memory-writer.mjs`
-6. **History threading (Track H)** — `use_run_history` on llm_call steps; budget-trimmed prior turn reconstruction
-7. **Domain data initialization** — capture initial-value conventions from `create_domain` for downstream workflows
+---
+
+## Acceptance Criteria
+
+- **AC1 — Memory provenance:** `create_domain` writes episodic memory before user confirmation and semantic memory after. The saved_to_memory flag no longer writes pre-confirmation LLM reasoning as semantic. Confirmed by inspecting `PGC_Memory` rows after a domain creation run.
+- **AC2 — Memory bridge (B AC3):** Delete and recreate the flashcard domain, then run `create_workflow quiz_flashcards`. The LLM prompt log must show the injected domain memory block. The generated workflow must handle null `next_review_date` correctly on first attempt with no manual correction.
+- **AC3 — Initial-value conventions:** `create_domain` captures DEFAULT expressions and application-level initial-value conventions (e.g. `ease_factor = 2.5`) in `PGC_Memory` at confirmation time. `serv_entity_insert` and `add_entity` prompts receive and apply them.
+- **AC4 — Domain propagation:** Audit complete. Every system boundary where `domain` is passed has an assertion or documented guarantee that it is non-null. At least one new unit test per boundary point added.
+- **AC5 — Routing skeleton:** `design_workflow_process` output extended with per-step `routing` fields. A `js_transform` step derives a JSON routing skeleton. L1/BFS runs on the skeleton before `design_workflow_dialogs` and `generate_workflow_steps` run. A workflow with an invalid routing skeleton never reaches step generation.
+- **AC6 — IntentMap phrasing:** `create_workflow` presents a `text_input` gate asking for invocation phrases. The pattern written to `PGC_IntentMap` is a `|`-joined regex of the user's phrases (lowercased, trimmed). Validated by running the new workflow from Slack using one of the provided phrases — it matches Pass 1a with no Tier 2 LLM call.
+- **AC7 — fix_workflow post-write L1:** After `fix_workflow` writes to `PGC_Workflow`, a `simulate` Level 1 step runs on the written steps. A workflow with dead routing targets returns a 422 and is not persisted.
+- **AC8 — session_id column:** `PGC_WorkflowRun.session_id nullable integer` column exists. No FK constraint (PGC_Session not yet bootstrapped). Registered in `PGC_Schema`.
+
+---
+
+## Out of Scope
+
+- PGC_Session table creation and session chat (Sprint 5+)
+- pgvector semantic intent matching — the right long-term solution for invocation phrasing; blocked on embedding population at workflow registration. Noted in backlog for Sprint 5+.
+- History threading (Track H) — Sprint 5
+- Richer episodic memory content — medium priority, no AC dependency
+- Stack overwrite race condition (`PGC_WorkflowRunLock`) — separate sprint
+- Novia Mode 4 agentic loop — Sprint 5
+- Backlog item 9 (`analyze_and_design_workflow` v10 fix) — confirm obsolete if v4 workflow with separate `analyze_workflow_gaps` + `design_workflow_process` prompts is what's running in prod; close item at sprint open
+
+---
+
+## Tracks
+
+### Track M — Memory Bridge (must-have)
+
+**M1. Memory two-layer architecture**
+- Edit `memory-writer.mjs` / `llm-harness.mjs` / `write_memory` step logic:
+  - `save_to_memory: true` flag → writes episodic only, tagged `initial_design_reasoning`
+  - Add explicit `write_memory` step to `create_domain` workflow after user confirms scaffold (post-confirmation semantic facts)
+- Update `seed_PGC_Workflow.json` (`create_domain`), run `upsert-workflow.mjs`
+- Produces: episodic + semantic rows with correct provenance tags
+
+**M2. Memory bridge validation (B AC3)**
+- Test sequence: delete flashcard domain → `create_domain flashcards` (Slack) → inspect `PGC_Memory` rows → `create_workflow quiz_flashcards` (Slack) → inspect LLM prompt log for injected memory block → verify generated workflow handles null `next_review_date` on first attempt
+
+**M3. Domain data initialization**
+- `create_domain` post-confirmation `write_memory` step (added in M1) must also capture initial-value conventions: DEFAULT expressions, application-level invariants (e.g. `ease_factor = 2.5`, `interval_days = 1`)
+- Update `generate_domain_schema` prompt to reason explicitly about initial-state nullability and emit an `initial_value_conventions` field in its output
+- `serv_entity_insert` and `add_entity` prompts: add `initial_value_conventions` as an optional injected variable from retrieved memory
+
+### Track S — Skeleton-First Generation (should-have)
+
+**S1. Extend `design_workflow_process` output schema**
+- Add `routing` field to each `process_design` item: `{ on_success?, on_failure?, on_truthy?, on_falsy?, on_cancel? }` using step_label references (not step numbers)
+- Update `design_workflow_process` prompt output schema, update `seed_PGC_Prompt.json`, run `upsert-prompt.mjs`
+
+**S2. Skeleton derivation js_transform + L1/BFS**
+- Add a new `js_transform` step between step 21 and step 22 in `create_workflow`:
+  - Builds a minimal step array (step key, type, routing fields only) from `process_spec.process_design[*].routing`
+  - `output_key: routing_skeleton`
+- Add a `simulate` Level 1 step immediately after, running BFS on `routing_skeleton`
+- On L1 failure: route to a `human_gate confirm` notifying the user that process design produced an invalid routing graph; options: "Redesign process" → step:21, "Cancel" → cancel
+- On L1 pass: proceed to step 22 (`design_workflow_dialogs`) with routing locked
+
+**S3. `generate_workflow_steps` receives locked skeleton**
+- Pass `routing_skeleton` as an additional input to step 23 so the step generator fills in content against already-validated routing (never invents routing from scratch)
+- Update `generate_workflow_steps` prompt: "routing fields are locked from the skeleton; do not modify `on_success`, `on_failure`, etc."
+
+### Track I — IntentMap Phrasing (should-have)
+
+**I1. Invocation phrasing gate**
+- Add `human_gate text_input` step to `create_workflow` between step 36 (`serv_insert PGC_IntentMap`) and step 37 (`notify`):
+  - Message: "How will you invoke this workflow? Enter one or more phrases separated by commas (e.g. `quiz me, start a quiz, test my flashcards`)"
+  - `output_key: invocation_phrases`
+  - Options: Submit → next; Skip → next (falls back to `draft_workflow.name` as pattern); Cancel → cancel
+
+**I2. Pattern builder js_transform**
+- `js_transform` step after I1: lowercase, split on `,`, trim each phrase, filter empty, join with `|`
+  - If result is empty (user skipped), use `draft_workflow.name` as fallback
+  - `output_key: intent_pattern`
+
+**I3. Update PGC_IntentMap insert**
+- Step 36 (`serv_insert PGC_IntentMap`) writes `pattern: intent_pattern` instead of `draft_workflow.name`
+- Add `draft_workflow.name` as an extra alternation appended to `intent_pattern` so the exact name still matches Pass 1a
+
+### Track F — fix_workflow Post-Write L1 (should-have)
+
+**F1.**
+- After `fix_workflow` step 8 (`serv_update PGC_Workflow`), add a `simulate` Level 1 step that reads the written steps
+- On L1 failure: return structured 422 error with issue list; the write is rolled back (or the row is deleted if insert)
+- Update `seed_PGC_Workflow.json` (`fix_workflow`), run `upsert-workflow.mjs`
+
+### Track D — Domain Propagation Audit (must-have)
+
+**D1.**
+- Enumerate every place `domain` enters or crosses a system boundary: `classify-intent.mjs`, `create-workflow.mjs`, `fix-workflow.mjs`, SQS payloads, `PGC_WorkflowRun` input field
+- For each boundary: add an assertion that domain is non-null at handoff, or document explicitly that null is valid and why
+- Add unit tests in `step-executor.test.mjs` or a new `domain-propagation.test.mjs` asserting domain flows through each handoff
+
+### Track X — schema migration (small, any time)
+
+**X1. PGC_WorkflowRun.session_id**
+- `POST /api/v1/serv/schema/addColumn` with `{ tableName: "PGC_WorkflowRun", columnName: "session_id", type: "integer", nullable: true }`
+- Update `PGC_Schema` seed to reflect new column
+- No FK constraint — PGC_Session does not yet exist
+
+---
+
+## Test Scenarios
+
+1. `create_domain flashcards` (fresh) → inspect `PGC_Memory` rows: episodic row exists pre-confirm, semantic row exists post-confirm with `initial_value_conventions` — AC1, AC3
+2. `create_workflow quiz_flashcards` after fresh domain → prompt log shows injected memory block; workflow handles null `next_review_date` on first attempt — AC2
+3. Invoke new workflow via one of the phrasing gate phrases from Slack → Pass 1a match (no Tier 2 LLM call in logs) — AC6
+4. `design_workflow_process` intentionally generates a broken routing reference (dead step label) → skeleton L1 fires before dialogs/steps are generated; user sees redesign gate — AC5
+5. `fix_workflow` with a routing fix that introduces a dead target → post-write L1 fires 422, workflow not persisted — AC7
+6. `SELECT session_id FROM "PGC_WorkflowRun" LIMIT 1` returns null cleanly — AC8
+
+---
+
+## Sprint Close Checklist
+
+- [ ] `node --test tests/unit/*.test.mjs` passes
+- [ ] Simulate Level 1+2 pass on `create_workflow` and `fix_workflow` seed definitions
+- [ ] All ACs above validated from Slack
+- [ ] `CLAUDE.md` "Current State" updated
+- [ ] `docs/architecture.md` updated (new step in create_workflow, memory two-layer, skeleton derivation)
+- [ ] `docs/data-architecture.md` updated (`PGC_WorkflowRun.session_id`, `PGC_Memory` provenance tags)
+- [ ] `docs/create-workflow-design.md` updated (skeleton track, phrasing gate, routing fields on process_design)
+- [ ] `README.md` updated if any env or bootstrap changes
+- [ ] `docs/backlog.md` updated — completed items marked, pgvector intent matching added as Sprint 5+ item
+- [ ] Item 9 (`analyze_and_design_workflow`) confirmed obsolete and closed or kept open with rationale
+- [ ] `CURRENT.md` renamed to `sprint-04.md` with outcome notes
 
 ---
 
 ## Session Notes
 
-**2026-05-31 (session 8):** Sprint 3 closed. Quiz e2e validated (runs 403–405, 13-card Test Set, all mastered, G3 episodic memory written). Eight harness fixes shipped:
-- `evalExpression` in `template-resolver.mjs` — arithmetic in `{{}}` tokens
-- `description_list` suppressed when no option descriptions
-- Confirm gate HELP-specific fallback removed
-- `chat.update` replaces stale buttons (response_url was null in practice)
-- `classify-intent.mjs` passes `domain` to all WorkflowRun inputs
-- Pass 1a domain resolution via substring match for freely-named workflow intents
-- IntentMap pattern for `quiz_flashcards`: `quiz.*flashcard|flashcard.*quiz`
-- `.claude/settings.json` — added `Bash(cp *)`
-- Hello convention updated: 3 health checks + diagnostic framework (system vs artifact, extend harness)
-- Backlog task 12 updated with domain propagation systemic pattern
-- Credentials rotation needed before sharing transcripts with Claude engineers
+**2026-06-01 (session 9):** Sprint 4 scoped. Key decisions:
+- `design_workflow_process` is left-brain — correct place to add routing fields; js_transform derives skeleton without extra LLM call
+- Memory bridge test requires domain recreation (episodic memory must be written fresh with new provenance tags)
+- IntentMap phrasing: js_transform phrase-join is MVP; pgvector semantic matching is the long-term solution (deferred to Sprint 5+, requires embedding population at workflow registration)
+- Backlog item 9 (`analyze_and_design_workflow` v10): likely obsolete if v4 prompts are deployed; confirm at sprint open
+- Backlog item 10 (session_id column): pulled in as nullable integer, no FK until PGC_Session exists
+- Backlog item 11 (post-write L1): pulled in for fix_workflow only; create_workflow already has pre-write L1 at step 25
