@@ -165,12 +165,13 @@
         },
         "output_key": "proposed_scaffold",
         "save_to_memory": {
-          "memory_type": "semantic",
+          "memory_type": "episodic",
           "scope": {
             "domain": "{{proposed_scaffold.domain}}"
           },
           "tags": [
-            "domain_design"
+            "domain_design",
+            "initial_design_reasoning"
           ],
           "priority": 3
         },
@@ -280,7 +281,13 @@
         },
         "output_key": "proposed_scaffold",
         "on_success": "11",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": { "domain": "{{proposed_scaffold.domain}}" },
+          "tags": ["schema_expectations"],
+          "priority": 3
+        }
       },
       {
         "step": "13",
@@ -294,7 +301,13 @@
         },
         "output_key": "new_table",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_failure": "cancel",
+        "save_to_memory": {
+          "memory_type": "semantic",
+          "scope": { "domain": "{{proposed_scaffold.domain}}" },
+          "tags": ["schema_expectations"],
+          "priority": 3
+        }
       },
       {
         "step": "14",
@@ -327,6 +340,29 @@
         "on_success": "next",
         "on_failure": "cancel",
         "on_cancel": "cancel"
+      },
+      {
+        "step": "16b",
+        "type": "js_transform",
+        "description": "Build domain_semantic_content: structural snapshot of confirmed schema highlighting insert expectations — which columns are required, which SQL defaults the DB manages, and which are null at creation.",
+        "output_key": "domain_semantic_content",
+        "on_success": "next",
+        "on_failure": "next",
+        "expression": "(function() { var scaffold = local_state.proposed_scaffold; var domain = scaffold && scaffold.domain || ''; var tables = scaffold && scaffold.tables || []; var SYS = new Set(['id','created_at','updated_at']); var parts = ['Schema snapshot for ' + domain + ' (confirmed):']; tables.forEach(function(t) { var cols = (t.columns || []).filter(function(c) { return !SYS.has(c.name); }); var required = [], sqlDef = [], nullAtCreate = []; cols.forEach(function(c) { if (c.nullable === true || (c.nullable === undefined && !c.default && !c.primaryKey)) { nullAtCreate.push(c.name); } else if (c.default) { sqlDef.push(c.name + '(' + c.default + ')'); } else { required.push(c.name); } }); var segs = [t.tableName + ':']; if (required.length) segs.push('required at insert: ' + required.join(', ') + '.'); if (sqlDef.length) segs.push('SQL defaults, db sets: ' + sqlDef.join(', ') + '.'); if (nullAtCreate.length) segs.push('null at creation, omit from insert: ' + nullAtCreate.join(', ') + '.'); parts.push(segs.join(' ')); }); var convs = scaffold && scaffold.initial_value_conventions; if (Array.isArray(convs) && convs.length > 0) { var cl = convs.map(function(c) { return c.table + '.' + c.column + ': ' + c.convention; }); parts.push('Application initial-value conventions (apply when field not in user input): ' + cl.join('; ') + '.'); } return parts.join(' '); })()"
+      },
+      {
+        "step": "16c",
+        "type": "write_memory",
+        "description": "Persist confirmed schema snapshot as semantic memory for retrieval by create_workflow and parse_entity_input (classify-intent data loads).",
+        "input": {
+          "memory_type": "semantic",
+          "scope": { "domain": "{{proposed_scaffold.domain}}" },
+          "content_key": "domain_semantic_content",
+          "tags": ["schema_snapshot", "insert_expectations"],
+          "priority": 2
+        },
+        "on_success": "next",
+        "on_failure": "next"
       },
       {
         "step": "17",

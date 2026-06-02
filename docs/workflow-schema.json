@@ -181,6 +181,7 @@
         { "$ref": "#/definitions/iteratorStep" },
         { "$ref": "#/definitions/notifyStep" },
         { "$ref": "#/definitions/simulateStep" },
+        { "$ref": "#/definitions/writeMemoryStep" },
         { "$ref": "#/definitions/endStep" }
       ]
     },
@@ -655,6 +656,32 @@
           }
         },
         "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },
+        "on_success":  { "$ref": "#/definitions/routingToken" },
+        "on_failure":  { "$ref": "#/definitions/routingToken" }
+      }
+    },
+
+    "writeMemoryStep": {
+      "type": "object",
+      "description": "Persists a PGC_Memory row. Content is read from local_state[content_key]. Never fails the run — errors are logged only.",
+      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "additionalProperties": false,
+      "properties": {
+        "step":        { "type": "string" },
+        "type":        { "const": "write_memory" },
+        "description": { "type": "string" },
+        "input": {
+          "type": "object",
+          "required": ["memory_type", "scope", "content_key"],
+          "additionalProperties": false,
+          "properties": {
+            "memory_type": { "type": "string", "enum": ["episodic", "semantic", "procedural"] },
+            "scope":       { "type": "object", "additionalProperties": { "type": "string" } },
+            "content_key": { "type": "string", "description": "Key in local_state whose string value is written as the memory content." },
+            "tags":        { "type": "array", "items": { "type": "string" } },
+            "priority":    { "type": "integer" }
+          }
+        },
         "on_success":  { "$ref": "#/definitions/routingToken" },
         "on_failure":  { "$ref": "#/definitions/routingToken" }
       }
