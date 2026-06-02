@@ -967,6 +967,48 @@
         "on_failure": "cancel"
       },
       {
+        "step": "21a",
+        "type": "js_transform",
+        "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation.",
+        "output_key": "routing_skeleton",
+        "on_success": "next",
+        "on_failure": "cancel",
+        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_failure) s.on_failure = r.on_failure; if (r.on_truthy)  s.on_truthy  = r.on_truthy; if (r.on_falsy)   s.on_falsy   = r.on_falsy; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_truthy) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return steps; })()"
+      },
+      {
+        "step": "21b",
+        "type": "simulate",
+        "description": "Level 1 BFS on routing_skeleton — validates that all routing targets exist and no dead ends are present before dialogs or step content are generated.",
+        "input": {
+          "steps_key": "routing_skeleton"
+        },
+        "output_key": "skeleton_validation",
+        "on_success": "step:22",
+        "on_failure": "step:21c"
+      },
+      {
+        "step": "21c",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Skeleton L1 failed: process design produced an invalid routing graph. Offer to redesign or cancel before any content is generated.",
+        "message_template": "⚠️ *Process design has routing issues* — fixing these now prevents wasted step generation.\n\n*Issues found:* {{skeleton_validation.static_analysis.issues.length}}\n\nChoose how to proceed:",
+        "options": [
+          {
+            "label": "Redesign process",
+            "action": "confirm",
+            "on_select": "step:21"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "step:21",
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
         "step": "22",
         "type": "llm_call",
         "description": "Left brain pass 3: design Slack dialogs for every human_gate step. Joined to process_spec by step_label.",
@@ -999,6 +1041,7 @@
           "state_map": "{{process_spec.state_map}}",
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
+          "routing_skeleton": "{{routing_skeleton}}",
           "user_feedback": "{{step_gen_context.user_workflow_feedback}}",
           "static_analysis": "{{step_gen_context.static_analysis_result}}",
           "previous_draft_steps": "{{step_gen_context.previous_draft_steps}}",
