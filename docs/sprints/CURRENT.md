@@ -153,6 +153,8 @@ Close the memory bridge between `create_domain` and `create_workflow` so that sc
 
 ## Session Notes
 
+**2026-06-02 (session 11):** Documentation sprint. Updated create-domain-design.md (full rewrite — Sprint 3/4 current), create-workflow-design.md (skeleton validation §21a/21b/21c, phrasing gate §35a/35b), memory-design.md (full rewrite — pre-implementation → live, two-layer provenance, initial_value_conventions, implementation status table), architecture.md (v3.2→v3.3: §6.13 memory layer new section, write_memory step type, MEMORY_WRITE SQS, llm_call hooks 4/5, §6.8/6.9 Sprint 4 notes). All docs harmonized — architecture.md = decision/rationale, design docs = implementation detail.
+
 **2026-06-02 (session 10):** All Sprint 4 code complete. Deployed to prod (evomind-infrastructure). All upsert scripts run. 345 unit tests pass.
 - Tracks F, X, I, D completed first (smaller); then M (memory bridge) and S (skeleton-first)
 - Track D: `classify-intent.mjs` domain always written as `null` not omitted; 16 new tests document all 5 propagation boundaries
