@@ -3,10 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.2  
-Status: Active development — Session 32 complete  
-Last updated: 2026-05-01 (session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, removed {{step_type_contracts}} template variable from prompt, moved Rules 4/5a/5b/5c into SystemContext homes; probe_input added to upsert-prompt.mjs fingerprint; PGC_SystemContext 4.3.3 updated: content→jsonb schema defined, format column drop, section-level inject tags, DDL + migration checklist)
-Previously: session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file
+Version: 3.3
+Status: Active development — Sprint 4 complete
+Last updated: 2026-06-02 (Sprint 4 — memory bridge: two-layer domain semantic memory, initial_value_conventions, parse_entity_input memory retrieval for classify-intent data loads; skeleton-first routing validation in create_workflow steps 21a/21b/21c; domain propagation audit + classify-intent fix; fix_workflow post-write L1 gate + revert; IntentMap phrasing gate steps 35a/35b; PGC_WorkflowRun.session_id column; write_memory in workflow-schema.json)
+Previously: session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, moved Rules 4/5a/5b/5c into SystemContext homes; session 31 — create_domain modal routing verified; architecture-*.md files consolidated into this file
 
 ---
 
@@ -162,6 +162,7 @@ entry messages, which carry no run ID and are consumed once.
 | `FIX_WORKFLOW` | — | 1 — fire-and-forget → 2 on gate | troubleshoot-workflow.mjs (autoFix) / developer curl | proc/fix-workflow.mjs |
 | `DELETE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-domain.mjs |
 | `DELETE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-workflow.mjs |
+| `MEMORY_WRITE` | — | 1 — fire-and-forget | run-workflow.mjs (on qualifying domain workflow completion) | proc/memory-writer.mjs |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
@@ -1400,6 +1401,10 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
 ║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
 ║               ║ execution, skip-path analysis. See Section 6.5.6.   ║ complete        ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ write_memory  ║ Persist a PGC_Memory row. Reads content string from  ║ ✅ Sprint 3      ║
+║               ║ local_state[content_key]. Never fails the run —      ║                  ║
+║               ║ errors logged only. See Section 6.13.                ║                  ║
 ╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
 ```
 
@@ -1440,6 +1445,17 @@ mechanisms wired into it by the Step Processor — no workflow definition change
    failure pattern and, for `token_truncation` with 2+ consecutive occurrences, inserts
    a new `PGC_Prompt` version with a raised ceiling automatically. No human intervention
    required. Schema errors are logged as advisory for the Phase 3 right-brain loop.
+
+4. **Memory write** (Section 6.13): When `save_to_memory` is set on the step definition,
+   `llm-harness.mjs` appends a `reasoning` instruction to the prompt, extracts and strips
+   the `reasoning` field from the LLM output before schema validation, and writes it to
+   `PGC_Memory`. Zero additional LLM calls — the reasoning content is part of the existing
+   call. `save_to_memory` fields: `memory_type`, `scope` (supports `{{template}}` tokens),
+   `tags`, `priority`.
+
+5. **Memory retrieval** (Section 6.13): When `PGC_Prompt.memory_config.memory_budget_tokens > 0`,
+   `llm-harness.mjs` calls `memory-client.mjs` to retrieve scope-matching `PGC_Memory` rows
+   within the token budget, then appends the formatted memory block to the system instructions.
 
 ##### `js_transform`
 
@@ -1840,6 +1856,28 @@ Supports `{{template}}` substitution.
 System columns (`id`, `created_at`, `updated_at`) and FK columns are excluded from all column lists.
 Column definitions are read from `PGC_Schema` at runtime — not cached — so new columns are
 immediately visible without recreating the domain.
+
+##### `write_memory`
+```json
+{
+  "step": "16c", "type": "write_memory",
+  "description": "Persist confirmed schema snapshot as semantic domain memory.",
+  "input": {
+    "memory_type": "semantic",
+    "scope":       { "domain": "{{proposed_scaffold.domain}}" },
+    "content_key": "domain_semantic_content",
+    "tags":        ["schema_snapshot", "insert_expectations"],
+    "priority":    2
+  },
+  "on_success": "next",
+  "on_failure": "next"
+}
+```
+`content_key` names a `local_state` key whose string value becomes the memory content.
+`token_estimate` is computed automatically: `Math.ceil(content.length / 4)`.
+Scope values support `{{template}}` substitution resolved at write time.
+No `output_key` — the step returns `outputValue: null`. Errors are logged but never fail the run.
+See Section 6.13 for the full memory layer design.
 
 ---
 
@@ -2788,14 +2826,18 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 
 ### 6.8 create_domain Workflow
 
-> Full annotated workflow, CRUD verb definitions, and gap taxonomy retrospective extracted to [`docs/create-domain-design.md`](../create-domain-design.md).
+Full annotated workflow design is in [`docs/create-domain-design.md`](create-domain-design.md).
+
+**Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
 
 ### 6.9 create_workflow Workflow
 
 Full design documentation — including L/R collaboration architecture decisions,
 the six-phase step structure with `local_state` data flow, gap taxonomy application,
 simulation correction loops, and implementation notes — is in
-`docs/create-workflow-design.md`.
+[`docs/create-workflow-design.md`](create-workflow-design.md).
+
+**Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
 
 
 ### 6.10 Session Architecture — Chat and Diagnostics
@@ -3272,7 +3314,61 @@ mechanism for these cases.
 
 ---
 
+### 6.13 Memory Layer
 
+Full design reference: [`docs/memory-design.md`](memory-design.md).
+
+The memory layer gives LLM calls persistent context across runs, domains, and workflows.
+Implemented in Sprint 3; extended in Sprint 4.
+
+#### Key files
+
+| File | Role |
+|---|---|
+| `src/proc/llm-harness.mjs` | Centralised LLM call assembly — retrieves memories, appends memory block to instructions, handles `save_to_memory` extract+write |
+| `src/proc/memory-client.mjs` | `retrieveMemories()`, `expandScope()`, `formatMemoryBlock()` — scope expansion and budget-aware selection |
+| `src/proc/memory-writer.mjs` | Handles `MEMORY_WRITE` SQS messages — fire-and-forget episodic writes on domain workflow completion |
+
+#### Three memory types
+
+| Type | Content | Primary consumers |
+|---|---|---|
+| **episodic** | What happened — distilled activity log, one record per significant workflow completion | `/chat` companion (Sprint 5) |
+| **semantic** | What was decided — design facts and schema expectations from `create_domain` and `create_workflow` | `create_workflow` LLM calls, `parse_entity_input` (classify-intent data loads) |
+| **procedural** | Why a workflow works the way it does — design intent from `create_workflow` | `fix_workflow`, `troubleshoot_workflow` |
+
+#### Two write paths
+
+**`save_to_memory` on `llm_call` steps** (harness-driven, Sprint 3):
+The `reasoning` field is appended to the prompt, extracted from LLM output before schema validation, and written to `PGC_Memory`. Used on `create_domain` (step 10 — episodic), `revise_domain_schema` (step 12b — semantic), `design_table` (step 13 — semantic), `generate_domain_aliases` (step 17b — semantic), `generate_workflow_steps` (step 23 — procedural). Multiple iterations accumulate rows — `insertRow` always creates a new row, never updates.
+
+**`write_memory` step** (workflow-driven, Sprint 3):
+Explicit step for writes where content is derived by a prior `js_transform`. Used in `create_domain` step 16c for the post-confirmation structural snapshot (the authoritative semantic record).
+
+**`MEMORY_WRITE` SQS** (fire-and-forget, Sprint 3):
+`run-workflow.mjs` enqueues after any qualifying domain workflow completes (domain non-null, not a system workflow). `memory-writer.mjs` writes a deterministic episodic summary at zero LLM cost.
+
+#### Scope and retrieval
+
+Scope is a JSONB object — e.g. `{"domain":"flashcards"}` or `{"workflow":"quiz_flashcards"}`. `expandScope()` derives all parent scopes so domain-level memories are reachable from any compound call scope that includes that domain. Retrieval is client-side (all `PGC_Memory` rows loaded and filtered) — household scale keeps this in the hundreds of rows.
+
+`PGC_Prompt.memory_config` (nullable JSONB) controls retrieval per prompt:
+```json
+{ "memory_budget_tokens": 600, "memory_types": ["semantic"], "scope_additions": { "domain": "{{input.domain}}" } }
+```
+`memory_budget_tokens: 0` disables memory for that prompt.
+
+#### Domain memory two-layer provenance (Sprint 4)
+
+`create_domain` writes memories at two distinct points:
+- **Pre-confirmation (episodic):** `save_to_memory` on LLM steps (10, 12b, 13) captures reasoning before the user confirms. Correctly labelled episodic — reflects thinking that the user may still revise.
+- **Post-confirmation (semantic):** Step 16c `write_memory` fires after "Create it" click, before DDL. Writes a structural prose snapshot: which columns are required at insert, which the DB defaults manage, and which are null at creation. This is the authoritative record retrieved by `create_workflow` and `parse_entity_input`.
+
+**Why this matters for data loads:** `parse_entity_input` (called by `add_entity` in the classify-intent path) now retrieves domain semantic memories (400-token budget, Sprint 4). When a user pastes a bulk spreadsheet of records, the LLM knows which columns to omit at creation (nullable-at-creation) and which initial values to apply — without explicit workflow parameters.
+
+#### initial_value_conventions
+
+`create_domain`, `design_table`, and `revise_domain_schema` prompts emit an optional `initial_value_conventions` array capturing application-level initial values that SQL DEFAULT alone does not express. Example: `interval_days` SQL DEFAULT is 0 but the SM-2 first interval should be 1. These conventions are included in the step 16c structural snapshot and flow through memory to both `create_workflow` and `parse_entity_input`.
 
 ---
 
