@@ -153,6 +153,15 @@ Close the memory bridge between `create_domain` and `create_workflow` so that sc
 
 ## Session Notes
 
+**2026-06-02 (session 10):** All Sprint 4 code complete. Deployed to prod (evomind-infrastructure). All upsert scripts run. 345 unit tests pass.
+- Tracks F, X, I, D completed first (smaller); then M (memory bridge) and S (skeleton-first)
+- Track D: `classify-intent.mjs` domain always written as `null` not omitted; 16 new tests document all 5 propagation boundaries
+- Track M: memory two-layer (episodic pre-confirm, semantic post-confirm); `revise_domain_schema` + `design_table` accumulate semantic schema_expectations; `parse_entity_input` gets 400-token semantic memory budget for classify-intent data loads; `initial_value_conventions` added to all three design prompts
+- Track S: `design_workflow_process` now emits routing fields per step; steps 21a/21b/21c validate routing topology before dialog/step generation; `generate_workflow_steps` receives locked routing_skeleton
+- `workflow-schema.json` extended with `writeMemoryStep` definition
+- Ready to validate: AC1/AC2 (flashcard memory bridge), AC5 (skeleton routing gate), AC6 (phrasing gate Pass 1a match)
+- Sprint 3 carry-in docs (architecture.md, data-architecture.md, README.md) still pending — do before merge
+
 **2026-06-01 (session 9):** Sprint 4 scoped. Key decisions:
 - `design_workflow_process` is left-brain — correct place to add routing fields; js_transform derives skeleton without extra LLM call
 - Memory bridge test requires domain recreation (episodic memory must be written fresh with new provenance tags)
