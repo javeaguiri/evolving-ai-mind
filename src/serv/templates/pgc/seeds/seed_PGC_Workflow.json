@@ -1278,17 +1278,54 @@
           }
         },
         "output_key": "registered_workflow",
-        "on_success": "next",
+        "on_success": "step:35a",
         "on_failure": "cancel"
+      },
+      {
+        "step": "35a",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Ask the user for the phrases they will use to invoke this workflow from Slack.",
+        "message_template": "How will you invoke *{{draft_workflow.name}}* from Slack? Enter one or more phrases separated by commas (e.g. `quiz me, start a quiz, test my flashcards`).\n\nSkip to use the workflow name as the only match pattern.",
+        "output_key": "invocation_phrases",
+        "options": [
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "next"
+          },
+          {
+            "label": "Skip",
+            "action": "skip",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_failure": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "35b",
+        "type": "js_transform",
+        "description": "Build intent_pattern: split user phrases on comma, lowercase/trim each, append workflow name, join with | for Pass 1a regex matching.",
+        "output_key": "intent_pattern",
+        "on_success": "next",
+        "on_failure": "cancel",
+        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
       },
       {
         "step": "36",
         "type": "serv_insert",
-        "description": "Write the PGC_IntentMap routing row.",
+        "description": "Write the PGC_IntentMap routing row using the user-supplied invocation pattern.",
         "input": {
           "tableName": "PGC_IntentMap",
           "row": {
-            "pattern": "{{draft_workflow.name}}",
+            "pattern": "{{intent_pattern}}",
             "intent_category": "{{draft_workflow.name}}",
             "action_type": "workflow"
           }
@@ -1512,8 +1549,48 @@
           }
         },
         "output_key": "workflow_updated",
-        "on_success": "next",
+        "on_success": "step:8b",
         "on_failure": "cancel"
+      },
+      {
+        "step": "8b",
+        "type": "simulate",
+        "description": "Post-write L1 — verifies the step array written to PGC_Workflow has valid routing. On failure reverts the write.",
+        "input": {
+          "steps_key": "merged_steps"
+        },
+        "output_key": "post_write_validation",
+        "on_success": "9",
+        "on_failure": "step:8c"
+      },
+      {
+        "step": "8c",
+        "type": "serv_update",
+        "description": "Revert PGC_Workflow to its original steps after post-write L1 failure.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "filters": [
+            {
+              "column": "name",
+              "op": "eq",
+              "value": "{{fix_context.workflowName}}"
+            }
+          ],
+          "updates": {
+            "steps": "{{workflow_row[0].steps}}",
+            "version": "{{fix_context.workflowVersion}}"
+          }
+        },
+        "output_key": "workflow_reverted",
+        "on_success": "step:8d",
+        "on_failure": "step:8d"
+      },
+      {
+        "step": "8d",
+        "type": "notify",
+        "description": "Inform the user post-write L1 failed and the workflow was reverted to its previous version.",
+        "message_template": "⚠️ *Post-write validation failed for {{fix_context.workflowName}}* — the write was reverted.\n\n*Issues found:* {{post_write_validation.static_analysis.issues.length}}\n\nReview the routing issues and run fix again.",
+        "on_success": "end"
       },
       {
         "step": "9",
