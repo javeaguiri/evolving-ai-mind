@@ -760,7 +760,7 @@ When `create_domain` runs, the Step Processor:
 3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
 4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
 5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
-6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_Workflow` (4 CRUD workflows), `PGC_IntentMap` (4 rows — pattern + intent_category + action_type, no workflow_id), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` (5 rows — one per `*_entity` intent category, pointing to the 5 pre-existing generic `*_entity` workflows with `domain: null`), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
 
 The PGC tables are not just config — they are the evolving state of the brain.
 The Intent Preprocessor reads from PGC to route incoming intents. The Step
