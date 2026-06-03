@@ -300,7 +300,8 @@ evolving-mind-ai/
 │   │   │                             step type), and dev_scripts/upsert-workflow.mjs (pre-write L1 guard).
 │   │   ├── step-executor.mjs         Step type dispatch — llm_call, js_transform, human_gate, serv_schema,
 │   │   │                             serv_insert, serv_query, serv_update, serv_delete, serv_entity_query,
-│   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate, notify, end
+│   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate,
+│   │   │                             write_memory, notify, end
 │   │   ├── template-resolver.mjs     Resolves {{key.path}} tokens against local_state; pure function, no I/O
 │   │   ├── classify-intent.mjs       POST /proc/classify-intent — Intent Preprocessor entry; three-tier pipeline;
 │   │   │                             executes ad_hoc CRUD steps for Pass 1a/1c matches
@@ -313,6 +314,13 @@ evolving-mind-ai/
 │   │   │                             called by step-executor llm_call; not an HTTP endpoint
 │   │   ├── troubleshoot-workflow.mjs POST /proc/troubleshoot-workflow — Tier 1 static analysis on
 │   │   │                             PGC_Workflow.steps; SQS TROUBLESHOOT_WORKFLOW; optionally enqueues FIX_WORKFLOW
+│   │   ├── llm-harness.mjs           Central LLM call assembly — retrieves memories, appends memory block to
+│   │   │                             system instructions, handles save_to_memory extract+write; called by
+│   │   │                             step-executor for all llm_call steps
+│   │   ├── memory-client.mjs         retrieveMemories(), expandScope(), formatMemoryBlock() — scope expansion,
+│   │   │                             budget-aware selection, and prompt block formatting for PGC_Memory rows
+│   │   ├── memory-writer.mjs         Handles MEMORY_WRITE SQS messages — fire-and-forget episodic writes on
+│   │   │                             qualifying domain workflow completion; zero LLM cost
 │   │   ├── migrations/               One-time DB migration scripts — run manually via node
 │   │   │   └── seed-*.mjs
 │   │   └── scaffolds/                Phase 2b static scaffolds — superseded by LLM output
@@ -352,6 +360,7 @@ evolving-mind-ai/
 │   │           ├── PGC_StepType.json
 │   │           ├── PGC_SystemContext.json
 │   │           ├── PGC_Capability.json
+│   │           ├── PGC_Memory.json
 │   │           └── seeds/            Seed JSON consumed by dev_scripts/upsert-*.mjs
 │   │               ├── seed_PGC_Workflow.json
 │   │               ├── seed_PGC_Prompt.json

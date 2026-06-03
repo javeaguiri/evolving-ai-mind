@@ -206,6 +206,7 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 | probe_input | jsonb | ✦ Minimal substitution map for integration testing — mirrors the `input_variables` contract. Used by `llm-prompt-schema.test.mjs` to substitute template vars before firing the live LLM call |
 | model | text | Which LLM was used |
 | max_output_tokens | integer | ✦ Per-prompt output token ceiling forwarded to `callLlm`. NULL = use LLM default |
+| memory_config | jsonb | ✦ Controls memory retrieval for this prompt. `{ memory_budget_tokens, memory_types, scope_additions }`. NULL = no memory injection. `memory_budget_tokens: 0` disables memory. See §4.3.4 |
 | version | integer | |
 | parent_prompt_id | integer FK | Self-referential — prompt evolution history |
 | was_successful | boolean | |
@@ -446,7 +447,53 @@ not yet supported.
 
 ---
 
-#### 4.3.4 PGC Session Tables
+#### 4.3.4 PGC Memory Layer Table
+
+##### PGC_Memory
+Persistent memory store. Holds episodic, semantic, and procedural memories scoped by domain,
+workflow, topic, or global. Written by `write_memory` workflow steps, the `save_to_memory`
+hook on `llm_call` steps, and `MEMORY_WRITE` SQS fire-and-forget messages.
+Retrieved and injected into LLM prompts by `llm-harness.mjs` based on scope and token budget.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| memory_type | varchar(20) NOT NULL | CHECK: `episodic` \| `semantic` \| `procedural` |
+| scope | jsonb NOT NULL | Scope object — e.g. `{"domain":"flashcards"}` or `{"workflow":"quiz_flashcards"}`. Default `{}` = global |
+| content | text NOT NULL | Memory content string. Token estimate pre-computed for budget-aware selection |
+| tags | jsonb NOT NULL | Array of string tags — e.g. `["schema_snapshot","insert_expectations"]`. Default `[]` |
+| priority | integer NOT NULL | Selection priority (lower = higher priority). Default 5. Range 1–10 |
+| token_estimate | integer NOT NULL | `Math.ceil(content.length / 4)` — computed at write time. Default 0 |
+| source_run_id | integer FK | → PGC_WorkflowRun.id, ON DELETE SET NULL. NULL for harness-driven writes |
+| source_workflow | varchar(100) | Name of the workflow that produced this memory |
+| source_step | varchar(50) | Step key that wrote this memory (NULL for MEMORY_WRITE path) |
+| expires_at | timestamptz | NULL = never expires. Set for ephemeral episodic memories |
+| embedding | real[] | Reserved for future vector search — not yet populated |
+| created_at | timestamptz | |
+| updated_at | timestamptz | Auto-updated by trigger |
+
+**Indexes:** GIN on `scope` and `tags` (containment queries), btree on `memory_type` and `expires_at` (filtered).
+
+**Three memory types:**
+
+| Type | Content | Written by | Retrieved by |
+|---|---|---|---|
+| episodic | What happened — distilled activity log per domain workflow completion | `MEMORY_WRITE` SQS path (`memory-writer.mjs`); `save_to_memory` on `create_domain` step 10 | `/chat` companion (Sprint 5) |
+| semantic | What was decided — design facts, schema expectations, initial-value conventions | `create_domain` step 16c (`write_memory`); `save_to_memory` on steps 12b, 13, 17b | `create_workflow` LLM calls, `parse_entity_input` (400-token budget) |
+| procedural | Why a workflow works the way it does — design intent at generation time | `save_to_memory` on `generate_workflow_steps` step 23 | `fix_workflow`, `troubleshoot_workflow` |
+
+**`PGC_Prompt.memory_config` controls retrieval per prompt:**
+```json
+{ "memory_budget_tokens": 600, "memory_types": ["semantic"], "scope_additions": { "domain": "{{input.domain}}" } }
+```
+`memory_budget_tokens: 0` or NULL `memory_config` disables memory injection for that prompt.
+Scope additions support `{{template}}` tokens resolved against `run.input` at call time.
+
+See `docs/memory-design.md` for full design reference and `docs/architecture.md` §6.13.
+
+---
+
+#### 4.3.5 PGC Session Tables
 
 Two tables supporting persistent LLM session context for general chat and LLM
 call diagnostics. Full design, DDL, messages array reconstruction, and Slack command
@@ -531,7 +578,7 @@ ORDER BY sequence_number ASC;
 
 ---
 
-#### 4.3.5 PGC_WorkflowStats — SQL View
+#### 4.3.6 PGC_WorkflowStats — SQL View
 
 Not a physical table. Queried by PROC only when building LLM prompts for workflow
 evaluation or improvement. Not on the execution hot path — guards operate on
@@ -559,7 +606,7 @@ GROUP BY workflow_id;
 
 ---
 
-#### 4.3.6 Updated PGC Table Count
+#### 4.3.7 Updated PGC Table Count
 
 | # | Table | Status |
 |---|---|---|
@@ -568,24 +615,25 @@ GROUP BY workflow_id;
 | 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
-| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added (`session_id`: Backlog — not yet in DB) |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4 |
 | 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
-| 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log` added |
+| 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log`, `memory_config` added |
 | 9 | PGC_IntentMap | written at runtime by create_workflow completion |
 | 10 | PGC_WorkflowRunLock | unchanged |
 | 11 | PGC_SystemContext | new |
 | 12 | PGC_StepType | new |
 | 13 | PGC_Capability | new |
-| 14 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/session-chat-design.md` |
-| 15 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
+| 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
+| 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/session-chat-design.md` |
+| 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
-**Total: 15 physical PGC tables (13 bootstrapped + 2 session added in v3.2) + 1 view**
+**Total: 16 physical PGC tables (14 bootstrapped + 2 session added in v3.2) + 1 view**
 
 
 ---
 
-#### 4.3.7 Dev Scripts — PGC Data Management
+#### 4.3.8 Dev Scripts — PGC Data Management
 
 These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
 intelligence at runtime. They are not part of the Lambda deployment — they run locally
