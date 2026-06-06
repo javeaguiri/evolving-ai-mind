@@ -652,7 +652,8 @@
           "properties": {
             "steps_key":        { "type": "string", "description": "Dot-path to the draft workflow steps array in local_state." },
             "mock_outputs_key": { "type": "string", "description": "Optional. Dot-path to mock output map. If absent, only Level 1 static analysis runs." },
-            "paths_key":        { "type": "string", "description": "Optional. Dot-path to simulation paths array. If absent, only Level 1 static analysis runs." }
+            "paths_key":        { "type": "string", "description": "Optional. Dot-path to simulation paths array. If absent, only Level 1 static analysis runs." },
+            "skeleton":         { "type": "boolean", "description": "Optional. Set to true when simulating a routing skeleton. Skips serv_step_missing_required_input — content fields are not yet present. All routing topology checks still run." }
           }
         },
         "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },
