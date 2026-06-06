@@ -101,8 +101,9 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
   // and may prepend reasoning text before the opening fence or append explanations
   // after the closing fence. Extract content between the first ``` pair when present;
   // otherwise use the raw text directly.
-  const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const clean      = fenceMatch ? fenceMatch[1].trim() : rawText.trim();
+  const fenceMatch    = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const openingStrip  = rawText.replace(/^```(?:json)?\s*/i, '').trim();
+  const clean         = fenceMatch ? fenceMatch[1].trim() : openingStrip;
 
   try {
     return JSON.parse(clean);
