@@ -1743,6 +1743,12 @@ dead-routing or structurally invalid workflows from entering `PGC_Workflow` at a
 The check is performed in PROC (not SERV) because `runLevel1StaticAnalysis` lives in
 `simulation-engine.mjs` which is a PROC-tier module — SERV has no access to it.
 
+**Skeleton vs full L1:** `serv_step_missing_required_input` is a content completeness
+check (verifies `tableName`, `row`, `filters`, `updates` are declared). It is skipped
+when the simulate step sets `input.skeleton: true` (routing skeleton validation, step 21b)
+because skeleton steps are intentionally input-free. All topology checks run in both modes.
+The final pre-write simulate (step 25) always runs full L1 with `skeleton` unset.
+
 ##### `condition`
 ```json
 {
@@ -2847,6 +2853,12 @@ simulation correction loops, and implementation notes — is in
 [`docs/create-workflow-design.md`](create-workflow-design.md).
 
 **Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
+
+**Session 13 decisions:**
+
+*Skeleton mode for L1 (`input.skeleton: true` on simulate step):* The `serv_step_missing_required_input` L1 check is a **content completeness** check — it verifies that a fully-formed step declares `tableName`, `row`, `filters`, and `updates`. A routing skeleton is intentionally content-free; those fields are filled in by `generate_workflow_steps`. Running this check on a skeleton produces false positives on every serv_* step. Decision: add a `skeleton: boolean` flag to the `simulate` step input, threaded through `runSimulation` → `runLevel1StaticAnalysis`. When `skeleton=true`, `serv_step_missing_required_input` is skipped. All routing topology checks (dead targets, missing `on_cancel`, unresolved templates, condition keys) still run — these apply equally to skeletons. The skeleton validate step (21b) sets `input.skeleton: true`; the final pre-write simulate (step 25) does not. L1 and L2 level definitions are unchanged.
+
+*`on_cancel` required on all human_gate steps:* The `PGC_StepType` human_gate contract marked `on_cancel` as `required: false`, which LLMs correctly read as optional. This caused persistent `missing_on_cancel` and `missing_cancel_option` L1 failures on skeleton and full steps. Decision: add `on_cancel` explicitly to the human_gate `input_contract` as `required: true`, with a description that makes the coupling to the cancel option explicit. Applied in `seed_PGC_StepType.json` + `upsert-step-type.mjs`; no system code change.
 
 
 ### 6.10 Session Architecture — Chat and Diagnostics

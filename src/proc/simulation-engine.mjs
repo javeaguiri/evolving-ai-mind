@@ -27,16 +27,17 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // @returns {SimulateWorkflowResponse}
 // ---------------------------------------------------------------------------
 
-export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, traceId }) {
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
     pathCount: Array.isArray(simulationPaths) ? simulationPaths.length : 0,
+    skeleton,
     traceId,
   });
 
   // ── Level 1 — Static analysis ────────────────────────────────────────────
-  const level1Result  = runLevel1StaticAnalysis(steps);
+  const level1Result  = runLevel1StaticAnalysis(steps, { skeleton });
   const staticIssues  = level1Result.issues;
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
@@ -128,7 +129,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 // Level 1 — Static analysis
 // ---------------------------------------------------------------------------
 
-export function runLevel1StaticAnalysis(steps) {
+export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
   const issues = [];
 
   // Build a set of all step keys for dead-target checking
@@ -362,7 +363,8 @@ export function runLevel1StaticAnalysis(steps) {
     }
 
     // Check required input fields for serv_* step types.
-    // These are enforced at runtime; L1 catches missing fields before registration.
+    // Skipped in skeleton mode — skeleton steps are routing-topology only and carry no
+    // input fields by design. Content completeness is checked in the final pre-write L1.
     // Template references (e.g. "{{item.tableName}}") are valid — only absent/null/empty fails.
     const servRequired = {
       serv_query:  ['tableName'],
@@ -370,7 +372,7 @@ export function runLevel1StaticAnalysis(steps) {
       serv_update: ['tableName', 'filters', 'updates'],
       serv_delete: ['tableName', 'filters'],
     };
-    if (servRequired[s.type]) {
+    if (!skeleton && servRequired[s.type]) {
       const inputObj = s.input ?? {};
       for (const field of servRequired[s.type]) {
         const val = inputObj[field];

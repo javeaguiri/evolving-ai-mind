@@ -988,7 +988,8 @@
         "type": "simulate",
         "description": "Level 1 BFS on routing_skeleton — validates that all routing targets exist and no dead ends are present before dialogs or step content are generated.",
         "input": {
-          "steps_key": "routing_skeleton"
+          "steps_key": "routing_skeleton",
+          "skeleton": true
         },
         "output_key": "skeleton_validation",
         "on_success": "step:22",

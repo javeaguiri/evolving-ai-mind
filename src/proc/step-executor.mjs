@@ -1216,6 +1216,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const stepsKey       = step.input?.steps_key;
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
+  const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
 
   if (!stepsKey) {
     throw new Error('simulate step missing input.steps_key');
@@ -1234,6 +1235,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
     mockOutputs,
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
+    skeleton,
     traceId,
   });
 
