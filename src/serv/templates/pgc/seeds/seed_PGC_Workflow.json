@@ -166,7 +166,9 @@
         "output_key": "proposed_scaffold",
         "save_to_memory": {
           "memory_type": "episodic",
-          "scope": {},
+          "scope": {
+            "domain": "{{input.domain}}"
+          },
           "tags": [
             "domain_design",
             "initial_design_reasoning"
