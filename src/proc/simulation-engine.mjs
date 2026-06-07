@@ -225,17 +225,20 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Check gate has at least one cancel option
+    // Check gate has at least one cancel option — skipped in skeleton mode because
+    // options are dialog-layer content added after routing topology is validated.
     if (s.type === 'human_gate') {
-      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
-      const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
-      if (!hasCancel) {
-        issues.push({
-          check:         'missing_cancel_option',
-          step:          stepKey,
-          failure_class: 'missing_cancel_option',
-          detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
-        });
+      if (!skeleton) {
+        const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+        const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
+        if (!hasCancel) {
+          issues.push({
+            check:         'missing_cancel_option',
+            step:          stepKey,
+            failure_class: 'missing_cancel_option',
+            detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
+          });
+        }
       }
 
       if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
