@@ -87,24 +87,25 @@ function fingerprint(entry) {
 // ---------------------------------------------------------------------------
 // Upsert each target workflow
 // ---------------------------------------------------------------------------
+const counts = { ok: 0, updated: 0, inserted: 0, l1Failed: 0 };
+
 for (const workflow of targets) {
   const seedFp = fingerprint(workflow);
+  const label  = workflow.name;
 
-  console.log(`\nWorkflow: ${workflow.name}`);
-  console.log(`  Seed version : v${workflow.version}  fingerprint: ${seedFp}`);
-  console.log(`  Steps        : ${workflow.steps.map(s => `${s.step}:${s.type}`).join(' \u2192 ')}`);
-
-  // L1 static analysis \u2014 reject before DB write if steps have structural issues.
+  // L1 static analysis \u2014 suppress simulation-engine info logs in upsert context.
+  const origInfo = console.info;
+  console.info = () => {};
   const l1Result = runSimulation({ steps: workflow.steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+  console.info = origInfo;
   if (!l1Result.static_analysis.passed) {
-    console.error(`\n  L1 VALIDATION FAILED \u2014 ${l1Result.static_analysis.issues.length} issue(s):`);
+    console.error(`  ${label}  L1 FAILED \u2014 ${l1Result.static_analysis.issues.length} issue(s):`);
     for (const issue of l1Result.static_analysis.issues) {
       console.error(`    [${issue.check}] step ${issue.step}: ${issue.detail}`);
     }
-    console.error('\n  Fix the issues above before upserting. Skipping this workflow.\n');
+    counts.l1Failed++;
     continue;
   }
-  console.log(`  L1 validation: passed`);
 
   const existing = await servPost('/api/v1/serv/table/getRows', {
     tableName: 'PGC_Workflow',
@@ -113,13 +114,12 @@ for (const workflow of targets) {
   });
 
   if (!existing.success) {
-    console.error('ERROR: getRows failed', existing);
+    console.error(`ERROR [${label}]: getRows failed`, existing);
     process.exit(1);
   }
 
   // No row -- insert at seed version
   if (existing.count === 0) {
-    console.log('  DB row       : none -- inserting...');
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_Workflow',
       row: {
@@ -133,49 +133,43 @@ for (const workflow of targets) {
         version: workflow.version ?? 1,
       },
     });
-    if (!result.success) { console.error('ERROR: insertRow failed', result); process.exit(1); }
-    console.log(`  Result       : inserted at v${workflow.version ?? 1} (id: ${result.row?.id})`);
+    if (!result.success) { console.error(`ERROR [${label}]: insertRow failed`, result); process.exit(1); }
+    console.log(`  ${label}  v${workflow.version ?? 1}  inserted (id: ${result.row?.id})`);
+    counts.inserted++;
     continue;
   }
 
-  const dbRow = existing.rows[0];
+  const dbRow     = existing.rows[0];
   const dbVersion = dbRow.version ?? 1;
-  const dbFp = fingerprint(dbRow);
-
-  console.log(`  DB version   : v${dbVersion}  fingerprint: ${dbFp}`);
+  const dbFp      = fingerprint(dbRow);
 
   // Fingerprints match -- no-op
   if (seedFp === dbFp) {
-    console.log(`  Result       : no changes -- already current (v${dbVersion})`);
+    console.log(`  ${label}  v${dbVersion}  ok`);
+    counts.ok++;
     continue;
   }
 
   // Content differs -- increment DB version
   const newVersion = dbVersion + 1;
-  console.log(`  Content diff detected -- updating to v${newVersion}...`);
-
   const result = await servPost('/api/v1/serv/table/updateRows', {
     tableName: 'PGC_Workflow',
     filters: [{ column: 'name', op: 'eq', value: workflow.name }],
     updates: {
-      steps: workflow.steps,
+      steps:       workflow.steps,
       description: workflow.description,
-      model_used: workflow.model_used ?? null,
-      version: newVersion,
+      model_used:  workflow.model_used ?? null,
+      version:     newVersion,
     },
   });
 
-  if (!result.success) { console.error('ERROR: updateRows failed', result); process.exit(1); }
-  console.log(`  Result       : updated -- v${dbVersion} \u2192 v${newVersion}  (${result.updatedCount ?? 1} row)`);
-
-  // Verify
-  const verify = await servPost('/api/v1/serv/table/getRows', {
-    tableName: 'PGC_Workflow',
-    filters: [{ column: 'name', op: 'eq', value: workflow.name }],
-    limit: 1,
-  });
-  const stored = verify.rows?.[0];
-  console.log(`  Verified     : v${stored?.version}  updated_at: ${stored?.updated_at}`);
+  if (!result.success) { console.error(`ERROR [${label}]: updateRows failed`, result); process.exit(1); }
+  console.log(`  ${label}  v${dbVersion} \u2192 v${newVersion}  updated`);
+  counts.updated++;
 }
 
-console.log('\nDone.');
+const parts = [`${counts.ok} ok`];
+if (counts.updated)  parts.push(`${counts.updated} updated`);
+if (counts.inserted) parts.push(`${counts.inserted} inserted`);
+if (counts.l1Failed) parts.push(`${counts.l1Failed} L1 FAILED`);
+console.log(`\n${targets.length} workflows: ${parts.join(', ')}`);
