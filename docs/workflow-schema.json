@@ -56,13 +56,13 @@
     "routingToken": {
       "type": "string",
       "pattern": "^(next|end|cancel|step:[a-zA-Z0-9][a-zA-Z0-9_]*|[a-zA-Z0-9][a-zA-Z0-9_]*)$",
-      "description": "Valid routing value for on_success, on_failure, on_select, on_complete. Canonical values: 'next' (advance to next step), 'end' (complete run), 'cancel' (cancel run), or a bare step key (e.g. '3', '3a', '1R'). step:N format is also accepted for backwards compatibility. SYNC NOTE: this pattern must be kept identical to the routingToken pattern inside PGC_Prompt.output_schema for generate_workflow_steps (seed_PGC_Prompt.json). When updating either, update both."
+      "description": "Valid routing value for on_success, on_else, on_select, on_complete. Canonical values: 'next' (advance to next step), 'end' (complete run), 'cancel' (cancel run), or a bare step key (e.g. '3', '3a', '1R'). step:N format is also accepted for backwards compatibility. SYNC NOTE: this pattern must be kept identical to the routingToken pattern inside PGC_Prompt.output_schema for generate_workflow_steps (seed_PGC_Prompt.json). When updating either, update both."
     },
 
     "bareStepKey": {
       "type": "string",
       "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_]*$",
-      "description": "Used in condition.on_truthy and condition.on_falsy. Bare step key — same rule as all other routing fields. Do NOT use routing tokens (next, end, cancel) here — they will fail at runtime because condition routes to a step key, not a control token."
+      "description": "Used in condition.on_success and condition.on_else. Bare step key — same rule as all other routing fields. Do NOT use routing tokens (next, end, cancel) here — they will fail at runtime because condition routes to a step key, not a control token."
     },
 
     "modalDescriptor": {
@@ -189,7 +189,7 @@
     "llmCallStep": {
       "type": "object",
       "description": "Loads a prompt from PGC_Prompt by intent_category key, calls the LLM, and runs review-output.mjs validation (2-attempt correction loop). Right-brain hooks are wired in by the Step Processor — no workflow changes needed.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -217,7 +217,7 @@
           }
         },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
@@ -243,14 +243,14 @@
         "max_rows":    { "type": "integer", "description": "Optional. Caps the number of rows returned when the expression produces an array. Applied after the expression evaluates." },
         "root_only":   { "type": "boolean", "description": "Optional. When true, strips child arrays from entity result objects before writing to output_key." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "humanGateStep": {
       "type": "object",
       "description": "Suspends the workflow stack and presents a Slack dialog. Resumes when the user responds via /interactive. Gate type determines the dialog shape, option schema, and what is written to output_key. Options must include at least one cancel path.",
-      "required": ["step", "type", "gate_type", "message_template", "on_success", "on_failure"],
+      "required": ["step", "type", "gate_type", "message_template", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -334,7 +334,7 @@
           ]
         },
         "on_success": { "$ref": "#/definitions/routingToken" },
-        "on_failure": { "$ref": "#/definitions/routingToken" },
+        "on_else": { "$ref": "#/definitions/routingToken" },
         "on_cancel":  { "$ref": "#/definitions/routingToken", "description": "Routing when the user cancels. Use \"cancel\" to end the workflow immediately, or a step key (e.g. \"step:cleanup\") to route to a cleanup step first." }
       }
     },
@@ -342,7 +342,7 @@
     "servSchemaStep": {
       "type": "object",
       "description": "Creates a PGD table via SERV /schema/createTable. Typically used inside a non-suspending iterator to create tables from an array of table definition objects.",
-      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -358,14 +358,14 @@
         },
         "output_key":  { "type": "string" },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servQueryStep": {
       "type": "object",
       "description": "SELECT rows from a PGD or PGC table via SERV. For domains with child tables, prefer serv_entity_query.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -393,14 +393,14 @@
         },
         "output_key":  { "type": "string" },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servInsertStep": {
       "type": "object",
       "description": "INSERT one row into a PGD or PGC table via SERV. Table must be registered in PGC_TableMap with allow_insert: true. Never include id, created_at, or updated_at in the row.",
-      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -423,14 +423,14 @@
         },
         "output_key":  { "type": "string", "description": "Optional. Receives the inserted row if provided." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servUpdateStep": {
       "type": "object",
       "description": "UPDATE matching rows in a PGD or PGC table via SERV. Enforces non-empty filters — will refuse to update without a WHERE clause.",
-      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -454,14 +454,14 @@
         },
         "output_key":  { "type": "string" },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servDeleteStep": {
       "type": "object",
       "description": "DELETE matching rows from a PGD or PGC table via SERV. Enforces non-empty filters — will refuse to delete without a WHERE clause.",
-      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -477,14 +477,14 @@
           }
         },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servEntityQueryStep": {
       "type": "object",
       "description": "LIST assembled entities via SERV Entity. Returns root columns plus jsonb_agg child arrays. Use instead of serv_query for domains with child tables or when a full entity display is needed.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -502,14 +502,14 @@
         },
         "output_key":  { "type": "string" },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servEntityGetStep": {
       "type": "object",
       "description": "FETCH a single assembled entity by id via SERV Entity. Returns root columns plus all child arrays.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -526,14 +526,14 @@
         },
         "output_key":  { "type": "string" },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "servEntitySchemaStep": {
       "type": "object",
       "description": "Loads a full entity schema by joining PGC_EntitySchema (topology) with PGC_Schema (live column definitions). Replaces the two-step serv_query + js_transform pattern. Use when a workflow needs to know the entity's join structure and column list at runtime.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -549,7 +549,7 @@
         },
         "output_key":  { "type": "string", "description": "Receives { entity_name, description, root: { table, columns }, children: [{ table, alias, fk_column, parent, match_by, columns }] }." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
@@ -573,22 +573,22 @@
         },
         "output_key":  { "type": "string", "description": "Receives { root_id, root_record, inserted_counts: { <alias>: number } }." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "conditionStep": {
       "type": "object",
-      "description": "Evaluates a {{template}} expression against local_state and routes to on_truthy or on_falsy. Produces no output — no output_key. Truthy: resolved value is non-empty, not 'null', not 'undefined', not '0', and contains no unresolved {{ markers.",
-      "required": ["step", "type", "expression", "on_truthy", "on_falsy"],
+      "description": "Evaluates a {{template}} expression against local_state and routes to on_success or on_else. Produces no output — no output_key. Truthy: resolved value is non-empty, not 'null', not 'undefined', not '0', and contains no unresolved {{ markers.",
+      "required": ["step", "type", "expression", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
         "type":        { "const": "condition" },
         "description": { "type": "string" },
         "expression":  { "type": "string", "description": "{{template}} resolved against local_state. Examples: '{{input.id}}', '{{text_valid}}', '{{ping_text}}'." },
-        "on_truthy":   { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is truthy. Bare key only — do NOT prefix with 'step:'." },
-        "on_falsy":    { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is falsy. Bare key only — do NOT prefix with 'step:'." }
+        "on_success":   { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is truthy. Bare key only — do NOT prefix with 'step:'." },
+        "on_else":    { "$ref": "#/definitions/bareStepKey", "description": "Step key to route to when expression is falsy. Bare key only — do NOT prefix with 'step:'." }
       }
     },
 
@@ -611,13 +611,13 @@
         "output_key":     { "type": "string", "description": "Collects each item_step result into an array written to this local_state key." },
         "execution_mode": { "type": "string", "const": "sequential" },
         "on_complete": {
-          "description": "Routing after all items are processed. Accepts a routingToken (next, end, step:N) or a bare step key (e.g. '5a') — the executor resolves bare keys the same way as condition.on_truthy.",
+          "description": "Routing after all items are processed. Accepts a routingToken (next, end, step:N) or a bare step key (e.g. '5a') — the executor resolves bare keys the same way as condition.on_success.",
           "anyOf": [
             { "$ref": "#/definitions/routingToken" },
             { "$ref": "#/definitions/bareStepKey" }
           ]
         },
-        "on_failure":     { "$ref": "#/definitions/routingToken" }
+        "on_else":     { "$ref": "#/definitions/routingToken" }
       }
     },
 
@@ -638,8 +638,8 @@
 
     "simulateStep": {
       "type": "object",
-      "description": "Dry-runs a workflow step array against named execution paths using injected mock outputs. Three validation levels: (1) static analysis — step key uniqueness, routing target existence, required fields; (2) path execution — traces each named path through the step graph; (3) skip-path analysis — detects unreachable steps. on_failure routes back to the step where the user can correct the workflow before re-simulating.",
-      "required": ["step", "type", "input", "output_key", "on_success", "on_failure"],
+      "description": "Dry-runs a workflow step array against named execution paths using injected mock outputs. Three validation levels: (1) static analysis — step key uniqueness, routing target existence, required fields; (2) path execution — traces each named path through the step graph; (3) skip-path analysis — detects unreachable steps. on_else routes back to the step where the user can correct the workflow before re-simulating.",
+      "required": ["step", "type", "input", "output_key", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -658,14 +658,14 @@
         },
         "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 
     "writeMemoryStep": {
       "type": "object",
       "description": "Persists a PGC_Memory row. Content is read from local_state[content_key]. Never fails the run — errors are logged only.",
-      "required": ["step", "type", "input", "on_success", "on_failure"],
+      "required": ["step", "type", "input", "on_success", "on_else"],
       "additionalProperties": false,
       "properties": {
         "step":        { "type": "string" },
@@ -684,7 +684,7 @@
           }
         },
         "on_success":  { "$ref": "#/definitions/routingToken" },
-        "on_failure":  { "$ref": "#/definitions/routingToken" }
+        "on_else":  { "$ref": "#/definitions/routingToken" }
       }
     },
 

@@ -441,7 +441,7 @@ components:
           enum: [success, failure, gate]
           description: >
             success — step completes normally, mock_output injected into local_state.
-            failure — step throws, on_failure routing is taken.
+            failure — step throws, on_else routing is taken.
             gate    — human_gate step, user_response and on_select are injected.
         user_response:
           type: string
@@ -2410,7 +2410,7 @@ paths:
         **Level 1 — Static analysis (no mocks required)**
 
         Structural checks on the step array itself:
-          - All on_success, on_failure, on_select values are valid routing tokens
+          - All on_success, on_else, on_select values are valid routing tokens
           - All step:N routing targets exist in the step array
           - All {{template}} references resolve to an output_key written by a prior step
             on that execution path
@@ -2451,8 +2451,8 @@ paths:
                 summary: Level 1 only — validate step array structure without mocks
                 value:
                   steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "cancel" }
-                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_failure: "cancel" }
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_else: "cancel" }
+                    - { step: "2", type: "serv_insert", input: { tableName: "PGC_DomainHelp", row: "{{confirmed_domain_help}}" }, on_success: "next", on_else: "cancel" }
                   simulationPaths:
                     - path_name: happy_path
                       decisions:
@@ -2463,8 +2463,8 @@ paths:
                 summary: Full simulation — all three levels
                 value:
                   steps:
-                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_failure: "cancel" }
-                    - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_failure: "cancel" }
+                    - { step: "1", type: "llm_call", input: { prompt: "create_domain", userInput: "{{input.userInput}}" }, output_key: "proposed_scaffold", on_success: "next", on_else: "cancel" }
+                    - { step: "2", type: "human_gate", gate_type: "confirm", message_template: "Create domain {{proposed_scaffold.domain}}?", options: [{ label: "Confirm", action: "confirm", on_select: "next" }, { label: "Cancel", action: "cancel", on_select: "cancel" }], on_success: "next", on_else: "cancel" }
                     - { step: "3", type: "end" }
                   mockOutputs:
                     "1": { domain: "recipes", tables: [] }

@@ -121,7 +121,7 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
 **L1 gaps to close:**
 
 1. **Condition routing contract** ✅ DONE — `condition_routing_invalid` check added to
-   `simulation-engine.mjs`. `on_truthy`/`on_falsy` values that are control tokens
+   `simulation-engine.mjs`. `on_success`/`on_else` values that are control tokens
    (`next`, `end`, `cancel`) or `step:N`-prefixed now fail L1 with
    `failure_class: condition_routing_invalid`. Bare step keys in `stepKeys` are the
    only valid values.
@@ -129,7 +129,7 @@ Note: Level 3 (skip-path analysis) was removed; this track covers L1 + L2.
 2. **Bare step key routing — L1 + runtime** ✅ DONE (surfaced by routing standardisation
    session) — Three gaps closed together:
    - `ROUTING_TOKEN_RE` in `simulation-engine.mjs` did not accept bare step keys for
-     `on_success`/`on_failure`/`on_select`/`on_complete`; dead-target check only handled
+     `on_success`/`on_else`/`on_select`/`on_complete`; dead-target check only handled
      `step:N` targets. Both updated.
    - `resolveNextStep` and `resolveOnSelect` in `run-workflow.mjs` treated bare step
      keys as "next" (advance to next array entry) instead of jumping to the named step.
@@ -231,7 +231,7 @@ This is the acceptance vehicle — not a seeded workflow. It must be generated b
   names; openapi.yaml and architecture.md updated before implementation
 
 **Track C — simulation enrichment**
-- [ ] L1 rejects `on_truthy`/`on_falsy` values that are routing tokens (`"next"`,
+- [ ] L1 rejects `on_success`/`on_else` values that are routing tokens (`"next"`,
   `"cancel"`, `"end"`) or `step:N`-prefixed — must be bare step keys in `stepKeys`
 - [ ] L1 raises `unsupported_handlebars_syntax` for nested `{{...{{...}}...}}` patterns
 - [ ] `PGC_StepType` + `PGC_SystemContext.step_type_contracts` document the `reveal`

@@ -157,41 +157,14 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
     // Check every routing value on this step
     const routingValues = [];
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
-    if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
+    if (s.on_else)    routingValues.push({ field: 'on_else',    value: s.on_else });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    // condition on_truthy/on_falsy: only bare step keys that exist in stepKeys are valid.
-    // Control tokens (next, end, cancel) and step:N format are all wrong here.
-    for (const condField of ['on_truthy', 'on_falsy']) {
-      if (!s[condField]) continue;
-      const cv = String(s[condField]);
-      const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
-      if (CONTROL_TOKENS.has(cv) || cv.startsWith('step:')) {
-        issues.push({
-          check:         'condition_routing_invalid',
-          step:          stepKey,
-          failure_class: 'condition_routing_invalid',
-          detail:        `Step "${stepKey}" field "${condField}" value "${cv}" is invalid in a condition step. Use a bare step key (e.g. "3", "3a") that exists in the workflow. Control tokens (next, end, cancel) and step:N format are not valid here.`,
-        });
-      } else if (!stepKeys.has(cv)) {
-        issues.push({
-          check:         'dead_routing_target',
-          step:          stepKey,
-          failure_class: 'dead_routing_target',
-          detail:        `Step "${stepKey}" field "${condField}" routes to "${cv}" but no step with key "${cv}" exists`,
-        });
-      }
-    }
-
-    if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: s.on_truthy });
-    if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: s.on_falsy });
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
     const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
     for (const { field, value } of routingValues) {
-      // condition on_truthy/on_falsy already validated above — skip here
-      if (s.type === 'condition' && (field === 'on_truthy' || field === 'on_falsy')) continue;
       const sv = String(value);
       if (!ROUTING_TOKEN_RE.test(sv)) {
         issues.push({
@@ -212,6 +185,25 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           failure_class: 'dead_routing_target',
           detail:        `Step "${stepKey}" field "${field}" routes to "${sv}" but no step with key "${target}" exists`,
         });
+      }
+    }
+
+    // Condition steps have a stricter contract: on_success/on_else must be bare step keys.
+    // Control tokens (next, end, cancel) and step:N prefixed values are not valid —
+    // a condition must explicitly name its true and false target steps by key.
+    if (s.type === 'condition') {
+      for (const field of ['on_success', 'on_else']) {
+        const val = s[field];
+        if (val == null) continue;
+        const sv = String(val);
+        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
+          issues.push({
+            check:         'condition_routing_invalid',
+            step:          stepKey,
+            failure_class: 'condition_routing_invalid',
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") but got "${sv}". Control tokens (next, end, cancel) and step:N prefixed values are not valid here — specify the target step key directly.`,
+          });
+        }
       }
     }
 
@@ -743,7 +735,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     // For steps with a decision entry that signals failure
     if (decision?.outcome === 'failure') {
-      const onFailure = currentStep.on_failure ?? 'cancel';
+      const onFailure = currentStep.on_else ?? 'cancel';
       nextKey = resolveSimNextKey(steps, currentKey, onFailure);
       if (onFailure === 'cancel')    currentKey = 'cancel';
       else if (onFailure === 'end') currentKey = 'end';
@@ -877,8 +869,8 @@ function runRoutingMatrix(steps, traceId) {
     if (s.type === 'end') {
       targets.add('end');
     } else if (s.type === 'condition') {
-      const tt = resolveTarget(key, s.on_truthy);
-      const ft = resolveTarget(key, s.on_falsy);
+      const tt = resolveTarget(key, s.on_success);
+      const ft = resolveTarget(key, s.on_else);
       if (tt) targets.add(tt);
       if (ft) targets.add(ft);
     } else if (s.type === 'human_gate') {
@@ -886,15 +878,15 @@ function runRoutingMatrix(steps, traceId) {
         const ot = resolveTarget(key, opt.on_select);
         if (ot) targets.add(ot);
       }
-      // on_success and on_failure are step-level routing fields present in skeleton
+      // on_success and on_else are step-level routing fields present in skeleton
       // steps (before options are added) and used as defaults in full steps.
-      for (const field of ['on_success', 'on_failure', 'on_cancel']) {
+      for (const field of ['on_success', 'on_else', 'on_cancel']) {
         if (s[field]) { const t = resolveTarget(key, s[field]); if (t) targets.add(t); }
       }
     } else {
       const st = resolveTarget(key, s.on_success ?? 'next');
       if (st) targets.add(st);
-      for (const field of ['on_failure', 'on_complete', 'on_empty', 'on_error']) {
+      for (const field of ['on_else', 'on_complete', 'on_empty', 'on_error']) {
         if (s[field]) {
           const t = resolveTarget(key, s[field]);
           if (t) targets.add(t);

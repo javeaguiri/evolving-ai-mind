@@ -1341,7 +1341,7 @@ Every step follows this shape:
   "input":            {},
   "output_key":       "key_in_local_state",
   "on_success":       "next | end | step:3a",
-  "on_failure":       "cancel | step:<key>"
+  "on_else":       "cancel | step:<key>"
 }
 ```
 
@@ -1402,7 +1402,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ sub_workflow ║ Push child workflow frame, inherit local_state        ║ ⬜ Backlog       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ condition    ║ Evaluate {{expression}} against local_state, route   ║ ✅ Implemented   ║
-║              ║ to on_truthy / on_falsy step keys. No I/O.           ║ Session 19       ║
+║              ║ to on_success / on_else step keys. No I/O.           ║ Session 19       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Backlog       ║
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
@@ -1429,7 +1429,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
   },
   "output_key": "proposed_scaffold",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 `input.prompt` is the `intent_category` key into `PGC_Prompt`. All other `input`
@@ -1486,7 +1486,7 @@ Wrap multi-statement logic in an IIFE: `(function() { ... })()`
   "output_key": "proposed_scaffold.tables",
   "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) { return tables.map(function(t) { if (!t.columns) return t; var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain }); }); } return enrich(items, local_state.proposed_scaffold.domain); })()",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1527,7 +1527,7 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
     { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
   ],
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 ###### Context key 
@@ -1572,7 +1572,7 @@ entry. The `iterator` field is stripped from the rendered buttons.
       "on_select": "next", "iterator": "decks" },
     { "value": "cancel", "label": "Cancel", "description": "Stop", "on_select": "cancel" }
   ],
-  "on_success": "next", "on_failure": "cancel"
+  "on_success": "next", "on_else": "cancel"
 }
 ```
 
@@ -1662,7 +1662,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1678,7 +1678,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 `entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`, not `Recipes`.
@@ -1692,7 +1692,7 @@ Use instead of `serv_query` for domains with child tables or when full entity di
   "input": { "entityName": "Recipe", "id": "{{input.id}}" },
   "output_key": "result",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1723,12 +1723,12 @@ Use instead of `serv_query` for domains with child tables or when full entity di
   },
   "output_key":  "simulation_result",
   "on_success":  "next",
-  "on_failure":  "step:3"
+  "on_else":  "step:3"
 }
 ```
 All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
 and `paths_key` are optional — if absent, the `simulate` step runs Level 1
-static analysis only. `on_failure` routes back to the step where the user can
+static analysis only. `on_else` routes back to the step where the user can
 review and correct the workflow definition before re-simulating.
 Full schema, validation levels, and result structure: see **Section 6.5.6**.
 
@@ -1756,17 +1756,17 @@ The final pre-write simulate (step 25) always runs full L1 with `skeleton` unset
   "type": "condition",
   "description": "Route to id lookup or name search depending on which input field is set.",
   "expression": "{{input.id}}",
-  "on_truthy": "2",
-  "on_falsy":  "3"
+  "on_success": "2",
+  "on_else":  "3"
 }
 ```
 `expression` is resolved via `resolveTemplate` against `local_state`. Truthy: resolved value is
 non-empty, not `"null"`, not `"undefined"`, not `"0"`, and does not contain `{{` (unresolved
-template literals are treated as falsy — the key was not set). `on_truthy` and `on_falsy` are
+template literals are treated as falsy — the key was not set). `on_success` and `on_else` are
 bare step keys (e.g. `"2"`, `"3"`) — the executor prefixes them to `step:N` internally.
 No output_key is written — condition steps produce no state output.
 
-**Constraint:** `on_truthy` and `on_falsy` must reference step keys that exist in the workflow.
+**Constraint:** `on_success` and `on_else` must reference step keys that exist in the workflow.
 Level 1 static analysis validates both targets as `step:N` routing tokens.
 
 ##### `js_transform` — full detail
@@ -1837,7 +1837,7 @@ Any of the following causes an immediate throw:
   "input": { "entityName": "{{input.entity_name}}" },
   "output_key": "full_entity_schema",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 Loads a full entity schema by combining `PGC_EntitySchema` (join topology) with `PGC_Schema`
@@ -1885,7 +1885,7 @@ immediately visible without recreating the domain.
     "priority":    2
   },
   "on_success": "next",
-  "on_failure": "next"
+  "on_else": "next"
 }
 ```
 `content_key` names a `local_state` key whose string value becomes the memory content.
@@ -2185,7 +2185,7 @@ workflow definitions containing gate steps.
   "output_key":   "key_written_to_local_state_on_resolve",
 
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -2245,8 +2245,8 @@ When implemented, a gate that receives no user response within `timeout_seconds`
 will resolve via `on_timeout` routing (e.g. `"cancel"` or a specific step key).
 Until then, gates wait indefinitely — cost-free while suspended.
 
-**`on_success` / `on_failure`** — gate-level fallbacks. `on_success` is the
-default routing when no `on_select` override applies. `on_failure` handles
+**`on_success` / `on_else`** — gate-level fallbacks. `on_success` is the
+default routing when no `on_select` override applies. `on_else` handles
 gate execution errors (e.g. dialog build failure), not user cancellation.
 User cancellation is always routed via the option with `action: "cancel"`.
 
@@ -2416,13 +2416,13 @@ manifests at execution time. Simulation catches it before registration.
   },
   "output_key":  "simulation_result",
   "on_success":  "next",
-  "on_failure":  "step:3"
+  "on_else":  "step:3"
 }
 ```
 
 `steps_key`, `mock_outputs_key`, and `paths_key` are dot-paths into `local_state`.
 They reference keys written by the LLM generation steps that precede the simulate
-step. `on_failure: "step:3"` routes back to the human gate where the user reviewed
+step. `on_else: "step:3"` routes back to the human gate where the user reviewed
 the step array, with simulation failures injected into the gate context.
 `mock_outputs_key` and `paths_key` are optional — when absent the simulate step
 runs Level 1 static analysis only.
@@ -2516,7 +2516,7 @@ Runs before any path simulation. Catches structural errors in the step array its
 
 | Check | Failure class |
 |---|---|
-| Every `on_success`, `on_failure`, `on_select` value is a known routing token | Unknown routing value |
+| Every `on_success`, `on_else`, `on_select` value is a known routing token | Unknown routing value |
 | Every `step:N` routing target exists in the step array | Dead routing target |
 | Every `{{template}}` reference resolves to an `output_key` written by a prior step on that path | Unresolved template variable |
 | Every `items_key` in an `iterator` resolves to an array written by a prior step | Iterator source not an array |
@@ -2572,7 +2572,7 @@ Written to `local_state[output_key]` on completion:
 On failure, `passed: false` and `paths_failed > 0`. The first failed path’s
 transition log is included in full, showing exactly which step failed and what
 `local_state` contained at that point. This is presented to the user in the
-`review_object` gate when `on_failure: "step:3"` routes back for correction.
+`review_object` gate when `on_else: "step:3"` routes back for correction.
 
 #### Simulation mode flag on WorkflowRun
 
@@ -2636,7 +2636,7 @@ output shape includes a steps array). Does not run on `create_domain` output.
 
 Rules enforced on every step in the array:
 
-- Every `on_success`, `on_failure`, and `on_complete` value must be a known routing
+- Every `on_success`, `on_else`, and `on_complete` value must be a known routing
   token: `next`, `end`, `cancel`, or `step:<key>`
 - Every `step:N` target must exist as a step key in the same array -- dead targets
   are caught here before the workflow is ever registered or simulated
@@ -3454,10 +3454,10 @@ _"base key '#each available_sets' has not been written by any prior step"_. The 
 signal did not tell the LLM that the syntax itself was illegal, so each correction attempt
 re-copied the same template from `dialog_designs` and produced the same errors.
 
-**2. `condition` step `on_truthy`/`on_falsy` double `step:` prefix**
+**2. `condition` step `on_success`/`on_else` double `step:` prefix**
 
 Translation Rule 4 in the prompt instructs the LLM to use `step:<key>` format for all
-routing targets. The LLM applied this uniformly, including to `on_truthy`/`on_falsy` on
+routing targets. The LLM applied this uniformly, including to `on_success`/`on_else` on
 `condition` steps. The engine's `executeCondition` and the static analysis both expected
 bare keys and unconditionally prepended `step:`, producing `step:step:8` — a dead routing
 target that does not exist in the step array.
@@ -3467,15 +3467,15 @@ target that does not exist in the step array.
 | Fix | Location | Change |
 |---|---|---|
 | Handlebars detection | `runLevel1StaticAnalysis` | Refs starting with `#`, `/`, or equal to `this`/`this.*` emit `unsupported_handlebars_syntax` with an explicit "use indexed dot-notation" message instead of a misleading unresolved-variable error |
-| `on_truthy`/`on_falsy` normalisation — static analysis | `runLevel1StaticAnalysis` | Strip existing `step:` prefix before wrapping, so both bare keys and `step:N` values produce correct dead-target checks |
-| `on_truthy`/`on_falsy` normalisation — runtime | `executeCondition` | Strip existing `step:` prefix before constructing `nextAction`, so `"step:8"` and `"8"` are both valid values at execution time |
+| `on_success`/`on_else` normalisation — static analysis | `runLevel1StaticAnalysis` | Strip existing `step:` prefix before wrapping, so both bare keys and `step:N` values produce correct dead-target checks |
+| `on_success`/`on_else` normalisation — runtime | `executeCondition` | Strip existing `step:` prefix before constructing `nextAction`, so `"step:8"` and `"8"` are both valid values at execution time |
 
 #### Prompt fixes (generate_workflow_steps v9)
 
 Two rules added to TRANSLATION RULES:
 
 - **Rule 5a** — `message_template` supports ONLY `{{key.path}}` dot-notation. Handlebars syntax is explicitly prohibited. When copying from `dialog_designs`, the LLM must transform any `{{#each array}}...{{this.prop}}...{{/each}}` blocks to indexed access: `{{array.0.prop}}`, `{{array.1.prop}}`, etc.
-- **Rule 5b** — `on_truthy` and `on_falsy` on `condition` steps take **bare step keys** (e.g., `"8"`) — not `step:N` routing tokens. The engine adds the prefix at runtime.
+- **Rule 5b** — `on_success` and `on_else` on `condition` steps take **bare step keys** (e.g., `"8"`) — not `step:N` routing tokens. The engine adds the prefix at runtime.
 
 #### Correction mode — `callLlmWithCorrection` analogue
 
@@ -3498,7 +3498,7 @@ structural context to make targeted fixes, mirroring the behaviour of `callLlmWi
 |---|---|
 | 14 | Added `previous_draft_steps` and `path_errors` inputs |
 | 16a | Fixed `js_transform` expression: `i.message \|\| i.type` → `i.detail \|\| i.check` — user now sees actual error text in 16b instead of "validation issue" × N |
-| 19 | `on_failure` changed from `step:15` to `step:19a` |
+| 19 | `on_else` changed from `step:15` to `step:19a` |
 | 19a (new) | `js_transform` — formats Level 2 `simulation_result.path_results` failures into `path_error_summary` |
 | 19b (new) | `human_gate` (confirm) — displays `path_error_summary`, offers Regenerate with feedback → 15a, Regenerate automatically → 14, Cancel; mirrors the 16/16a/16b Level 1 retry pattern |
 

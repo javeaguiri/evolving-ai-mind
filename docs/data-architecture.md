@@ -422,7 +422,7 @@ LLM produces valid step definitions.
 | input_contract | jsonb | Required and optional fields — `[{ field, type, required, description }]` |
 | output_contract | jsonb | Fields produced — `[{ field, type, description }]`. NULL for steps with no output (e.g. `notify`) |
 | on_success_options | jsonb | Valid values for `on_success` — e.g. `["next", "end", "step:N"]` |
-| on_failure_options | jsonb | Valid values for `on_failure` |
+| on_failure_options | jsonb | Valid values for `on_else` |
 | requires_capability | text | → PGC_Capability.capability_key — NULL if always available |
 | status | text | `live`, `planned`, `deprecated` |
 | created_at | timestamptz | |
@@ -765,7 +765,7 @@ step type so `step_type_contracts` is regenerated.
 | `step_usage_patterns` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Concrete correct step definitions per type with common mistake notes |
 | `runtime_bindings` | `generate_workflow_steps`, `analyze_and_design_workflow` | What the Step Processor injects automatically: `input.*`, `item`, `output_key` lifecycle per gate type, `local_state` in expressions |
 | `template_syntax` | `generate_workflow_steps`, `analyze_and_design_workflow` | `{{key}}`, `{{key.field}}`, `{{key.0.field}}`, `{{input.field}}` — resolution rules and silent-empty-on-miss behaviour |
-| `workflow_constraints` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Structural rules: `end` required, `notify` no on_failure, Guard 3, Guard 1 stuck-step detection |
+| `workflow_constraints` | `generate_workflow_steps`, `analyze_and_design_workflow`, `fix_workflow_steps` | Structural rules: `end` required, `notify` no on_else, Guard 3, Guard 1 stuck-step detection |
 
 **Argument:** `key` name — e.g. `upsert-system-context.mjs create_domain_example`.
 Omit to push all rows in the seed file.
