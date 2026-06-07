@@ -48,6 +48,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              false,
+      total_issues:        staticIssues.length,
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -76,6 +77,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              l2Passed,
+      total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -105,6 +107,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 
   const result = {
     passed:              l2Passed,
+    total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,

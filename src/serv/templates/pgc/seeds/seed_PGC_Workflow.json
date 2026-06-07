@@ -1002,7 +1002,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Skeleton L1 failed: process design produced an invalid routing graph. Offer to redesign or cancel before any content is generated.",
-        "message_template": "⚠️ *Process design has routing issues* — fixing these now prevents wasted step generation.\n\n*Issues found:* {{skeleton_validation.static_analysis.issues.length}}\n\nChoose how to proceed:",
+        "message_template": "⚠️ *Process design has routing issues* — fixing these now prevents wasted step generation.\n\n*Issues found:* {{skeleton_validation.total_issues}}\n\nChoose how to proceed:",
         "options": [
           {
             "label": "Redesign process",
