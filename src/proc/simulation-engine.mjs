@@ -314,15 +314,16 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
     for (const template of templatesToCheck) {
       // Nested {{ detection must happen before extractTemplateRefs — e.g.
       // "{{cards.{{index}}.term}}" is structurally unparseable, not a ref error.
-      if (/\{\{[^}]*\{\{/.test(template)) {
-        const issueKey = `nested_template::${template.slice(0, 60)}`;
+      const nestedMatch = /\{\{[^}]*\{\{[^}]*\}\}/.exec(template);
+      if (nestedMatch) {
+        const issueKey = `nested_template::${nestedMatch[0]}`;
         if (!seenTemplateIssues.has(issueKey)) {
           seenTemplateIssues.add(issueKey);
           issues.push({
             check:         'unsupported_handlebars_syntax',
             step:          stepKey,
             failure_class: 'unsupported_handlebars_syntax',
-            detail:        `Step "${stepKey}" contains nested template syntax which is not supported: "${template.slice(0, 80)}". Pre-compute the value in a js_transform step and reference the result key instead.`,
+            detail:        `Step "${stepKey}" contains nested template syntax which is not supported: "${nestedMatch[0]}". Pre-compute the value in a js_transform step and reference the result key instead.`,
           });
         }
         continue;
