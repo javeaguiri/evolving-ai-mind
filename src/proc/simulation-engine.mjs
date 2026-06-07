@@ -885,8 +885,11 @@ function runRoutingMatrix(steps, traceId) {
         const ot = resolveTarget(key, opt.on_select);
         if (ot) targets.add(ot);
       }
-      const ct = resolveTarget(key, s.on_cancel);
-      if (ct) targets.add(ct);
+      // on_success and on_failure are step-level routing fields present in skeleton
+      // steps (before options are added) and used as defaults in full steps.
+      for (const field of ['on_success', 'on_failure', 'on_cancel']) {
+        if (s[field]) { const t = resolveTarget(key, s[field]); if (t) targets.add(t); }
+      }
     } else {
       const st = resolveTarget(key, s.on_success ?? 'next');
       if (st) targets.add(st);
