@@ -334,7 +334,8 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
       // then any explicit overrides from the step's save_to_memory config.
       const baseScope = deriveCallScope(run, resolvedInput);
       if (!baseScope.domain && finalOutput?.domain) baseScope.domain = finalOutput.domain;
-      const memoryScope = { ...baseScope, ...(saveMemCfg.scope ?? {}) };
+      const explicitScope = saveMemCfg.scope ?? {};
+      const memoryScope = Object.keys(explicitScope).length > 0 ? explicitScope : baseScope;
 
       await insertRow('PGC_Memory', {
         memory_type:     saveMemCfg.memory_type ?? 'semantic',
