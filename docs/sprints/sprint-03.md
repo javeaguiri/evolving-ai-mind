@@ -226,7 +226,7 @@ New case in `step-executor.mjs`. Input fields:
 `scope` values support `{{template}}` substitution.
 `token_estimate` is computed as `Math.ceil(content.length / 4)` — no API call.
 `write_memory` must always be the last step after `notify`.
-Failure logs but never fails the run (`on_failure: "end"` always).
+Failure logs but never fails the run (`on_else: "end"` always).
 
 Unit tests: write_memory resolves scope templates, computes token_estimate,
 calls SERV insertRow with correct payload. Failure path does not throw.

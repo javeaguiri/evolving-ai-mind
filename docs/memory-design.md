@@ -245,12 +245,12 @@ snapshot where content is derived by `js_transform`, not from LLM reasoning):
     "priority": 2
   },
   "on_success": "next",
-  "on_failure": "next"
+  "on_else": "next"
 }
 ```
 
 `content_key` names a `local_state` key whose string value becomes the memory content.
-`write_memory` never fails the run — errors are logged only (`on_failure: "next"`).
+`write_memory` never fails the run — errors are logged only (`on_else: "next"`).
 No `output_key` — the step returns `outputValue: null`.
 
 ### 5.5 Fire-and-forget episodic writes (memory-writer.mjs)

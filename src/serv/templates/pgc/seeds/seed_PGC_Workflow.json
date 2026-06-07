@@ -21,7 +21,7 @@
         "output_key": "candidate_domain",
         "expression": "(function() { return (items.userInput || '').toLowerCase().trim().replace(/\\s+/g, '_').replace(/[^a-z0-9_]/g, ''); })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -40,15 +40,15 @@
         },
         "output_key": "existing_domain_check",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "3",
         "type": "condition",
         "description": "If domain already exists: show exists gate. Else: proceed to right brain research.",
         "expression": "{{existing_domain_check.length}}",
-        "on_truthy": "4",
-        "on_falsy": "5"
+        "on_success": "4",
+        "on_else": "5"
       },
       {
         "step": "4",
@@ -69,7 +69,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -82,7 +82,7 @@
         },
         "output_key": "domain_research",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "6",
@@ -92,7 +92,7 @@
         "output_key": "preference_gates",
         "expression": "(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, rationale: q.rationale || '', options: opts }; }); })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "6a",
@@ -102,7 +102,7 @@
         "output_key": "design_assumptions_message",
         "expression": "(function() { var f = items && items.findings || []; if (!f.length) return '_No automatic design decisions — your domain is straightforward._'; var lines = ['ℹ️ *Automatic design decisions from research:*']; f.forEach(function(d) { lines.push('• *' + d.topic + '* → ' + d.recommendation + '. _' + d.rationale + '_'); }); return lines.join('\\n'); })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "6b",
@@ -119,15 +119,15 @@
         "output_key": "user_preferences",
         "expression": "(function() { return []; })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "8",
         "type": "condition",
         "description": "Skip preference gates if research found no structural decisions to ask.",
         "expression": "{{preference_gates.length}}",
-        "on_truthy": "9",
-        "on_falsy": "10"
+        "on_success": "9",
+        "on_else": "10"
       },
       {
         "step": "9",
@@ -145,13 +145,13 @@
           },
           "output_key": "user_preferences",
           "on_success": "next",
-          "on_failure": "cancel",
+          "on_else": "cancel",
           "on_cancel": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "user_preferences",
         "on_complete": "10",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "10",
@@ -176,7 +176,7 @@
           "priority": 3
         },
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "11",
@@ -185,7 +185,7 @@
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } return enrich(items, local_state.proposed_scaffold.domain); })()"
       },
       {
@@ -195,7 +195,7 @@
         "output_key": "schema_summary,table_review_items",
         "expression": "(function() { var SYS = ['id','created_at','updated_at']; var tables = local_state.proposed_scaffold && local_state.proposed_scaffold.tables || []; var domain = local_state.proposed_scaffold && local_state.proposed_scaffold.domain || ''; var summaryLines = ['*' + domain + ' — ' + tables.length + ' table' + (tables.length !== 1 ? 's' : '') + ':*']; tables.forEach(function(t) { summaryLines.push('• *' + t.tableName + '* — ' + (t.columnSummary || '')); }); var schema_summary = summaryLines.join('\\n'); var table_review_items = tables.map(function(t) {  var cols = (t.columns || []).filter(function(c) { return SYS.indexOf(c.name) === -1; });  var colLines = cols.map(function(c) {   var l = c.name + ' (' + (c.type || 'text') + ')';   if (c.description) l = l + ' — ' + c.description;   return '• ' + l;  });  var content = (t.description ? t.description + '\\n\\n' : '') + 'Columns:\\n' + colLines.join('\\n');  return { button_label: t.tableName, content: content }; }); return { schema_summary: schema_summary, table_review_items: table_review_items };})()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "12",
@@ -237,7 +237,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "reveals": "{{table_review_items}}",
         "on_cancel": "cancel"
       },
@@ -264,7 +264,7 @@
           }
         ],
         "on_success": "13",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -281,7 +281,7 @@
         },
         "output_key": "proposed_scaffold",
         "on_success": "11",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "save_to_memory": {
           "memory_type": "semantic",
           "scope": { "domain": "{{proposed_scaffold.domain}}" },
@@ -301,7 +301,7 @@
         },
         "output_key": "new_table",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "save_to_memory": {
           "memory_type": "semantic",
           "scope": { "domain": "{{proposed_scaffold.domain}}" },
@@ -316,7 +316,7 @@
         "input_key": "proposed_scaffold.tables",
         "output_key": "proposed_scaffold.tables",
         "on_success": "11a",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) {  return tables.map(function(t) {   if (!t.columns) return t;   var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; });   return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain });  }); } function topoSort(tables) {  var nameToTable = {};  tables.forEach(function(t) { nameToTable[t.tableName] = t; });  var deps = {};  tables.forEach(function(t) {   var d = [];   (t.foreignKeys || []).forEach(function(fk) {    var ref = fk.references && fk.references.table;    if (ref && nameToTable[ref] && ref !== t.tableName) d.push(ref);   });   deps[t.tableName] = d;  });  var result = [], visited = {}, inStack = {};  function visit(name) {   if (visited[name]) return;   if (inStack[name]) return;   inStack[name] = true;   (deps[name] || []).forEach(visit);   inStack[name] = false;   visited[name] = true;   if (nameToTable[name]) result.push(nameToTable[name]);  }  tables.forEach(function(t) { visit(t.tableName); });  return result; } var newTable = local_state.new_table; var domain = local_state.proposed_scaffold.domain; var mods = (newTable && Array.isArray(newTable.existing_table_modifications))   ? newTable.existing_table_modifications : []; var patched = items.map(function(t) {  var mod = mods.find(function(m) { return m.tableName === t.tableName; });  if (!mod) return t;  var extraCols = Array.isArray(mod.add_columns) ? mod.add_columns : [];  var extraFKs  = Array.isArray(mod.add_foreign_keys) ? mod.add_foreign_keys : [];  return Object.assign({}, t, {   columns:     (t.columns || []).concat(extraCols),   foreignKeys: (t.foreignKeys || []).concat(extraFKs)  }); }); var cleanNew = null; if (newTable) {  cleanNew = Object.assign({}, newTable);  delete cleanNew.existing_table_modifications; } var merged = cleanNew ? patched.concat([cleanNew]) : patched; var ordered = topoSort(merged); return enrich(ordered, domain);})()"
       },
       {
@@ -338,7 +338,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -347,7 +347,7 @@
         "description": "Build domain_semantic_content: structural snapshot of confirmed schema highlighting insert expectations — which columns are required, which SQL defaults the DB manages, and which are null at creation.",
         "output_key": "domain_semantic_content",
         "on_success": "next",
-        "on_failure": "next",
+        "on_else": "next",
         "expression": "(function() { var scaffold = local_state.proposed_scaffold; var domain = scaffold && scaffold.domain || ''; var tables = scaffold && scaffold.tables || []; var SYS = new Set(['id','created_at','updated_at']); var parts = ['Schema snapshot for ' + domain + ' (confirmed):']; tables.forEach(function(t) { var cols = (t.columns || []).filter(function(c) { return !SYS.has(c.name); }); var required = [], sqlDef = [], optional = [], omit = []; cols.forEach(function(c) { var isNullable = c.nullable === true || (c.nullable === undefined && !c.default && !c.primaryKey); if (!isNullable && c.default) { sqlDef.push(c.name + '(' + c.default + ')'); } else if (!isNullable) { required.push(c.name); } else { var isSystemManaged = (c.type === 'vector' || (typeof c.type === 'string' && c.type.startsWith('vector'))) || c.embed_source || (c.name.endsWith('_at') && c.name !== 'created_at' && c.name !== 'updated_at'); if (isSystemManaged) { omit.push(c.name); } else { optional.push(c.name); } } }); var segs = [t.tableName + ':']; if (required.length) segs.push('required at insert: ' + required.join(', ') + '.'); if (sqlDef.length) segs.push('SQL defaults, db sets: ' + sqlDef.join(', ') + '.'); if (optional.length) segs.push('optional at insert (user-provided, nullable): ' + optional.join(', ') + '.'); if (omit.length) segs.push('omit from insert (system-managed): ' + omit.join(', ') + '.'); parts.push(segs.join(' ')); }); var convs = scaffold && scaffold.initial_value_conventions; if (Array.isArray(convs) && convs.length > 0) { var cl = convs.map(function(c) { return c.table + '.' + c.column + ': ' + c.convention; }); parts.push('Application initial-value conventions (apply when field not in user input): ' + cl.join('; ') + '.'); } return parts.join(' '); })()"
       },
       {
@@ -362,7 +362,7 @@
           "priority": 2
         },
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "17",
@@ -372,12 +372,12 @@
         "item_step": {
           "type": "serv_schema",
           "input": "{{item}}",
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "created_tables",
         "on_complete": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "17b",
@@ -401,7 +401,7 @@
           "priority": 4
         },
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "18",
@@ -410,7 +410,7 @@
         "input_key": "proposed_scaffold",
         "output_key": "generated",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const llmAliases = (local_state.domain_aliases && Array.isArray(local_state.domain_aliases.aliases)) ? local_state.domain_aliases.aliases : []; const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' ')].concat(llmAliases))); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: (function() { var SYS2 = new Set(['id','created_at','updated_at','embedding']); var SKIP_TYPES = new Set(['timestamptz','boolean','real[]']); var rt = tables.find(function(t){ var extFKs=(t.foreignKeys||[]).filter(function(fk){return !(fk.references&&fk.references.table===t.tableName);}); return extFKs.length===0; })||tables[0]; var ct = tables.filter(function(t){ return t.tableName!==rt.tableName; }); var rtAlias = rt.tableName.replace('PGD_','').toLowerCase(); var rtSingular = (rtAlias.endsWith('s')&&rtAlias.length>2)?rtAlias.slice(0,-1):rtAlias; var rtFKCols = new Set((rt.foreignKeys||[]).map(function(f){return f.column;})); var rtLabelCol = (rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name)&&c.nullable!==true;})||(rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name);}); var rtLabel = rtLabelCol?rtLabelCol.name:'name'; var cmds = [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record using natural language' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ]; if(ct.length>0){ var fc=ct[0]; var fcFKCols=new Set((fc.foreignKeys||[]).map(function(f){return f.column;})); var contentCols=(fc.columns||[]).filter(function(c){return !SYS2.has(c.name)&&!fcFKCols.has(c.name)&&!SKIP_TYPES.has(c.type)&&!c.name.includes('embedding');}).slice(0,3).map(function(c){return c.name;}); var fcAlias=fc.tableName.replace('PGD_','').toLowerCase(); var fcSingular=(fcAlias.endsWith('s')&&fcAlias.length>2)?fcAlias.slice(0,-1):fcAlias; var hdr=contentCols.join(', '); if(contentCols.length>0){ cmds.push({ syntax: '/m add '+domain+' '+rtSingular+' '+rtLabel+'=<value>\\n'+hdr+'\\n<'+contentCols.join('>, <')+'>, ...', description: 'Bulk add: '+rtSingular+' on the first line ('+rtLabel+'=value). Use a newline to separate it from the '+fcSingular+' rows. An optional header row ('+hdr+') is supported — paste a spreadsheet or CSV and the LLM will map the columns.' }); } } return cmds; })() }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { var extFKs=(t.foreignKeys||[]).filter(function(fk){return !(fk.references&&fk.references.table===t.tableName);}); return extFKs.length===0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
       },
       {
@@ -433,7 +433,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -445,7 +445,7 @@
           "row": "{{generated.domainHelp}}"
         },
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "21",
@@ -458,12 +458,12 @@
             "tableName": "PGC_IntentMap",
             "row": "{{item}}"
           },
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "registered_intent_rows",
         "on_complete": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "22",
@@ -476,12 +476,12 @@
             "tableName": "PGC_EntitySchema",
             "row": "{{item}}"
           },
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "registered_entities",
         "on_complete": "22a",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "22a",
@@ -491,7 +491,7 @@
         "output_key": "domain_ready_message",
         "expression": "(function() { var domain = local_state.proposed_scaffold.domain; var tableCount = (local_state.proposed_scaffold.tables||[]).length; var lines = ['Domain ' + domain + ' is ready with ' + tableCount + ' table' + (tableCount !== 1 ? 's' : '') + '.', '', 'Try:']; (items||[]).forEach(function(c){ lines.push('\\u2022 ' + c.syntax); }); return lines.join('\\n'); })()",
         "on_success": "23",
-        "on_failure": "23"
+        "on_else": "23"
       },
       {
         "step": "23",
@@ -533,7 +533,7 @@
         },
         "output_key": "registered_domains",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "2",
@@ -542,7 +542,7 @@
         "input_key": "registered_domains",
         "output_key": "help_options",
         "on_success": "next",
-        "on_failure": "next",
+        "on_else": "next",
         "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
       },
       {
@@ -566,7 +566,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -576,7 +576,7 @@
         "system_key": "system",
         "output_key": "resolved_help",
         "on_success": "next",
-        "on_failure": "next",
+        "on_else": "next",
         "input_key": "help_options",
         "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (selection === 'system') {  content = [   '*System Commands*',   '',   '• `/create-domain <name>` — Create a new memory domain',   '• `/create-workflow <description>` — Generate a reusable workflow',   '• `/delete-domain <name>` — Remove a domain and its data',   '• `/delete-workflow <name>` — Remove a workflow',   '• `/m <intent>` — Natural language: classify and route',   '• `/chat <message>` — Multi-turn conversation',   '• `/explain <query>` — Explain a query or result',   '• `/help` — Show this help',   '• `/ping <type>` — Health check (api sqs llm e2e db core)'  ].join('\\n'); } else if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '• `' + c.syntax + '` — ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
@@ -604,7 +604,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -645,7 +645,7 @@
         },
         "output_key": "domain_schema",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -699,7 +699,7 @@
         ],
         "output_key": "workflow_mode",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -715,7 +715,7 @@
         },
         "output_key": "right_brain_research",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "4",
@@ -725,7 +725,7 @@
         "output_key": "preference_gates",
         "expression": "(function() { var questions = (items && Array.isArray(items.preference_questions)) ? items.preference_questions : []; return questions.map(function(q) { var letters = ['A','B','C','D','E']; var options = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65 + i), description: o.description || '', on_select: 'next' }; }); options.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); options.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, affects: q.affects, default: q.default, options: options }; }); })()",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "5",
@@ -735,7 +735,7 @@
         "output_key": "research_summary",
         "expression": "(function() { var r = items; var findings = Array.isArray(r.findings) ? r.findings : []; var questions = Array.isArray(r.preference_questions) ? r.preference_questions : []; var lines = []; findings.forEach(function(f) { lines.push('*' + f.topic + '*'); lines.push(f.rationale || f.what_is_known || ''); if (f.recommendation) lines.push('\\u2192 ' + f.recommendation); lines.push(''); }); var decisions = findings.filter(function(f) { return f.recommendation; }); var decisionNote = decisions.length > 0 ? decisions.length + ' design decision' + (decisions.length !== 1 ? 's' : '') + ' resolved by research' : 'No autonomous decisions made'; var questionNote = questions.length > 0 ? questions.length + ' preference question' + (questions.length !== 1 ? 's' : '') + ' to follow' : 'No preference questions — proceeding directly to design'; return { summary: lines.join('\\n').trim(), decision_note: decisionNote, question_note: questionNote }; })()",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "6",
@@ -756,7 +756,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -764,8 +764,8 @@
         "type": "condition",
         "description": "Skip Tier 1 preference gates if right brain found no preference questions.",
         "expression": "{{preference_gates.length}}",
-        "on_truthy": "8",
-        "on_falsy": "9"
+        "on_success": "8",
+        "on_else": "9"
       },
       {
         "step": "8",
@@ -779,13 +779,13 @@
           "options": "{{item.options}}",
           "output_key": "user_preferences",
           "on_success": "next",
-          "on_failure": "cancel",
+          "on_else": "cancel",
           "on_cancel": "cancel"
         },
         "output_key": "user_preferences",
         "execution_mode": "sequential",
         "on_complete": "9",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "9",
@@ -812,7 +812,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -831,7 +831,7 @@
         },
         "output_key": "step_type_contracts",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "11",
@@ -849,7 +849,7 @@
         },
         "output_key": "gap_analysis",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "12",
@@ -859,15 +859,15 @@
         "output_key": "routing_flags",
         "expression": "(function() { var g = items; var hasBlockingSchema = (g.schema_changes || []).some(function(s) { return s.blocking; }); var isBlocked = g.confidence === 'blocked'; var hasNonBlocking = (g.schema_changes || []).some(function(s) { return !s.blocking; }); return { is_blocked: isBlocked ? 1 : 0, needs_schema: (hasBlockingSchema || isBlocked) ? 1 : 0, has_missing_prompts: (g.prompts_needed || []).some(function(p) { return p.exists === false; }) ? 1 : 0 }; })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "13",
         "type": "condition",
         "description": "Hard stop if gap analysis detected a missing step type capability.",
         "expression": "{{routing_flags.is_blocked}}",
-        "on_truthy": "14",
-        "on_falsy": "15"
+        "on_success": "14",
+        "on_else": "15"
       },
       {
         "step": "14",
@@ -881,8 +881,8 @@
         "type": "condition",
         "description": "Check for blocking schema gaps.",
         "expression": "{{routing_flags.needs_schema}}",
-        "on_truthy": "16",
-        "on_falsy": "18"
+        "on_success": "16",
+        "on_else": "18"
       },
       {
         "step": "16",
@@ -892,7 +892,7 @@
         "output_key": "schema_gap_message",
         "expression": "(function() { var changes = (items.schema_changes || []).filter(function(s) { return s.blocking; }); if (changes.length === 0) changes = items.schema_changes || []; var lines = ['To build the best version of this workflow I need tables that don\\'t exist yet:', '']; changes.forEach(function(c) { lines.push('*Table:* ' + c.table); lines.push('*Why:* ' + c.recommendation); lines.push('*If skipped:* ' + c.impact_if_skipped); if (c.domain_suggestion) lines.push('*Create first:* `/m create domain ' + c.domain_suggestion + '`'); lines.push(''); }); return lines.join('\\n'); })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "17",
@@ -918,7 +918,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -929,15 +929,15 @@
         "output_key": "missing_prompts",
         "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "19",
         "type": "condition",
         "description": "Skip prompt seeding if there are no missing prompts.",
         "expression": "{{missing_prompts.length}}",
-        "on_truthy": "20",
-        "on_falsy": "21"
+        "on_success": "20",
+        "on_else": "21"
       },
       {
         "step": "20",
@@ -950,12 +950,12 @@
             "tableName": "PGC_Prompt",
             "row": "{{item}}"
           },
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "output_key": "seeded_prompts",
         "execution_mode": "sequential",
         "on_complete": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "21",
@@ -974,7 +974,7 @@
         },
         "output_key": "process_spec",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "21a",
@@ -982,8 +982,8 @@
         "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation.",
         "output_key": "routing_skeleton",
         "on_success": "next",
-        "on_failure": "cancel",
-        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_failure) s.on_failure = r.on_failure; if (r.on_truthy)  s.on_truthy  = r.on_truthy; if (r.on_falsy)   s.on_falsy   = r.on_falsy; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_truthy) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return steps; })()"
+        "on_else": "cancel",
+        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_else) s.on_else = r.on_else; if (r.on_success)  s.on_success  = r.on_success; if (r.on_else)   s.on_else   = r.on_else; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_success) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return steps; })()"
       },
       {
         "step": "21b",
@@ -995,7 +995,7 @@
         },
         "output_key": "skeleton_validation",
         "on_success": "step:22",
-        "on_failure": "step:21c"
+        "on_else": "step:21c"
       },
       {
         "step": "21c",
@@ -1016,7 +1016,7 @@
           }
         ],
         "on_success": "step:21",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -1031,7 +1031,7 @@
         },
         "output_key": "dialog_spec",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "22a",
@@ -1040,7 +1040,7 @@
         "expression": "(function(){return{user_workflow_feedback:local_state.user_workflow_feedback||null,static_analysis_result:local_state.static_analysis_result||null,previous_draft_steps:(local_state.draft_workflow&&Array.isArray(local_state.draft_workflow.steps))?local_state.draft_workflow.steps:[],simulation_error_summary:local_state.simulation_error_summary||null};})()",
         "output_key": "step_gen_context",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "23",
@@ -1070,7 +1070,7 @@
           "priority": 3
         },
         "on_success": "step:24",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "24",
@@ -1109,7 +1109,7 @@
           }
         ],
         "on_success": "step:25",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "item_label_template": "Step {{step}} ({{type}}): {{description}}",
         "item_secondary_key": "on_success",
         "on_cancel": "cancel"
@@ -1123,7 +1123,7 @@
         },
         "output_key": "static_analysis_result",
         "on_success": "step:25a",
-        "on_failure": "step:26"
+        "on_else": "step:26"
       },
       {
         "step": "25a",
@@ -1133,7 +1133,7 @@
         "expression": "(function(){var draft=local_state.draft_workflow;var steps=draft&&Array.isArray(draft.steps)?draft.steps:[];return Object.assign({},draft,{steps:steps.map(function(s){return Object.assign({},s,{level1_applied:true,level1_issue:''});})});})() ",
         "output_key": "draft_workflow",
         "on_success": "step:28",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "26",
@@ -1143,7 +1143,7 @@
         "output_key": "simulation_error_summary",
         "expression": "(function(){var lines=[];var sa=items&&items.static_analysis;var l1issues=(sa&&Array.isArray(sa.issues))?sa.issues:[];l1issues.slice(0,6).forEach(function(i){lines.push(\"- Step \"+(i.step||\"?\")+\": \"+(i.detail||i.check||\"validation issue\"));});if(l1issues.length>6)lines.push(\"...and \"+(l1issues.length-6)+\" more issues\");var rm=items&&items.routing_matrix;if(rm&&!rm.passed&&Array.isArray(rm.issues)){rm.issues.slice(0,3).forEach(function(i){lines.push(\"- [routing] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"routing issue\"));});}var st=items&&items.smoke_test;if(st&&!st.passed&&Array.isArray(st.issues)){var hard=st.issues.filter(function(i){return i.failure_class===\"js_transform_syntax_error\"||i.failure_class===\"js_transform_void_return\";});hard.slice(0,3).forEach(function(i){lines.push(\"- [js_transform] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"smoke test failed\"));});}if(lines.length===0)return\"Validation failed - no specific issues reported.\";return lines.join(\"\\n\");})()",
         "on_success": "step:26a",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "26a",
@@ -1153,7 +1153,7 @@
         "expression": "(function(){var sa=local_state.static_analysis_result;var issues=(sa&&sa.static_analysis&&Array.isArray(sa.static_analysis.issues))?sa.static_analysis.issues:[];var issueMap={};issues.forEach(function(i){issueMap[String(i.step)]=i.detail||i.check||'validation issue';});var draft=local_state.draft_workflow;var steps=draft&&Array.isArray(draft.steps)?draft.steps:[];return Object.assign({},draft,{steps:steps.map(function(s){var issue=issueMap[String(s.step)];return Object.assign({},s,{level1_applied:issue===undefined,level1_issue:issue||''});})});})() ",
         "output_key": "draft_workflow",
         "on_success": "step:27",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "27",
@@ -1186,7 +1186,7 @@
           }
         ],
         "on_success": "step:22a",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -1199,7 +1199,7 @@
         },
         "output_key": "mock_outputs",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "29",
@@ -1212,7 +1212,7 @@
         },
         "output_key": "simulation_paths",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "30",
@@ -1225,7 +1225,7 @@
         },
         "output_key": "simulation_result",
         "on_success": "step:30a",
-        "on_failure": "step:31"
+        "on_else": "step:31"
       },
       {
         "step": "30a",
@@ -1235,7 +1235,7 @@
         "expression": "(function(){var draft=local_state.draft_workflow;var steps=draft&&Array.isArray(draft.steps)?draft.steps:[];return Object.assign({},draft,{steps:steps.map(function(s){return Object.assign({},s,{level2_applied:true,level2_issue:''});})});})() ",
         "output_key": "draft_workflow",
         "on_success": "step:34",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "31",
@@ -1245,7 +1245,7 @@
         "output_key": "path_error_summary",
         "expression": "(function(){var sr=items;var lines=[];var rm=sr&&sr.routing_matrix;if(rm&&!rm.passed&&Array.isArray(rm.issues)){rm.issues.slice(0,3).forEach(function(i){lines.push(\"- [routing] Step \"+i.step+\": \"+i.detail);});}var st=sr&&sr.smoke_test;if(st&&Array.isArray(st.issues)){var hard=st.issues.filter(function(i){return i.failure_class===\"js_transform_syntax_error\"||i.failure_class===\"js_transform_void_return\";});hard.slice(0,3).forEach(function(i){lines.push(\"- [js_transform] Step \"+i.step+\": \"+i.detail);});}var r=sr&&Array.isArray(sr.path_results)?sr.path_results:[];var paths=(local_state.simulation_paths&&local_state.simulation_paths.simulation_paths)||[];var failed=r.filter(function(p){return!p.passed;});failed.slice(0,4).forEach(function(p){var base=\"- Path \\\"\"+p.path_name+\"\\\": \"+p.failure_reason;if(p.failure_step===\"end\"||p.failure_step===\"cancel\"){var pathDef=paths.find(function(pd){return pd.path_name===p.path_name;})||{};var cancelDec=(pathDef.decisions||[]).find(function(d){return d.on_select===\"cancel\";});if(cancelDec){lines.push(base+\" — step \"+cancelDec.step+\" has on_select:\\\"cancel\\\"; verify it routes to cancel termination\");return;}var ts=p.local_state_transitions||[];var prev=ts.length>=2?ts[ts.length-2]:null;if(prev){lines.push(base+\" (preceding step: \"+prev.step+\", type=\"+prev.type+\")\");return;}}lines.push(base);});if(lines.length===0)return\"Level 2 simulation failed - no specific issues reported.\";return lines.join(\"\\n\");})()",
         "on_success": "step:31a",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "31a",
@@ -1255,7 +1255,7 @@
         "expression": "(function(){var sr=local_state.simulation_result;var failureMap={};var rm=sr&&sr.routing_matrix;if(rm&&Array.isArray(rm.issues)){rm.issues.forEach(function(i){var k=String(i.step);if(!failureMap[k])failureMap[k]=i.detail||'routing matrix issue';});}var st=sr&&sr.smoke_test;if(st&&Array.isArray(st.issues)){st.issues.forEach(function(i){if(i.failure_class!==\"js_transform_runtime_error\"){var k=String(i.step);if(!failureMap[k])failureMap[k]=i.detail||'js_transform issue';}});}var pathResults=sr&&Array.isArray(sr.path_results)?sr.path_results:[];pathResults.forEach(function(p){if(!p.passed&&p.failure_step){var k=String(p.failure_step);if(!failureMap[k])failureMap[k]=p.failure_reason||'path simulation failure';}});var draft=local_state.draft_workflow;var steps=draft&&Array.isArray(draft.steps)?draft.steps:[];return Object.assign({},draft,{steps:steps.map(function(s){var issue=failureMap[String(s.step)];return Object.assign({},s,{level2_applied:issue===undefined,level2_issue:issue||''});})});})() ",
         "output_key": "draft_workflow",
         "on_success": "step:32",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "32",
@@ -1265,7 +1265,7 @@
         "output_key": "static_analysis_result",
         "expression": "(function(){ return ''; })()",
         "on_success": "step:33",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "33",
@@ -1298,7 +1298,7 @@
           }
         ],
         "on_success": "step:33a",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -1317,7 +1317,7 @@
         },
         "output_key": "draft_workflow",
         "on_success": "step:24",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "34",
@@ -1338,7 +1338,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -1349,7 +1349,7 @@
         "expression": "(function(){var draft=items;var steps=draft&&Array.isArray(draft.steps)?draft.steps:[];return Object.assign({},draft,{steps:steps.map(function(s){var c=Object.assign({},s);delete c.level1_applied;delete c.level1_issue;delete c.level2_applied;delete c.level2_issue;return c;})});})() ",
         "output_key": "draft_workflow",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "35",
@@ -1369,7 +1369,7 @@
         },
         "output_key": "registered_workflow",
         "on_success": "step:35a",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "35a",
@@ -1396,7 +1396,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -1405,7 +1405,7 @@
         "description": "Build intent_pattern: split user phrases on comma, lowercase/trim each, append workflow name, join with | for Pass 1a regex matching.",
         "output_key": "intent_pattern",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
       },
       {
@@ -1422,15 +1422,15 @@
         },
         "output_key": "registered_intent_row",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "36a",
         "type": "condition",
         "description": "Only update DomainHelp commands if a domain is associated with this workflow.",
         "expression": "{{input.domain}}",
-        "on_truthy": "36b",
-        "on_falsy": "37"
+        "on_success": "36b",
+        "on_else": "37"
       },
       {
         "step": "36b",
@@ -1449,7 +1449,7 @@
         },
         "output_key": "domain_help_row",
         "on_success": "36c",
-        "on_failure": "37"
+        "on_else": "37"
       },
       {
         "step": "36c",
@@ -1457,7 +1457,7 @@
         "description": "Merge new workflow command into existing DomainHelp commands list.",
         "output_key": "updated_domain_commands",
         "on_success": "36d",
-        "on_failure": "37",
+        "on_else": "37",
         "expression": "(() => { const helpRows = Array.isArray(local_state.domain_help_row) ? local_state.domain_help_row : []; if (helpRows.length === 0) { throw new Error('no_domain_help_row'); } const existingHelp = helpRows[0]; const draft = local_state.draft_workflow; const keyword = Array.isArray(draft.intent_keywords) && draft.intent_keywords.length > 0 ? draft.intent_keywords[0] : draft.name; const newCommand = { syntax: '/m ' + keyword, description: draft.description || ('Run ' + draft.name) }; const existing = Array.isArray(existingHelp.commands) ? existingHelp.commands : []; return existing.filter(function(c) { return c.syntax !== newCommand.syntax; }).concat([newCommand]); })()"
       },
       {
@@ -1479,7 +1479,7 @@
         },
         "output_key": "domain_help_updated",
         "on_success": "37",
-        "on_failure": "37"
+        "on_else": "37"
       },
       {
         "step": "37",
@@ -1512,8 +1512,8 @@
         "type": "condition",
         "description": "If brokenSteps were supplied in input, skip the DB load. Otherwise load them from PGC_Workflow.",
         "expression": "{{input.brokenSteps}}",
-        "on_truthy": "3",
-        "on_falsy": "2"
+        "on_success": "3",
+        "on_else": "2"
       },
       {
         "step": "2",
@@ -1532,7 +1532,7 @@
         },
         "output_key": "workflow_row",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "3",
@@ -1541,7 +1541,7 @@
         "input_key": "input",
         "output_key": "fix_context",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { var inp = local_state.input; var row = (local_state.workflow_row || [])[0] || {}; var allSteps = inp.brokenSteps || row.steps || []; var issueKeys = (inp.issues || []).map(function(i) { return String(i.step); }); var brokenSteps = issueKeys.length > 0 ? allSteps.filter(function(s) { return issueKeys.indexOf(String(s.step)) !== -1; }) : allSteps; return { workflowName: inp.workflowName, issues: inp.issues, brokenSteps: brokenSteps, workflowVersion: inp.workflowVersion != null ? inp.workflowVersion : (row.version != null ? row.version : 1), stackTrace: inp.stackTrace || '' }; })()"
       },
       {
@@ -1557,7 +1557,7 @@
         },
         "output_key": "fix_result",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "4b",
@@ -1566,7 +1566,7 @@
         "input_key": "workflow_row",
         "output_key": "merged_steps",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { var fullSteps = (local_state.workflow_row || [])[0] ? (local_state.workflow_row[0].steps || []) : []; var corrected = local_state.fix_result ? (local_state.fix_result.corrected_steps || []) : []; var correctedMap = {}; corrected.forEach(function(s) { correctedMap[String(s.step)] = s; }); return fullSteps.map(function(s) { return correctedMap[String(s.step)] || s; }); })()"
       },
       {
@@ -1578,7 +1578,7 @@
         },
         "output_key": "post_fix_validation",
         "on_success": "next",
-        "on_failure": "step:6"
+        "on_else": "step:6"
       },
       {
         "step": "6",
@@ -1605,7 +1605,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel",
         "item_secondary_key": "after",
         "item_label_template": "step {{step}} — {{field}}"
@@ -1617,7 +1617,7 @@
         "input_key": "fix_context",
         "output_key": "new_version",
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "expression": "(function() { return (items.workflowVersion || 1) + 1; })()"
       },
       {
@@ -1640,7 +1640,7 @@
         },
         "output_key": "workflow_updated",
         "on_success": "step:8b",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "8b",
@@ -1651,7 +1651,7 @@
         },
         "output_key": "post_write_validation",
         "on_success": "9",
-        "on_failure": "step:8c"
+        "on_else": "step:8c"
       },
       {
         "step": "8c",
@@ -1673,7 +1673,7 @@
         },
         "output_key": "workflow_reverted",
         "on_success": "step:8d",
-        "on_failure": "step:8d"
+        "on_else": "step:8d"
       },
       {
         "step": "8d",
@@ -1687,8 +1687,8 @@
         "type": "condition",
         "description": "Skip context update iterator if LLM produced no context_updates.",
         "expression": "{{fix_result.context_updates.length}}",
-        "on_truthy": "10",
-        "on_falsy": "11"
+        "on_success": "10",
+        "on_else": "11"
       },
       {
         "step": "10",
@@ -1710,12 +1710,12 @@
               "content": "{{item.updated_content}}"
             }
           },
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "context_update_results",
         "on_complete": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "11",
@@ -1737,7 +1737,7 @@
         },
         "output_key": "active_runs",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "12",
@@ -1756,7 +1756,7 @@
         },
         "output_key": "target_workflow_row",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "13",
@@ -1765,7 +1765,7 @@
         "input_key": "active_runs",
         "output_key": "runs_to_cancel",
         "on_success": "next",
-        "on_failure": "next",
+        "on_else": "next",
         "expression": "(function() { var targetId = (local_state.target_workflow_row || [])[0]?.id; var currentRunId = local_state.input?.currentRunId || null; if (!targetId) return []; return (items || []).filter(function(r) { return r.workflow_id === targetId && r.id !== currentRunId; }); })()"
       },
       {
@@ -1773,8 +1773,8 @@
         "type": "condition",
         "description": "Skip cancellation iterator if no active runs to cancel.",
         "expression": "{{runs_to_cancel.length}}",
-        "on_truthy": "15",
-        "on_falsy": "16"
+        "on_success": "15",
+        "on_else": "16"
       },
       {
         "step": "15",
@@ -1796,12 +1796,12 @@
               "status": "cancelled"
             }
           },
-          "on_failure": "cancel"
+          "on_else": "cancel"
         },
         "execution_mode": "sequential",
         "output_key": "cancelled_runs",
         "on_complete": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "16",
@@ -1837,8 +1837,8 @@
         "type": "condition",
         "description": "Route to id lookup when input.id is set, otherwise fall through to name search.",
         "expression": "{{input.id}}",
-        "on_truthy": "2",
-        "on_falsy": "3"
+        "on_success": "2",
+        "on_else": "3"
       },
       {
         "step": "2",
@@ -1850,7 +1850,7 @@
         },
         "output_key": "results",
         "on_success": "step:4",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "3",
@@ -1869,7 +1869,7 @@
         },
         "output_key": "results",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "4",
@@ -1918,7 +1918,7 @@
         },
         "output_key": "results",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -1966,7 +1966,7 @@
         },
         "output_key": "full_entity_schema",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -1979,7 +1979,7 @@
         },
         "output_key": "parsed_entity",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "3",
@@ -2001,7 +2001,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2014,7 +2014,7 @@
         },
         "output_key": "insert_result",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "5",
@@ -2059,7 +2059,7 @@
         },
         "output_key": "entity_schema_rows",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -2080,7 +2080,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2100,7 +2100,7 @@
         },
         "output_key": "updated_record",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "4",
@@ -2143,7 +2143,7 @@
         },
         "output_key": "entity_schema_rows",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "2",
@@ -2164,7 +2164,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2182,7 +2182,7 @@
           ]
         },
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "4",
@@ -2279,8 +2279,8 @@
         "type": "condition",
         "description": "Any violations found?",
         "expression": "{{gate_payload.hasViolations}}",
-        "on_truthy": "9",
-        "on_falsy": "12"
+        "on_success": "9",
+        "on_else": "12"
       },
       {
         "step": "9",
@@ -2300,7 +2300,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2325,15 +2325,15 @@
         },
         "output_key": "schema_update_result",
         "on_success": "next",
-        "on_failure": "step:13"
+        "on_else": "step:13"
       },
       {
         "step": "11",
         "type": "condition",
         "description": "Cancel the failed WorkflowRun if supplied",
         "expression": "{{input.failedRunId}}",
-        "on_truthy": "11a",
-        "on_falsy": "11b"
+        "on_success": "11a",
+        "on_else": "11b"
       },
       {
         "step": "11a",
@@ -2354,7 +2354,7 @@
         },
         "output_key": "cancel_result",
         "on_success": "next",
-        "on_failure": "next"
+        "on_else": "next"
       },
       {
         "step": "11b",
@@ -2408,7 +2408,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2445,7 +2445,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2466,7 +2466,7 @@
           }
         ],
         "on_success": "step:2",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2488,7 +2488,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2499,15 +2499,15 @@
         "expression": "(function(){ return (items || '').trim() === 'Hello World'; })()",
         "output_key": "text_valid",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "3c",
         "type": "condition",
         "description": "Route on text validation result.",
         "expression": "{{text_valid}}",
-        "on_truthy": "4",
-        "on_falsy": "3e"
+        "on_success": "4",
+        "on_else": "3e"
       },
       {
         "step": "3e",
@@ -2527,7 +2527,7 @@
           }
         ],
         "on_success": "step:3",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2550,7 +2550,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "placeholder": "Line 1: This is a test\nLine 2: Of multiline input\nLine 3: Working correctly",
         "on_cancel": "cancel"
       },
@@ -2562,15 +2562,15 @@
         "expression": "(function(){ var v = (items || '').trim(); return v.indexOf('Line 1: This is a test') >= 0 && v.indexOf('Line 2: Of multiline input') >= 0 && v.indexOf('Line 3: Working correctly') >= 0; })()",
         "output_key": "multiline_valid",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "4c",
         "type": "condition",
         "description": "Route on multiline validation result.",
         "expression": "{{multiline_valid}}",
-        "on_truthy": "5",
-        "on_falsy": "4e"
+        "on_success": "5",
+        "on_else": "4e"
       },
       {
         "step": "4e",
@@ -2590,7 +2590,7 @@
           }
         ],
         "on_success": "step:4",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2619,7 +2619,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2630,15 +2630,15 @@
         "expression": "(function(){ return (items || '').trim() === 'Modal Works'; })()",
         "output_key": "modal_valid",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "5c",
         "type": "condition",
         "description": "Route on modal validation result.",
         "expression": "{{modal_valid}}",
-        "on_truthy": "5b",
-        "on_falsy": "5e"
+        "on_success": "5b",
+        "on_else": "5e"
       },
       {
         "step": "5e",
@@ -2658,7 +2658,7 @@
           }
         ],
         "on_success": "step:5",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2690,7 +2690,7 @@
           }
         ],
         "on_success": "step:6r",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2711,7 +2711,7 @@
           }
         ],
         "on_success": "step:5b",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2752,7 +2752,7 @@
           }
         ],
         "on_success": "step:6",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2773,7 +2773,7 @@
           }
         ],
         "on_success": "step:6r",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2784,7 +2784,7 @@
         "expression": "(function(){ return { 'Test 1 - Choice': 'PASS — clicked ' + (local_state.ping_choice || '?'), 'Test 2 - Text input': 'PASS — entered: ' + (items || ''), 'Test 3 - Multiline': 'PASS — ' + (local_state.ping_multiline || '').split('\\n').length + ' lines entered', 'Test 4 - Modal button': 'PASS — entered: ' + (local_state.ping_modal || ''), 'Test 5 - Text input special button': 'PASS — skip routed', 'Test 6 - Reveal gate': 'PASS — selected: ' + (local_state.ping_reveal || '?'), 'Tests 7-10': 'Pending — review object, condition, follow-up, notify' }; })()",
         "output_key": "ping_summary",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "7",
@@ -2805,7 +2805,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2836,7 +2836,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2847,15 +2847,15 @@
         "expression": "(function(){ return items === 'true'; })()",
         "output_key": "ping_condition_bool",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "8",
         "type": "condition",
         "description": "Route on ping_condition_bool: truthy path to 8y, falsy path to 8n. Both converge on 9f.",
         "expression": "{{ping_condition_bool}}",
-        "on_truthy": "8y",
-        "on_falsy": "8n"
+        "on_success": "8y",
+        "on_else": "8n"
       },
       {
         "step": "8y",
@@ -2875,7 +2875,7 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2896,7 +2896,7 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2914,7 +2914,7 @@
           }
         ],
         "on_success": "next",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {
@@ -2925,15 +2925,15 @@
         "expression": "(function(){ return (items || '').trim() === 'follow-up works'; })()",
         "output_key": "followup_valid",
         "on_success": "next",
-        "on_failure": "cancel"
+        "on_else": "cancel"
       },
       {
         "step": "9fc",
         "type": "condition",
         "description": "Route on follow-up validation result.",
         "expression": "{{followup_valid}}",
-        "on_truthy": "9",
-        "on_falsy": "9fe"
+        "on_success": "9",
+        "on_else": "9fe"
       },
       {
         "step": "9fe",
@@ -2953,7 +2953,7 @@
           }
         ],
         "on_success": "step:9f",
-        "on_failure": "cancel",
+        "on_else": "cancel",
         "on_cancel": "cancel"
       },
       {

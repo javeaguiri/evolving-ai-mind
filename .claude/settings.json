@@ -20,7 +20,8 @@
       "Bash(truncate*)",
       "Bash(nohup*)",
       "Bash(tail*)",
-      "Bash(cp *)"
+      "Bash(cp *)",
+      "Bash(awk *)"
     ]
   }
 }

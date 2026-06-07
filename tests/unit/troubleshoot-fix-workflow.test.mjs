@@ -85,21 +85,21 @@ function resolveFixInputs(body) {
 // ---------------------------------------------------------------------------
 
 const BROKEN_CONDITION_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
-  { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_failure: 'next' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_else: 'cancel' },
+  { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_else: 'next' },
   { step: '3', type: 'js_transform', input_key: 'right_brain_research', output_key: 'preference_gates', expression: '(function(){ return []; })()', on_success: 'next' },
   // BUG: both sides use routing tokens instead of bare step keys
-  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_truthy: 'next', on_falsy: 'cancel' },
+  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_success: 'next', on_else: 'cancel' },
   { step: '5', type: 'end' },
   { step: '6', type: 'end' },
 ];
 
 const FIXED_CONDITION_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
-  { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_failure: 'next' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_else: 'cancel' },
+  { step: '2', type: 'llm_call',   input: { prompt: 'research_workflow_domain' }, output_key: 'right_brain_research', on_success: 'next', on_else: 'next' },
   { step: '3', type: 'js_transform', input_key: 'right_brain_research', output_key: 'preference_gates', expression: '(function(){ return []; })()', on_success: 'next' },
   // FIXED: bare step keys
-  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_truthy: '5', on_falsy: '6' },
+  { step: '4', type: 'condition', expression: '{{preference_gates.length}}', on_success: '5', on_else: '6' },
   { step: '5', type: 'end' },
   { step: '6', type: 'end' },
 ];
@@ -107,18 +107,18 @@ const FIXED_CONDITION_STEPS = [
 // All four condition bugs from create_workflow v4
 const ALL_FOUR_CONDITION_BUGS = [
   ...BROKEN_CONDITION_STEPS,
-  { step: '7', type: 'serv_query', input: { tableName: 'PGC_StepType', filters: [] }, output_key: 'step_type_contracts', on_success: 'next', on_failure: 'cancel' },
+  { step: '7', type: 'serv_query', input: { tableName: 'PGC_StepType', filters: [] }, output_key: 'step_type_contracts', on_success: 'next', on_else: 'cancel' },
   { step: '8', type: 'js_transform', input_key: 'step_type_contracts', output_key: 'routing_flags', expression: '(function(){ return { is_blocked: false, needs_schema: false }; })()', on_success: 'next' },
-  { step: '9',  type: 'condition', expression: '{{routing_flags.is_blocked}}',  on_truthy: 'cancel', on_falsy: '11' },
+  { step: '9',  type: 'condition', expression: '{{routing_flags.is_blocked}}',  on_success: 'cancel', on_else: '11' },
   { step: '9a', type: 'notify', message_template: 'Blocked', on_success: 'end' },
-  { step: '10', type: 'condition', expression: '{{routing_flags.needs_schema}}', on_truthy: 'next', on_falsy: '11' },
+  { step: '10', type: 'condition', expression: '{{routing_flags.needs_schema}}', on_success: 'next', on_else: '11' },
   { step: '10a', type: 'end' },
   { step: '11', type: 'end' },
 ];
 
 const HEALTHY_STEPS = [
-  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_failure: 'cancel' },
-  { step: '2', type: 'condition', expression: '{{domain_schema.length}}', on_truthy: '3', on_falsy: '4' },
+  { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'domain_schema', on_success: 'next', on_else: 'cancel' },
+  { step: '2', type: 'condition', expression: '{{domain_schema.length}}', on_success: '3', on_else: '4' },
   { step: '3', type: 'notify', message_template: 'Found schema', on_success: 'end' },
   { step: '4', type: 'notify', message_template: 'No schema', on_success: 'end' },
   { step: '5', type: 'end' },
@@ -131,18 +131,18 @@ const HEALTHY_STEPS = [
 
 describe('Level 1 static analysis — condition routing contract', () => {
 
-  test('detects on_truthy: "next" — control token is invalid in condition step', () => {
+  test('detects on_success: "next" — control token is invalid in condition step', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
     assert.equal(result.static_analysis.passed, false);
-    const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_truthy'));
-    assert.ok(issue, 'Expected issue on step 4 on_truthy');
+    const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_success'));
+    assert.ok(issue, 'Expected issue on step 4 on_success');
     assert.equal(issue.failure_class, 'condition_routing_invalid');
   });
 
-  test('detects on_falsy: "cancel" — control token is invalid in condition step', () => {
+  test('detects on_else: "cancel" — control token is invalid in condition step', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
-    const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_falsy'));
-    assert.ok(issue, 'Expected issue on step 4 on_falsy');
+    const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_else'));
+    assert.ok(issue, 'Expected issue on step 4 on_else');
     assert.equal(issue.failure_class, 'condition_routing_invalid');
   });
 
@@ -174,7 +174,7 @@ describe('Level 1 static analysis — other failure classes', () => {
 
   test('detects dead routing target', () => {
     const steps = [
-      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'step:99', on_failure: 'cancel' },
+      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'step:99', on_else: 'cancel' },
       { step: '2', type: 'end' },
     ];
     const issue = runSimulation({ steps }).static_analysis.issues.find(i => i.failure_class === 'dead_routing_target');
@@ -184,7 +184,7 @@ describe('Level 1 static analysis — other failure classes', () => {
 
   test('detects unresolved template variable', () => {
     const steps = [
-      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'next', on_failure: 'cancel' },
+      { step: '1', type: 'serv_query', input: { tableName: 'PGC_Schema', filters: [] }, output_key: 'rows', on_success: 'next', on_else: 'cancel' },
       { step: '2', type: 'notify', message_template: '{{nonexistent_key}}', on_success: 'end' },
       { step: '3', type: 'end' },
     ];
@@ -195,7 +195,7 @@ describe('Level 1 static analysis — other failure classes', () => {
 
   test('detects human_gate missing cancel option', () => {
     const steps = [
-      { step: '1', type: 'human_gate', gate_type: 'confirm', message_template: 'x', options: [{ label: 'OK', action: 'confirm', on_select: 'next' }], on_success: 'next', on_failure: 'cancel' },
+      { step: '1', type: 'human_gate', gate_type: 'confirm', message_template: 'x', options: [{ label: 'OK', action: 'confirm', on_select: 'next' }], on_success: 'next', on_else: 'cancel' },
       { step: '2', type: 'end' },
     ];
     const issue = runSimulation({ steps }).static_analysis.issues.find(i => i.failure_class === 'missing_cancel_option');
@@ -240,11 +240,11 @@ describe('buildTroubleshootSummary', () => {
   });
 
   test('includes step key, failure_class, detail in each bullet', () => {
-    const issues = [{ step: '4', failure_class: 'unknown_routing_value', detail: 'on_truthy next is invalid', check: 'y' }];
+    const issues = [{ step: '4', failure_class: 'unknown_routing_value', detail: 'on_success next is invalid', check: 'y' }];
     const s = buildTroubleshootSummary({ workflowName: 'test', workflowVersion: 1, issues });
     assert.match(s, /Step 4/);
     assert.match(s, /unknown_routing_value/);
-    assert.match(s, /on_truthy next is invalid/);
+    assert.match(s, /on_success next is invalid/);
   });
 
   test('appends suggestion when present', () => {
@@ -435,18 +435,18 @@ describe('fix_workflow workflow definition — structural validity', () => {
     assert.ok(conditions.length > 0, 'Expected at least one condition step');
     const stepKeys = new Set(fixWorkflowSteps.map(s => String(s.step)));
     for (const s of conditions) {
-      assert.ok(stepKeys.has(String(s.on_truthy)),
-        `Step ${s.step} on_truthy "${s.on_truthy}" is not a valid step key`);
-      assert.ok(stepKeys.has(String(s.on_falsy)),
-        `Step ${s.step} on_falsy "${s.on_falsy}" is not a valid step key`);
-      assert.doesNotMatch(String(s.on_truthy), /^(next|end|cancel)$/,
-        `Step ${s.step} on_truthy must be a bare step key, not a routing token`);
-      assert.doesNotMatch(String(s.on_falsy), /^(next|end|cancel)$/,
-        `Step ${s.step} on_falsy must be a bare step key, not a routing token`);
-      assert.doesNotMatch(String(s.on_truthy), /^step:/,
-        `Step ${s.step} on_truthy must not be pre-prefixed with step:`);
-      assert.doesNotMatch(String(s.on_falsy), /^step:/,
-        `Step ${s.step} on_falsy must not be pre-prefixed with step:`);
+      assert.ok(stepKeys.has(String(s.on_success)),
+        `Step ${s.step} on_success "${s.on_success}" is not a valid step key`);
+      assert.ok(stepKeys.has(String(s.on_else)),
+        `Step ${s.step} on_else "${s.on_else}" is not a valid step key`);
+      assert.doesNotMatch(String(s.on_success), /^(next|end|cancel)$/,
+        `Step ${s.step} on_success must be a bare step key, not a routing token`);
+      assert.doesNotMatch(String(s.on_else), /^(next|end|cancel)$/,
+        `Step ${s.step} on_else must be a bare step key, not a routing token`);
+      assert.doesNotMatch(String(s.on_success), /^step:/,
+        `Step ${s.step} on_success must not be pre-prefixed with step:`);
+      assert.doesNotMatch(String(s.on_else), /^step:/,
+        `Step ${s.step} on_else must not be pre-prefixed with step:`);
     }
   });
 
@@ -533,13 +533,13 @@ describe('fix_workflow workflow definition — structural validity', () => {
 describe('Level 2a — routing matrix', () => {
 
   const UNREACHABLE_STEP_STEPS = [
-    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '3', on_failure: 'cancel' },
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '3', on_else: 'cancel' },
     { step: '2', type: 'notify', message_template: 'orphan', on_success: 'end' }, // nothing routes to step 2
     { step: '3', type: 'end' },
   ];
 
   const SELF_LOOP_STEPS = [
-    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '2', on_failure: 'cancel' },
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: '2', on_else: 'cancel' },
     { step: '2', type: 'notify', message_template: 'loop', on_success: '2' }, // self-loop, no way to 'end'
   ];
 
@@ -615,7 +615,7 @@ describe('Level 2b — js_transform smoke test', () => {
   ];
 
   const VALID_TRANSFORM_STEPS = [
-    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: 'next', on_failure: 'cancel' },
+    { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [] }, output_key: 'rows', on_success: 'next', on_else: 'cancel' },
     { step: '2', type: 'js_transform', expression: '(function(){ return local_state.rows.length > 0; })()', output_key: 'has_rows', on_success: 'end' },
     { step: '3', type: 'end' },
   ];

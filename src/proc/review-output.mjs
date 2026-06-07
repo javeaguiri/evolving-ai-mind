@@ -308,7 +308,7 @@ function runSemanticRules(scaffold) {
  * Not called for create_domain output (which has tables, not steps).
  *
  * Checks:
- *   1. Every on_success / on_failure / on_select value is a known routing token
+ *   1. Every on_success / on_else / on_select value is a known routing token
  *   2. Every step:N routing target exists as a step key in the array
  *   3. Every human_gate has at least one option with action: "cancel"
  *
@@ -353,7 +353,7 @@ function runRoutingValueRules(steps) {
     const key = String(s.step);
 
     checkToken(key, 'on_success',  s.on_success);
-    checkToken(key, 'on_failure',  s.on_failure);
+    checkToken(key, 'on_else',     s.on_else);
     checkToken(key, 'on_complete', s.on_complete);
 
     for (const opt of s.options ?? []) {

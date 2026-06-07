@@ -489,13 +489,13 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
     {
       step: '1', type: 'serv_query',
       input: { tableName: 'PGD_Sets' },
-      on_failure: 'cancel', on_success: 'next',
+      on_else: 'cancel', on_success: 'next',
       output_key: 'active_sets',
     },
     {
       step: '2', type: 'human_gate', gate_type: 'choice',
       output_key: 'selected_id',
-      on_success: 'next', on_cancel: 'cancel', on_failure: 'cancel',
+      on_success: 'next', on_cancel: 'cancel', on_else: 'cancel',
       options: [
         { label: 'A', value: '{{active_sets.0.id}}', action: 'next', description: '' },
         { label: 'Cancel', value: 'cancel', action: 'cancel', description: '' },
@@ -504,7 +504,7 @@ describe('runSimulation — choice gate writes output_key to local_state', () =>
     {
       step: '3', type: 'serv_insert',
       input: { tableName: 'PGD_Sessions', row: { set_id: '{{selected_id}}' } },
-      on_failure: 'cancel', on_success: 'end',
+      on_else: 'cancel', on_success: 'end',
       output_key: 'session',
     },
     { step: 'end', type: 'end' },
@@ -574,7 +574,7 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
     {
       step: '1', type: 'serv_query',
       input: { tableName: 'PGD_Cards' },
-      on_success: 'next', on_failure: 'cancel',
+      on_success: 'next', on_else: 'cancel',
       output_key: 'cards',
     },
     {
@@ -590,7 +590,7 @@ describe('runSimulation — choice gate resolves option value, not raw user_resp
     {
       step: '3', type: 'serv_insert',
       input: { tableName: 'PGD_TestLogs', row: { result: '{{user_result}}' } },
-      on_success: 'end', on_failure: 'cancel',
+      on_success: 'end', on_else: 'cancel',
       output_key: 'log',
     },
     { step: 'end', type: 'end' },
@@ -645,7 +645,7 @@ describe('runSimulation — auto-continues human_gate with no decision using fir
     {
       step: '1', type: 'serv_query',
       input: { tableName: 'PGD_Items' },
-      on_success: 'next', on_failure: 'cancel',
+      on_success: 'next', on_else: 'cancel',
       output_key: 'items',
     },
     {
@@ -660,7 +660,7 @@ describe('runSimulation — auto-continues human_gate with no decision using fir
     {
       step: '3', type: 'serv_insert',
       input: { tableName: 'PGD_Results', row: {} },
-      on_success: 'end', on_failure: 'cancel',
+      on_success: 'end', on_else: 'cancel',
       output_key: 'result',
     },
     { step: 'end', type: 'end' },
@@ -861,8 +861,8 @@ describe('ping_core seed — step 6r reveal gate', () => {
 
   it('step 8 condition routes to 8y on truthy and 8n on falsy', () => {
     const step = getStep('ping_core', '8');
-    assert.equal(step.on_truthy, '8y');
-    assert.equal(step.on_falsy,  '8n');
+    assert.equal(step.on_success, '8y');
+    assert.equal(step.on_else,  '8n');
   });
 });
 
@@ -877,7 +877,7 @@ describe('runSimulation — loop limit reached treats path as passed', () => {
     {
       step: '1', type: 'serv_query',
       input: { tableName: 'PGD_Cards' },
-      on_success: 'next', on_failure: 'cancel',
+      on_success: 'next', on_else: 'cancel',
       output_key: 'cards',
     },
     {
@@ -921,7 +921,7 @@ describe('runSimulation — L1 rejects nested {{...{{...}}...}} syntax', () => {
       {
         step: '1', type: 'serv_query',
         input: { tableName: 'PGD_Cards' },
-        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+        output_key: 'cards', on_success: 'next', on_else: 'cancel',
       },
       {
         step: '2', type: 'human_gate', gate_type: 'choice',
@@ -931,7 +931,7 @@ describe('runSimulation — L1 rejects nested {{...{{...}}...}} syntax', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel',
+        on_success: 'next', on_else: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
@@ -947,7 +947,7 @@ describe('runSimulation — L1 rejects nested {{...{{...}}...}} syntax', () => {
       {
         step: '1', type: 'serv_query',
         input: { tableName: 'PGD_Cards' },
-        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+        output_key: 'cards', on_success: 'next', on_else: 'cancel',
       },
       {
         step: '2', type: 'human_gate', gate_type: 'choice',
@@ -956,7 +956,7 @@ describe('runSimulation — L1 rejects nested {{...{{...}}...}} syntax', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel',
+        on_success: 'next', on_else: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
@@ -977,7 +977,7 @@ describe('runSimulation — L2 simulates one iterator body iteration', () => {
     {
       step: '1', type: 'serv_query',
       input: { tableName: 'PGD_Cards' },
-      output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+      output_key: 'cards', on_success: 'next', on_else: 'cancel',
     },
     {
       step: '2', type: 'iterator',
@@ -990,11 +990,11 @@ describe('runSimulation — L2 simulates one iterator body iteration', () => {
           { label: 'A', value: 'correct', action: 'correct', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel',
+        on_success: 'next', on_else: 'cancel',
       },
       execution_mode: 'sequential',
       output_key: 'answers',
-      on_complete: 'next', on_failure: 'cancel',
+      on_complete: 'next', on_else: 'cancel',
     },
     {
       step: '3', type: 'notify',
@@ -1041,7 +1041,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
       {
         step: '1', type: 'serv_query',
         input: { tableName: 'PGD_Cards' },
-        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+        output_key: 'cards', on_success: 'next', on_else: 'cancel',
       },
       {
         step: '2', type: 'human_gate', gate_type: 'choice',
@@ -1054,7 +1054,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel', on_cancel: 'cancel',
+        on_success: 'next', on_else: 'cancel', on_cancel: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
@@ -1080,7 +1080,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
       {
         step: '1', type: 'serv_query',
         input: { tableName: 'PGD_Cards' },
-        output_key: 'cards', on_success: 'next', on_failure: 'cancel',
+        output_key: 'cards', on_success: 'next', on_else: 'cancel',
       },
       {
         step: '2', type: 'human_gate', gate_type: 'choice',
@@ -1093,7 +1093,7 @@ describe('runSimulation — L2 validates reveal.content template vars', () => {
           { label: 'A', value: 'a', action: 'a', on_select: 'next' },
           { label: 'Cancel', value: 'cancel', action: 'cancel', on_select: 'cancel' },
         ],
-        on_success: 'next', on_failure: 'cancel', on_cancel: 'cancel',
+        on_success: 'next', on_else: 'cancel', on_cancel: 'cancel',
       },
       { step: '3', type: 'end' },
     ];
