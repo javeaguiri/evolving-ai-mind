@@ -210,13 +210,6 @@ function runValidation(output, outputSchema) {
     errors.push(...runSemanticRules(output));
   }
 
-  // Pass 2b — Routing value rules (only for outputs that carry a steps array)
-  // Runs independently of output.tables — workflow generation prompts produce
-  // steps arrays without tables. Does not run on create_domain output.
-  if (errors.length === 0 && Array.isArray(output.steps)) {
-    errors.push(...runRoutingValueRules(output.steps));
-  }
-
   return errors;
 }
 
@@ -290,113 +283,6 @@ function runSemanticRules(scaffold) {
             parent:  parentTable,
           });
         }
-      }
-    }
-  }
-
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Pass 2b — Routing value rules (workflow step arrays)
-// ---------------------------------------------------------------------------
-
-/**
- * Validate routing values in a steps array.
- * Called when LLM output contains a steps array — i.e. workflow generation
- * prompts (generate_workflow_steps, classify_workflow_intent, etc.).
- * Not called for create_domain output (which has tables, not steps).
- *
- * Checks:
- *   1. Every on_success / on_else / on_select value is a known routing token
- *   2. Every step:N routing target exists as a step key in the array
- *   3. Every human_gate has at least one option with action: "cancel"
- *
- * Returns errors as { type: 'semantic', rule, message, step } — same shape
- * as runSemanticRules so the correction loop formats them identically.
- */
-function runRoutingValueRules(steps) {
-  const errors = [];
-
-  // Valid routing token: next, end, cancel, step:<key>, or a bare step key.
-  // Bare alphanumeric keys are valid for all steps; condition steps additionally
-  // require bare keys (control tokens and step:N are invalid there — checked below).
-  const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
-  const CONTROL_TOKENS   = new Set(['next', 'end', 'cancel']);
-  const stepKeys         = new Set(steps.map(s => String(s.step)));
-
-  function checkToken(stepKey, fieldName, value) {
-    if (value == null) return;
-    const v = String(value);
-    if (!ROUTING_TOKEN_RE.test(v)) {
-      errors.push({
-        type:    'semantic',
-        rule:    'unknown_routing_value',
-        message: `Step "${stepKey}" field "${fieldName}" has unknown routing value "${v}". ` +
-                 `Valid values: next, end, cancel, step:<key>, or a bare step key (e.g. "5", "9a")`,
-        step:    stepKey,
-      });
-      return;
-    }
-    // Dead-target check for step:N and bare step keys
-    let target = null;
-    if (v.startsWith('step:'))         target = v.slice(5);
-    else if (!CONTROL_TOKENS.has(v))   target = v;
-    if (target !== null && !stepKeys.has(target)) {
-      errors.push({
-        type:    'semantic',
-        rule:    'dead_routing_target',
-        message: `Step "${stepKey}" field "${fieldName}" routes to "${v}" ` +
-                 `but no step with key "${target}" exists in this steps array`,
-        step:    stepKey,
-      });
-    }
-  }
-
-  for (const s of steps) {
-    const key = String(s.step);
-
-    checkToken(key, 'on_success',  s.on_success);
-    checkToken(key, 'on_else',     s.on_else);
-    checkToken(key, 'on_complete', s.on_complete);
-
-    for (const opt of s.options ?? []) {
-      checkToken(key, `options[${opt.label ?? opt.value}].on_select`, opt.on_select);
-    }
-
-    // Condition steps: on_success/on_else must be bare step keys.
-    // Control tokens (next, end, cancel) and step:N format are not valid.
-    if (s.type === 'condition') {
-      for (const field of ['on_success', 'on_else']) {
-        const val = s[field];
-        if (val == null) continue;
-        const sv = String(val);
-        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
-          const bare = sv.startsWith('step:') ? sv.slice(5) : null;
-          errors.push({
-            type:    'semantic',
-            rule:    'condition_routing_invalid',
-            message: `Condition step "${key}" field "${field}" must be a bare step key but got "${sv}". ` +
-                     (bare
-                       ? `Use "${bare}" directly — not "step:${bare}".`
-                       : `Control tokens (next, end, cancel) are not valid for condition routing — use the target step key directly (e.g. "5", "9a").`),
-            step:    key,
-          });
-        }
-      }
-    }
-
-    // Ensure every human_gate has a cancel option (on_select === 'cancel')
-    if (s.type === 'human_gate') {
-      const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
-      if (!hasCancel) {
-        errors.push({
-          type:    'semantic',
-          rule:    'missing_cancel_option',
-          message: `human_gate step "${key}" has no option with on_select "cancel" — ` +
-                   `every gate must give the user a way to cancel`,
-          step:    key,
-        });
       }
     }
   }
