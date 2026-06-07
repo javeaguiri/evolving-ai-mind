@@ -318,9 +318,12 @@ function runSemanticRules(scaffold) {
 function runRoutingValueRules(steps) {
   const errors = [];
 
-  // Valid routing token: next, end, cancel, or step:<key>
-  const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+)$/;
-  const stepKeys = new Set(steps.map(s => String(s.step)));
+  // Valid routing token: next, end, cancel, step:<key>, or a bare step key.
+  // Bare alphanumeric keys are valid for all steps; condition steps additionally
+  // require bare keys (control tokens and step:N are invalid there — checked below).
+  const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
+  const CONTROL_TOKENS   = new Set(['next', 'end', 'cancel']);
+  const stepKeys         = new Set(steps.map(s => String(s.step)));
 
   function checkToken(stepKey, fieldName, value) {
     if (value == null) return;
@@ -330,22 +333,23 @@ function runRoutingValueRules(steps) {
         type:    'semantic',
         rule:    'unknown_routing_value',
         message: `Step "${stepKey}" field "${fieldName}" has unknown routing value "${v}". ` +
-                 `Valid values: next, end, cancel, step:<key>`,
+                 `Valid values: next, end, cancel, step:<key>, or a bare step key (e.g. "5", "9a")`,
         step:    stepKey,
       });
       return;
     }
-    if (v.startsWith('step:')) {
-      const target = v.slice(5);
-      if (!stepKeys.has(target)) {
-        errors.push({
-          type:    'semantic',
-          rule:    'dead_routing_target',
-          message: `Step "${stepKey}" field "${fieldName}" routes to "step:${target}" ` +
-                   `but no step with key "${target}" exists in this steps array`,
-          step:    stepKey,
-        });
-      }
+    // Dead-target check for step:N and bare step keys
+    let target = null;
+    if (v.startsWith('step:'))         target = v.slice(5);
+    else if (!CONTROL_TOKENS.has(v))   target = v;
+    if (target !== null && !stepKeys.has(target)) {
+      errors.push({
+        type:    'semantic',
+        rule:    'dead_routing_target',
+        message: `Step "${stepKey}" field "${fieldName}" routes to "${v}" ` +
+                 `but no step with key "${target}" exists in this steps array`,
+        step:    stepKey,
+      });
     }
   }
 
@@ -358,6 +362,28 @@ function runRoutingValueRules(steps) {
 
     for (const opt of s.options ?? []) {
       checkToken(key, `options[${opt.label ?? opt.value}].on_select`, opt.on_select);
+    }
+
+    // Condition steps: on_success/on_else must be bare step keys.
+    // Control tokens (next, end, cancel) and step:N format are not valid.
+    if (s.type === 'condition') {
+      for (const field of ['on_success', 'on_else']) {
+        const val = s[field];
+        if (val == null) continue;
+        const sv = String(val);
+        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
+          const bare = sv.startsWith('step:') ? sv.slice(5) : null;
+          errors.push({
+            type:    'semantic',
+            rule:    'condition_routing_invalid',
+            message: `Condition step "${key}" field "${field}" must be a bare step key but got "${sv}". ` +
+                     (bare
+                       ? `Use "${bare}" directly — not "step:${bare}".`
+                       : `Control tokens (next, end, cancel) are not valid for condition routing — use the target step key directly (e.g. "5", "9a").`),
+            step:    key,
+          });
+        }
+      }
     }
 
     // Ensure every human_gate has a cancel option (on_select === 'cancel')
