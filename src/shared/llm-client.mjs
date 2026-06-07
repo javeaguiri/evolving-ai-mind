@@ -260,7 +260,14 @@ export async function callLlmWithCorrection(model, instructions, userMessage, ou
       if (node !== undefined && node !== null && typeof node !== 'object') actualValue = node;
     }
     const valuePart = actualValue !== null ? ` (got: "${actualValue}")` : '';
-    return location ? `- [${location}]${valuePart} ${e.message}` : `- ${e.message}`;
+    let message = e.message;
+    const path = e.instancePath || '';
+    if (path.endsWith('output_shape') || path.endsWith('/output_shape')) {
+      message += ' — output_shape must be a JSON Schema object describing the prompt\'s output fields; use {} if the output has no specific shape';
+    } else if (e.keyword === 'required' && e.params?.missingProperty === 'output_shape') {
+      message += ' — output_shape must be a JSON Schema object describing the prompt\'s output fields; use {} if the output has no specific shape';
+    }
+    return location ? `- [${location}]${valuePart} ${message}` : `- ${message}`;
   }).join('\n');
   const outputText = JSON.stringify(attempt1Output, null, 2);
 
