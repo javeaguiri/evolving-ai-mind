@@ -979,6 +979,26 @@ function mockValueForType(stepType) {
   return {};
 }
 
+// Scan expression for `local_state.X[` patterns — keys used as arrays.
+function inferMockArrayKeys(expr) {
+  const keys = new Set();
+  const indexRe  = /local_state\.(\w+)\s*\[/g;
+  const methodRe = /local_state\.(\w+)\.(slice|map|filter|find|findIndex|forEach|some|every|reduce|includes|length|push|pop|shift|unshift)\b/g;
+  let m;
+  while ((m = indexRe.exec(expr))  !== null) keys.add(m[1]);
+  while ((m = methodRe.exec(expr)) !== null) keys.add(m[1]);
+  return keys;
+}
+
+// Scan expression for `[local_state.X]` patterns — keys used as numeric indices.
+function inferMockIndexKeys(expr) {
+  const keys = new Set();
+  const re = /\[\s*local_state\.(\w+)\s*\]/g;
+  let m;
+  while ((m = re.exec(expr)) !== null) keys.add(m[1]);
+  return keys;
+}
+
 function runJsTransformSmokeTest(steps, traceId) {
   const issues    = [];
   let stepsTested = 0;
@@ -994,6 +1014,17 @@ function runJsTransformSmokeTest(steps, traceId) {
         let result;
         let threwSyntax  = false;
         let threwRuntime = false;
+
+        // Augment mockState with inferred shapes before running the expression.
+        // Keys accessed as arrays get [{ id: 1 }]; keys used as numeric indices get 0.
+        // This prevents false-positive void_return and runtime_error failures when the
+        // expression is valid but mock state doesn't match real data shapes.
+        for (const k of inferMockArrayKeys(expr)) {
+          if (!Array.isArray(mockState[k])) mockState[k] = [{ id: 1 }];
+        }
+        for (const k of inferMockIndexKeys(expr)) {
+          if (typeof mockState[k] !== 'number') mockState[k] = 0;
+        }
 
         // When input_key is set, step-executor binds local_state[input_key] as 'items'.
         // Mirror that here so expressions using 'items' don't throw spurious ReferenceErrors.
