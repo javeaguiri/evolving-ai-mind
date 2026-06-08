@@ -146,7 +146,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
       status:        'running',
       workflow_name: run.workflow_name,
       current_step:  '1',
-      local_state:   { ...(run.state?.local_state ?? {}), input: run.input ?? {} },
+      local_state:   { input: run.input ?? {} },
       on_complete:   'end',
       pushed_at:     new Date().toISOString(),
     };
@@ -412,7 +412,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
       {
         status:     'awaiting_human_gate',
         stack:      run.stack,
-        state:      { local_state: frame.local_state },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -481,7 +480,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
     [{ column: 'id', op: 'eq', value: run.id }],
     {
       stack:      run.stack,
-      state:      { local_state: frame.local_state },
       step_count: (run.step_count ?? 0) + 1,
     }
   );
@@ -537,7 +535,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
 
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
-      { stack: run.stack, state: { local_state: localState } }
+      { stack: run.stack }
     );
 
     const updatedDialog = buildDialog(stepRef, localState);
@@ -701,7 +699,6 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     {
       status:     'running',
       stack:      run.stack,
-      state:      { local_state: persistedState },
       step_count: (run.step_count ?? 0) + 1,
     }
   );
@@ -753,7 +750,7 @@ async function startIterator({ step, frame, run, traceId }) {
 
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
-    { stack: run.stack, state: { local_state: frame.local_state }, step_count: (run.step_count ?? 0) + 1 }
+    { stack: run.stack, step_count: (run.step_count ?? 0) + 1 }
   );
 
   await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
@@ -855,7 +852,6 @@ async function executeIteratorInline({ run, frame, traceId }) {
         {
           status:     'awaiting_human_gate',
           stack:      run.stack,
-          state:      { local_state: frame.local_state },
           step_count: (run.step_count ?? 0) + 1,
         }
       );
@@ -897,7 +893,6 @@ async function executeIteratorInline({ run, frame, traceId }) {
     [{ column: 'id', op: 'eq', value: run.id }],
     {
       stack:      run.stack,
-      state:      { local_state: parentFrame?.local_state ?? {} },
       step_count: (run.step_count ?? 0) + results.length + 1,
     }
   );
@@ -939,7 +934,6 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       {
         stack:      run.stack,
-        state:      { local_state: parentFrame?.local_state ?? {} },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -1026,7 +1020,6 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       {
         stack:      run.stack,
-        state:      { local_state: parentFrame?.local_state ?? {} },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -1119,7 +1112,7 @@ function topFrame(run) {
 async function persistStack(run) {
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
-    { stack: run.stack, state: { local_state: topFrame(run)?.local_state ?? {} } }
+    { stack: run.stack }
   );
 }
 
