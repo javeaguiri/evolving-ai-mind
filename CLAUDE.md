@@ -241,7 +241,7 @@ Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updat
 | PGC_EntitySchema | Business entities spanning multiple PGD tables (jsonb_agg queries) | entity_name, root_table, joins, aggregations, upsert_key, domain |
 | PGC_DomainHelp | User-facing aliases + help text per domain; Pass 2 alias matching | domain, aliases, description, commands, embedding |
 | PGC_Workflow | Reusable workflow definitions | name, domain, steps, intent_keywords, state_strategy, model_used, version |
-| PGC_WorkflowRun | One row per execution — stack, state, safety counters | workflow_id, trace_id, status, input, stack, state, output, callback, step_count |
+| PGC_WorkflowRun | One row per execution — stack, safety counters | workflow_id, trace_id, status, input, stack, output, callback, step_count (`state` deprecated — written only at completion) |
 | PGC_WorkflowRunStep | Append-only step audit log; idempotency on SQS redelivery | run_id, frame_id, step_number, step_type, status, input_snapshot, output_snapshot |
 | PGC_Prompt | LLM prompts with versioning | intent_category, prompt_text, input_variables, output_schema, probe_input, model, version |
 | PGC_IntentMap | Maps patterns → workflows for Pass 1 intent classification | pattern, intent_category, workflow_id, action_type |

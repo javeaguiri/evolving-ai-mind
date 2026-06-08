@@ -159,7 +159,7 @@ callback routing, and runtime safety counters.
 | status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `completed`, `failed`, `cancelled` |
 | input | jsonb | Original user intent + parameters |
 | stack | jsonb | Execution stack — array of FrameDefinition (see Section 6.3). Controls frame flow only |
-| state | jsonb | Accumulated cross-step data bag. Steps write `output_key` values here; subsequent steps read from here. Copied to `output` at run completion |
+| state | jsonb | **Deprecated.** Previously mirrored `stack[top].local_state` on every write. Now written only at workflow completion (`{ local_state: finalState }`). Do not read or write `state.local_state` during execution — use `stack[top].local_state` directly |
 | output | jsonb | Final workflow output — copied from `state` at completion |
 | callback | jsonb | Provider-agnostic UI callback — `{ provider, channel, threadId }` |
 | total_execution_ms | integer | Running sum of all step `duration_ms` values. Incremented in same UPDATE as stack write. Used by Guard 2 |
