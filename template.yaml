@@ -243,13 +243,13 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSWorkflow
-      # Must exceed ProcFunction Timeout (120s) — prevents SQS redelivery while a
+      # Must exceed ProcFunction Timeout (240s) — prevents SQS redelivery while a
       # long-running step (LLM call + correction loop can reach ~105s) is in flight.
       # 90s caused duplicate step execution when correction loop exceeded the timeout
-      # (run 384: 55s LLM + 48s correction = 103s). Set to 300s (2.5× Lambda timeout)
-      # to give comfortable headroom. Trade-off: a hard-killed Lambda waits up to 300s
+      # (run 384: 55s LLM + 48s correction = 103s). Set to 600s (2.5× Lambda timeout)
+      # to give comfortable headroom. Trade-off: a hard-killed Lambda waits up to 600s
       # before SQS retries, but application-level catch handles all normal failures.
-      VisibilityTimeout: 300
+      VisibilityTimeout: 600
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
         maxReceiveCount: 3
@@ -522,7 +522,7 @@ Resources:
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
       Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
-      Timeout: 120                    # Override Global 29s — LLM steps can run long
+      Timeout: 240                    # Override Global 29s — LLM steps can run long
       Environment:
         Variables:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
