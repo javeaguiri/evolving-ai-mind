@@ -143,10 +143,19 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
   }
   const promptRow = promptResp.rows[0];
 
-  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  let resolvedInput = resolveInput(step.input ?? {}, localState);
 
   const contextResp = await getRows('PGC_SystemContext');
   const contextRows = contextResp.success ? (contextResp.rows ?? []) : [];
+
+  // Auto-inject step_type_contracts when the prompt references it.
+  // Fetched fresh from PGC_StepType at call time — not stored in local_state.
+  if (!('step_type_contracts' in resolvedInput) && promptRow.prompt_text?.includes('{{step_type_contracts}}')) {
+    const stResp = await getRows('PGC_StepType', [{ column: 'status', op: 'eq', value: 'live' }]);
+    if (stResp.success && stResp.rows?.length > 0) {
+      resolvedInput = { ...resolvedInput, step_type_contracts: stResp.rows };
+    }
+  }
 
   const resolvedModel = resolveModelAlias(promptRow.model, contextRows);
 
