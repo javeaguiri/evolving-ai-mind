@@ -284,8 +284,12 @@
         "on_else": "cancel",
         "save_to_memory": {
           "memory_type": "semantic",
-          "scope": { "domain": "{{proposed_scaffold.domain}}" },
-          "tags": ["schema_expectations"],
+          "scope": {
+            "domain": "{{proposed_scaffold.domain}}"
+          },
+          "tags": [
+            "schema_expectations"
+          ],
           "priority": 3
         }
       },
@@ -304,8 +308,12 @@
         "on_else": "cancel",
         "save_to_memory": {
           "memory_type": "semantic",
-          "scope": { "domain": "{{proposed_scaffold.domain}}" },
-          "tags": ["schema_expectations"],
+          "scope": {
+            "domain": "{{proposed_scaffold.domain}}"
+          },
+          "tags": [
+            "schema_expectations"
+          ],
           "priority": 3
         }
       },
@@ -356,9 +364,14 @@
         "description": "Persist confirmed schema snapshot as semantic memory for retrieval by create_workflow and parse_entity_input (classify-intent data loads).",
         "input": {
           "memory_type": "semantic",
-          "scope": { "domain": "{{proposed_scaffold.domain}}" },
+          "scope": {
+            "domain": "{{proposed_scaffold.domain}}"
+          },
           "content_key": "domain_semantic_content",
-          "tags": ["schema_snapshot", "insert_expectations"],
+          "tags": [
+            "schema_snapshot",
+            "insert_expectations"
+          ],
           "priority": 2
         },
         "on_success": "next",
@@ -816,24 +829,6 @@
         "on_cancel": "cancel"
       },
       {
-        "step": "10",
-        "type": "serv_query",
-        "description": "Load live PGC_StepType contracts for injection into left brain prompts.",
-        "input": {
-          "tableName": "PGC_StepType",
-          "filters": [
-            {
-              "column": "status",
-              "op": "eq",
-              "value": "live"
-            }
-          ]
-        },
-        "output_key": "step_type_contracts",
-        "on_success": "next",
-        "on_else": "cancel"
-      },
-      {
         "step": "11",
         "type": "llm_call",
         "description": "Left brain pass 1: classify all gaps (schema, missing prompts, blocked capabilities). No design work.",
@@ -844,8 +839,7 @@
           "domain_schema": "{{domain_schema}}",
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
-          "user_design_notes": "{{user_design_notes}}",
-          "step_type_contracts": "{{step_type_contracts}}"
+          "user_design_notes": "{{user_design_notes}}"
         },
         "output_key": "gap_analysis",
         "on_success": "next",
@@ -969,8 +963,7 @@
           "gap_analysis": "{{gap_analysis}}",
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
-          "user_design_notes": "{{user_design_notes}}",
-          "step_type_contracts": "{{step_type_contracts}}"
+          "user_design_notes": "{{user_design_notes}}"
         },
         "output_key": "process_spec",
         "on_success": "next",
