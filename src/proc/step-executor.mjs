@@ -1391,6 +1391,21 @@ async function executeWriteMemory({ step, localState, run, traceId }) {
     const row = buildMemoryRow(step, localState);
     row.source_run_id = run?.id ?? null;
 
+    const input = resolveInput(step.input ?? {}, localState);
+    if (input.expire_prior === true) {
+      const expireFilters = [
+        { column: 'scope',       op: 'jsonb_contains', value: row.scope },
+        { column: 'expires_at',  op: 'is_null' },
+      ];
+      if (row.tags?.length > 0) {
+        expireFilters.push({ column: 'tags', op: 'jsonb_contains', value: row.tags });
+      }
+      const expireResp = await updateRows('PGC_Memory', expireFilters, { expires_at: new Date().toISOString() });
+      if (!expireResp.success) {
+        console.warn('step-executor: write_memory expire_prior failed (non-fatal)', { error: expireResp.error, traceId });
+      }
+    }
+
     console.info('step-executor: write_memory', { memory_type: row.memory_type, traceId });
 
     const resp = await insertRow('PGC_Memory', row);
