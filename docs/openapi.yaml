@@ -313,7 +313,7 @@ components:
           example: status
         op:
           type: string
-          enum: [eq, neq, gt, gte, lt, lte, like, in, is_null, not_null]
+          enum: [eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains]
           example: eq
         value:
           description: >
@@ -3271,7 +3271,7 @@ paths:
       description: >
         Parameterised SELECT gated by PGC_TableMap. Supports filters, orderBy,
         and limit. Column names in filters are validated against PGC_Schema.
-        Filter operators — eq, neq, gt, gte, lt, lte, like, in, is_null, not_null.
+        Filter operators — eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains (PostgreSQL @> containment — value must be a JSON object or array).
 
         **pgvector semantic search (vectorSearch)**
 

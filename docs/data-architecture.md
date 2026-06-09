@@ -856,7 +856,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 Security gate on all operations:
 - Table must be registered in `PGC_TableMap`
 - Column names validated against `PGC_Schema.columns` for that table
-- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`)
+- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`, `jsonb_contains` — PostgreSQL `@>` containment; value must be a JSON object or array)
 - `updateRows` and `deleteRows` require non-empty `filters` — unfiltered mass writes rejected at 400
 - `allow_insert`, `allow_update`, `allow_delete` checked per-table from `PGC_TableMap`
 
