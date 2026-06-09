@@ -679,8 +679,9 @@
             "memory_type": { "type": "string", "enum": ["episodic", "semantic", "procedural"] },
             "scope":       { "type": "object", "additionalProperties": { "type": "string" } },
             "content_key": { "type": "string", "description": "Key in local_state whose string value is written as the memory content." },
-            "tags":        { "type": "array", "items": { "type": "string" } },
-            "priority":    { "type": "integer" }
+            "tags":          { "type": "array", "items": { "type": "string" } },
+            "priority":      { "type": "integer" },
+            "expire_prior":  { "type": "boolean" }
           }
         },
         "on_success":  { "$ref": "#/definitions/routingToken" },

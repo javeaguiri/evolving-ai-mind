@@ -372,7 +372,8 @@
             "schema_snapshot",
             "insert_expectations"
           ],
-          "priority": 2
+          "priority": 2,
+          "expire_prior": true
         },
         "on_success": "next",
         "on_else": "next"
