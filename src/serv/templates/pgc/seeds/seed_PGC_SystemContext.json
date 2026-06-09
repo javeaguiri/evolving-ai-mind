@@ -915,7 +915,8 @@
     "content": {
       "enabled_workflows": [
         "create_workflow",
-        "create_domain"
+        "create_domain",
+        "add_entity"
       ]
     }
   },
