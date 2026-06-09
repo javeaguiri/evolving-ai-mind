@@ -821,7 +821,7 @@
   },
   {
     "intent_category": "parse_entity_input",
-    "version": 6,
+    "version": 7,
     "model": "smart",
     "was_successful": null,
     "input_variables": [
@@ -869,7 +869,7 @@
     },
     "max_output_tokens": 16384,
     "memory_config": {
-      "memory_budget_tokens": 400,
+      "memory_budget_tokens": 800,
       "memory_types": [
         "semantic"
       ]
