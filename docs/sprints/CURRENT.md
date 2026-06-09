@@ -153,6 +153,14 @@ Close the memory bridge between `create_domain` and `create_workflow` so that sc
 
 ## Session Notes
 
+**2026-06-09 (session 20):** Diagnosed run 448 (`add_entity` failure, flashcard domain). Two defects in `parse_entity_input` prompt identified via `/explain`.
+
+**(1) Wrong empty-child rule:** LLM produced `[{},{},...]` (one empty object per flashcard) for `review` and `cardtag` arrays when no user data was present. Correct rule: use `[]` when no user data exists for a child table that has required fields. `[{},{}...]` is only valid for tables whose columns are entirely system-managed (zero user-providable fields at creation time). `parse_entity_input` prompt needs this rule made explicit.
+
+**(2) Deck hierarchy not inferred:** Input "Patent set name=Spanish Vocabulary" (typo for "Parent") was interpreted as a deck description, not a parent deck entity. Self-referential parent-child inserts require two sequential operations — parent first (to get its FK), then child. The prompt should either reject ambiguous hierarchy input and ask for clarification, or document that hierarchical decks must be created separately. Correct structure: `{root:{name:"Spanish Vocabulary"}, children:{flashcard:[],…}}` first, then `{root:{name:"June 5, 2024", parent_deck_fk:<id>}, children:{flashcard:[34 cards],…}}`.
+
+Also this session: `add_entity` added to `diagnostics_config.enabled_workflows` (upserted). Next: retrigger the failed flashcard set insert and confirm PGC_Session is created for `/explain`.
+
 **2026-06-09 (session 19):** Three prompt defects found and fixed via LLM diagnostic sessions (PGC_Session/PGC_SessionEntry).
 
 (1) `create_domain` v17 / `design_table` v6 — `initial_value_conventions` case (2) reworded: "Any aggregations needed during data loads (even if a SQL DEFAULT is present)..." so the LLM no longer skips `card_count`-style counters that have `DEFAULT 0`. `expire_prior` confirmed working — old schema snapshots correctly expired on new runs.
