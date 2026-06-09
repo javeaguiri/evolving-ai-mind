@@ -108,7 +108,7 @@ for (const row of targets) {
     const dbFp = fingerprint(existingRow);
 
     if (seedFp === dbFp) {
-      console.log(`  ${label}  v${existingRow.version}  ok`);
+      console.log(`  ${label}  v${row.version}  ok`);
       counts.ok++;
       continue;
     }

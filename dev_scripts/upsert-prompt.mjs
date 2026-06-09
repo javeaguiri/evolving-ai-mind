@@ -158,9 +158,18 @@ for (const prompt of targets) {
   const dbVersion = dbRow.version;
   const dbFp      = fingerprint(dbRow);
 
-  // Fingerprints match -- no-op (version number difference is irrelevant)
+  // Fingerprints match -- content already current; sync version if it drifted
   if (seedFp === dbFp) {
-    console.log(`  ${label}  v${dbVersion}  ok`);
+    if (dbVersion !== seedVersion) {
+      await servPost('/api/v1/serv/table/updateRows', {
+        tableName: 'PGC_Prompt',
+        filters: [{ column: 'intent_category', op: 'eq', value: prompt.intent_category }, { column: 'version', op: 'eq', value: dbVersion }],
+        updates: { version: seedVersion },
+      });
+      console.log(`  ${label}  v${dbVersion}→v${seedVersion}  ok (version synced)`);
+    } else {
+      console.log(`  ${label}  v${seedVersion}  ok`);
+    }
     counts.ok++;
     continue;
   }
@@ -187,11 +196,12 @@ for (const prompt of targets) {
       max_output_tokens: prompt.max_output_tokens ?? null,
       probe_input:       prompt.probe_input ?? null,
       memory_config:     prompt.memory_config ?? null,
+      version:           seedVersion,
     },
   });
 
   if (!result.success) { console.error(`ERROR [${label}]: updateRows failed`, result); process.exit(1); }
-  console.log(`  ${label}  v${dbVersion}  updated`);
+  console.log(`  ${label}  v${dbVersion}→v${seedVersion}  updated`);
   counts.updated++;
 }
 

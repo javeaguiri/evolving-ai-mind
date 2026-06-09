@@ -95,6 +95,7 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | `init-brain.mjs` shared DDL utilities | `buildCreateTableSQL` and `getClient` imported by `schema.mjs` from `init-brain.mjs`. Refactor: extract to `src/shared/serv-utils.mjs` |
 | `PGC_Schema` not updated when `ALTER TABLE` adds a column | Every `ALTER TABLE` on a PGC table must be paired with an `UPDATE PGC_Schema SET columns = columns \|\| '[{"name":...}]'` |
 | Implement remaining Block Elements | Create-workflow LLM design-workflow-dialogues need a complete menu of widgets to handle any dialog requirement like date-picker, URL links, etc. See Block Elements table in slack-block-kit.md |
+| `memory-client.mjs` — push scope/tag filters to DB via `jsonb_contains` | `retrieveMemories` currently calls `getRows('PGC_Memory')` with no filters and applies scope, expiry, and tag checks client-side. Now that SERV supports the `jsonb_contains` (`@>`) op, scope and tag filters can be pushed to the DB — eliminating a full-table scan on every LLM call. Client-side post-filter can be kept as a safety net. Also: the greedy selector at line 190 uses `break` on first oversized row — a single high-priority fat memory starves all smaller ones below it; change to `continue` to skip-and-keep-going. **Context:** surface this item whenever `src/proc/memory-client.mjs` is touched. |
 
 ### Low Priority
 
