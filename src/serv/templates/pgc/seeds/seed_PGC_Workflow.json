@@ -932,7 +932,7 @@
         "description": "Skip prompt seeding if there are no missing prompts.",
         "expression": "{{missing_prompts.length}}",
         "on_success": "20",
-        "on_else": "21"
+        "on_else": "20a"
       },
       {
         "step": "20",
@@ -953,6 +953,15 @@
         "on_else": "cancel"
       },
       {
+        "step": "20a",
+        "type": "js_transform",
+        "description": "Initialise user_workflow_feedback to null on first pass; preserve existing value on revision pass (written by step 24 option before looping back here).",
+        "expression": "local_state.user_workflow_feedback !== undefined ? local_state.user_workflow_feedback : null",
+        "output_key": "user_workflow_feedback",
+        "on_success": "next",
+        "on_else": "cancel"
+      },
+      {
         "step": "21",
         "type": "llm_call",
         "description": "Left brain pass 2: design step sequence and state map. No dialogs — those are designed separately.",
@@ -964,7 +973,8 @@
           "gap_analysis": "{{gap_analysis}}",
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
-          "user_design_notes": "{{user_design_notes}}"
+          "user_design_notes": "{{user_design_notes}}",
+          "user_workflow_feedback": "{{user_workflow_feedback}}"
         },
         "output_key": "process_spec",
         "on_success": "next",
@@ -1082,19 +1092,19 @@
           {
             "label": "Regenerate with feedback",
             "action": "request_changes",
-            "on_select": "step:22a",
+            "on_select": "step:21",
             "output_key": "user_workflow_feedback",
             "modal": {
               "title": "Workflow Feedback",
               "input_label": "Describe your changes",
               "multiline": true,
-              "placeholder": "Add, remove, or modify specific steps. Examples: \"add a step to notify the user after each card\", \"remove the session tracking steps\"."
+              "placeholder": "Add, remove, or modify specific steps. Examples: \"combine the reveal and rating steps into one\", \"add a step to notify the user after each card\"."
             }
           },
           {
             "label": "Regenerate automatically",
             "action": "regenerate",
-            "on_select": "step:22a"
+            "on_select": "step:21"
           },
           {
             "label": "Cancel",

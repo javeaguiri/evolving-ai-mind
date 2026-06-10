@@ -1348,3 +1348,68 @@ describe('resolveInput — arithmetic expression in {{}} token', () => {
     assert.strictEqual(resolveInput('{{undefined_var + 1}}', state), '{{undefined_var + 1}}');
   });
 });
+
+describe('resolvePath — variable-based array index [varName]', () => {
+  const state = {
+    current_subset: [
+      { front_text: 'Hello', back_text: 'Hola' },
+      { front_text: 'Dog',   back_text: 'Perro' },
+      { front_text: 'Cat',   back_text: 'Gato' },
+    ],
+    subset_index: 1,
+  };
+
+  it('resolves array[varName].field using localState variable as numeric index', () => {
+    assert.strictEqual(resolvePath(state, 'current_subset[subset_index].front_text'), 'Dog');
+  });
+
+  it('resolves to the last element when index points to it', () => {
+    const s = { ...state, subset_index: 2 };
+    assert.strictEqual(resolvePath(s, 'current_subset[subset_index].back_text'), 'Gato');
+  });
+
+  it('returns undefined when variable index is out of bounds', () => {
+    const s = { ...state, subset_index: 99 };
+    assert.strictEqual(resolvePath(s, 'current_subset[subset_index].front_text'), undefined);
+  });
+
+  it('resolveInput resolves full {{arr[var].field}} template token', () => {
+    assert.strictEqual(resolveInput('{{current_subset[subset_index].front_text}}', state), 'Dog');
+  });
+});
+
+describe('L1 static analysis — arithmetic expression and bracket-notation false positives', () => {
+  it('does not flag {{subset_index + 1}} as unresolved — arithmetic handled by evalExpression', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '0', output_key: 'subset_index', on_success: 'next', on_else: 'end' },
+      { step: '2', type: 'notify', message_template: 'Card {{subset_index + 1}} of 10', on_success: 'end', on_else: 'end' },
+      { step: '3', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const issues = result.static_analysis.issues.filter(i => i.failure_class === 'unresolved_template_variable');
+    assert.strictEqual(issues.length, 0, `Expected no unresolved issues, got: ${JSON.stringify(issues)}`);
+  });
+
+  it('does not flag {{current_subset[subset_index].front_text}} as unresolved when base key exists', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '[]', output_key: 'current_subset', on_success: 'next', on_else: 'end' },
+      { step: '2', type: 'js_transform', expression: '0',  output_key: 'subset_index',   on_success: 'next', on_else: 'end' },
+      { step: '3', type: 'notify', message: '{{current_subset[subset_index].front_text}}', on_success: 'end', on_else: 'end' },
+      { step: '4', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const issues = result.static_analysis.issues.filter(i => i.failure_class === 'unresolved_template_variable');
+    assert.strictEqual(issues.length, 0, `Expected no unresolved issues, got: ${JSON.stringify(issues)}`);
+  });
+
+  it('still flags genuinely missing base key', () => {
+    const steps = [
+      { step: '1', type: 'notify', message_template: '{{missing_key.field}}', on_success: 'end', on_else: 'end' },
+      { step: '2', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const issues = result.static_analysis.issues.filter(i => i.failure_class === 'unresolved_template_variable');
+    assert.strictEqual(issues.length, 1);
+    assert.match(issues[0].detail, /missing_key/);
+  });
+});

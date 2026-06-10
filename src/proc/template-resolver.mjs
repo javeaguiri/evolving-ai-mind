@@ -13,18 +13,20 @@
 //   {{proposed_scaffold.tables.length}} — .length on arrays
 //   {{all_cards[*].id}}                 — JSONPath wildcard: extract field from every array element
 //   {{entity_schema_rows[0].root_table}} — bracket index access
+//   {{current_subset[subset_index].front_text}} — variable-based array index resolved against localState
 
 /**
  * Normalise a path string to a plain dot-separated token list.
- * Converts JSONPath bracket notation — [*] and [n] — to dot segments
+ * Converts JSONPath bracket notation — [*], [n], and [varName] — to dot segments
  * so the walker below handles a single unified format.
  *
- * "cards[*].id"   → ["cards", "*", "id"]
- * "rows[0].name"  → ["rows", "0", "name"]
- * "input.domain"  → ["input", "domain"]
+ * "cards[*].id"                       → ["cards", "*", "id"]
+ * "rows[0].name"                      → ["rows", "0", "name"]
+ * "current_subset[subset_index].front" → ["current_subset", "subset_index", "front"]
+ * "input.domain"                      → ["input", "domain"]
  */
 function tokenizePath(path) {
-  return path.replace(/\[(\*|\d+)\]/g, '.$1').split('.').filter(Boolean);
+  return path.replace(/\[(\*|\d+|[a-zA-Z_][a-zA-Z0-9_]*)\]/g, '.$1').split('.').filter(Boolean);
 }
 
 /**
@@ -52,6 +54,10 @@ export function resolvePath(obj, path) {
 
     if (Array.isArray(cur) && /^\d+$/.test(key)) {
       cur = cur[parseInt(key, 10)];
+    } else if (Array.isArray(cur) && /^[a-zA-Z_]/.test(key)) {
+      // Variable-based index: look up the key in the root object to get the numeric index.
+      const idx = obj[key];
+      cur = typeof idx === 'number' ? cur[idx] : cur[key];
     } else {
       cur = cur[key];
     }

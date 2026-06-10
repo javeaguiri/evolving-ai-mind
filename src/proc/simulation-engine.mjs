@@ -339,7 +339,18 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           }
           continue;
         }
-        const baseKey = ref.split('.')[0];
+        // Arithmetic expressions (e.g. "subset_index + 1") are handled by evalExpression at
+        // runtime — extract identifiers for tracking but skip the unresolved-key check.
+        if (/[\s+\-*%]/.test(ref)) {
+          const ids = ref.match(/\b[a-zA-Z_][a-zA-Z0-9_.]*\b/g) ?? [];
+          for (const id of ids) {
+            const bk = id.split('.')[0];
+            if (bk !== 'item') { stepReads.add(bk); allReadsEver.add(bk); }
+          }
+          continue;
+        }
+        // Strip bracket notation to extract true base key: "arr[idx].prop" → "arr"
+        const baseKey = ref.split('.')[0].replace(/\[.*/, '');
         // Collect read for state_flow tracking (all base keys except iterator-scoped 'item')
         if (baseKey !== 'item') {
           stepReads.add(baseKey);
