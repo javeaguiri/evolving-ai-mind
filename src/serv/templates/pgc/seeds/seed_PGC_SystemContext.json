@@ -53,7 +53,7 @@
             },
             {
               "step_type": "human_gate",
-              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in an inline Slack input block), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single task_card shown inline above the gate buttons — { button_label, content }. reveals: array version — one task_card per entry; supports inline array or {{template}} reference to local_state array.",
+              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in the input field), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single task_card shown inline above the gate buttons — { button_label, content }. reveals: array version — one task_card per entry; supports inline array or {{template}} reference to local_state array.",
               "input_contract": [
                 {
                   "type": "string",
@@ -77,7 +77,7 @@
                   "type": "array",
                   "field": "options",
                   "required": true,
-                  "description": "Array of option objects — must include at least one with action/value: \"cancel\". Shape by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } — clicking opens a Slack overlay modal. For choice options with a modal, also add output_key to route the modal text to a specific local_state key instead of the step-level output_key."
+                  "description": "Array of option objects — must include at least one with action/value: \"cancel\". Shape by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } — clicking opens an overlay modal. For choice options with a modal, also add output_key to route the modal text to a specific local_state key instead of the step-level output_key."
                 },
                 {
                   "type": "array",
@@ -89,7 +89,7 @@
                   "type": "string",
                   "field": "input_label",
                   "required": false,
-                  "description": "text_input only — short label above the Slack input element. Defaults to \"Your input\"."
+                  "description": "text_input only — short label above the inline text input. Defaults to \"Your input\"."
                 },
                 {
                   "type": "string",
@@ -291,7 +291,7 @@
             },
             {
               "step_type": "notify",
-              "description": "Sends a message to the user via the callback channel (Slack or any UI). The message_template is resolved against local_state. Does not block — fire and forget. Typically the second-to-last step before \"end\".",
+              "description": "Sends a message to the user via the callback channel. The message_template is resolved against local_state. Does not block — fire and forget. Typically the second-to-last step before \"end\".",
               "input_contract": [
                 {
                   "type": "string",
