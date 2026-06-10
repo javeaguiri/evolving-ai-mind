@@ -77,7 +77,7 @@ async function processSqsBatch(records) {
   for (const record of records) {
     try {
       const message = JSON.parse(record.body);
-      console.info('proc: SQS message received', { messageId: record.messageId, type: message.type });
+      console.info('proc: SQS message received', { messageId: record.messageId, type: message.type, action: message.action, workflowRunId: message.workflowRunId, traceId: message.traceId });
 
       // Ping types are handled inline — they use the generic callback object
       // and are not transport-agnostic PROC routes.
