@@ -234,18 +234,13 @@ async function executeTop({ workflowRunId, traceId, source }) {
     }
 
     // stuckCount === 1: first idempotency hit on this step.
-    // Two possible causes:
-    //   (A) SQS redelivery — the original Lambda took longer than the queue's
-    //       visibility timeout (e.g. slow LLM call + correction loop), so SQS
-    //       made the message visible again and a second Lambda picked it up.
-    //       The first Lambda already completed and recorded the step; this is a
-    //       harmless duplicate. Signature: source === 'sqs' and the prior
-    //       stuck_step is absent or different.
-    //   (B) Routing loop beginning — the workflow routes back to this step on
-    //       every execution. Will escalate to stuckCount >= 3 on next hits.
-    // Log both fields so CloudWatch can distinguish A from B in future analysis.
+    // The original Lambda already executed this step and enqueued the next
+    // execute_top. Re-enqueueing here duplicates that message and sustains any
+    // burst that reached this path — the amplifier behind recursive loop
+    // detection. Discard silently; the run advances via the already-enqueued
+    // continuation.
     const likelyCause = (source === 'sqs' && !sameStep) ? 'sqs_redelivery' : 'routing_loop_start';
-    console.warn('run-workflow: idempotency hit', {
+    console.warn('run-workflow: idempotency hit — discarding duplicate', {
       workflowRunId: run.id,
       step:          frame.current_step,
       stuckCount,
@@ -257,7 +252,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       { error: { stuck_step: frame.current_step, stuck_count: stuckCount } }
     );
-    await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
     return { skipped: true };
   }
 
