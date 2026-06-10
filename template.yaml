@@ -193,6 +193,16 @@ Resources:
                   - sqs:ListQueues
                   - sqs:GetQueueUrl
                 Resource: "*"
+              # SQS — dev debugging: read/purge DLQ, manually enqueue to WorkflowQueue
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:ChangeMessageVisibility
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt WorkflowQueue.Arn
+                  - !GetAtt WorkflowDLQ.Arn
               # EC2 — DescribeKeyPairs required for CloudFormation to validate AWS::EC2::KeyPair::KeyName parameter
               - Effect: Allow
                 Action:
