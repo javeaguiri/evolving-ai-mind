@@ -115,12 +115,74 @@ Close the memory bridge between `create_domain` and `create_workflow` so that sc
 - For each boundary: add an assertion that domain is non-null at handoff, or document explicitly that null is valid and why
 - Add unit tests in `step-executor.test.mjs` or a new `domain-propagation.test.mjs` asserting domain flows through each handoff
 
+### Track P — design_workflow_prompts in create_workflow (should-have)
+
+**Role separation and big picture:**
+
+`generate_workflow_steps` is a *workflow architect* — its job is to express intent: data flow, step sequencing, what reasoning each step requires. It must not decide whether an LLM call is optimal or whether a deterministic algorithm could replace it. That is an execution strategy concern, not a design concern.
+
+`design_workflow_prompts` is a *capability registration step* — not a mechanical lifting operation. Every `PGC_Prompt` row it creates becomes a named, versioned reasoning capability that the agentic layer (Sprint 5+) can discover, invoke, reuse, and improve. It makes three decisions for each `prompt_draft`:
+1. **Reuse** — does a matching capability already exist in `PGC_Prompt`? Link to it.
+2. **Create** — is this genuinely irreducible LLM reasoning? Register a new `PGC_Prompt` row.
+3. **Convert** — is this a deterministic algorithm the LLM expressed as prose? Emit a `js_transform` step instead and register no prompt.
+
+Decision 3 is the key capability that separates this from a simple DB insert loop. SM-2 is the canonical test vehicle: the algorithm is fully deterministic, so `design_workflow_prompts` should recognise it and emit a `js_transform`, reserving `PGC_Prompt` for genuinely irreducible reasoning. As the system accumulates domain workflows, `PGC_Prompt` becomes a clean vocabulary where every entry is irreducible — the foundation the agentic layer will reason over.
+
+**Contract between `generate_workflow_steps` and `design_workflow_prompts`:**
+
+`generate_workflow_steps` produces a *draft* step array. For each `llm_call` step requiring domain-specific reasoning it emits:
+
+| Field | Description |
+|---|---|
+| `prompt_draft` | Full inline prompt text with `{{var}}` tokens — the reasoning intent |
+| `prompt_category` | Snake_case candidate `intent_category` (e.g. `sm2_calculate`, `parse_inventory_item`) |
+| `prompt_model` | Model alias hint: `cheap`, `fast`, or `smart` |
+| `output_schema` | JSON Schema for the expected output — used by `design_workflow_prompts` to assess whether the task is deterministic |
+
+`generate_workflow_steps` must NOT write `input.prompt: <name>` for domain-specific calls — the final DB reference is `design_workflow_prompts`' output. For known system prompts (e.g. `parse_entity_input`) it continues to write `input.prompt: <intent_category>` as before.
+
+**P1. Update `generate_workflow_steps` prompt**
+- Add `prompt_draft` / `prompt_category` / `prompt_model` / `output_schema` fields to the llm_call step contract in the prompt
+- Rule: system prompts (already in `PGC_Prompt`) use `input.prompt: intent_category`; domain-specific reasoning uses `prompt_draft` + metadata
+- Add `prompt_category` and `prompt_model` to the PGC_StepType `llm_call` input_contract so L1 understands the new fields
+- Update `seed_PGC_Prompt.json`, run `upsert-prompt.mjs`; update `seed_PGC_StepType.json`, run `upsert-step-type.mjs`
+
+**P2. Add `design_workflow_prompts` LLM call to `create_workflow`**
+- New step between `generate_workflow_steps` and the L1 simulation step
+- Input: draft steps array (all `llm_call` steps with `prompt_draft` fields) + existing `PGC_Prompt` `intent_category` list (for reuse detection)
+- Output: `capability_decisions` array — one entry per `prompt_draft`: `{ step_key, decision: "reuse"|"create"|"convert", intent_category?, js_expression?, prompt_text?, model?, output_schema?, input_variables? }`
+- Update `seed_PGC_Workflow.json` (`create_workflow`), run `upsert-workflow.mjs`
+
+**P3. Apply decisions and rewrite steps**
+- `iterator` over `capability_decisions`:
+  - `create` → `serv_insert PGC_Prompt` with `domain` set to the workflow's domain
+  - `reuse` → no insert, just record the existing `intent_category`
+  - `convert` → no insert; the step will become a `js_transform`
+- `js_transform` step rewrites the draft steps array: `prompt_draft` steps with `create`/`reuse` decisions get `input: { prompt: intent_category, <vars> }`; `convert` decisions get `type: "js_transform"` with the generated `js_expression`
+- Output: clean steps array ready for L1 simulation and `serv_insert PGC_Workflow`
+
+**P4. Prompt cleanup on delete_workflow and delete_domain**
+- `delete_workflow`: after deleting the `PGC_Workflow` row, add a `serv_delete PGC_Prompt` step filtering on `intent_category IN (workflow step input.prompt values)` — or simpler: `domain = workflow.domain AND intent_category NOT IN (system prompt categories)`. The cleanest key is the `domain` column (P5 below).
+- `delete_domain`: already deletes PGD tables and associated PGC rows. Extend to also `serv_delete PGC_Prompt WHERE domain = input.domain`.
+- Update `seed_PGC_Workflow.json` for both workflows, run `upsert-workflow.mjs`
+
+**P5. Add `domain` column to `PGC_Prompt` (prerequisite for P3/P4)**
+- `POST /api/v1/serv/schema/addColumn`: `{ tableName: "PGC_Prompt", columnName: "domain", type: "text", nullable: true }`
+- System prompts have `domain: null`; domain-specific prompts written by `design_workflow_prompts` carry the workflow's domain
+- Update `PGC_Schema` seed to reflect new column; run `upsert-system-context.mjs` if any context references PGC_Prompt schema
+- Backfill: `sm2_calculate` (id=79) → `domain: "flashcards"` via `updateRows`
+
 ### Track X — schema migration (small, any time)
 
 **X1. PGC_WorkflowRun.session_id**
 - `POST /api/v1/serv/schema/addColumn` with `{ tableName: "PGC_WorkflowRun", columnName: "session_id", type: "integer", nullable: true }`
 - Update `PGC_Schema` seed to reflect new column
 - No FK constraint — PGC_Session does not yet exist
+
+**X2. PGC_Prompt.domain** *(prerequisite for Track P)*
+- `POST /api/v1/serv/schema/addColumn` with `{ tableName: "PGC_Prompt", columnName: "domain", type: "text", nullable: true }`
+- Update `PGC_Schema` seed
+- Backfill `sm2_calculate` (id=79) to `domain: "flashcards"` via `updateRows`
 
 ---
 
@@ -152,6 +214,8 @@ Close the memory bridge between `create_domain` and `create_workflow` so that sc
 ---
 
 ## Session Notes
+
+**2026-06-11 (session 22):** Sprint close session. Quiz unblocked end-to-end. (1) IntentMap mismatch: `create_workflow` run 456 registered `spaced_repetition_quiz` but old row 442 mapped `quiz.*flashcard` → `quiz_flashcards` (non-existent). Deleted rows 442 and 494 (literal-string fallback); inserted row 495 with pattern `quiz.*flashcard|flashcard.*quiz|start.*quiz|begin.*quiz|quiz\s*me` → `spaced_repetition_quiz`, `workflow_id: 335`. (2) `classify-intent.mjs` bug: workflow-not-found threw instead of notifying user — SQS retried silently for the full visibility timeout window. Fixed: replaced throw with `enqueueCallback(HUMAN_NOTIFICATION)` + return; message now consumed cleanly. (3) Run 457: step 11 `llm_call` failed — `spaced_repetition_quiz` had inline `prompt` string instead of `input.prompt: intent_category`. Created `PGC_Prompt` row `sm2_calculate` (id=79, model `cheap`); rewrote step 11 to reference it. Led to design discussion: `generate_workflow_steps` should emit `prompt_draft`/`prompt_category`/`prompt_model` for domain LLM calls; `design_workflow_prompts` step classifies each as reuse/create/convert (deterministic→js_transform) — Track P added to sprint. (4) Run 458: `chk_flashcard_difficulty_level` constraint violated — `difficulty_level real` cannot represent `1.3` exactly in 32-bit float; `1.29999995 >= 1.3` fails. Fixed `modifyColumn` to `numeric(4,2)`. Root cause in `design_table` prompt: allows `real` + decimal boundary constraints. Backlog item added with exact prompt replacement. (5) `PGC_WorkflowRunStep` not written for run 458 — backlog item added (fix or remove decision). Run 459 quiz started successfully. 352 unit tests pass.
 
 **2026-06-10 (session 21):** SQS recursive loop investigation and fix. Root cause: idempotency hit on stuckCount===1 re-enqueued an `execute_top` before returning skipped — N duplicate messages at step N sustained the burst indefinitely, inflating the AWS recursion counter past 16 and triggering recursive loop auto-remediation. Fix: removed `enqueueWorkflow` call on idempotency path in `run-workflow.mjs`. With the amplifier gone, each step produces exactly 1 execute_top; human gates break the lineage chain (counter resets to 0 at each gate); auto-segments are ≤6 steps, well under the 16-hop threshold. Session also: UI-agnostic language audit on `seed_PGC_Prompt.json`, `seed_PGC_StepType.json`, `seed_PGC_SystemContext.json` — Slack/mrkdwn/Block Kit references replaced with generic equivalents (except `workflow_constraints` row which describes current EXP tier). SQS receipt log added to `handler.mjs` `processSqsBatch` for Case A/B/C diagnosis. BastionEC2Role now has `sqs:ReceiveMessage/DeleteMessage/ChangeMessageVisibility/SendMessage` on WorkflowQueue and WorkflowDLQ for dev debugging. `create_workflow` run 456 completed; flashcard quiz workflow regenerated after validation caught `{{current_card,quality_rating}}` token defect in step 11 — corrected on regeneration pass. Open: cannot start quiz — user suspects skipping IntentMap phrasing dialog is the cause.
 
