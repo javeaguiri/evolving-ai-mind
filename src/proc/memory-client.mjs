@@ -7,8 +7,9 @@
 // Provides scope expansion, client-side candidate filtering, budget-aware
 // selection, and prompt block formatting.
 //
-// SERV does not support jsonb @> containment queries, so retrieval fetches all
-// PGC_Memory rows and applies scope + expiry + tag filters client-side.
+// Retrieval fetches all PGC_Memory rows and applies scope + expiry + tag filters
+// client-side. SERV now supports jsonb_contains (@>) but PGC_Memory stays small
+// at household scale — a full fetch avoids multiple round-trips for scope expansion.
 // At household scale PGC_Memory stays small (hundreds of rows at most).
 
 import { getRows } from '../shared/serv-client.mjs';

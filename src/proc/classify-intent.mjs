@@ -415,7 +415,14 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
       null, 1
     );
     if (!wfResp.success || wfResp.count === 0) {
-      throw new Error(`handoff: workflow "${result.workflow_name}" not found in PGC_Workflow`);
+      console.error('classify-intent: workflow not found', { workflow_name: result.workflow_name, traceId });
+      await enqueueCallback(callback, {
+        type:    'HUMAN_NOTIFICATION',
+        traceId,
+        message: `I understood your request but couldn't find a matching workflow. ` +
+                 `Try rephrasing, or use \`/m help\` to see available commands.`,
+      });
+      return;
     }
     const workflowId = wfResp.rows[0].id;
 
@@ -477,7 +484,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
 
     const workflowInput = {
       userInput,
-      ...(result.domain                                                       ? { domain: result.domain }          : {}),
+      domain:          result.domain ?? null,
       ...(domainEntity                                                        ? { entity_name: domainEntity }      : {}),
       ...(result.search_term                                                  ? { search: result.search_term }     : {}),
       ...(result.record_id !== null && result.record_id !== undefined         ? { id: result.record_id }           : {}),

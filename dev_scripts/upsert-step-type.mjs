@@ -90,11 +90,11 @@ function fingerprint(row) {
 // ---------------------------------------------------------------------------
 // Upsert each target row
 // ---------------------------------------------------------------------------
+const counts = { ok: 0, updated: 0, inserted: 0 };
 
 for (const row of targets) {
-  console.log(`\nUpserting step type: ${row.step_type}`);
-  console.log(`  status:      ${row.status}`);
-  console.log(`  description: ${row.description.slice(0, 80)}...`);
+  const seedFp = fingerprint(row);
+  const label  = row.step_type;
 
   // Check if row exists by step_type
   const existing = await servPost('/api/v1/serv/table/getRows', {
@@ -104,22 +104,20 @@ for (const row of targets) {
   });
 
   if (!existing.success) {
-    console.error('ERROR: getRows failed', existing);
+    console.error(`ERROR [${label}]: getRows failed`, existing);
     process.exit(1);
   }
 
   if (existing.count > 0) {
     const existingRow = existing.rows[0];
-    const seedFp = fingerprint(row);
-    const dbFp   = fingerprint(existingRow);
-    console.log(`  Row found (id: ${existingRow.id})  fingerprint: seed=${seedFp}  db=${dbFp}`);
+    const dbFp = fingerprint(existingRow);
 
     if (seedFp === dbFp) {
-      console.log(`  No changes — already current\n`);
+      console.log(`  ${label}  ok`);
+      counts.ok++;
       continue;
     }
 
-    console.log(`  Content diff detected — updating...`);
     const result = await servPost('/api/v1/serv/table/updateRows', {
       tableName: 'PGC_StepType',
       filters:   [{ column: 'step_type', op: 'eq', value: row.step_type }],
@@ -135,15 +133,14 @@ for (const row of targets) {
     });
 
     if (!result.success) {
-      console.error('ERROR: updateRows failed', result);
+      console.error(`ERROR [${label}]: updateRows failed`, result);
       process.exit(1);
     }
 
-    console.log(`  ✅ Updated — ${result.updatedCount ?? 1} row(s) affected`);
+    console.log(`  ${label}  updated`);
+    counts.updated++;
 
   } else {
-    console.log('  Row not found — inserting...');
-
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_StepType',
       row: {
@@ -159,25 +156,16 @@ for (const row of targets) {
     });
 
     if (!result.success) {
-      console.error('ERROR: insertRow failed', result);
+      console.error(`ERROR [${label}]: insertRow failed`, result);
       process.exit(1);
     }
 
-    console.log(`  ✅ Inserted — id: ${result.row?.id}`);
+    console.log(`  ${label}  inserted (id: ${result.row?.id})`);
+    counts.inserted++;
   }
-
-  // Verify
-  const verify = await servPost('/api/v1/serv/table/getRows', {
-    tableName: 'PGC_StepType',
-    filters:   [{ column: 'step_type', op: 'eq', value: row.step_type }],
-    limit:     1,
-  });
-
-  const stored = verify.rows?.[0];
-  console.log(`  Verification:`);
-  console.log(`    step_type:   ${stored?.step_type}`);
-  console.log(`    status:      ${stored?.status}`);
-  console.log(`    updated_at:  ${stored?.updated_at}`);
 }
 
-console.log('\nDone.');
+const parts = [`${counts.ok} ok`];
+if (counts.updated)  parts.push(`${counts.updated} updated`);
+if (counts.inserted) parts.push(`${counts.inserted} inserted`);
+console.log(`\n${targets.length} step types: ${parts.join(', ')}`);

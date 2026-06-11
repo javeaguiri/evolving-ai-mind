@@ -46,7 +46,7 @@ When a workflow is saved (via `upsert-workflow` dev script or the `create_workfl
 
 Update the `ping_core` workflow artifact (`seed_PGC_Workflow.json` + upsert) to:
 
-1. **Fix condition step (step 8):** Add a preceding choice gate (`8p`) letting the user pick "True" or "False" path. js_transform converts to boolean. `on_truthy` → `8y` ("TRUE path confirmed"), `on_falsy` → `8n` ("FALSE path confirmed"). Both converge on `9f`. Demonstrates that both branches actually route correctly.
+1. **Fix condition step (step 8):** Add a preceding choice gate (`8p`) letting the user pick "True" or "False" path. js_transform converts to boolean. `on_success` → `8y` ("TRUE path confirmed"), `on_else` → `8n` ("FALSE path confirmed"). Both converge on `9f`. Demonstrates that both branches actually route correctly.
 
 2. **Add reveal test (step 6, new):** After text input special button test, add a `choice` gate with a `reveal` field. The reveal hides a definition; user clicks "Show Definition" to see it, then picks the correct answer. Labels it "Test 6 of 10 — Reveal Gate".
 
@@ -117,6 +117,6 @@ Update the `ping_core` workflow artifact (`seed_PGC_Workflow.json` + upsert) to:
 - ✅ L1+L2 simulation passes on ping_core (0 issues)
 
 **Retro notes:**
-- Condition step seeds had `step:N` routing format in `on_truthy`/`on_falsy` — schema requires bare keys. Fixed 10 occurrences across 4 workflows. L1 enforces this going forward.
+- Condition step seeds had `step:N` routing format in `on_success`/`on_else` — schema requires bare keys. Fixed 10 occurrences across 4 workflows. L1 enforces this going forward.
 - `reveal` UX iterated: started as modal (`views.open`), moved to thread `chat.postMessage`, then to inline `task_card` in the gate message. Final form (inline, always visible) validated in prod.
 - `simulation-engine.mjs` extraction was prerequisite work not in original scope but necessary to avoid duplication.

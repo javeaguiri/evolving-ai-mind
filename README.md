@@ -1,6 +1,6 @@
 # evolving-mind-ai
 
-> A self-evolving, low-cost cognitive automation brain — v3.2
+> A self-evolving, low-cost cognitive automation brain — v3.3
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
 [![AWS SAM](https://img.shields.io/badge/infra-AWS%20SAM-orange)](https://docs.aws.amazon.com/serverless-application-model/)
@@ -162,6 +162,7 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | `PGC_SystemContext` | Runtime self-description injected into heavy-lift LLM prompts |
 | `PGC_StepType` | Catalogue of valid step types with input/output contracts |
 | `PGC_Capability` | Registry of what the system can currently do — injected into LLM prompts |
+| `PGC_Memory` | Persistent memory store — episodic, semantic, and procedural memories injected into LLM calls by scope and budget |
 
 A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical table. Used by PROC when building LLM prompts for workflow evaluation.
 
@@ -229,7 +230,10 @@ evolving-mind-ai/
 │   │   ├── template-resolver.mjs     # Pure functions — {{variable}} resolution, path traversal
 │   │   ├── review-output.mjs         # Ajv + semantic validation, 2-attempt correction loop
 │   │   ├── shutdown.mjs              # /proc/shutdown — cancel active WorkflowRuns
-│   │   └── delete-domain.mjs         # /proc/delete-domain — drop PGD tables + deregister
+│   │   ├── delete-domain.mjs         # /proc/delete-domain — drop PGD tables + deregister
+│   │   ├── llm-harness.mjs           # Central LLM call assembly — memory retrieval + save_to_memory hook
+│   │   ├── memory-client.mjs         # retrieveMemories(), expandScope(), formatMemoryBlock()
+│   │   └── memory-writer.mjs         # MEMORY_WRITE SQS handler — fire-and-forget episodic writes
 │   │
 │   └── serv/                         # Service tier — DB access only
 │       ├── handler.mjs               # Route dispatcher
@@ -309,6 +313,7 @@ evolving-mind-ai/
 | `serv_entity_query` | ✅ Implemented | Multi-table jsonb_agg entity query via SERV |
 | `notify` | ✅ Implemented | Resolves `message_template`, enqueues `HUMAN_NOTIFICATION` |
 | `end` | ✅ Implemented | Marks run completed |
+| `write_memory` | ✅ Implemented | Persists a `PGC_Memory` row from `content_key` in `local_state`; errors logged but never fail the run |
 | `sub_workflow` | ⏳ Deferred | Phase 3 |
 
 ### Known Limitations
@@ -485,6 +490,7 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 | `create_workflow` workflow | `v3.2-create-workflow-complete` | ✅ Done |
 | Gap 1 (interactive `/help`) + Gap 4 (entity schema) + structural refactoring | `v3.2-create-domain-complete-w-help` | ✅ Done |
 | Sprint 2 — create_workflow generates working domain workflows end-to-end; R/L brain pipeline operational; routing matrix + smoke test replace broken L2 path execution | `sprint/02-create-workflow-reliability` | ✅ Done |
+| Sprint 3 — Memory layer complete: PGC_Memory, write_memory step, llm-harness.mjs, memory-client.mjs, memory-writer.mjs, MEMORY_WRITE SQS. create_domain writes episodic + semantic memories. fix_workflow retrieves procedural memories. Domain workflow completions write episodic summaries. quiz_flashcards workflow runs end-to-end in prod | `sprint/03-memory-quiz` | ✅ Done |
 
 ---
 

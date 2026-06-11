@@ -241,7 +241,7 @@ Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updat
 | PGC_EntitySchema | Business entities spanning multiple PGD tables (jsonb_agg queries) | entity_name, root_table, joins, aggregations, upsert_key, domain |
 | PGC_DomainHelp | User-facing aliases + help text per domain; Pass 2 alias matching | domain, aliases, description, commands, embedding |
 | PGC_Workflow | Reusable workflow definitions | name, domain, steps, intent_keywords, state_strategy, model_used, version |
-| PGC_WorkflowRun | One row per execution — stack, state, safety counters | workflow_id, trace_id, status, input, stack, state, output, callback, step_count |
+| PGC_WorkflowRun | One row per execution — stack, safety counters | workflow_id, trace_id, status, input, stack, output, callback, step_count (`state` deprecated — written only at completion) |
 | PGC_WorkflowRunStep | Append-only step audit log; idempotency on SQS redelivery | run_id, frame_id, step_number, step_type, status, input_snapshot, output_snapshot |
 | PGC_Prompt | LLM prompts with versioning | intent_category, prompt_text, input_variables, output_schema, probe_input, model, version |
 | PGC_IntentMap | Maps patterns → workflows for Pass 1 intent classification | pattern, intent_category, workflow_id, action_type |
@@ -317,6 +317,15 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Recently Completed
 
+**Sprint 4 (2026-06-11) — Memory Bridge + Skeleton-First Generation:**
+- All Sprint 4 code complete and deployed (session 10, 2026-06-02). Tracks F (fix_workflow post-write L1), I (IntentMap phrasing gate), D (domain propagation), M (memory two-layer), S (skeleton-first routing), X (session_id column) implemented.
+- `design_workflow_process` now emits per-step routing fields; steps 21a/21b/21c validate routing topology before dialog/step generation; `generate_workflow_steps` receives locked routing_skeleton.
+- Memory two-layer: episodic pre-confirm, semantic post-confirm. `revise_domain_schema` + `design_table` accumulate schema_expectations. `initial_value_conventions` added to all three design prompts.
+- `classify-intent.mjs` bug fixed: workflow-not-found previously threw (causing silent SQS retry for full visibility timeout); now sends `HUMAN_NOTIFICATION` and returns cleanly.
+- `spaced_repetition_quiz` (run 457/458/459): step 11 upgraded from inline prompt to `PGC_Prompt` reference (`sm2_calculate`, id=79). `PGD_Flashcard.difficulty_level` changed `real → numeric(4,2)` (float precision trap at constraint boundary). Quiz runs end-to-end in prod.
+- Track P (`design_workflow_prompts`) added as new sprint scope: `generate_workflow_steps` emits `prompt_draft`/`prompt_category`/`prompt_model`; new step classifies each as reuse/create/convert (deterministic→js_transform). `PGC_Prompt.domain` column (X2) prerequisite. SM-2 is canonical convert test vehicle.
+- 352 unit tests pass.
+
 **Sprint 3 (2026-05-31) — Memory and the Running Quiz:**
 - `quiz_flashcards` workflow runs end-to-end in prod (runs 403–405). All 13 cards mastered, episodic memory written on completion (G3 confirmed).
 - Memory layer complete: `PGC_Memory` table, `write_memory` step type, `memory-client.mjs`, `llm-harness.mjs`, `memory_config` on `PGC_Prompt`, model aliases in `PGC_SystemContext`. `create_domain` and `create_workflow` write semantic/procedural memories; `fix_workflow` retrieves procedural memories; domain workflow completions write episodic memories via `MEMORY_WRITE` SQS.
@@ -341,25 +350,23 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ### Immediate Open Work
 
-1. B AC3: validate that a fresh `create_workflow` run for flashcards generates correct column names on first attempt (domain_schema injection working in LLM prompt).
-2. Validate `analyze_and_design_workflow` field name fix (prompt id 25, v10 deployed but not yet validated).
-3. Domain propagation systemic audit — backlog task 12. Three fixes in two sprints; needs a full boundary audit and test coverage.
+1. Track P — `design_workflow_prompts`: `PGC_Prompt.domain` column (X2), update `generate_workflow_steps` prompt, add new step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`.
+2. `PGC_WorkflowRunStep` audit log not written (run 458) — fix or remove decision required before Lambda death resilience work.
+3. `design_table` prompt: replace type rule and constraint expression rule with type-matched literal casting (backlog item added).
+4. Domain propagation systemic audit — backlog task 12.
+5. `PGC_WorkflowRun.session_id` column (X1) — not yet applied.
 
 ### Medium Priority
 
-- Skeleton-first workflow generation (Sprint 4 Track) — splits `generate_workflow_steps` into routing frame + per-step content fill
-- IntentMap pattern quality — add human_gate to `create_workflow` asking user how they want to invoke the workflow
 - Richer episodic memory content — distil session outcomes (score, card counts) rather than generic one-liners
-- Review `PGC_Prompt.output_schema`: evaluate separate table, cross-prompt sharing, `review-output.mjs` validation integration
-- `PGC_WorkflowRun.session_id` FK column (nullable integer FK → `PGC_Session.id`): migration script needed
-- Active bug: `analyze_and_design_workflow` (prompt id 25) produces wrong field names — v10 deployed session 23, not yet validated
+- Novia `/chat` + Mode 4 agentic loop (Track I) — Sprint 5
+- `PGC_Memory` semantic deduplication / TTL cleanup
 
 ### Deferred
 
 - `design-domain.mjs` Phase 4 — HUMAN_GATE refactor (deferred since session 29)
 - Pass 2 keyword scan excludes `domain: null` workflows (causes unnecessary Tier 2 LLM calls)
-- History threading (Track H) — Sprint 4
-- Novia /chat + Mode 4 agentic loop (Track I) — Sprint 5
+- History threading (Track H) — Sprint 5
 
 > Full tech debt register and tangential feature designs: `docs/backlog.md`
 

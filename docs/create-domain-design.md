@@ -1,238 +1,240 @@
 # create_domain Workflow — Design Reference
 
-Extracted from `docs/architecture.md` §6.8. Full annotated step flow, generated CRUD
-workflow definitions, and gap taxonomy retrospective for `create_domain`.
+Current as of Sprint 4. Describes the live workflow definition (v33) running in prod.
 
-Cross-references: `docs/architecture.md` §6.5 (Step Processor), §6.11 (Gap Taxonomy).
-
----
-
-## Data flow summary
-
-`create_domain` is the primary demonstrator workflow. It uses every major Step
-Processor capability: `llm_call`, `js_transform`, multi-step `human_gate`
-sequences with branching, `iterator`, `serv_insert`, and `notify`.
-
-```
-run.input.userInput = "stock portfolios"
-
-Step 1  llm_call → proposed_scaffold = { domain, tables: [4 table objects with columns/FKs/constraints] }
-Step 2  js_transform → proposed_scaffold.tables[*].columnSummary added
-Step 3  human_gate edit_list → user reviews tables, may remove child tables or jump to add-table branch
-        ├── confirm   → step:3d
-        ├── add_table → step:3a (text_input)
-        └── cancel    → cancelled
-
-Step 3a human_gate text_input → new_table_description written to local_state via inline Slack input block
-        Note: "Add a table" button on step 3 carries a modal descriptor for overlay UX.
-        Modal submission resumes step 3 (edit_list) directly — handleViewSubmission routes
-        via original button action (add_table → on_select: step:3a). Step 3a is the
-        intermediate text_input step that captures the description.
-Step 3b llm_call → new_table designed, stored at local_state["new_table"]
-Step 3c js_transform → merge new_table into proposed_scaffold.tables, loop back to step:3
-Step 3d human_gate review_object → user reviews all table column details before DDL
-        ├── confirm → next (step 4)
-        └── cancel  → cancelled
-
-Step 4  human_gate confirm → final DDL confirmation
-        ├── confirm → next (step 5)
-        └── cancel  → cancelled
-
-Step 5  iterator over proposed_scaffold.tables
-          item_step: serv_schema createTable(item)
-          → created_tables = [{ tableName, status: 'created' }, ...]
-
-Step 6  llm_call → generated = { domainHelp, workflows: [4 CRUD workflows], intentMapRows: [4 rows], entitySchemas: [1+ entity definitions] }
-Step 7  human_gate review_object → user reviews domainHelp (aliases, description, commands)
-        ├── confirm → next (step 8)
-        └── cancel  → cancelled
-
-Step 8   serv_insert PGC_DomainHelp ← generated.domainHelp
-Step 9   iterator over generated.workflows
-           item_step: serv_insert PGC_Workflow(item)
-Step 10  iterator over generated.intentMapRows
-           item_step: serv_insert PGC_IntentMap(item)
-Step 10b iterator over generated.entitySchemas
-           item_step: serv_insert PGC_EntitySchema(item)
-Step 11  notify → "Domain {{proposed_scaffold.domain}} created."
-Step 12  end
-```
+Cross-references: `docs/architecture.md` §6.5 (Step Processor), §6.8 (create_domain).
 
 ---
 
-## Why the add-table branch loops back
+## Overview
 
-Step 3c uses `on_success: "step:3"` — a backward jump. After the new table is designed
-and merged into `proposed_scaffold.tables`, the workflow returns to step 3 so the user
-can review the updated list and either confirm, add another, or cancel.
+`create_domain` is the system's most complex workflow. It applies the full L/R brain
+collaboration pattern, iterative user review with schema amendment, DDL execution, domain
+registration, and post-confirmation memory writes. It exercises every major Step Processor
+capability.
 
-The Step Processor handles this correctly because step keys are resolved by string
-equality — `"step:3"` resolves to step `"3"` with no confusion with `"3a"`, `"3b"`,
-`"3c"`, or `"3d"`. Each branching step has a distinct `frame_id` × `step_key` pair in
-`PGC_WorkflowRunStep`, so idempotency works correctly across loop iterations.
+**Input:** `userInput` — free-text domain description from the user.
+
+**Outputs produced:**
+- Physical PGD tables in the domain database
+- `PGC_DomainHelp` row (aliases, description, commands)
+- 5 `PGC_IntentMap` rows (add/list/get/update/delete patterns)
+- 1+ `PGC_EntitySchema` rows
+- 3 `PGC_Memory` rows (see Memory layer below)
+
+---
+
+## Step flow
+
+### Phase 1 — Pre-check and right-brain research (steps 1–9)
+
+```
+Step 1   js_transform  → candidate_domain (slug derived from userInput)
+Step 2   serv_query PGC_DomainHelp  → existing_domain_check
+Step 3   condition: existing_domain_check.length
+           truthy → step 4 (domain exists gate)
+           falsy  → step 5
+
+Step 4   human_gate confirm — domain already exists; offer Recreate or Cancel
+           Recreate → step 5   |   Cancel → cancelled
+
+Step 5   llm_call research_domain_schema (RIGHT BRAIN — Perplexity sonar)
+           Input: userInput
+           Output: domain_research = { findings: [], preference_questions: [] }
+           Finds: data-modelling best practices, normalisation patterns, common pitfalls.
+           Resolves Type 1 structural choices that have a clear best-practice answer;
+           surfaces genuine preference decisions for the user to answer.
+
+Step 6   js_transform  → preference_gates (choice gate descriptors from domain_research)
+Step 6a  js_transform  → design_assumptions_message (human-readable findings summary)
+Step 6b  notify → posts design_assumptions_message to Slack before gates begin
+
+Step 7   js_transform  → user_preferences = [] (initialise for downstream LLM)
+Step 8   condition: preference_gates.length
+           truthy → step 9 (present gates)
+           falsy  → step 10 (skip to left brain)
+
+Step 9   iterator over preference_gates
+           item_step: human_gate choice
+             Present each preference question. User selects one option.
+             output_key: user_preferences (collected array)
+           on_complete → step 10
+```
+
+### Phase 2 — Left-brain schema design and iterative review (steps 10–16)
+
+```
+Step 10  llm_call create_domain (LEFT BRAIN)
+           Inputs: userInput, research_findings (from step 5), user_preferences (from step 9)
+           Output: proposed_scaffold = { domain, tables: [...], initial_value_conventions: [...] }
+           save_to_memory: EPISODIC — initial_design_reasoning tag (pre-confirmation)
+
+Step 11  js_transform  → enriches proposed_scaffold.tables with columnSummary and domain fields
+Step 11a js_transform  → schema_summary (Slack mrkdwn) + table_review_items (reveal content)
+
+Step 12  human_gate choice — user reviews schema summary with per-table reveal panels
+           Approve         → step 16
+           Request changes → step 12b (revision modal)
+           Add a table     → step 12c (text_input)
+           Cancel          → cancelled
+
+Step 12c human_gate text_input → new_table_description
+           Design it → step 13   |   Back → step 12
+
+Step 12b llm_call revise_domain_schema (LEFT BRAIN)
+           Inputs: userInput, proposed_scaffold, user_preferences, research_findings, design_feedback
+           Output: proposed_scaffold (full replacement)
+           save_to_memory: SEMANTIC — schema_expectations tag (additive — each revision adds a row)
+           on_success → step 11 (re-enrich, loop back to review)
+
+Step 13  llm_call design_table (LEFT BRAIN)
+           Inputs: domain, existing_tables, new_table_description
+           Output: new_table (single table object with optional existing_table_modifications)
+           save_to_memory: SEMANTIC — schema_expectations tag (additive — one row per new table)
+
+Step 14  js_transform → merges new_table into proposed_scaffold.tables, topological-sorts,
+           re-enriches, loops back to step 12
+
+Step 16  human_gate confirm — final DDL confirmation
+           Create it → next (step 16b)   |   Cancel → cancelled
+```
+
+### Phase 3 — Post-confirmation memory write (steps 16b–16c)
+
+These steps run immediately after user confirmation, before any DDL. They write the
+semantic memory that `create_workflow` and `parse_entity_input` will retrieve.
+
+```
+Step 16b js_transform → domain_semantic_content
+           Reads proposed_scaffold (the confirmed schema). Builds a structural prose
+           summary for each table, categorising non-system columns into three groups:
+             - required at insert (NOT NULL, no default)
+             - SQL defaults, db sets (NOT NULL with default — value auto-applied)
+             - null at creation, omit from insert (nullable — populated by a later workflow)
+           Appends initial_value_conventions lines when present.
+
+Step 16c write_memory SEMANTIC
+           Scope: { domain }
+           Content: domain_semantic_content
+           Tags: schema_snapshot, insert_expectations
+           Priority: 2
+           This is the definitive post-confirmation structural snapshot. Retrieved by
+           both create_workflow and parse_entity_input (classify-intent data loads).
+```
+
+### Phase 4 — DDL execution and domain registration (steps 17–24)
+
+```
+Step 17  iterator over proposed_scaffold.tables
+           item_step: serv_schema createTable(item)
+           → created_tables
+
+Step 17b llm_call generate_domain_aliases (Perplexity sonar)
+           Generates natural-language aliases for the domain (singular/plural, synonyms)
+           save_to_memory: SEMANTIC — aliases, vocabulary tags
+
+Step 18  js_transform → generated = { domainHelp, intentMapRows: [5], entitySchemas: [1+] }
+           Derives domain registration from confirmed scaffold + LLM aliases.
+           Also computes entity name (TitleCase singular), join/aggregation structure,
+           and 5 IntentMap patterns (add/list/get/update/delete).
+
+Step 19  human_gate review_object — user reviews aliases and CRUD commands
+           Looks good → next   |   Cancel → cancelled
+
+Step 20  serv_insert PGC_DomainHelp ← generated.domainHelp
+Step 21  iterator → serv_insert 5 PGC_IntentMap rows
+Step 22  iterator → serv_insert PGC_EntitySchema rows
+Step 23  notify → "Domain {{proposed_scaffold.domain}} is ready with N tables."
+Step 24  end
+```
+
+---
+
+## Memory layer
+
+`create_domain` writes three types of memory entries. They accumulate additively —
+old rows are never overwritten (each write creates a new `PGC_Memory` row).
+
+| When | Step | Type | Tags | Content | Consumer |
+|------|------|------|------|---------|----------|
+| Pre-confirmation | 10 | episodic | domain_design, initial_design_reasoning | LLM reasoning from initial schema design (via `save_to_memory` / `reasoning` field) | Episodic history only |
+| Pre-confirmation (on each revision) | 12b | semantic | schema_expectations | LLM reasoning about revised design expectations (additive — one row per revision) | create_workflow, parse_entity_input |
+| Pre-confirmation (on each add-table) | 13 | semantic | schema_expectations | LLM reasoning about new table's insert expectations | create_workflow, parse_entity_input |
+| Post-confirmation | 16c | semantic | schema_snapshot, insert_expectations | Structural fact snapshot: required/defaulted/null-at-creation columns + initial_value_conventions | create_workflow, parse_entity_input |
+| Post-workflow-completion | MEMORY_WRITE SQS | episodic | run_complete | "Completed workflow 'create_domain' for domain 'X'" — written by memory-writer.mjs | Episodic history |
+
+**Why two-layer?** Pre-confirmation reasoning (step 10) is episodic — it reflects the
+LLM's initial thinking, which the user may revise. Post-confirmation (step 16c) is
+semantic fact — it reflects the schema as the user actually confirmed it. `create_workflow`
+and `parse_entity_input` should rely on the confirmed facts, not the initial draft.
+
+**Memory retrieval scope:** All semantic entries are written with `scope: { domain }`.
+When `create_workflow` runs for a domain workflow (scope `{ domain, workflow: create_workflow }`),
+`expandScope` includes `{ domain }` as a parent level — all domain semantic memories
+are retrieved. Same for `parse_entity_input` running inside `add_entity` (scope
+`{ domain, workflow: add_entity }`).
+
+---
+
+## initial_value_conventions
+
+The `create_domain`, `design_table`, and `revise_domain_schema` prompts all emit an
+optional `initial_value_conventions` array in their output. Each entry is:
+
+```json
+{ "table": "PGD_Cards", "column": "interval_days", "convention": "first review interval is 1, not SQL default 0" }
+```
+
+**When to emit:** Only for cases where the SQL DEFAULT or nullable flag does not fully
+describe the application-level intent. Examples:
+- A nullable column that must be null at creation because a later workflow sets it (name WHICH workflow)
+- A NOT NULL column with a SQL DEFAULT where the application applies a semantically different starting value
+
+**How it flows:**
+1. LLM emits it in `proposed_scaffold.initial_value_conventions`
+2. Step 16b includes it in `domain_semantic_content` under "Application initial-value conventions"
+3. Step 16c writes it to semantic memory
+4. `parse_entity_input` reads it from memory and applies conventions to fields not supplied by the user
+5. `create_workflow` reads it from memory and designs steps that handle initial state correctly
 
 ---
 
 ## Prompt dependencies
 
-| Step | Prompt `intent_category` | Output stored at |
-|---|---|---|
-| 1 | `create_domain` v3 | `proposed_scaffold` |
-| 3b | `design_table` v1 | `new_table` |
-| 6 | `generate_crud_workflows` v5 | `generated` |
+| Step | Prompt `intent_category` | Model | Output key |
+|------|--------------------------|-------|------------|
+| 5 | `research_domain_schema` | perplexity/sonar | `domain_research` |
+| 10 | `create_domain` | smart | `proposed_scaffold` |
+| 12b | `revise_domain_schema` | smart | `proposed_scaffold` |
+| 13 | `design_table` | smart | `new_table` |
+| 17b | `generate_domain_aliases` | perplexity/sonar | `domain_aliases` |
 
-All three prompts have `output_schema` defined. The correction loop runs on all three
-if the LLM output is malformed.
-
----
-
-## Generated CRUD workflows — one per verb
-
-The `generate_crud_workflows` v5 prompt produces four workflow definitions written to
-`PGC_Workflow` at step 9. All four have `action_type: workflow` in `PGC_IntentMap`.
-
-### list_\<domain\>
-
-Zero-LLM formatted list. Runs `serv_query` on the root table and posts count + preview.
-
-```
-Step 1  serv_query PGD_<root_table>  (no filters — all rows)
-          output_key: results
-Step 2  notify → "Found {{results.length}} <domain> record(s)."
-Step 3  end
-```
-
-### add_\<domain\>
-
-LLM-parse-first multi-table insert. Uses `serv_entity_schema` to load live column
-definitions from `PGC_Schema` — immune to schema drift.
-
-```
-Step 1  serv_entity_schema  (input.entityName = <PascalCase>)
-          output_key: full_entity_schema
-Step 2  llm_call parse_entity_input  v2
-          input: { userInput: "{{input.userInput}}", full_entity_schema: "{{full_entity_schema}}" }
-          output_key: parsed_entity
-Step 3  human_gate review_object  → "Here's what I parsed — does this look right?"
-          ├── Looks good → next
-          └── Cancel     → cancelled
-Step 4  serv_insert <root_table>   row: "{{parsed_entity.root}}"   output_key: new_record
-Step 5  js_transform buildChildInserts   output_key: child_inserts
-Step 6  iterator over child_inserts
-          item_step: serv_insert <child_table>
-            row: { <fk_column>: "{{new_record.id}}", <col>: "{{item.<col>}}" }
-Step 7  notify → "Added <domain> record (id: {{new_record.id}})."
-Step 8  end
-```
-
-Key decisions: `serv_entity_schema` fetches live column defs at run time — not cached
-`PGC_EntitySchema.aggregations.columns`. FK columns are never included in
-`parsed_entity.children` output; they are injected at insert time from `new_record.id`.
-
-### update_\<domain\>
-
-Confirmation-gate update on root table by id. Only updates root table — child row
-updates require a dedicated workflow.
-
-```
-Step 1  human_gate confirm  → "Update <domain> id={{input.id}} with provided changes?"
-          ├── Confirm → next    └── Cancel → cancelled
-Step 2  serv_update <root_table>
-          filters: [{ column: id, op: eq, value: "{{input.id}}" }]
-          updates: "{{input.updates}}"   output_key: updated_record
-Step 3  notify → "Updated <domain> record (id: {{input.id}})."
-Step 4  end
-```
-
-### delete_\<domain\>
-
-Confirmation-gate delete by id. Child rows cleaned up by `ON DELETE CASCADE`.
-
-```
-Step 1  human_gate confirm  → "Delete <domain> id={{input.id}}? This cannot be undone."
-          ├── Confirm delete → next    └── Cancel → cancelled
-Step 2  serv_delete <root_table>
-          filters: [{ column: id, op: eq, value: "{{input.id}}" }]
-Step 3  notify → "Deleted <domain> record (id: {{input.id}})."
-Step 4  end
-```
+All five prompts have `output_schema` defined. The correction loop runs on all five
+if LLM output is malformed. `create_domain`, `design_table`, and `revise_domain_schema`
+have `save_to_memory` wired in the workflow step definition — the harness strips the
+`reasoning` field before schema validation and writes it to `PGC_Memory`.
 
 ---
 
-## Gap taxonomy retrospective
+## Design patterns used
 
-`create_domain` was built before the gap taxonomy (`docs/architecture.md` §6.11) was
-formalised. This maps current steps against the taxonomy.
+**L/R brain split:** Right brain (step 5, sonar) researches domain best practice and
+surfaces preference questions. Left brain (step 10) designs the schema with all
+decisions already resolved.
 
-### Type 1 — Preference gaps
+**Iterative review with back-edge routing:** Step 12b and step 14 both route back to
+step 12 after updating `proposed_scaffold`. Back-edge routing with the Step Processor
+is safe because idempotency is keyed on `(run_id, frame_id, step_key)` — each visit
+to step 12 has a distinct `frame_id` pushed by the gate suspension.
 
-**Not handled before the LLM call.** The user types one line and the LLM guesses every
-structural choice. The user reviews at step 3 (edit_list) and can remove or add tables —
-but this is post-hoc correction, not pre-design guidance. The `temperature: 0.2` variance
-entry in the tech debt register is a direct symptom: the LLM produces different schemas
-for the same input because no design constraints were provided before the call.
+**Schema amendment vs full redesign:** Step 12b replaces the full scaffold (full redesign
+based on feedback). Step 13 + step 14 add a single table (additive merge). Both loop
+back to step 12 for review.
 
-### Type 2 — Knowledge gaps
+**Topological sort in step 14:** FK dependencies are sorted so parent tables precede
+child tables. Required because `createTable` in SERV will fail if a referenced table
+does not yet exist.
 
-**Not handled.** No right-brain research pass. `create_domain` runs general-purpose Sonnet
-with no domain context injection. A stock portfolio schema without domain research will
-likely miss: cost basis tracking, realised vs unrealised P&L distinction, transaction log
-as append-only audit trail, and separation of ticker metadata from position data.
-
-### Type 3 — Schema gaps
-
-**Partially handled and correctly where it exists.** The topological sort in step 3c
-detects FK ordering dependencies and sorts tables so parents are created before child
-references. The `existing_table_modifications` field in `design_table` allows the
-add-table branch to patch FK columns into existing tables when a new parent concept is
-introduced mid-design.
-
-### Type 4a/4b — Missing prompts and step types
-
-**Not applicable.** `create_domain` does not generate prompts and requires no step types
-beyond what already exist.
-
-### Type 5 — Ambiguity
-
-**Not handled.** If `stock_portfolio` already exists, the workflow re-runs the LLM and
-overwrites the schema. A `serv_query` pre-check step before step 1 would detect the
-existing domain and surface the choice: update aliases only, recreate from scratch, or
-cancel. This is a single `serv_query` step — not an architectural change.
-
----
-
-## Target design — create_domain v9 with L/R collaboration
-
-Applying the gap taxonomy (§6.11) produces the following pre-generation pipeline.
-Steps 2–12 are unchanged from the current implementation.
-
-```
-Pre-check  serv_query PGC_DomainHelp — does this domain already exist?
-           If yes → human_gate: update aliases / recreate / cancel  (Type 5)
-
-Step 1R    RIGHT BRAIN: research_domain_schema (Perplexity sonar)
-           Input: userInput + inferred domain category
-           Retrieves: data modelling best practices, canonical table structures,
-             normalisation patterns, common pitfalls
-           Surfaces: Type 1 preference questions where the answer changes schema
-             structure (e.g. "Track individual transactions or current holdings only?",
-             "Multi-currency support?")
-
-Step 1a    js_transform: build preference gate descriptors from research output
-
-Step 1b    condition: any preference questions?
-           → iterator: Tier 1 preference gates — user answers structural choices
-
-Step 1c    LEFT BRAIN: llm_call create_domain
-           Receives: userInput + research findings + confirmed preferences
-           Produces schema implementing known choices, not guesses
-           → proposed_scaffold
-
-Steps 2–12  unchanged
-```
-
-The user review gate at step 3 (edit_list) remains — the user can still remove tables
-or add one. By step 3 the schema already reflects stated preferences and domain best
-practice. The gate becomes refinement rather than correction.
-
-**Sprint 2 Track A implements this pattern.** See `docs/sprints/CURRENT.md`.
+**Additive memory accumulation:** Steps 12b and 13 write semantic memory on every
+iteration. Multiple design cycles accumulate rows — retrieval sorts by `created_at DESC`
+so the most recent expectations appear first in the memory block.

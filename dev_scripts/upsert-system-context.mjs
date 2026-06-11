@@ -60,15 +60,36 @@ async function servPost(path, body) {
 }
 
 // ---------------------------------------------------------------------------
+// Fingerprint — content hash so no-op is detected even without a version bump
+// ---------------------------------------------------------------------------
+import { createHash } from 'crypto';
+
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+  }
+  return v;
+}
+
+function fingerprint(row) {
+  const canonical = [
+    JSON.stringify(sortKeys(row.content ?? null)),
+    row.section ?? '',
+    String(row.inject_always ?? false),
+    JSON.stringify(row.inject_for ?? []),
+  ].join('\x00');
+  return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
 // Upsert each target row
 // ---------------------------------------------------------------------------
+const counts = { ok: 0, updated: 0, inserted: 0 };
 
 for (const row of targets) {
-  console.log(`\nUpserting system context: ${row.key} v${row.version}`);
-  console.log(`  section:       ${row.section}`);
-  console.log(`  inject_for:    ${JSON.stringify(row.inject_for ?? [])}`);
-  console.log(`  inject_always: ${row.inject_always ?? false}`);
-  console.log(`  content:       ${JSON.stringify(row.content).slice(0, 80)}...`);
+  const seedFp = fingerprint(row);
+  const label  = row.key;
 
   // Check if row exists by key
   const existing = await servPost('/api/v1/serv/table/getRows', {
@@ -78,20 +99,20 @@ for (const row of targets) {
   });
 
   if (!existing.success) {
-    console.error('ERROR: getRows failed', existing);
+    console.error(`ERROR [${label}]: getRows failed`, existing);
     process.exit(1);
   }
 
   if (existing.count > 0) {
     const existingRow = existing.rows[0];
-    console.log(`  Row found (id: ${existingRow.id})  db version: v${existingRow.version}  seed version: v${row.version}`);
+    const dbFp = fingerprint(existingRow);
 
-    if (existingRow.version === row.version) {
-      console.log(`  No changes — already current (v${row.version})\n`);
+    if (seedFp === dbFp) {
+      console.log(`  ${label}  v${row.version}  ok`);
+      counts.ok++;
       continue;
     }
 
-    console.log(`  Version diff detected — updating v${existingRow.version} → v${row.version}...`);
     const result = await servPost('/api/v1/serv/table/updateRows', {
       tableName: 'PGC_SystemContext',
       filters:   [{ column: 'key', op: 'eq', value: row.key }],
@@ -105,15 +126,17 @@ for (const row of targets) {
     });
 
     if (!result.success) {
-      console.error('ERROR: updateRows failed', result);
+      console.error(`ERROR [${label}]: updateRows failed`, result);
       process.exit(1);
     }
 
-    console.log(`  ✅ Updated — ${result.updatedCount ?? 1} row(s) affected`);
+    const vTag = existingRow.version === row.version
+      ? `v${row.version}`
+      : `v${existingRow.version} → v${row.version}`;
+    console.log(`  ${label}  ${vTag}  updated`);
+    counts.updated++;
 
   } else {
-    console.log('  Row not found — inserting...');
-
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_SystemContext',
       row: {
@@ -127,26 +150,16 @@ for (const row of targets) {
     });
 
     if (!result.success) {
-      console.error('ERROR: insertRow failed', result);
+      console.error(`ERROR [${label}]: insertRow failed`, result);
       process.exit(1);
     }
 
-    console.log(`  ✅ Inserted — id: ${result.row?.id}`);
+    console.log(`  ${label}  v${row.version}  inserted (id: ${result.row?.id})`);
+    counts.inserted++;
   }
-
-  // Verify
-  const verify = await servPost('/api/v1/serv/table/getRows', {
-    tableName: 'PGC_SystemContext',
-    filters:   [{ column: 'key', op: 'eq', value: row.key }],
-    limit:     1,
-  });
-
-  const stored = verify.rows?.[0];
-  console.log(`  Verification:`);
-  console.log(`    key:        ${stored?.key}`);
-  console.log(`    version:    ${stored?.version}`);
-  console.log(`    section:    ${stored?.section}`);
-  console.log(`    updated_at: ${stored?.updated_at}`);
 }
 
-console.log('\nDone.');
+const parts = [`${counts.ok} ok`];
+if (counts.updated)  parts.push(`${counts.updated} updated`);
+if (counts.inserted) parts.push(`${counts.inserted} inserted`);
+console.log(`\n${targets.length} context rows: ${parts.join(', ')}`);

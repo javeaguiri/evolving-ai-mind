@@ -3,10 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.2  
-Status: Active development — Session 32 complete  
-Last updated: 2026-05-01 (session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, removed {{step_type_contracts}} template variable from prompt, moved Rules 4/5a/5b/5c into SystemContext homes; probe_input added to upsert-prompt.mjs fingerprint; PGC_SystemContext 4.3.3 updated: content→jsonb schema defined, format column drop, section-level inject tags, DDL + migration checklist)
-Previously: session 31 — create_domain modal routing verified; create_workflow step 1a Other button routes to step:2, orphaned step 1b removed; PGC table reference added to CLAUDE.md; architecture-*.md files consolidated into this file
+Version: 3.3
+Status: Active development — Sprint 4 complete
+Last updated: 2026-06-02 (Sprint 4 — memory bridge: two-layer domain semantic memory, initial_value_conventions, parse_entity_input memory retrieval for classify-intent data loads; skeleton-first routing validation in create_workflow steps 21a/21b/21c; domain propagation audit + classify-intent fix; fix_workflow post-write L1 gate + revert; IntentMap phrasing gate steps 35a/35b; PGC_WorkflowRun.session_id column; write_memory in workflow-schema.json)
+Previously: session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, moved Rules 4/5a/5b/5c into SystemContext homes; session 31 — create_domain modal routing verified; architecture-*.md files consolidated into this file
 
 ---
 
@@ -162,6 +162,7 @@ entry messages, which carry no run ID and are consumed once.
 | `FIX_WORKFLOW` | — | 1 — fire-and-forget → 2 on gate | troubleshoot-workflow.mjs (autoFix) / developer curl | proc/fix-workflow.mjs |
 | `DELETE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-domain.mjs |
 | `DELETE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-workflow.mjs |
+| `MEMORY_WRITE` | — | 1 — fire-and-forget | run-workflow.mjs (on qualifying domain workflow completion) | proc/memory-writer.mjs |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
@@ -299,7 +300,8 @@ evolving-mind-ai/
 │   │   │                             step type), and dev_scripts/upsert-workflow.mjs (pre-write L1 guard).
 │   │   ├── step-executor.mjs         Step type dispatch — llm_call, js_transform, human_gate, serv_schema,
 │   │   │                             serv_insert, serv_query, serv_update, serv_delete, serv_entity_query,
-│   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate, notify, end
+│   │   │                             serv_entity_get, serv_entity_schema, iterator, condition, simulate,
+│   │   │                             write_memory, notify, end
 │   │   ├── template-resolver.mjs     Resolves {{key.path}} tokens against local_state; pure function, no I/O
 │   │   ├── classify-intent.mjs       POST /proc/classify-intent — Intent Preprocessor entry; three-tier pipeline;
 │   │   │                             executes ad_hoc CRUD steps for Pass 1a/1c matches
@@ -312,6 +314,13 @@ evolving-mind-ai/
 │   │   │                             called by step-executor llm_call; not an HTTP endpoint
 │   │   ├── troubleshoot-workflow.mjs POST /proc/troubleshoot-workflow — Tier 1 static analysis on
 │   │   │                             PGC_Workflow.steps; SQS TROUBLESHOOT_WORKFLOW; optionally enqueues FIX_WORKFLOW
+│   │   ├── llm-harness.mjs           Central LLM call assembly — retrieves memories, appends memory block to
+│   │   │                             system instructions, handles save_to_memory extract+write; called by
+│   │   │                             step-executor for all llm_call steps
+│   │   ├── memory-client.mjs         retrieveMemories(), expandScope(), formatMemoryBlock() — scope expansion,
+│   │   │                             budget-aware selection, and prompt block formatting for PGC_Memory rows
+│   │   ├── memory-writer.mjs         Handles MEMORY_WRITE SQS messages — fire-and-forget episodic writes on
+│   │   │                             qualifying domain workflow completion; zero LLM cost
 │   │   ├── migrations/               One-time DB migration scripts — run manually via node
 │   │   │   └── seed-*.mjs
 │   │   └── scaffolds/                Phase 2b static scaffolds — superseded by LLM output
@@ -351,6 +360,7 @@ evolving-mind-ai/
 │   │           ├── PGC_StepType.json
 │   │           ├── PGC_SystemContext.json
 │   │           ├── PGC_Capability.json
+│   │           ├── PGC_Memory.json
 │   │           └── seeds/            Seed JSON consumed by dev_scripts/upsert-*.mjs
 │   │               ├── seed_PGC_Workflow.json
 │   │               ├── seed_PGC_Prompt.json
@@ -750,7 +760,7 @@ When `create_domain` runs, the Step Processor:
 3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
 4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
 5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
-6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_Workflow` (4 CRUD workflows), `PGC_IntentMap` (4 rows — pattern + intent_category + action_type, no workflow_id), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` (5 rows — one per `*_entity` intent category, pointing to the 5 pre-existing generic `*_entity` workflows with `domain: null`), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
 
 The PGC tables are not just config — they are the evolving state of the brain.
 The Intent Preprocessor reads from PGC to route incoming intents. The Step
@@ -1331,7 +1341,7 @@ Every step follows this shape:
   "input":            {},
   "output_key":       "key_in_local_state",
   "on_success":       "next | end | step:3a",
-  "on_failure":       "cancel | step:<key>"
+  "on_else":       "cancel | step:<key>"
 }
 ```
 
@@ -1392,7 +1402,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ sub_workflow ║ Push child workflow frame, inherit local_state        ║ ⬜ Backlog       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ condition    ║ Evaluate {{expression}} against local_state, route   ║ ✅ Implemented   ║
-║              ║ to on_truthy / on_falsy step keys. No I/O.           ║ Session 19       ║
+║              ║ to on_success / on_else step keys. No I/O.           ║ Session 19       ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Backlog       ║
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
@@ -1400,6 +1410,10 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
 ║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
 ║               ║ execution, skip-path analysis. See Section 6.5.6.   ║ complete        ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ write_memory  ║ Persist a PGC_Memory row. Reads content string from  ║ ✅ Sprint 3      ║
+║               ║ local_state[content_key]. Never fails the run —      ║                  ║
+║               ║ errors logged only. See Section 6.13.                ║                  ║
 ╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
 ```
 
@@ -1415,7 +1429,7 @@ Processor resolves step keys by string equality — `parseInt` is never used.
   },
   "output_key": "proposed_scaffold",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 `input.prompt` is the `intent_category` key into `PGC_Prompt`. All other `input`
@@ -1441,6 +1455,17 @@ mechanisms wired into it by the Step Processor — no workflow definition change
    a new `PGC_Prompt` version with a raised ceiling automatically. No human intervention
    required. Schema errors are logged as advisory for the Phase 3 right-brain loop.
 
+4. **Memory write** (Section 6.13): When `save_to_memory` is set on the step definition,
+   `llm-harness.mjs` appends a `reasoning` instruction to the prompt, extracts and strips
+   the `reasoning` field from the LLM output before schema validation, and writes it to
+   `PGC_Memory`. Zero additional LLM calls — the reasoning content is part of the existing
+   call. `save_to_memory` fields: `memory_type`, `scope` (supports `{{template}}` tokens),
+   `tags`, `priority`.
+
+5. **Memory retrieval** (Section 6.13): When `PGC_Prompt.memory_config.memory_budget_tokens > 0`,
+   `llm-harness.mjs` calls `memory-client.mjs` to retrieve scope-matching `PGC_Memory` rows
+   within the token budget, then appends the formatted memory block to the system instructions.
+
 ##### `js_transform`
 
 Every `js_transform` step requires an `expression` field — a pure synchronous JavaScript
@@ -1461,7 +1486,7 @@ Wrap multi-statement logic in an IIFE: `(function() { ... })()`
   "output_key": "proposed_scaffold.tables",
   "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) { return tables.map(function(t) { if (!t.columns) return t; var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain }); }); } return enrich(items, local_state.proposed_scaffold.domain); })()",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1502,7 +1527,7 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
     { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
   ],
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 ###### Context key 
@@ -1547,7 +1572,7 @@ entry. The `iterator` field is stripped from the rendered buttons.
       "on_select": "next", "iterator": "decks" },
     { "value": "cancel", "label": "Cancel", "description": "Stop", "on_select": "cancel" }
   ],
-  "on_success": "next", "on_failure": "cancel"
+  "on_success": "next", "on_else": "cancel"
 }
 ```
 
@@ -1637,7 +1662,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1653,7 +1678,7 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
   },
   "output_key": "results",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 `entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`, not `Recipes`.
@@ -1667,7 +1692,7 @@ Use instead of `serv_query` for domains with child tables or when full entity di
   "input": { "entityName": "Recipe", "id": "{{input.id}}" },
   "output_key": "result",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -1698,12 +1723,12 @@ Use instead of `serv_query` for domains with child tables or when full entity di
   },
   "output_key":  "simulation_result",
   "on_success":  "next",
-  "on_failure":  "step:3"
+  "on_else":  "step:3"
 }
 ```
 All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
 and `paths_key` are optional — if absent, the `simulate` step runs Level 1
-static analysis only. `on_failure` routes back to the step where the user can
+static analysis only. `on_else` routes back to the step where the user can
 review and correct the workflow definition before re-simulating.
 Full schema, validation levels, and result structure: see **Section 6.5.6**.
 
@@ -1718,6 +1743,12 @@ dead-routing or structurally invalid workflows from entering `PGC_Workflow` at a
 The check is performed in PROC (not SERV) because `runLevel1StaticAnalysis` lives in
 `simulation-engine.mjs` which is a PROC-tier module — SERV has no access to it.
 
+**Skeleton vs full L1:** `serv_step_missing_required_input` is a content completeness
+check (verifies `tableName`, `row`, `filters`, `updates` are declared). It is skipped
+when the simulate step sets `input.skeleton: true` (routing skeleton validation, step 21b)
+because skeleton steps are intentionally input-free. All topology checks run in both modes.
+The final pre-write simulate (step 25) always runs full L1 with `skeleton` unset.
+
 ##### `condition`
 ```json
 {
@@ -1725,17 +1756,17 @@ The check is performed in PROC (not SERV) because `runLevel1StaticAnalysis` live
   "type": "condition",
   "description": "Route to id lookup or name search depending on which input field is set.",
   "expression": "{{input.id}}",
-  "on_truthy": "2",
-  "on_falsy":  "3"
+  "on_success": "2",
+  "on_else":  "3"
 }
 ```
 `expression` is resolved via `resolveTemplate` against `local_state`. Truthy: resolved value is
 non-empty, not `"null"`, not `"undefined"`, not `"0"`, and does not contain `{{` (unresolved
-template literals are treated as falsy — the key was not set). `on_truthy` and `on_falsy` are
+template literals are treated as falsy — the key was not set). `on_success` and `on_else` are
 bare step keys (e.g. `"2"`, `"3"`) — the executor prefixes them to `step:N` internally.
 No output_key is written — condition steps produce no state output.
 
-**Constraint:** `on_truthy` and `on_falsy` must reference step keys that exist in the workflow.
+**Constraint:** `on_success` and `on_else` must reference step keys that exist in the workflow.
 Level 1 static analysis validates both targets as `step:N` routing tokens.
 
 ##### `js_transform` — full detail
@@ -1806,7 +1837,7 @@ Any of the following causes an immediate throw:
   "input": { "entityName": "{{input.entity_name}}" },
   "output_key": "full_entity_schema",
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 Loads a full entity schema by combining `PGC_EntitySchema` (join topology) with `PGC_Schema`
@@ -1840,6 +1871,28 @@ Supports `{{template}}` substitution.
 System columns (`id`, `created_at`, `updated_at`) and FK columns are excluded from all column lists.
 Column definitions are read from `PGC_Schema` at runtime — not cached — so new columns are
 immediately visible without recreating the domain.
+
+##### `write_memory`
+```json
+{
+  "step": "16c", "type": "write_memory",
+  "description": "Persist confirmed schema snapshot as semantic domain memory.",
+  "input": {
+    "memory_type": "semantic",
+    "scope":       { "domain": "{{proposed_scaffold.domain}}" },
+    "content_key": "domain_semantic_content",
+    "tags":        ["schema_snapshot", "insert_expectations"],
+    "priority":    2
+  },
+  "on_success": "next",
+  "on_else": "next"
+}
+```
+`content_key` names a `local_state` key whose string value becomes the memory content.
+`token_estimate` is computed automatically: `Math.ceil(content.length / 4)`.
+Scope values support `{{template}}` substitution resolved at write time.
+No `output_key` — the step returns `outputValue: null`. Errors are logged but never fail the run.
+See Section 6.13 for the full memory layer design.
 
 ---
 
@@ -2132,7 +2185,7 @@ workflow definitions containing gate steps.
   "output_key":   "key_written_to_local_state_on_resolve",
 
   "on_success": "next",
-  "on_failure": "cancel"
+  "on_else": "cancel"
 }
 ```
 
@@ -2192,8 +2245,8 @@ When implemented, a gate that receives no user response within `timeout_seconds`
 will resolve via `on_timeout` routing (e.g. `"cancel"` or a specific step key).
 Until then, gates wait indefinitely — cost-free while suspended.
 
-**`on_success` / `on_failure`** — gate-level fallbacks. `on_success` is the
-default routing when no `on_select` override applies. `on_failure` handles
+**`on_success` / `on_else`** — gate-level fallbacks. `on_success` is the
+default routing when no `on_select` override applies. `on_else` handles
 gate execution errors (e.g. dialog build failure), not user cancellation.
 User cancellation is always routed via the option with `action: "cancel"`.
 
@@ -2363,13 +2416,13 @@ manifests at execution time. Simulation catches it before registration.
   },
   "output_key":  "simulation_result",
   "on_success":  "next",
-  "on_failure":  "step:3"
+  "on_else":  "step:3"
 }
 ```
 
 `steps_key`, `mock_outputs_key`, and `paths_key` are dot-paths into `local_state`.
 They reference keys written by the LLM generation steps that precede the simulate
-step. `on_failure: "step:3"` routes back to the human gate where the user reviewed
+step. `on_else: "step:3"` routes back to the human gate where the user reviewed
 the step array, with simulation failures injected into the gate context.
 `mock_outputs_key` and `paths_key` are optional — when absent the simulate step
 runs Level 1 static analysis only.
@@ -2463,7 +2516,7 @@ Runs before any path simulation. Catches structural errors in the step array its
 
 | Check | Failure class |
 |---|---|
-| Every `on_success`, `on_failure`, `on_select` value is a known routing token | Unknown routing value |
+| Every `on_success`, `on_else`, `on_select` value is a known routing token | Unknown routing value |
 | Every `step:N` routing target exists in the step array | Dead routing target |
 | Every `{{template}}` reference resolves to an `output_key` written by a prior step on that path | Unresolved template variable |
 | Every `items_key` in an `iterator` resolves to an array written by a prior step | Iterator source not an array |
@@ -2519,7 +2572,7 @@ Written to `local_state[output_key]` on completion:
 On failure, `passed: false` and `paths_failed > 0`. The first failed path’s
 transition log is included in full, showing exactly which step failed and what
 `local_state` contained at that point. This is presented to the user in the
-`review_object` gate when `on_failure: "step:3"` routes back for correction.
+`review_object` gate when `on_else: "step:3"` routes back for correction.
 
 #### Simulation mode flag on WorkflowRun
 
@@ -2583,7 +2636,7 @@ output shape includes a steps array). Does not run on `create_domain` output.
 
 Rules enforced on every step in the array:
 
-- Every `on_success`, `on_failure`, and `on_complete` value must be a known routing
+- Every `on_success`, `on_else`, and `on_complete` value must be a known routing
   token: `next`, `end`, `cancel`, or `step:<key>`
 - Every `step:N` target must exist as a step key in the same array -- dead targets
   are caught here before the workflow is ever registered or simulated
@@ -2788,14 +2841,24 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 
 ### 6.8 create_domain Workflow
 
-> Full annotated workflow, CRUD verb definitions, and gap taxonomy retrospective extracted to [`docs/create-domain-design.md`](../create-domain-design.md).
+Full annotated workflow design is in [`docs/create-domain-design.md`](create-domain-design.md).
+
+**Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
 
 ### 6.9 create_workflow Workflow
 
 Full design documentation — including L/R collaboration architecture decisions,
 the six-phase step structure with `local_state` data flow, gap taxonomy application,
 simulation correction loops, and implementation notes — is in
-`docs/create-workflow-design.md`.
+[`docs/create-workflow-design.md`](create-workflow-design.md).
+
+**Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
+
+**Session 13 decisions:**
+
+*Skeleton mode for L1 (`input.skeleton: true` on simulate step):* The `serv_step_missing_required_input` L1 check is a **content completeness** check — it verifies that a fully-formed step declares `tableName`, `row`, `filters`, and `updates`. A routing skeleton is intentionally content-free; those fields are filled in by `generate_workflow_steps`. Running this check on a skeleton produces false positives on every serv_* step. Decision: add a `skeleton: boolean` flag to the `simulate` step input, threaded through `runSimulation` → `runLevel1StaticAnalysis`. When `skeleton=true`, `serv_step_missing_required_input` is skipped. All routing topology checks (dead targets, missing `on_cancel`, unresolved templates, condition keys) still run — these apply equally to skeletons. The skeleton validate step (21b) sets `input.skeleton: true`; the final pre-write simulate (step 25) does not. L1 and L2 level definitions are unchanged.
+
+*`on_cancel` required on all human_gate steps:* The `PGC_StepType` human_gate contract marked `on_cancel` as `required: false`, which LLMs correctly read as optional. This caused persistent `missing_on_cancel` and `missing_cancel_option` L1 failures on skeleton and full steps. Decision: add `on_cancel` explicitly to the human_gate `input_contract` as `required: true`, with a description that makes the coupling to the cancel option explicit. Applied in `seed_PGC_StepType.json` + `upsert-step-type.mjs`; no system code change.
 
 
 ### 6.10 Session Architecture — Chat and Diagnostics
@@ -3272,7 +3335,61 @@ mechanism for these cases.
 
 ---
 
+### 6.13 Memory Layer
 
+Full design reference: [`docs/memory-design.md`](memory-design.md).
+
+The memory layer gives LLM calls persistent context across runs, domains, and workflows.
+Implemented in Sprint 3; extended in Sprint 4.
+
+#### Key files
+
+| File | Role |
+|---|---|
+| `src/proc/llm-harness.mjs` | Centralised LLM call assembly — retrieves memories, appends memory block to instructions, handles `save_to_memory` extract+write |
+| `src/proc/memory-client.mjs` | `retrieveMemories()`, `expandScope()`, `formatMemoryBlock()` — scope expansion and budget-aware selection |
+| `src/proc/memory-writer.mjs` | Handles `MEMORY_WRITE` SQS messages — fire-and-forget episodic writes on domain workflow completion |
+
+#### Three memory types
+
+| Type | Content | Primary consumers |
+|---|---|---|
+| **episodic** | What happened — distilled activity log, one record per significant workflow completion | `/chat` companion (Sprint 5) |
+| **semantic** | What was decided — design facts and schema expectations from `create_domain` and `create_workflow` | `create_workflow` LLM calls, `parse_entity_input` (classify-intent data loads) |
+| **procedural** | Why a workflow works the way it does — design intent from `create_workflow` | `fix_workflow`, `troubleshoot_workflow` |
+
+#### Two write paths
+
+**`save_to_memory` on `llm_call` steps** (harness-driven, Sprint 3):
+The `reasoning` field is appended to the prompt, extracted from LLM output before schema validation, and written to `PGC_Memory`. Used on `create_domain` (step 10 — episodic), `revise_domain_schema` (step 12b — semantic), `design_table` (step 13 — semantic), `generate_domain_aliases` (step 17b — semantic), `generate_workflow_steps` (step 23 — procedural). Multiple iterations accumulate rows — `insertRow` always creates a new row, never updates.
+
+**`write_memory` step** (workflow-driven, Sprint 3):
+Explicit step for writes where content is derived by a prior `js_transform`. Used in `create_domain` step 16c for the post-confirmation structural snapshot (the authoritative semantic record).
+
+**`MEMORY_WRITE` SQS** (fire-and-forget, Sprint 3):
+`run-workflow.mjs` enqueues after any qualifying domain workflow completes (domain non-null, not a system workflow). `memory-writer.mjs` writes a deterministic episodic summary at zero LLM cost.
+
+#### Scope and retrieval
+
+Scope is a JSONB object — e.g. `{"domain":"flashcards"}` or `{"workflow":"quiz_flashcards"}`. `expandScope()` derives all parent scopes so domain-level memories are reachable from any compound call scope that includes that domain. Retrieval is client-side (all `PGC_Memory` rows loaded and filtered) — household scale keeps this in the hundreds of rows.
+
+`PGC_Prompt.memory_config` (nullable JSONB) controls retrieval per prompt:
+```json
+{ "memory_budget_tokens": 600, "memory_types": ["semantic"], "scope_additions": { "domain": "{{input.domain}}" } }
+```
+`memory_budget_tokens: 0` disables memory for that prompt.
+
+#### Domain memory two-layer provenance (Sprint 4)
+
+`create_domain` writes memories at two distinct points:
+- **Pre-confirmation (episodic):** `save_to_memory` on LLM steps (10, 12b, 13) captures reasoning before the user confirms. Correctly labelled episodic — reflects thinking that the user may still revise.
+- **Post-confirmation (semantic):** Step 16c `write_memory` fires after "Create it" click, before DDL. Writes a structural prose snapshot: which columns are required at insert, which the DB defaults manage, and which are null at creation. This is the authoritative record retrieved by `create_workflow` and `parse_entity_input`.
+
+**Why this matters for data loads:** `parse_entity_input` (called by `add_entity` in the classify-intent path) now retrieves domain semantic memories (400-token budget, Sprint 4). When a user pastes a bulk spreadsheet of records, the LLM knows which columns to omit at creation (nullable-at-creation) and which initial values to apply — without explicit workflow parameters.
+
+#### initial_value_conventions
+
+`create_domain`, `design_table`, and `revise_domain_schema` prompts emit an optional `initial_value_conventions` array capturing application-level initial values that SQL DEFAULT alone does not express. Example: `interval_days` SQL DEFAULT is 0 but the SM-2 first interval should be 1. These conventions are included in the step 16c structural snapshot and flow through memory to both `create_workflow` and `parse_entity_input`.
 
 ---
 
@@ -3337,10 +3454,10 @@ _"base key '#each available_sets' has not been written by any prior step"_. The 
 signal did not tell the LLM that the syntax itself was illegal, so each correction attempt
 re-copied the same template from `dialog_designs` and produced the same errors.
 
-**2. `condition` step `on_truthy`/`on_falsy` double `step:` prefix**
+**2. `condition` step `on_success`/`on_else` double `step:` prefix**
 
 Translation Rule 4 in the prompt instructs the LLM to use `step:<key>` format for all
-routing targets. The LLM applied this uniformly, including to `on_truthy`/`on_falsy` on
+routing targets. The LLM applied this uniformly, including to `on_success`/`on_else` on
 `condition` steps. The engine's `executeCondition` and the static analysis both expected
 bare keys and unconditionally prepended `step:`, producing `step:step:8` — a dead routing
 target that does not exist in the step array.
@@ -3350,15 +3467,15 @@ target that does not exist in the step array.
 | Fix | Location | Change |
 |---|---|---|
 | Handlebars detection | `runLevel1StaticAnalysis` | Refs starting with `#`, `/`, or equal to `this`/`this.*` emit `unsupported_handlebars_syntax` with an explicit "use indexed dot-notation" message instead of a misleading unresolved-variable error |
-| `on_truthy`/`on_falsy` normalisation — static analysis | `runLevel1StaticAnalysis` | Strip existing `step:` prefix before wrapping, so both bare keys and `step:N` values produce correct dead-target checks |
-| `on_truthy`/`on_falsy` normalisation — runtime | `executeCondition` | Strip existing `step:` prefix before constructing `nextAction`, so `"step:8"` and `"8"` are both valid values at execution time |
+| `on_success`/`on_else` normalisation — static analysis | `runLevel1StaticAnalysis` | Strip existing `step:` prefix before wrapping, so both bare keys and `step:N` values produce correct dead-target checks |
+| `on_success`/`on_else` normalisation — runtime | `executeCondition` | Strip existing `step:` prefix before constructing `nextAction`, so `"step:8"` and `"8"` are both valid values at execution time |
 
 #### Prompt fixes (generate_workflow_steps v9)
 
 Two rules added to TRANSLATION RULES:
 
 - **Rule 5a** — `message_template` supports ONLY `{{key.path}}` dot-notation. Handlebars syntax is explicitly prohibited. When copying from `dialog_designs`, the LLM must transform any `{{#each array}}...{{this.prop}}...{{/each}}` blocks to indexed access: `{{array.0.prop}}`, `{{array.1.prop}}`, etc.
-- **Rule 5b** — `on_truthy` and `on_falsy` on `condition` steps take **bare step keys** (e.g., `"8"`) — not `step:N` routing tokens. The engine adds the prefix at runtime.
+- **Rule 5b** — `on_success` and `on_else` on `condition` steps take **bare step keys** (e.g., `"8"`) — not `step:N` routing tokens. The engine adds the prefix at runtime.
 
 #### Correction mode — `callLlmWithCorrection` analogue
 
@@ -3381,7 +3498,7 @@ structural context to make targeted fixes, mirroring the behaviour of `callLlmWi
 |---|---|
 | 14 | Added `previous_draft_steps` and `path_errors` inputs |
 | 16a | Fixed `js_transform` expression: `i.message \|\| i.type` → `i.detail \|\| i.check` — user now sees actual error text in 16b instead of "validation issue" × N |
-| 19 | `on_failure` changed from `step:15` to `step:19a` |
+| 19 | `on_else` changed from `step:15` to `step:19a` |
 | 19a (new) | `js_transform` — formats Level 2 `simulation_result.path_results` failures into `path_error_summary` |
 | 19b (new) | `human_gate` (confirm) — displays `path_error_summary`, offers Regenerate with feedback → 15a, Regenerate automatically → 14, Cancel; mirrors the 16/16a/16b Level 1 retry pattern |
 
