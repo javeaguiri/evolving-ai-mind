@@ -210,13 +210,6 @@ function runValidation(output, outputSchema) {
     errors.push(...runSemanticRules(output));
   }
 
-  // Pass 2b — Routing value rules (only for outputs that carry a steps array)
-  // Runs independently of output.tables — workflow generation prompts produce
-  // steps arrays without tables. Does not run on create_domain output.
-  if (errors.length === 0 && Array.isArray(output.steps)) {
-    errors.push(...runRoutingValueRules(output.steps));
-  }
-
   return errors;
 }
 
@@ -290,87 +283,6 @@ function runSemanticRules(scaffold) {
             parent:  parentTable,
           });
         }
-      }
-    }
-  }
-
-  return errors;
-}
-
-// ---------------------------------------------------------------------------
-// Pass 2b — Routing value rules (workflow step arrays)
-// ---------------------------------------------------------------------------
-
-/**
- * Validate routing values in a steps array.
- * Called when LLM output contains a steps array — i.e. workflow generation
- * prompts (generate_workflow_steps, classify_workflow_intent, etc.).
- * Not called for create_domain output (which has tables, not steps).
- *
- * Checks:
- *   1. Every on_success / on_failure / on_select value is a known routing token
- *   2. Every step:N routing target exists as a step key in the array
- *   3. Every human_gate has at least one option with action: "cancel"
- *
- * Returns errors as { type: 'semantic', rule, message, step } — same shape
- * as runSemanticRules so the correction loop formats them identically.
- */
-function runRoutingValueRules(steps) {
-  const errors = [];
-
-  // Valid routing token: next, end, cancel, or step:<key>
-  const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+)$/;
-  const stepKeys = new Set(steps.map(s => String(s.step)));
-
-  function checkToken(stepKey, fieldName, value) {
-    if (value == null) return;
-    const v = String(value);
-    if (!ROUTING_TOKEN_RE.test(v)) {
-      errors.push({
-        type:    'semantic',
-        rule:    'unknown_routing_value',
-        message: `Step "${stepKey}" field "${fieldName}" has unknown routing value "${v}". ` +
-                 `Valid values: next, end, cancel, step:<key>`,
-        step:    stepKey,
-      });
-      return;
-    }
-    if (v.startsWith('step:')) {
-      const target = v.slice(5);
-      if (!stepKeys.has(target)) {
-        errors.push({
-          type:    'semantic',
-          rule:    'dead_routing_target',
-          message: `Step "${stepKey}" field "${fieldName}" routes to "step:${target}" ` +
-                   `but no step with key "${target}" exists in this steps array`,
-          step:    stepKey,
-        });
-      }
-    }
-  }
-
-  for (const s of steps) {
-    const key = String(s.step);
-
-    checkToken(key, 'on_success',  s.on_success);
-    checkToken(key, 'on_failure',  s.on_failure);
-    checkToken(key, 'on_complete', s.on_complete);
-
-    for (const opt of s.options ?? []) {
-      checkToken(key, `options[${opt.label ?? opt.value}].on_select`, opt.on_select);
-    }
-
-    // Ensure every human_gate has a cancel option (on_select === 'cancel')
-    if (s.type === 'human_gate') {
-      const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
-      if (!hasCancel) {
-        errors.push({
-          type:    'semantic',
-          rule:    'missing_cancel_option',
-          message: `human_gate step "${key}" has no option with on_select "cancel" — ` +
-                   `every gate must give the user a way to cancel`,
-          step:    key,
-        });
       }
     }
   }

@@ -27,7 +27,7 @@
 //   serv_entity_get   — calls SERV getEntity by id, writes entity object to output_key
 //   serv_update  — calls SERV updateRows, generic filter + updates shape
 //   serv_delete  — calls SERV deleteRows, generic filter shape
-//   condition    — resolves expression, routes on_truthy/on_falsy — no I/O
+//   condition    — resolves expression, routes on_success/on_else — no I/O
 //   simulate     — static analysis + optional path simulation of a step array
 //   notify       — enqueues result message to SlackResults
 //   end          — signals workflow complete
@@ -1216,6 +1216,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const stepsKey       = step.input?.steps_key;
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
+  const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
 
   if (!stepsKey) {
     throw new Error('simulate step missing input.steps_key');
@@ -1234,6 +1235,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
     mockOutputs,
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
+    skeleton,
     traceId,
   });
 
@@ -1242,7 +1244,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
     outputValue: result,
     nextAction:  passed
       ? resolveNextAction(step.on_success, null)
-      : resolveNextAction(step.on_failure ?? 'next', null),
+      : resolveNextAction(step.on_else ?? 'next', null),
   };
 }
 
@@ -1252,7 +1254,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
 
 /**
  * Pure control-flow step — evaluates an expression against local_state and
- * routes to on_truthy or on_falsy without performing any I/O.
+ * routes to on_success or on_else without performing any I/O.
  *
  * Two evaluation paths determined by whether the expression contains '{{':
  *
@@ -1266,17 +1268,17 @@ async function executeSimulate({ step, localState, run, traceId }) {
  *     Evaluated in the same sandboxed vm context as js_transform — local_state
  *     is available. Accepts any valid JS boolean expression the LLM naturally
  *     produces, e.g. local_state.items.length === 0 or count > 5 && active.
- *     If evaluation throws the step routes to on_falsy and logs the error.
+ *     If evaluation throws the step routes to on_else and logs the error.
  *
- * on_truthy / on_falsy use bare step keys (e.g. "2", "3a"). step:N format is
- * also accepted — both normalise to a bare key before return.
+ * on_success / on_else accept any routing token (next, end, cancel, step:N,
+ * or a bare step key). step:N format normalises to a bare key before return.
  *
  * No output_key is written — condition steps produce no state output.
  */
 function executeCondition({ step, localState, traceId }) {
   if (!step.expression) throw new Error('condition step missing expression');
-  if (!step.on_truthy)  throw new Error('condition step missing on_truthy');
-  if (!step.on_falsy)   throw new Error('condition step missing on_falsy');
+  if (!step.on_success) throw new Error('condition step missing on_success');
+  if (!step.on_else)    throw new Error('condition step missing on_else');
 
   const usesTemplate = step.expression.includes('{{');
   let isTruthy;
@@ -1294,7 +1296,7 @@ function executeCondition({ step, localState, traceId }) {
       expression: step.expression,
       resolved,
       isTruthy,
-      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      nextStep: String(isTruthy ? step.on_success : step.on_else).replace(/^step:/, ''),
       traceId,
     });
   } else {
@@ -1314,12 +1316,12 @@ function executeCondition({ step, localState, traceId }) {
       expression: step.expression,
       evalMode:   'js',
       isTruthy,
-      nextStep: String(isTruthy ? step.on_truthy : step.on_falsy).replace(/^step:/, ''),
+      nextStep: String(isTruthy ? step.on_success : step.on_else).replace(/^step:/, ''),
       traceId,
     });
   }
 
-  const rawNext  = isTruthy ? step.on_truthy : step.on_falsy;
+  const rawNext  = isTruthy ? step.on_success : step.on_else;
   const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
 
   return { outputValue: null, nextAction: `step:${bareNext}` };
@@ -1388,6 +1390,21 @@ async function executeWriteMemory({ step, localState, run, traceId }) {
   try {
     const row = buildMemoryRow(step, localState);
     row.source_run_id = run?.id ?? null;
+
+    const input = resolveInput(step.input ?? {}, localState);
+    if (input.expire_prior === true) {
+      const expireFilters = [
+        { column: 'scope',       op: 'jsonb_contains', value: row.scope },
+        { column: 'expires_at',  op: 'is_null' },
+      ];
+      if (row.tags?.length > 0) {
+        expireFilters.push({ column: 'tags', op: 'jsonb_contains', value: row.tags });
+      }
+      const expireResp = await updateRows('PGC_Memory', expireFilters, { expires_at: new Date().toISOString() });
+      if (!expireResp.success) {
+        console.warn('step-executor: write_memory expire_prior failed (non-fatal)', { error: expireResp.error, traceId });
+      }
+    }
 
     console.info('step-executor: write_memory', { memory_type: row.memory_type, traceId });
 

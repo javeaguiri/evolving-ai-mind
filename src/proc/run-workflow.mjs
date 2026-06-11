@@ -146,7 +146,7 @@ async function executeTop({ workflowRunId, traceId, source }) {
       status:        'running',
       workflow_name: run.workflow_name,
       current_step:  '1',
-      local_state:   { ...(run.state?.local_state ?? {}), input: run.input ?? {} },
+      local_state:   { input: run.input ?? {} },
       on_complete:   'end',
       pushed_at:     new Date().toISOString(),
     };
@@ -234,18 +234,13 @@ async function executeTop({ workflowRunId, traceId, source }) {
     }
 
     // stuckCount === 1: first idempotency hit on this step.
-    // Two possible causes:
-    //   (A) SQS redelivery — the original Lambda took longer than the queue's
-    //       visibility timeout (e.g. slow LLM call + correction loop), so SQS
-    //       made the message visible again and a second Lambda picked it up.
-    //       The first Lambda already completed and recorded the step; this is a
-    //       harmless duplicate. Signature: source === 'sqs' and the prior
-    //       stuck_step is absent or different.
-    //   (B) Routing loop beginning — the workflow routes back to this step on
-    //       every execution. Will escalate to stuckCount >= 3 on next hits.
-    // Log both fields so CloudWatch can distinguish A from B in future analysis.
+    // The original Lambda already executed this step and enqueued the next
+    // execute_top. Re-enqueueing here duplicates that message and sustains any
+    // burst that reached this path — the amplifier behind recursive loop
+    // detection. Discard silently; the run advances via the already-enqueued
+    // continuation.
     const likelyCause = (source === 'sqs' && !sameStep) ? 'sqs_redelivery' : 'routing_loop_start';
-    console.warn('run-workflow: idempotency hit', {
+    console.warn('run-workflow: idempotency hit — discarding duplicate', {
       workflowRunId: run.id,
       step:          frame.current_step,
       stuckCount,
@@ -257,7 +252,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       { error: { stuck_step: frame.current_step, stuck_count: stuckCount } }
     );
-    await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
     return { skipped: true };
   }
 
@@ -412,7 +406,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
       {
         status:     'awaiting_human_gate',
         stack:      run.stack,
-        state:      { local_state: frame.local_state },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -481,7 +474,6 @@ async function executeTop({ workflowRunId, traceId, source }) {
     [{ column: 'id', op: 'eq', value: run.id }],
     {
       stack:      run.stack,
-      state:      { local_state: frame.local_state },
       step_count: (run.step_count ?? 0) + 1,
     }
   );
@@ -537,7 +529,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
 
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
-      { stack: run.stack, state: { local_state: localState } }
+      { stack: run.stack }
     );
 
     const updatedDialog = buildDialog(stepRef, localState);
@@ -701,7 +693,6 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     {
       status:     'running',
       stack:      run.stack,
-      state:      { local_state: persistedState },
       step_count: (run.step_count ?? 0) + 1,
     }
   );
@@ -753,7 +744,7 @@ async function startIterator({ step, frame, run, traceId }) {
 
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
-    { stack: run.stack, state: { local_state: frame.local_state }, step_count: (run.step_count ?? 0) + 1 }
+    { stack: run.stack, step_count: (run.step_count ?? 0) + 1 }
   );
 
   await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId });
@@ -855,7 +846,6 @@ async function executeIteratorInline({ run, frame, traceId }) {
         {
           status:     'awaiting_human_gate',
           stack:      run.stack,
-          state:      { local_state: frame.local_state },
           step_count: (run.step_count ?? 0) + 1,
         }
       );
@@ -897,7 +887,6 @@ async function executeIteratorInline({ run, frame, traceId }) {
     [{ column: 'id', op: 'eq', value: run.id }],
     {
       stack:      run.stack,
-      state:      { local_state: parentFrame?.local_state ?? {} },
       step_count: (run.step_count ?? 0) + results.length + 1,
     }
   );
@@ -939,7 +928,6 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       {
         stack:      run.stack,
-        state:      { local_state: parentFrame?.local_state ?? {} },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -1026,7 +1014,6 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
       [{ column: 'id', op: 'eq', value: run.id }],
       {
         stack:      run.stack,
-        state:      { local_state: parentFrame?.local_state ?? {} },
         step_count: (run.step_count ?? 0) + 1,
       }
     );
@@ -1119,7 +1106,7 @@ function topFrame(run) {
 async function persistStack(run) {
   await updateRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: run.id }],
-    { stack: run.stack, state: { local_state: topFrame(run)?.local_state ?? {} } }
+    { stack: run.stack }
   );
 }
 

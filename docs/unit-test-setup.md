@@ -339,7 +339,7 @@ node --test tests/unit/troubleshoot-fix-workflow.test.mjs
 
 | Suite | What it tests |
 |---|---|
-| `Level 1 — condition step routing contract` | Detects on_truthy/on_falsy routing token violations (real create_workflow v4 bugs); passes for correctly fixed bare step keys; each issue has all fields the fix_workflow_steps prompt expects |
+| `Level 1 — condition step routing contract` | Detects on_success/on_else routing token violations (real create_workflow v4 bugs); passes for correctly fixed bare step keys; each issue has all fields the fix_workflow_steps prompt expects |
 | `Level 1 — other failure classes` | Dead routing targets, unresolved template variables, missing cancel option, Level 1-only mode (no paths), short-circuit on Level 1 failure |
 | `buildTroubleshootSummary` | ✅/❌ prefix, issue count, step/failure_class/detail in bullets, suggestion appended, 10-bullet cap with overflow, singular/plural "issue", null workflowName |
 | `validateCorrectedSteps` | null/empty input, still-broken steps rejected, fixed steps pass, structured issue objects when failed |
@@ -381,8 +381,8 @@ describe('executeCondition — falsy set', () => {
     const step = {
       type: 'condition',
       expression: '{{hasViolations}}',
-      on_truthy: '9',
-      on_falsy:  '12',
+      on_success: '9',
+      on_else:  '12',
     };
     const localState = { hasViolations: false };
     const result = executeCondition({ step, localState, traceId: 'test' });
@@ -390,21 +390,21 @@ describe('executeCondition — falsy set', () => {
   });
 
   it('treats string "0" as falsy', () => {
-    const step = { type: 'condition', expression: '{{count}}', on_truthy: '2', on_falsy: '5' };
+    const step = { type: 'condition', expression: '{{count}}', on_success: '2', on_else: '5' };
     const localState = { count: 0 };
     const result = executeCondition({ step, localState, traceId: 'test' });
     assert.equal(result.nextAction, 'step:5');
   });
 
   it('treats non-zero number as truthy', () => {
-    const step = { type: 'condition', expression: '{{count}}', on_truthy: '2', on_falsy: '5' };
+    const step = { type: 'condition', expression: '{{count}}', on_success: '2', on_else: '5' };
     const localState = { count: 3 };
     const result = executeCondition({ step, localState, traceId: 'test' });
     assert.equal(result.nextAction, 'step:2');
   });
 
   it('treats boolean true as truthy', () => {
-    const step = { type: 'condition', expression: '{{active}}', on_truthy: '2', on_falsy: '5' };
+    const step = { type: 'condition', expression: '{{active}}', on_success: '2', on_else: '5' };
     const localState = { active: true };
     const result = executeCondition({ step, localState, traceId: 'test' });
     assert.equal(result.nextAction, 'step:2');
@@ -416,8 +416,8 @@ Note: `executeCondition` must be exported from `step-executor.mjs` for direct un
 If not already exported, add `export` to the function declaration — it is a pure function
 with no I/O.
 
-- `BROKEN_CONDITION_STEPS` — step 4 with `on_truthy: "next"` and `on_falsy: "step:6"` (the exact
+- `BROKEN_CONDITION_STEPS` — step 4 with `on_success: "next"` and `on_else: "step:6"` (the exact
   condition routing bug that crashed the first test run)
-- `FIXED_CONDITION_STEPS` — step 4 corrected to `on_truthy: "5"`, `on_falsy: "6"`
+- `FIXED_CONDITION_STEPS` — step 4 corrected to `on_success: "5"`, `on_else: "6"`
 - `ALL_FOUR_CONDITION_BUGS` — all four condition steps from create_workflow v4 with violations
 - `HEALTHY_STEPS` — passes Level 1, used for positive validation cases

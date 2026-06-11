@@ -29,7 +29,7 @@ import { embedText }  from '../shared/embed-client.mjs';
 // Allowed filter operators — security gate.
 // ---------------------------------------------------------------------------
 const ALLOWED_OPS = new Set([
-  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null',
+  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -733,6 +733,10 @@ function buildWhereClause(filters, startIdx = 1) {
         break;
       case 'not_null':
         conditions.push(`${col} IS NOT NULL`);
+        break;
+      case 'jsonb_contains':
+        conditions.push(`${col} @> $${idx++}::jsonb`);
+        values.push(typeof f.value === 'string' ? f.value : JSON.stringify(f.value));
         break;
     }
   }

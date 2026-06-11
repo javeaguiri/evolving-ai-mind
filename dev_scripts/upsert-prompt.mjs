@@ -67,9 +67,7 @@ for (const p of candidates) {
 const targets = [...latestByCat.values()];
 
 if (targets.length < candidates.length) {
-  const skipped = candidates.length - targets.length;
-  console.warn(`NOTE: ${skipped} older seed version(s) skipped -- only the highest version per intent_category is deployed.`);
-  console.warn('      Remove old version entries from seed_PGC_Prompt.json to eliminate this warning.\n');
+  console.warn(`NOTE: ${candidates.length - targets.length} older seed version(s) ignored (only highest version per category is deployed)\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +113,12 @@ function fingerprint(entry) {
 // ---------------------------------------------------------------------------
 // Upsert each target prompt
 // ---------------------------------------------------------------------------
-let needsAttention = false;
+const counts = { ok: 0, updated: 0, inserted: 0, skipped: 0 };
 
 for (const prompt of targets) {
   const seedVersion = VERSION_OVERRIDE ?? prompt.version ?? 1;
   const seedFp = fingerprint(prompt);
-
-  console.log(`\nPrompt: ${prompt.intent_category}`);
-  console.log(`  Seed version : v${seedVersion}  fingerprint: ${seedFp}`);
+  const label  = prompt.intent_category;
 
   // Fetch highest-version DB row for this intent_category
   const existing = await servPost('/api/v1/serv/table/getRows', {
@@ -133,13 +129,12 @@ for (const prompt of targets) {
   });
 
   if (!existing.success) {
-    console.error('ERROR: getRows failed', existing);
+    console.error(`ERROR [${label}]: getRows failed`, existing);
     process.exit(1);
   }
 
   // No DB row -- insert at seed version
   if (existing.count === 0) {
-    console.log('  DB row       : none -- inserting...');
     const result = await servPost('/api/v1/serv/table/insertRow', {
       tableName: 'PGC_Prompt',
       row: {
@@ -153,45 +148,45 @@ for (const prompt of targets) {
         was_successful: prompt.was_successful ?? null,
       },
     });
-    if (!result.success) { console.error('ERROR: insertRow failed', result); process.exit(1); }
-    console.log(`  Result       : inserted at v${seedVersion} (id: ${result.row?.id})`);
+    if (!result.success) { console.error(`ERROR [${label}]: insertRow failed`, result); process.exit(1); }
+    console.log(`  ${label}  v${seedVersion}  inserted (id: ${result.row?.id})`);
+    counts.inserted++;
     continue;
   }
 
-  const dbRow = existing.rows[0];
+  const dbRow     = existing.rows[0];
   const dbVersion = dbRow.version;
-  const dbFp = fingerprint(dbRow);
+  const dbFp      = fingerprint(dbRow);
 
-  console.log(`  DB highest   : v${dbVersion}  fingerprint: ${dbFp}`);
-
-  // Fingerprints match -- no-op regardless of version numbers
+  // Fingerprints match -- content already current; sync version if it drifted
   if (seedFp === dbFp) {
-    console.log(`  Result       : no changes -- already current (v${dbVersion})`);
-    if (seedVersion !== dbVersion) {
-      console.warn(`  NOTE: Seed declares v${seedVersion} but DB is v${dbVersion}. Update seed version field.`);
-      needsAttention = true;
+    if (dbVersion !== seedVersion) {
+      await servPost('/api/v1/serv/table/updateRows', {
+        tableName: 'PGC_Prompt',
+        filters: [{ column: 'intent_category', op: 'eq', value: prompt.intent_category }, { column: 'version', op: 'eq', value: dbVersion }],
+        updates: { version: seedVersion },
+      });
+      console.log(`  ${label}  v${dbVersion}→v${seedVersion}  ok (version synced)`);
+    } else {
+      console.log(`  ${label}  v${seedVersion}  ok`);
     }
+    counts.ok++;
     continue;
   }
 
   // Content differs AND DB is ahead of seed -- do NOT overwrite
   if (dbVersion > seedVersion) {
-    console.warn(`  SKIP: DB v${dbVersion} has different content from seed v${seedVersion}.`);
-    console.warn(`        The seed is stale. Pull the DB content before deploying:`);
-    console.warn(`        node dev_scripts/pull-prompt.mjs ${prompt.intent_category}`);
-    needsAttention = true;
+    console.warn(`  ${label}  SKIP — DB v${dbVersion} differs from seed v${seedVersion} (run: node dev_scripts/pull-prompt.mjs ${prompt.intent_category})`);
+    counts.skipped++;
     continue;
   }
 
   // Content differs AND seed version >= DB version -- safe to update
-  const targetVersion = dbVersion;
-  console.log(`  Content diff detected -- updating v${targetVersion}...`);
-
   const result = await servPost('/api/v1/serv/table/updateRows', {
     tableName: 'PGC_Prompt',
     filters: [
       { column: 'intent_category', op: 'eq', value: prompt.intent_category },
-      { column: 'version', op: 'eq', value: targetVersion },
+      { column: 'version', op: 'eq', value: dbVersion },
     ],
     updates: {
       prompt_text:       prompt.prompt_text,
@@ -201,28 +196,17 @@ for (const prompt of targets) {
       max_output_tokens: prompt.max_output_tokens ?? null,
       probe_input:       prompt.probe_input ?? null,
       memory_config:     prompt.memory_config ?? null,
+      version:           seedVersion,
     },
   });
 
-  if (!result.success) { console.error('ERROR: updateRows failed', result); process.exit(1); }
-  console.log(`  Result       : updated v${targetVersion} -- ${result.updatedCount ?? 1} row(s) affected`);
-
-  // Verify
-  const verify = await servPost('/api/v1/serv/table/getRows', {
-    tableName: 'PGC_Prompt',
-    filters: [
-      { column: 'intent_category', op: 'eq', value: prompt.intent_category },
-      { column: 'version', op: 'eq', value: targetVersion },
-    ],
-    limit: 1,
-  });
-  const stored = verify.rows?.[0];
-  console.log(`  Verified     : v${stored?.version}  updated_at: ${stored?.updated_at}`);
+  if (!result.success) { console.error(`ERROR [${label}]: updateRows failed`, result); process.exit(1); }
+  console.log(`  ${label}  v${dbVersion}→v${seedVersion}  updated`);
+  counts.updated++;
 }
 
-if (needsAttention) {
-  console.warn('\n ACTION REQUIRED: one or more prompts were skipped or have version mismatches.');
-  console.warn(' Run: node dev_scripts/pull-prompt.mjs <intent_category> to pull DB content.');
-}
-
-console.log('\nDone.');
+const parts = [`${counts.ok} ok`];
+if (counts.updated)  parts.push(`${counts.updated} updated`);
+if (counts.inserted) parts.push(`${counts.inserted} inserted`);
+if (counts.skipped)  parts.push(`${counts.skipped} SKIPPED — pull required`);
+console.log(`\n${targets.length} prompts: ${parts.join(', ')}`);

@@ -319,7 +319,7 @@ const hasCancel = (s.options ?? []).some(o => o.on_select === 'cancel');
 7. `human_gate` (choice) — present card, collect correct/incorrect/cancel
 8. `js_transform` — advance index, compute `card_updates`, set done flag; `output_key: "quiz_state,card_updates"`
 9. `serv_update` — update flashcard streak/counters from `card_updates`
-10. `serv_insert` — write TestLog; `on_success/on_failure: "step:6"` (loop)
+10. `serv_insert` — write TestLog; `on_success/on_else: "step:6"` (loop)
 11. `serv_update` — finalize StudySession with completion metrics
 12. `notify` — post quiz completion summary
 13. `end`
@@ -354,7 +354,7 @@ Then replace `{{quiz_state.cards_array.{{quiz_state.index}}.term}}` with `{{curr
 ### Additional Observations
 
 - **Step 2 hardcoded set slots:** Options A–E hardcode `flashcard_sets.0` through `flashcard_sets.4`. If the user has fewer than 5 active sets, unused options will render `undefined`. Not a blocker for initial use but degrades the experience.
-- **Step 9 `on_failure: "next"`:** The flashcard stat update failing silently and continuing is intentional tolerance — acceptable.
+- **Step 9 `on_else: "next"`:** The flashcard stat update failing silently and continuing is intentional tolerance — acceptable.
 - **`quiz_state.cards_array.length` in step 11:** Accesses `.length` via dot-path template — works correctly since the resolver traverses via `obj[key]` which returns the native array length property.
 
 ---

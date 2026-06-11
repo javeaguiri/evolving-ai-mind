@@ -27,16 +27,17 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // @returns {SimulateWorkflowResponse}
 // ---------------------------------------------------------------------------
 
-export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, traceId }) {
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
     pathCount: Array.isArray(simulationPaths) ? simulationPaths.length : 0,
+    skeleton,
     traceId,
   });
 
   // ── Level 1 — Static analysis ────────────────────────────────────────────
-  const level1Result  = runLevel1StaticAnalysis(steps);
+  const level1Result  = runLevel1StaticAnalysis(steps, { skeleton });
   const staticIssues  = level1Result.issues;
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
@@ -47,6 +48,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              false,
+      total_issues:        staticIssues.length,
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -75,6 +77,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              l2Passed,
+      total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -104,6 +107,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 
   const result = {
     passed:              l2Passed,
+    total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
@@ -128,7 +132,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 // Level 1 — Static analysis
 // ---------------------------------------------------------------------------
 
-export function runLevel1StaticAnalysis(steps) {
+export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
   const issues = [];
 
   // Build a set of all step keys for dead-target checking
@@ -153,41 +157,14 @@ export function runLevel1StaticAnalysis(steps) {
     // Check every routing value on this step
     const routingValues = [];
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
-    if (s.on_failure) routingValues.push({ field: 'on_failure', value: s.on_failure });
+    if (s.on_else)    routingValues.push({ field: 'on_else',    value: s.on_else });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    // condition on_truthy/on_falsy: only bare step keys that exist in stepKeys are valid.
-    // Control tokens (next, end, cancel) and step:N format are all wrong here.
-    for (const condField of ['on_truthy', 'on_falsy']) {
-      if (!s[condField]) continue;
-      const cv = String(s[condField]);
-      const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
-      if (CONTROL_TOKENS.has(cv) || cv.startsWith('step:')) {
-        issues.push({
-          check:         'condition_routing_invalid',
-          step:          stepKey,
-          failure_class: 'condition_routing_invalid',
-          detail:        `Step "${stepKey}" field "${condField}" value "${cv}" is invalid in a condition step. Use a bare step key (e.g. "3", "3a") that exists in the workflow. Control tokens (next, end, cancel) and step:N format are not valid here.`,
-        });
-      } else if (!stepKeys.has(cv)) {
-        issues.push({
-          check:         'dead_routing_target',
-          step:          stepKey,
-          failure_class: 'dead_routing_target',
-          detail:        `Step "${stepKey}" field "${condField}" routes to "${cv}" but no step with key "${cv}" exists`,
-        });
-      }
-    }
-
-    if (s.on_truthy) routingValues.push({ field: 'on_truthy', value: s.on_truthy });
-    if (s.on_falsy)  routingValues.push({ field: 'on_falsy',  value: s.on_falsy });
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
     const CONTROL_TOKENS = new Set(['next', 'end', 'cancel']);
     for (const { field, value } of routingValues) {
-      // condition on_truthy/on_falsy already validated above — skip here
-      if (s.type === 'condition' && (field === 'on_truthy' || field === 'on_falsy')) continue;
       const sv = String(value);
       if (!ROUTING_TOKEN_RE.test(sv)) {
         issues.push({
@@ -211,6 +188,25 @@ export function runLevel1StaticAnalysis(steps) {
       }
     }
 
+    // Condition steps have a stricter contract: on_success/on_else must be bare step keys.
+    // Control tokens (next, end, cancel) and step:N prefixed values are not valid —
+    // a condition must explicitly name its true and false target steps by key.
+    if (s.type === 'condition') {
+      for (const field of ['on_success', 'on_else']) {
+        const val = s[field];
+        if (val == null) continue;
+        const sv = String(val);
+        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
+          issues.push({
+            check:         'condition_routing_invalid',
+            step:          stepKey,
+            failure_class: 'condition_routing_invalid',
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") but got "${sv}". Control tokens (next, end, cancel) and step:N prefixed values are not valid here — specify the target step key directly.`,
+          });
+        }
+      }
+    }
+
     // Check items_key for iterator steps
     if (s.type === 'iterator') {
       const baseKey = (s.items_key ?? '').split('.')[0];
@@ -224,17 +220,20 @@ export function runLevel1StaticAnalysis(steps) {
       }
     }
 
-    // Check gate has at least one cancel option
+    // Check gate has at least one cancel option — skipped in skeleton mode because
+    // options are dialog-layer content added after routing topology is validated.
     if (s.type === 'human_gate') {
-      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
-      const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
-      if (!hasCancel) {
-        issues.push({
-          check:         'missing_cancel_option',
-          step:          stepKey,
-          failure_class: 'missing_cancel_option',
-          detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
-        });
+      if (!skeleton) {
+        const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+        const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
+        if (!hasCancel) {
+          issues.push({
+            check:         'missing_cancel_option',
+            step:          stepKey,
+            failure_class: 'missing_cancel_option',
+            detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
+          });
+        }
       }
 
       if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
@@ -307,15 +306,16 @@ export function runLevel1StaticAnalysis(steps) {
     for (const template of templatesToCheck) {
       // Nested {{ detection must happen before extractTemplateRefs — e.g.
       // "{{cards.{{index}}.term}}" is structurally unparseable, not a ref error.
-      if (/\{\{[^}]*\{\{/.test(template)) {
-        const issueKey = `nested_template::${template.slice(0, 60)}`;
+      const nestedMatch = /\{\{[^}]*\{\{[^}]*\}\}/.exec(template);
+      if (nestedMatch) {
+        const issueKey = `nested_template::${nestedMatch[0]}`;
         if (!seenTemplateIssues.has(issueKey)) {
           seenTemplateIssues.add(issueKey);
           issues.push({
             check:         'unsupported_handlebars_syntax',
             step:          stepKey,
             failure_class: 'unsupported_handlebars_syntax',
-            detail:        `Step "${stepKey}" contains nested template syntax which is not supported: "${template.slice(0, 80)}". Pre-compute the value in a js_transform step and reference the result key instead.`,
+            detail:        `Step "${stepKey}" contains nested template syntax which is not supported: "${nestedMatch[0]}". Pre-compute the value in a js_transform step and reference the result key instead.`,
           });
         }
         continue;
@@ -339,7 +339,18 @@ export function runLevel1StaticAnalysis(steps) {
           }
           continue;
         }
-        const baseKey = ref.split('.')[0];
+        // Arithmetic expressions (e.g. "subset_index + 1") are handled by evalExpression at
+        // runtime — extract identifiers for tracking but skip the unresolved-key check.
+        if (/[\s+\-*%]/.test(ref)) {
+          const ids = ref.match(/\b[a-zA-Z_][a-zA-Z0-9_.]*\b/g) ?? [];
+          for (const id of ids) {
+            const bk = id.split('.')[0];
+            if (bk !== 'item') { stepReads.add(bk); allReadsEver.add(bk); }
+          }
+          continue;
+        }
+        // Strip bracket notation to extract true base key: "arr[idx].prop" → "arr"
+        const baseKey = ref.split('.')[0].replace(/\[.*/, '');
         // Collect read for state_flow tracking (all base keys except iterator-scoped 'item')
         if (baseKey !== 'item') {
           stepReads.add(baseKey);
@@ -362,7 +373,8 @@ export function runLevel1StaticAnalysis(steps) {
     }
 
     // Check required input fields for serv_* step types.
-    // These are enforced at runtime; L1 catches missing fields before registration.
+    // Skipped in skeleton mode — skeleton steps are routing-topology only and carry no
+    // input fields by design. Content completeness is checked in the final pre-write L1.
     // Template references (e.g. "{{item.tableName}}") are valid — only absent/null/empty fails.
     const servRequired = {
       serv_query:  ['tableName'],
@@ -370,7 +382,7 @@ export function runLevel1StaticAnalysis(steps) {
       serv_update: ['tableName', 'filters', 'updates'],
       serv_delete: ['tableName', 'filters'],
     };
-    if (servRequired[s.type]) {
+    if (!skeleton && servRequired[s.type]) {
       const inputObj = s.input ?? {};
       for (const field of servRequired[s.type]) {
         const val = inputObj[field];
@@ -734,7 +746,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
 
     // For steps with a decision entry that signals failure
     if (decision?.outcome === 'failure') {
-      const onFailure = currentStep.on_failure ?? 'cancel';
+      const onFailure = currentStep.on_else ?? 'cancel';
       nextKey = resolveSimNextKey(steps, currentKey, onFailure);
       if (onFailure === 'cancel')    currentKey = 'cancel';
       else if (onFailure === 'end') currentKey = 'end';
@@ -868,8 +880,8 @@ function runRoutingMatrix(steps, traceId) {
     if (s.type === 'end') {
       targets.add('end');
     } else if (s.type === 'condition') {
-      const tt = resolveTarget(key, s.on_truthy);
-      const ft = resolveTarget(key, s.on_falsy);
+      const tt = resolveTarget(key, s.on_success);
+      const ft = resolveTarget(key, s.on_else);
       if (tt) targets.add(tt);
       if (ft) targets.add(ft);
     } else if (s.type === 'human_gate') {
@@ -877,12 +889,15 @@ function runRoutingMatrix(steps, traceId) {
         const ot = resolveTarget(key, opt.on_select);
         if (ot) targets.add(ot);
       }
-      const ct = resolveTarget(key, s.on_cancel);
-      if (ct) targets.add(ct);
+      // on_success and on_else are step-level routing fields present in skeleton
+      // steps (before options are added) and used as defaults in full steps.
+      for (const field of ['on_success', 'on_else', 'on_cancel']) {
+        if (s[field]) { const t = resolveTarget(key, s[field]); if (t) targets.add(t); }
+      }
     } else {
       const st = resolveTarget(key, s.on_success ?? 'next');
       if (st) targets.add(st);
-      for (const field of ['on_failure', 'on_complete', 'on_empty', 'on_error']) {
+      for (const field of ['on_else', 'on_complete', 'on_empty', 'on_error']) {
         if (s[field]) {
           const t = resolveTarget(key, s[field]);
           if (t) targets.add(t);
@@ -975,6 +990,26 @@ function mockValueForType(stepType) {
   return {};
 }
 
+// Scan expression for `local_state.X[` patterns — keys used as arrays.
+function inferMockArrayKeys(expr) {
+  const keys = new Set();
+  const indexRe  = /local_state\.(\w+)\s*\[/g;
+  const methodRe = /local_state\.(\w+)\.(slice|map|filter|find|findIndex|forEach|some|every|reduce|includes|length|push|pop|shift|unshift)\b/g;
+  let m;
+  while ((m = indexRe.exec(expr))  !== null) keys.add(m[1]);
+  while ((m = methodRe.exec(expr)) !== null) keys.add(m[1]);
+  return keys;
+}
+
+// Scan expression for `[local_state.X]` patterns — keys used as numeric indices.
+function inferMockIndexKeys(expr) {
+  const keys = new Set();
+  const re = /\[\s*local_state\.(\w+)\s*\]/g;
+  let m;
+  while ((m = re.exec(expr)) !== null) keys.add(m[1]);
+  return keys;
+}
+
 function runJsTransformSmokeTest(steps, traceId) {
   const issues    = [];
   let stepsTested = 0;
@@ -990,6 +1025,17 @@ function runJsTransformSmokeTest(steps, traceId) {
         let result;
         let threwSyntax  = false;
         let threwRuntime = false;
+
+        // Augment mockState with inferred shapes before running the expression.
+        // Keys accessed as arrays get [{ id: 1 }]; keys used as numeric indices get 0.
+        // This prevents false-positive void_return and runtime_error failures when the
+        // expression is valid but mock state doesn't match real data shapes.
+        for (const k of inferMockArrayKeys(expr)) {
+          if (!Array.isArray(mockState[k])) mockState[k] = [{ id: 1 }];
+        }
+        for (const k of inferMockIndexKeys(expr)) {
+          if (typeof mockState[k] !== 'number') mockState[k] = 0;
+        }
 
         // When input_key is set, step-executor binds local_state[input_key] as 'items'.
         // Mirror that here so expressions using 'items' don't throw spurious ReferenceErrors.

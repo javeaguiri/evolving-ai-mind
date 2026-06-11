@@ -565,6 +565,11 @@
         "nullable": true
       },
       {
+        "name": "session_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
