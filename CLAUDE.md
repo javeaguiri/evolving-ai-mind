@@ -47,6 +47,22 @@ This principle extends to all system code boundaries: `step-executor.mjs`, `temp
 
 Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
 
+### Fault Domain Triage
+
+When a bug surfaces, identify the fault domain before reaching for a fix. Fix in that domain only — a fix applied to the wrong domain masks the root cause and creates new bugs.
+
+| Fault Domain | Covers | Correct fix |
+|---|---|---|
+| **Contract** | Wrong column type, constraint, or data shape | Update prompt instruction (e.g. `design_table`) |
+| **Instruction** | Prompt rule vague, wrong default, missing example | PGC_Prompt update |
+| **Generation** | LLM made a subjective but wrong call given correct instructions | Novia correction or targeted prompt example |
+| **Validation** | L1/L2 should have caught this but didn't | Extend `simulation-engine.mjs` |
+| **Execution** | Harness can't handle standard LLM output | Extend system code (extend-not-prompt principle) |
+
+**Before writing any fix, state the fault domain.** If unclear, ask — don't guess and code.
+
+Sprint 4 examples: `real` vs `numeric(4,2)` for ease_factor → Contract bug from an Instruction failure in `design_table`. `runRoutingValueRules` false positives → Validation fix in the wrong domain; correct fix was removing the function entirely.
+
 ---
 
 ## Development Process — Sprint Cycles
@@ -305,6 +321,8 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - **Human Gate flow:** Step Processor suspends → `HUMAN_GATE` SQS → SlackCallbackListenerFunction renders Block Kit → user clicks → `/interactive` → `resume_gate` SQS → Step Processor resumes.
 - **Seed file updates:** Never write directly to the database to update seeded values. Edit `seed_PGC_Workflow.json` or `seed_PGC_Prompt.json` then run the corresponding `dev_scripts/upsert-*.mjs` script.
 - **DB connections:** All `pg` connections use `ssl: { rejectUnauthorized: false }` — never change this. The 13 PGC system tables are bootstrapped and seeded — do not recreate them.
+- **Diagnose before coding:** After reading logs or curl output, present findings and agree on the fault domain and fix before writing any code. Wrong diagnoses produce wrong code.
+- **Commit and push after each meaningful change:** Do not batch unrelated changes across a session. Push to the branch so changes are visible on GitHub for review.
 - **Propose before implementing:** On complex tasks, propose the approach and wait for confirmation before writing code.
 - **No whitespace drift:** Do not add whitespace to lines or comments not affected by a change. Keeps diffs and git logs clean.
 - **No defensive code:** Do not add error handling, guards, or workarounds for problems that are symptoms of a missing architectural piece. Identify the root cause and the correct fix. Defer only usability/cosmetic items to the tech debt register.
@@ -315,60 +333,26 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ## Current State
 
-### Recently Completed
+**Sprint 4 closed 2026-06-11.** All 6 tracks complete (M: memory two-layer, S: skeleton-first routing, I: IntentMap phrasing gate, F: fix_workflow post-write L1, D: domain propagation, X: session_id column). `spaced_repetition_quiz` runs end-to-end in prod. 352 unit tests pass. Full retro in `docs/sprints/sprint-04.md`. **Sprint 5 not yet scoped.**
 
-**Sprint 4 (2026-06-11) — Memory Bridge + Skeleton-First Generation:**
-- All Sprint 4 code complete and deployed (session 10, 2026-06-02). Tracks F (fix_workflow post-write L1), I (IntentMap phrasing gate), D (domain propagation), M (memory two-layer), S (skeleton-first routing), X (session_id column) implemented.
-- `design_workflow_process` now emits per-step routing fields; steps 21a/21b/21c validate routing topology before dialog/step generation; `generate_workflow_steps` receives locked routing_skeleton.
-- Memory two-layer: episodic pre-confirm, semantic post-confirm. `revise_domain_schema` + `design_table` accumulate schema_expectations. `initial_value_conventions` added to all three design prompts.
-- `classify-intent.mjs` bug fixed: workflow-not-found previously threw (causing silent SQS retry for full visibility timeout); now sends `HUMAN_NOTIFICATION` and returns cleanly.
-- `spaced_repetition_quiz` (run 457/458/459): step 11 upgraded from inline prompt to `PGC_Prompt` reference (`sm2_calculate`, id=79). `PGD_Flashcard.difficulty_level` changed `real → numeric(4,2)` (float precision trap at constraint boundary). Quiz runs end-to-end in prod.
-- Track P (`design_workflow_prompts`) added as new sprint scope: `generate_workflow_steps` emits `prompt_draft`/`prompt_category`/`prompt_model`; new step classifies each as reuse/create/convert (deterministic→js_transform). `PGC_Prompt.domain` column (X2) prerequisite. SM-2 is canonical convert test vehicle.
-- 352 unit tests pass.
+### Open Work
 
-**Sprint 3 (2026-05-31) — Memory and the Running Quiz:**
-- `quiz_flashcards` workflow runs end-to-end in prod (runs 403–405). All 13 cards mastered, episodic memory written on completion (G3 confirmed).
-- Memory layer complete: `PGC_Memory` table, `write_memory` step type, `memory-client.mjs`, `llm-harness.mjs`, `memory_config` on `PGC_Prompt`, model aliases in `PGC_SystemContext`. `create_domain` and `create_workflow` write semantic/procedural memories; `fix_workflow` retrieves procedural memories; domain workflow completions write episodic memories via `MEMORY_WRITE` SQS.
-- Harness extensions (extend-not-prompt principle): `evalExpression` in `template-resolver.mjs` evaluates arithmetic `{{expr + 1}}` tokens; `description_list` suppressed when no option descriptions; confirm gate HELP-specific fallback removed; `chat.update` replaces stale buttons on click (response_url was null in practice).
-- Domain propagation fixed in three places: `classify-intent.mjs` now writes `domain` into all WorkflowRun inputs; Pass 1a domain resolution uses substring match for freely-named workflow intents (e.g. `quiz_flashcards` → `flashcards`). Recurring pattern — see backlog task 12 for systemic audit item.
-- IntentMap pattern for `quiz_flashcards` updated to `quiz.*flashcard|flashcard.*quiz` — Pass 1a match, no LLM call on quiz start.
-- 329 unit tests pass.
-
-**Sprint 2 (2026-05-22) — create_workflow Reliability:**
-- `create_workflow` generates working domain workflows end-to-end in prod. Validated with flashcard quiz domain (run 365 completed).
-- Routing matrix (`runRoutingMatrix`) + js_transform smoke test (`runJsTransformSmokeTest`) replace broken L2 path execution in `simulation-engine.mjs`. Both run after every L1 pass; `result.passed = routingMatrix.passed && smokeTest.passed`.
-- `generate_workflow_steps` prompt (v22): routing token format rule (`on_success`/`on_failure`/`on_cancel`/`on_select` must be `next`, `end`, `cancel`, or `step:<key>`); explicit ban on `{{#if}}`, `{{/if}}`, `{{else}}` with js_transform ternary pattern as substitute; loop back-edge format rule (bare numbers only valid in condition routing).
-- L1 iterator-scope fix: `human_gate` options with `iterator` field skip the unresolved-key check — tokens resolve against iterator items at runtime, not `local_state`.
-- 246 unit tests pass.
-
-**Sprint 1 (2026-05-14) — Engine Expressiveness:**
-- `reveal` field on `human_gate` steps: renders an inline `task_card` block (Slack partner block) above the gate buttons — no click required. `button_label` → card title, resolved `content` → rich_text output. L1 validates both fields non-empty. `callback.mjs` + `step-executor.mjs`.
-- Post-write L1 validation: `create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` before persisting to `PGC_Workflow`. Blocks invalid workflows at write time with structured 422 error. `dev_scripts/upsert-workflow.mjs` surfaces errors clearly.
-- `ping_core` v16: 10 numbered tests (Test X of 10), condition step with true/false branch verification, reveal gate test (step 6r). Validated end-to-end in prod.
-- `simulation-engine.mjs` extracted from `simulate-workflow.mjs` — shared by HTTP adapter and `step-executor.mjs`.
-- Condition step seed fix: stripped `step:` prefix from `on_truthy`/`on_falsy` in all seed workflows — aligns with `workflow-schema.json` `bareStepKey` contract. 225/225 unit tests pass.
-
-### Immediate Open Work
-
-1. Track P — `design_workflow_prompts`: `PGC_Prompt.domain` column (X2), update `generate_workflow_steps` prompt, add new step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`.
-2. `PGC_WorkflowRunStep` audit log not written (run 458) — fix or remove decision required before Lambda death resilience work.
-3. `design_table` prompt: replace type rule and constraint expression rule with type-matched literal casting (backlog item added).
+1. Track P — `design_workflow_prompts`: X2 (`PGC_Prompt.domain` column), update `generate_workflow_steps` prompt, add `design_workflow_prompts` step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`.
+2. `PGC_WorkflowRunStep` audit log not written (run 458) — fix-or-remove decision required before Lambda death resilience work.
+3. `design_table` prompt — replace type rule + constraint expression rule with type-matched literal casting (**Contract** fault domain fix).
 4. Domain propagation systemic audit — backlog task 12.
 5. `PGC_WorkflowRun.session_id` column (X1) — not yet applied.
-
-### Medium Priority
-
-- Richer episodic memory content — distil session outcomes (score, card counts) rather than generic one-liners
-- Novia `/chat` + Mode 4 agentic loop (Track I) — Sprint 5
-- `PGC_Memory` semantic deduplication / TTL cleanup
+6. Novia `/chat` + Mode 4 agentic loop — Sprint 5. Novia's correction scope: **Generation** fault domain only (subjective LLM decisions, no code change required). Not a substitute for Instruction or Execution fixes.
 
 ### Deferred
 
-- `design-domain.mjs` Phase 4 — HUMAN_GATE refactor (deferred since session 29)
-- Pass 2 keyword scan excludes `domain: null` workflows (causes unnecessary Tier 2 LLM calls)
-- History threading (Track H) — Sprint 5
+- Richer episodic memory content (distil session outcomes vs generic one-liners)
+- `PGC_Memory` semantic deduplication / TTL cleanup
+- Pass 2 keyword scan excludes `domain: null` workflows (unnecessary Tier 2 LLM calls)
+- History threading (Track H) — Sprint 5+
+- `design-domain.mjs` Phase 4 — HUMAN_GATE refactor
 
-> Full tech debt register and tangential feature designs: `docs/backlog.md`
+> Full tech debt register: `docs/backlog.md`
 
 ---
 
@@ -377,6 +361,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
 - `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows
 - `docs/data-architecture.md` — PGC/PGD database schema, all 15 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts
 - `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
+- `docs/novia-design.md` — Novia agentic process design: tool catalog, use cases, agentic loop, fault domain correction scope, implementation sequence
 - `docs/security-architecture.md` — threat model, Slack signing secret, PROC/SERV API key enforcement, implementation status
 - `docs/backlog.md` — tech debt register (active + unresolved), tangential feature designs, build history
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns

@@ -1,6 +1,34 @@
 # Sprint 4 — Memory Bridge + Skeleton-First Generation
 
-**Sprint 3 closed 2026-05-31. See `docs/sprints/sprint-03.md` for retro.**
+**Sprint 4 closed 2026-06-11. See `docs/sprints/sprint-05.md` → CURRENT.md for Sprint 5.**
+
+---
+
+## Retro — 2026-06-12
+
+### What required multiple correction cycles
+
+1. **`create_workflow` as shared mutable target.** Six tracks all modified the same workflow. Step reference drift (21a/21b/21c numbering) and routing vocabulary confusion (`on_truthy`/`on_falsy` → `on_success`) spread across tracks because every insertion required auditing all downstream routing targets. → *Fix: Sprint 5 tracks must scope changes to isolated workflows or step ranges. Larger refactors need a design review before any code.*
+
+2. **Validation rules written incorrectly.** `runRoutingValueRules` in `review-output.mjs` generated false correction signals for sessions 13–15 before being identified and removed entirely. The rule was added in the wrong fault domain (Validation applied to a Generation problem). → *Fix: Fault domain triage framework added to CLAUDE.md. Diagnose before coding rule added to memory.*
+
+3. **Simulation did not protect production.** Skeleton L1 false positives, routing vocabulary divergence, and the `sm2_calculate` inline prompt all reached prod. L1 currently catches structural issues but not semantic ones (wrong model selection, wrong prompt reference type). → *Fix: Track P (`design_workflow_prompts`) introduces a classification step that catches llm_call vs js_transform decisions at generation time.*
+
+4. **Lambda recursive loop.** Idempotency hit on `stuckCount===1` re-enqueued an `execute_top` before returning, causing N duplicate messages at step N to sustain the burst until the AWS recursion counter hit 16 and triggered auto-remediation. Fixed (session 21) by removing the `enqueueWorkflow` call on the idempotency path. → *Fix: Track L in Sprint 5 monitors for recurrence and adds a CloudWatch alarm as early warning.*
+
+### What broke post-simulation
+
+- `PGC_WorkflowRunStep` not written for run 458 — L1/L2 does not verify step audit log writes. Carry-forward to Sprint 5.
+- `real` vs `numeric(4,2)` for `difficulty_level` — constraint boundary failure only detectable at runtime. `design_table` prompt missing type rule. Carry-forward to Sprint 5.
+
+### Process failures (not system bugs)
+
+- Diagnose → code without review: wrong diagnoses produced wrong code multiple times. Diagnose-before-code rule now in CLAUDE.md and memory.
+- Design-first discipline lost: urgency of prod bugs overrode spec-first rule in mid-sprint.
+- CURRENT.md information accumulation: grew to 12+ pages; new format limits to 2 sentence sprint summary + open work list.
+- Commit/push gaps: changes not pushed for review on several sessions.
+
+**Sprint 3 closed 2026-05-31. See `docs/sprints/sprint-03.md` for prior retro.**
 
 **Branch:** `sprint/04-memory-bridge-skeleton` — create at sprint open.
 
