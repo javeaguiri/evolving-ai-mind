@@ -901,3 +901,140 @@ Used by PROC when executing workflow steps that read or write user domain data.
 
 ---
 
+### 5.5 Curl Cookbook
+
+All examples use env vars exported in `.bashrc` — use them directly, never read any `.env` file:
+- `$SERV_API_URL` — SERV base URL (`https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod`)
+- `$INTERNAL_API_KEY` — API key for PROC/SERV endpoints
+
+#### Base pattern
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Workflow" }'
+```
+
+#### SERV-Table — getRows filter operators
+
+All `filters` arrays are ANDed. Omit `filters` to return all rows.
+
+| Operator | Meaning | Example filter object |
+|---|---|---|
+| `eq` | equals | `{ "column": "name", "op": "eq", "value": "create_domain" }` |
+| `neq` | not equals | `{ "column": "status", "op": "neq", "value": "completed" }` |
+| `like` | SQL LIKE (use `%` wildcard) | `{ "column": "name", "op": "like", "value": "%entity%" }` |
+| `gt` / `gte` | greater than / ≥ | `{ "column": "id", "op": "gt", "value": "100" }` |
+| `lt` / `lte` | less than / ≤ | `{ "column": "version", "op": "lte", "value": "3" }` |
+| `in` | value in list | `{ "column": "status", "op": "in", "value": ["running", "awaiting_human_gate"] }` |
+| `is_null` | IS NULL | `{ "column": "domain", "op": "is_null" }` |
+| `not_null` | IS NOT NULL | `{ "column": "domain", "op": "not_null" }` |
+| `jsonb_contains` | JSONB `@>` containment | `{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }` |
+
+Optional fields on any `getRows` call: `"orderBy": "column ASC|DESC"`, `"limit": N`.
+
+#### Common PGC admin queries
+
+**List all workflows (names and domains):**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Workflow", "orderBy": "name ASC" }'
+```
+
+**Get one workflow by name:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Workflow", "filters": [{ "column": "name", "op": "eq", "value": "create_domain" }] }'
+```
+
+**Get recent runs (all statuses):**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_WorkflowRun", "orderBy": "id DESC", "limit": 10 }'
+```
+
+**Get one run by id:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_WorkflowRun", "filters": [{ "column": "id", "op": "eq", "value": "458" }] }'
+```
+
+**Get all active / stuck runs:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_WorkflowRun", "filters": [{ "column": "status", "op": "in", "value": ["running", "awaiting_human_gate"] }], "orderBy": "id DESC" }'
+```
+
+**Get a prompt by intent_category (latest version):**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "filters": [{ "column": "intent_category", "op": "eq", "value": "design_table" }], "orderBy": "version DESC", "limit": 1 }'
+```
+
+**List all IntentMap rows:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_IntentMap", "orderBy": "id ASC" }'
+```
+
+**Get DomainHelp for a domain:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_DomainHelp", "filters": [{ "column": "domain", "op": "eq", "value": "flashcards" }] }'
+```
+
+**Get memory rows by scope (jsonb_contains):**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Memory", "filters": [{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }], "orderBy": "priority ASC" }'
+```
+
+**List all registered table schemas:**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Schema", "orderBy": "table_name ASC" }'
+```
+
+**Get steps for a run (audit log):**
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_WorkflowRunStep", "filters": [{ "column": "run_id", "op": "eq", "value": "458" }], "orderBy": "id ASC" }'
+```
+
+#### SERV-Table — insertRow
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/insertRow" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_IntentMap", "row": { "pattern": "my pattern", "intent_category": "my_intent", "action_type": "workflow" } }'
+```
+Returns the inserted row. Never include `id`, `created_at`, or `updated_at` — they are auto-managed.
+
+#### SERV-Table — updateRows
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/updateRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_WorkflowRun", "filters": [{ "column": "id", "op": "eq", "value": "458" }], "updates": { "status": "cancelled" } }'
+```
+`filters` is required — unfiltered updates are rejected at 400. Returns updated rows.
+
+#### SERV-Table — deleteRows
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/deleteRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_IntentMap", "filters": [{ "column": "id", "op": "eq", "value": "42" }] }'
+```
+`filters` is required. `allow_delete` must be `true` for the table in `PGC_TableMap` (PGD tables: true by default; most PGC tables: false).
+
+#### SERV-Entity — listEntities
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/listEntities" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "entityName": "Recipe", "filters": [{ "column": "name", "op": "like", "value": "%potato%" }], "limit": 20 }'
+```
+`entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` (e.g. `Recipe`, `FlashcardDeck`). Returns root row + child arrays defined in `PGC_EntitySchema.aggregations`.
+
+#### SERV-Entity — getEntity
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "entityName": "Recipe", "id": 42 }'
+```
+
+#### SERV-Schema — addColumn
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "columnName": "domain", "type": "text", "nullable": true }'
+```
+Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update metadata without running DDL.
+
+#### SERV-Schema — listTables
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listTables" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "target": "pgd" }'
+```
+`target` accepts `"pgc"` or `"pgd"`. Omit to list all registered tables.
+
+---
+
