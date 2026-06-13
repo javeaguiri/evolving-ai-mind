@@ -923,68 +923,7 @@ The threshold is hardcoded in `classify-intent.mjs` as `DOMAIN_SIMILARITY_THRESH
 Threshold calibration per model should eventually be stored in `PGC_SystemContext.pgvector_config`
 so it is adjustable without a code deploy. This is a low-priority Backlog item.
 
----
-
-### How the Intent Preprocessor uses pgvector
-
-```
-PASS 2 — domain resolution (with pgvector, Session 26):
-  1. matchDomainAlias() — zero-cost exact substring check against aliases array
-  2. If no alias match: semanticDomainMatch() via SERV getRows vectorSearch
-     - SERV embeds userInput, returns top-1 domain by cosine similarity
-     - Threshold 0.40 — returns null if no domain exceeds it
-  3. If domain resolved (either path): matchWorkflowByKeywords() keyword scan
-  4. If no keyword match: fall to Tier 2 sonar
-
-PASS 2 Backlog — workflow routing via intent_embedding:
-  After keyword-scan miss, embed user input and query PGC_Workflow.intent_embedding
-  filtered by resolved domain. Threshold 0.40 (to be calibrated when implemented).
-```
-
-Pass 2 domain resolution is also used in `create-workflow.mjs` before creating the
-`PGC_WorkflowRun` — so `input.domain` is populated with the best available match
-before step 1 (`serv_query PGC_Schema`) runs.
-
----
-
-### create_domain workflow — automatic embedding on DomainHelp insert
-
-`PGC_DomainHelp.embedding` is populated automatically by SERV on `insertRow` because
-the column definition in `PGC_Schema` includes `embed_source: ["domain", "description", "aliases"]`.
-No workflow step change is needed. The `serv_insert PGC_DomainHelp` step in
-`create_domain` already triggers embedding computation transparently.
-
----
-
-### Backfill script
-
-`dev_scripts/backfill-embeddings.mjs`:
-- Fetches ALL `PGC_DomainHelp` rows (not just null-embedding rows — backfill is
-  unconditional so re-running after model or normalization changes recomputes everything)
-- For each row: calls `updateRows` with `description` in the updates payload,
-  triggering SERV's read-before-write embed path
-- Run after: pgvector extension enabled, `embedding` column added, SAM deployed
-
----
-
-### Status — Session 26
-
-| Item | Status |
-|---|---|
-| pgvector extension enabled on RDS | ✅ Complete |
-| `vector` added to `ALLOWED_TYPES` in `schema.mjs` | ✅ Complete |
-| `embed_source` persisted in `addColumn` → PGC_Schema | ✅ Complete |
-| `PGC_DomainHelp.embedding` column added via `addColumn` curl | ✅ Complete |
-| `seed_PGC_Schema.json` PGC_DomainHelp entry updated with `embed_source` | ✅ Complete |
-| `embed-client.mjs` — Perplexity pplx-embed-v1-4b, base64 INT8 decode | ✅ Complete |
-| `table.mjs` — auto-embed on insertRow/updateRows; vectorSearch on getRows | ✅ Complete |
-| `serv-client.mjs` — vectorSearch param added to getRows wrapper | ✅ Complete |
-| `classify-intent.mjs` — semanticDomainMatch via SERV getRows vectorSearch | ✅ Complete |
-| `create-workflow.mjs` — domain resolution before WorkflowRun creation | ✅ Complete |
-| `backfill-embeddings.mjs` — unconditional backfill via updateRows | ✅ Complete |
-| Threshold calibration — 0.40 for pplx-embed-v1-4b | ✅ Complete |
-| `PGC_Workflow.intent_embedding` vector column — workflow routing | ⬜ Backlog |
-| Threshold config in `PGC_SystemContext.pgvector_config` | ⬜ Backlog |
+> How the Intent Preprocessor uses pgvector (Pass 2 domain resolution) and `create_domain` automatic embedding are documented in `docs/arch-intent.md` — pgvector Integration section.
 
 ---
 

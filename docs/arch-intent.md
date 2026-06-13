@@ -465,3 +465,34 @@ the LLM cannot drift back to domain-specific categories.
 **`parseFieldValues` SYSTEM_COLS exclusion:** The `id`, `created_at`, and
 `updated_at` columns are excluded case-insensitively. If a user types `ID=5` or
 `Created_At=...`, these are silently dropped before field values reach SERV.
+
+---
+
+## pgvector Integration — Intent Pipeline
+
+### How the Intent Preprocessor uses pgvector
+
+```
+PASS 2 — domain resolution (with pgvector):
+  1. matchDomainAlias() — zero-cost exact substring check against aliases array
+  2. If no alias match: semanticDomainMatch() via SERV getRows vectorSearch
+     - SERV embeds userInput, returns top-1 domain by cosine similarity
+     - Threshold 0.40 — returns null if no domain exceeds it
+  3. If domain resolved (either path): matchWorkflowByKeywords() keyword scan
+  4. If no keyword match: fall to Tier 2 sonar
+
+PASS 2 Backlog — workflow routing via intent_embedding:
+  After keyword-scan miss, embed user input and query PGC_Workflow.intent_embedding
+  filtered by resolved domain. Threshold 0.40 (to be calibrated when implemented).
+```
+
+Pass 2 domain resolution is also used in `create-workflow.mjs` before creating the
+`PGC_WorkflowRun` — so `input.domain` is populated with the best available match
+before step 1 (`serv_query PGC_Schema`) runs.
+
+### create_domain — automatic embedding on DomainHelp insert
+
+`PGC_DomainHelp.embedding` is populated automatically by SERV on `insertRow` because
+the column definition in `PGC_Schema` includes `embed_source: ["domain", "description", "aliases"]`.
+No workflow step change is needed. The `serv_insert PGC_DomainHelp` step in
+`create_domain` triggers embedding computation transparently.
