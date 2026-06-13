@@ -492,7 +492,7 @@ Retrieved and injected into LLM prompts by `llm-harness.mjs` based on scope and 
 `memory_budget_tokens: 0` or NULL `memory_config` disables memory injection for that prompt.
 Scope additions support `{{template}}` tokens resolved against `run.input` at call time.
 
-See `docs/memory-design.md` for full design reference and `docs/architecture.md` §6.13.
+See `docs/arch-memory.md` for full design reference and `docs/architecture.md` §6.13.
 
 ---
 
@@ -500,7 +500,7 @@ See `docs/memory-design.md` for full design reference and `docs/architecture.md`
 
 Two tables supporting persistent LLM session context for general chat and LLM
 call diagnostics. Full design, DDL, messages array reconstruction, and Slack command
-flows are specified in `docs/session-chat-design.md`.
+flows are specified in `docs/arch-session.md`.
 
 ##### PGC_Session
 One row per session, regardless of session type. Created at the start of any `/chat`
@@ -627,7 +627,7 @@ GROUP BY workflow_id;
 | 12 | PGC_StepType | new |
 | 13 | PGC_Capability | new |
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
-| 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/session-chat-design.md` |
+| 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md` |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 

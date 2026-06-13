@@ -248,7 +248,7 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 
 ### 6.8 create_domain Workflow
 
-Full annotated workflow design is in [`docs/create-domain-design.md`](create-domain-design.md).
+Full annotated workflow design is in [`docs/arch-create-domain.md`](arch-create-domain.md).
 
 **Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
 
@@ -257,7 +257,7 @@ Full annotated workflow design is in [`docs/create-domain-design.md`](create-dom
 Full design documentation — including L/R collaboration architecture decisions,
 the six-phase step structure with `local_state` data flow, gap taxonomy application,
 simulation correction loops, and implementation notes — is in
-[`docs/create-workflow-design.md`](create-workflow-design.md).
+[`docs/arch-create-workflow.md`](arch-create-workflow.md).
 
 **Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
 
@@ -273,7 +273,7 @@ simulation correction loops, and implementation notes — is in
 Session architecture — including `PGC_Session` and `PGC_SessionEntry` table design,
 the `llm_call` diagnostic flow, `/chat` and `/explain` Slack commands, messages array
 reconstruction, and the `diagnostics_config` `PGC_SystemContext` entry — is fully
-specified in `docs/session-chat-design.md`.
+specified in `docs/arch-session.md`.
 
 Table DDL, column definitions, and `PGC_Schema` registration entries are in
 `docs/arch-data.md` section 4.3.4.
@@ -744,7 +744,7 @@ mechanism for these cases.
 
 ### 6.13 Memory Layer
 
-Full design reference: [`docs/memory-design.md`](memory-design.md).
+Full design reference: [`docs/arch-memory.md`](arch-memory.md).
 
 The memory layer gives LLM calls persistent context across runs, domains, and workflows.
 Implemented in Sprint 3; extended in Sprint 4.

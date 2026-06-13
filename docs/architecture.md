@@ -571,6 +571,16 @@ programmer's intent.
 | 6.5.1 | `docs/arch-step-types.md` | Step type reference — all fields, schemas, examples |
 | 6.6–6.16 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, memory layer, self-repair, monitoring |
 
+### Design documents
+
+| Doc | Topic |
+|---|---|
+| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step reference (live v33) |
+| `docs/arch-create-workflow.md` | `create_workflow` workflow — full design, LLM call chain, L1/L2 |
+| `docs/arch-memory.md` | Memory layer — PGC_Memory write paths, retrieval, scope, provenance |
+| `docs/arch-session.md` | Session and chat — PGC_Session/PGC_SessionEntry, `/chat`, `/explain` |
+| `docs/arch-minds-eye.md` | Minds-eye agent (Sprint 5) — tool catalog, use cases, agentic loop |
+
 ---
 
 ### 6.1 Process Layer API
@@ -698,8 +708,8 @@ When the Intent Preprocessor decides a workflow should run, it creates a `PGC_Wo
 > - **6.6** Right-brain output validation pipeline (Ajv → semantic → routing rules, correction loop, `PGC_Prompt.error_log`)
 > - **6.7** Workflow safety — circuit breakers, Guard 1, `/shutdown`
 > - **6.8** `create_domain` workflow (annotated step-by-step)
-> - **6.9** `create_workflow` workflow (pointer to `docs/create-workflow-design.md`)
-> - **6.10** Session architecture — chat and diagnostics (pointer to `docs/session-chat-design.md`)
+> - **6.9** `create_workflow` workflow (pointer to `docs/arch-create-workflow.md`)
+> - **6.10** Session architecture — chat and diagnostics (pointer to `docs/arch-session.md`)
 > - **6.11** Gap taxonomy — the five gap types and resolution sequence
 > - **6.12** Right-brain self-repair — `troubleshoot-workflow`, `fix-workflow`, three tiers
 > - **6.13** Memory layer — `PGC_Memory`, two write paths, scope/retrieval, domain two-layer provenance

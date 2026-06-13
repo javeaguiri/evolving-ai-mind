@@ -1,6 +1,9 @@
 # Minds-Eye Agent Design
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 ## evolving-mind-ai — Sprint 5+ Feature Spec
 ## (Display name "Novia" — configurable in PGC_SystemContext)
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-session.md` (PGC_Session/PGC_SessionEntry), `docs/arch-memory.md` (memory layer), `docs/arch-step-types.md` (step type reference).
 
 ---
 
@@ -60,7 +63,7 @@ New SQS message types:
 
 Thread continuation works identically to `general_chat`: the callback handler matches `slack_thread_ts` → `PGC_Session` → resumes the agent session.
 
-The agent creates its own `PGC_Session` row (`session_type = 'minds_eye'`) on first invocation and appends `PGC_SessionEntry` rows per turn, exactly as designed in `session-chat-design.md`.
+The agent creates its own `PGC_Session` row (`session_type = 'minds_eye'`) on first invocation and appends `PGC_SessionEntry` rows per turn, exactly as designed in `arch-session.md`.
 
 ---
 
@@ -109,7 +112,7 @@ When a correction task references a specific run, Novia can retrieve:
 - The `PGC_SessionEntry` reasoning from the `llm_call` that produced the bad output (via `query_id`)
 - Prior `/explain` session entries for the same run
 
-This is the bridge between the diagnostic layer (`session-chat-design.md`) and the correction layer. Novia reads what the human saw in `/explain` before deciding how to fix it.
+This is the bridge between the diagnostic layer (`arch-session.md`) and the correction layer. Novia reads what the human saw in `/explain` before deciding how to fix it.
 
 ---
 
@@ -311,7 +314,7 @@ Thread replies continue the session (same as `/chat`). Novia posts a brief conte
 
 ## 9. New PGC_Session Fields
 
-The existing `PGC_Session` design (see `session-chat-design.md`) is extended with one additional session type and two new fields:
+The existing `PGC_Session` design (see `arch-session.md`) is extended with one additional session type and two new fields:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -342,8 +345,8 @@ These require decisions before implementation begins:
 ## 11. Implementation Sequence
 
 Prerequisites (from open work list):
-- `PGC_Session` / `PGC_SessionEntry` tables bootstrapped (session-chat-design.md §11)
-- `/chat` and `/explain` commands implemented (session-chat-design.md §11)
+- `PGC_Session` / `PGC_SessionEntry` tables bootstrapped (arch-session.md §11)
+- `/chat` and `/explain` commands implemented (arch-session.md §11)
 - `PGC_Prompt.domain` column (Track P, X2) in place
 
 Sprint 5 build order:
