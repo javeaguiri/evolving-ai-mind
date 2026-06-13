@@ -248,14 +248,17 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 | `docs/arch-intent.md` | Intent classification pipeline — Pass 1a/1b/1c/2/3, I/O contracts, handoff() routing, generic CRUD workflows |
 | `docs/arch-step-types.md` | Step type reference — every field, schema, and example for `llm_call`, `serv_*`, `iterator`, `human_gate`, `condition`, `js_transform`, `simulate`, `write_memory`, `notify`, `end` |
 | `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle, simulation (L1/L2) |
-| `docs/arch-workflow-patterns.md` | Output validation, workflow authoring (create_domain, create_workflow), session, memory layer, self-repair, monitoring |
+| `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, session, memory layer, self-repair, monitoring |
 | `docs/arch-data.md` | PGC/PGD schema (all 16 tables), SERV API reference, **curl cookbook (§5.5)** |
 | `docs/arch-security.md` | Threat model, Slack signing, PROC/SERV API key enforcement |
+| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step design reference (live v33) |
+| `docs/arch-create-workflow.md` | `create_workflow` workflow — full design reference, LLM call chain, L1/L2 validation |
+| `docs/arch-memory.md` | Memory layer design — PGC_Memory schema, write paths, retrieval, scope, provenance |
+| `docs/arch-session.md` | Session and chat design — PGC_Session/PGC_SessionEntry, `/chat`, `/explain`, diagnostics |
+| `docs/arch-minds-eye.md` | Minds-eye agent — tool catalog, use cases, agentic loop, implementation sequence (Sprint 5) |
 
-### Design and process
+### Process and reference
 
-- `docs/session-chat-design.md` — `/chat`, `/explain`, PGC_Session/PGC_SessionEntry
-- `docs/novia-design.md` — Minds-eye agent: tool catalog, use cases, agentic loop, implementation sequence
 - `docs/backlog.md` — tech debt register, tangential feature designs
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs

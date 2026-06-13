@@ -1,5 +1,8 @@
 
 # Memory Layer — Architecture and Design
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-workflow-patterns.md` §6.13, `docs/arch-data.md` §4.3 (PGC_Memory columns).
 
 Version: 2.0
 Status: Implemented — Sprints 3 and 4
@@ -510,7 +513,7 @@ deferred to Sprint 5:
 - **Novia /chat Mode 4**: Agentic while-loop with tool use (`PGC_Capability` rows),
   persona memory, write-tool confirmation gates
 
-See `docs/session-chat-design.md` for the full session and history threading design.
+See `docs/arch-session.md` for the full session and history threading design.
 
 ---
 

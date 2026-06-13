@@ -1,8 +1,9 @@
 # create_domain Workflow — Design Reference
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.8.
 
 Current as of Sprint 4. Describes the live workflow definition (v33) running in prod.
-
-Cross-references: `docs/architecture.md` §6.5 (Step Processor), §6.8 (create_domain).
 
 ---
 

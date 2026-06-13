@@ -1,5 +1,8 @@
 # Session Chat & LLM Diagnostics — Requirements and Design
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 ## evolving-mind-ai v3.2 — Phase 3 Feature Spec
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-minds-eye.md` (Novia agent uses PGC_Session), `docs/arch-data.md` §4.3 (PGC_Session/PGC_SessionEntry columns).
 
 ---
 
