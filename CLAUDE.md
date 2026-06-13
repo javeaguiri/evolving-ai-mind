@@ -180,129 +180,11 @@ This produces per-event notifications in the conversation as each matching log l
 
 ---
 
-## Architecture
+## Architecture Reference
 
-**evolving-ai-mind** is a self-evolving cognitive automation brain. Users submit natural language intents via Slack; the system classifies them, executes (or generates) reusable declarative workflows, and stores them permanently. LLMs are invoked only for genuinely novel problems.
-
-### Three-Tier Structure
-
-```
-src/ui/slackbot/   ← Experience tier (EXP): Slack I/O, ACK, SQS enqueue
-src/proc/          ← Process tier (PROC): all business logic, workflow orchestration
-src/serv/          ← Service tier (SERV): PostgreSQL access only
-src/shared/        ← Pure utilities (cross-tier)
-```
-
-Four AWS Lambda functions, each bundled separately by esbuild:
-- **SlackbotFunction** — API Gateway, handles Slack commands and interactive callbacks
-- **ProcFunction** — API Gateway + SQS WorkflowQueue, all business logic
-- **ServFunction** — API Gateway, DB CRUD and DDL
-- **SlackCallbackListenerFunction** — SQS SlackResultsQueue, posts Slack replies
-
-### Transport-Agnostic Pattern (critical)
-
-Every PROC endpoint module receives identical input whether delivered via HTTP or SQS:
-
-```js
-req.source    // 'http' | 'sqs' — check ONLY to determine response path
-req.callback  // { provider, channel, threadId } — top-level on SQS delivery
-req.body      // actual request data
-```
-
-Always read callback as: `const callback = req.callback ?? req.body?.callback ?? null`
-
-Never branch business logic on `req.source`.
-
-### SQS Queues
-
-- **WorkflowQueue** — async workflow execution. Two categories:
-  1. Fire-and-forget (no workflowRunId): `PING_SQS`, `CLASSIFY_INTENT`, `CREATE_DOMAIN`, `HELP`, `CREATE_WORKFLOW`, `DELETE_DOMAIN`, `TROUBLESHOOT_WORKFLOW`, `FIX_WORKFLOW`, `CHAT_MESSAGE`, `EXPLAIN_QUERY`
-  2. Workflow execution (always has workflowRunId): `WORKFLOW_STEP` (actions: `execute_top`, `resume_gate`, `cancel`)
-- **SlackResultsQueue** — results back to EXP. Types: `HUMAN_GATE`, `HUMAN_NOTIFICATION`, `WORKFLOW_ERROR`, `PING_SQS_RESULT`, `PING_E2E_RESULT`, `LLM_DIAGNOSTIC`
-
-### Step Processor (Workflow Execution Engine)
-
-`src/proc/run-workflow.mjs` + `src/proc/step-executor.mjs` — generic declarative executor for any workflow stored in `PGC_Workflow.steps`. Key properties:
-- Stack-based execution: one SQS message per stack frame
-- Idempotent: checks `PGC_WorkflowRunStep` before executing any step
-- Step types: `llm_call`, `js_transform`, `human_gate`, `serv_schema`, `serv_insert`, `serv_query`, `serv_update`, `serv_delete`, `serv_entity_query`, `iterator`, `condition`, `notify`, `end`
-
-Workflow business logic lives entirely in `PGC_Workflow.steps` JSON — no workflow-specific `if` branches in `step-executor.mjs`. New behaviours = updated workflow JSON. New step types = new case in `step-executor.mjs`.
-
-### Intent Classification Pipeline
-
-`src/proc/classify-intent.mjs` — 4-pass pipeline (cheapest first):
-1. **Pass 1a** — exact text match against `PGC_IntentMap`
-2. **Pass 1b** — simple CRUD detection (no LLM)
-3. **Pass 1c** — alias match
-4. **Pass 2** — cheap LLM classify
-5. **Pass 3** — heavy-lift LLM workflow generation
-
-### Data Layer
-
-Two PostgreSQL databases:
-- **PGC (Config):** 13 system tables (`PGC_Schema`, `PGC_Workflow`, `PGC_WorkflowRun`, `PGC_WorkflowRunStep`, `PGC_Prompt`, `PGC_IntentMap`, `PGC_StepType`, `PGC_TableMap`, `PGC_EntitySchema`, `PGC_DomainHelp`, `PGC_SystemContext`, `PGC_Capability`, `PGC_WorkflowRunLock`) + 1 view
-- **PGD (Domain):** User-created tables generated at runtime
-
-Table names are mixed-case and **must be quoted** in SQL: `"PGC_Schema"`, `"PGD_Recipes"`.
-
-Auto-managed columns (never pass in inserts/updates): `id`, `created_at`, `updated_at`.
-
-#### PGC Table Reference (13 physical tables + 1 view)
-
-| Table | Purpose | Key columns |
-|---|---|---|
-| PGC_Schema | Registry of ALL table definitions (PGC + PGD) | table_name, target, domain, columns, foreign_keys, constraints, triggers |
-| PGC_TableMap | SERV write gatekeeper — rejects writes to unregistered tables | table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete |
-| PGC_EntitySchema | Business entities spanning multiple PGD tables (jsonb_agg queries) | entity_name, root_table, joins, aggregations, upsert_key, domain |
-| PGC_DomainHelp | User-facing aliases + help text per domain; Pass 2 alias matching | domain, aliases, description, commands, embedding |
-| PGC_Workflow | Reusable workflow definitions | name, domain, steps, intent_keywords, state_strategy, model_used, version |
-| PGC_WorkflowRun | One row per execution — stack, safety counters | workflow_id, trace_id, status, input, stack, output, callback, step_count (`state` deprecated — written only at completion) |
-| PGC_WorkflowRunStep | Append-only step audit log; idempotency on SQS redelivery | run_id, frame_id, step_number, step_type, status, input_snapshot, output_snapshot |
-| PGC_Prompt | LLM prompts with versioning | intent_category, prompt_text, input_variables, output_schema, probe_input, model, version |
-| PGC_IntentMap | Maps patterns → workflows for Pass 1 intent classification | pattern, intent_category, workflow_id, action_type |
-| PGC_SystemContext | Runtime self-description injected into heavy-lift LLM prompts | key, section, content, format, inject_always, inject_for |
-| PGC_StepType | Catalogue of all valid step types with input/output contracts | step_type, description, input_contract, output_contract, status |
-| PGC_Capability | Registry of what the system can do — injected into generation prompts | capability_key, category, description, status, available_in |
-| PGC_WorkflowRunLock | Optimistic locking for future parallel execution (not used yet) | run_id, locked_by, version |
-| PGC_WorkflowStats | SQL view — workflow run stats (not a physical table) | workflow_id, run_count, failure_rate_pct, avg_execution_ms |
-
-> Full column definitions: `docs/data-architecture.md` section 4.3
-
----
-
-## Tier Boundary Rules (enforced)
-
-| From → To | Allowed mechanism |
-|-----------|------------------|
-| EXP → PROC | HTTP API Gateway (fetch) |
-| PROC → SERV | HTTP API Gateway via `serv-client.mjs` |
-| SQS → PROC | `buildReqFromSqs()` in handler.mjs |
-| PROC → EXP | **NEVER** — results only via SQS callback |
-| SERV → PROC/EXP | **NEVER** |
-| Any → shared | Direct import |
-| Within same tier | Direct import |
-
-**EXP tier:** `@aws-sdk/client-sqs` and `@slack/web-api` are the only non-shared SDKs allowed.
-
-**PROC tier:** No `@aws-sdk/*` imports in endpoint modules. `@aws-sdk/client-sqs` lives only in `src/shared/sqs-callback.mjs`.
-
-**SERV tier:** `pg` client is the only external dependency. No LLM, no SQS, no Slack.
-
----
-
-## Shared Utilities
-
-| File | Purpose |
-|------|---------|
-| `src/shared/lambda-utils.mjs` | `parseEvent`, `ok`, `err`, `buildReqFromSqs` |
-| `src/shared/sqs-callback.mjs` | `enqueueCallback`, `enqueueWorkflow` — **sole** SQS SDK location in PROC |
-| `src/shared/serv-client.mjs` | `getRows`, `insertRow`, `updateRows`, `servPost` — all SERV HTTP calls |
-| `src/shared/llm-client.mjs` | `callLlm`, `callLlmWithCorrection`, `callLlmWithMessages` — all LLM calls |
-| `src/proc/template-resolver.mjs` | `resolveTemplate` — resolves `{{key.path}}` tokens against `local_state` |
-| `src/proc/review-output.mjs` | Ajv schema + semantic + routing validation pipeline for all LLM output |
-
-LLM output must always pass through `review-output.mjs` before being written to `local_state` or used downstream. Raw LLM output must never go directly to DDL or SQS payloads.
+Full architecture: `docs/architecture.md` — tier structure, transport-agnostic pattern, SQS queues, Step Processor, step types, all decisions and invariants.
+Component quick reference (impact index, fault triage map): `docs/architecture.md` Section 1.5.
+Full data/SERV API + curl cookbook: `docs/data-architecture.md` — PGC schema, SERV endpoints, filter operators, common queries.
 
 ---
 
@@ -333,7 +215,7 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ## Current State
 
-**Sprint 4 closed 2026-06-11.** All 6 tracks complete (M: memory two-layer, S: skeleton-first routing, I: IntentMap phrasing gate, F: fix_workflow post-write L1, D: domain propagation, X: session_id column). `spaced_repetition_quiz` runs end-to-end in prod. 352 unit tests pass. Full retro in `docs/sprints/sprint-04.md`. **Sprint 5 not yet scoped.**
+**Sprint 5 active (branch `sprint/05-novia-phase1`, target close 2026-06-27).** Goal: Novia Phase 1 (context assembly, read tools, `/novia` command), Track P (design_workflow_prompts), engine issues (W1–W4), Lambda loop alarm. No code written yet — session 1 scoped, designed, and documented. Full scope in `docs/sprints/CURRENT.md`.
 
 ### Open Work
 
@@ -358,8 +240,8 @@ LLM output must always pass through `review-output.mjs` before being written to 
 
 ## Key Reference Files
 
-- `docs/architecture.md` — full architecture decision log: system overview, Step Processor, step types, human gates, workflows
-- `docs/data-architecture.md` — PGC/PGD database schema, all 15 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts
+- `docs/architecture.md` — full architecture decision log: component quick reference (Section 1.5), tier structure, SQS queues, Step Processor, step types, human gates, workflows
+- `docs/data-architecture.md` — PGC/PGD database schema, all 16 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts, **curl cookbook (Section 5.5)**
 - `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
 - `docs/novia-design.md` — Novia agentic process design: tool catalog, use cases, agentic loop, fault domain correction scope, implementation sequence
 - `docs/security-architecture.md` — threat model, Slack signing secret, PROC/SERV API key enforcement, implementation status

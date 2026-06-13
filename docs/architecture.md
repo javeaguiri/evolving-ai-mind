@@ -3,9 +3,9 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.3
-Status: Active development — Sprint 4 complete
-Last updated: 2026-06-02 (Sprint 4 — memory bridge: two-layer domain semantic memory, initial_value_conventions, parse_entity_input memory retrieval for classify-intent data loads; skeleton-first routing validation in create_workflow steps 21a/21b/21c; domain propagation audit + classify-intent fix; fix_workflow post-write L1 gate + revert; IntentMap phrasing gate steps 35a/35b; PGC_WorkflowRun.session_id column; write_memory in workflow-schema.json)
+Version: 3.4
+Status: Active development — Sprint 5 in progress
+Last updated: 2026-06-13 (Sprint 5 — Component Quick Reference added; Section 1.5 index; architecture.md/CLAUDE.md documentation restructure)
 Previously: session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, moved Rules 4/5a/5b/5c into SystemContext homes; session 31 — create_domain modal routing verified; architecture-*.md files consolidated into this file
 
 ---
@@ -18,6 +18,68 @@ A self-evolving, low-cost cognitive automation brain that:
 - Persists generated workflows in PostgreSQL and reuses them — LLM is not called twice for the same problem
 - Evolves its own workflows and schemas over time
 - Runs at approximately $8–$13/month at household scale — see Section 16 for full cost breakdown
+
+---
+
+## 1.5 Component Quick Reference
+
+Fast-lookup index for requirement scoping, fault triage, and impact assessment.
+For authoritative detail follow the section references in each row.
+
+> **Requirement scoping rule:** Changes to user-visible behaviour belong in `PGC_Workflow` or `PGC_Prompt` (evolving artifacts). Changes to how the engine itself works belong in the system code files below. When in doubt, see "Static System vs Evolving Artifacts" in `CLAUDE.md`.
+
+### Code Components
+
+| File | Tier | Owns / Responsibility | Change impact |
+|---|---|---|---|
+| `src/ui/slackbot/handler.mjs` | EXP | Slack command parsing, Slack signing verification, HTTP dispatch to EXP endpoints | Breaks all Slack command entry if changed incorrectly |
+| `src/ui/slackbot/mind.mjs` | EXP | `/mind` command → CLASSIFY_INTENT SQS enqueue | Changes here affect how all free-form user intents enter the system |
+| `src/ui/slackbot/interactive.mjs` | EXP | Block Kit button clicks + modal submissions → `resume_gate` SQS enqueue | Changes here break all `human_gate` resume flows |
+| `src/ui/slackbot/callback.mjs` | EXP (listener) | SQS SlackResultsQueue consumer — renders ALL Slack replies (HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR) | Changes affect every result message posted to Slack |
+| `src/proc/handler.mjs` | PROC | HTTP + SQS dual dispatch; SQS batch failure reporting | Changes affect message routing for every PROC invocation |
+| `src/proc/classify-intent.mjs` | PROC | 4-pass intent routing pipeline — Pre-pass, Pass 1, Pass 2, Tier 2/3. See Section 6.3 | Changes affect routing of all `/mind` user inputs |
+| `src/proc/classify-intent-tiers.mjs` | PROC | Pure classification functions — matchIntentMap, matchDomainAlias, matchWorkflowByKeywords | 50+ unit tests cover these; changes must re-run `node --test tests/unit/*.test.mjs` |
+| `src/proc/run-workflow.mjs` | PROC | Step Processor outer loop — loads run, checks idempotency, dispatches to step-executor, enqueues next SQS. See Section 6.5 | Changes affect execution of ALL workflows |
+| `src/proc/step-executor.mjs` | PROC | Step type dispatch — one case per step type, zero workflow-specific logic. See Section 6.5.1 | Adding a case = new step type; changing a case = affects every workflow using that type |
+| `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
+| `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
+| `src/proc/simulation-engine.mjs` | PROC | L1/L2 static analysis + path simulation — pure function, no I/O. See Section 6.5.6 | Changes affect the pre-write workflow validation gate used by create_workflow, fix_workflow, and upsert-workflow.mjs |
+| `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state` | Changes affect template substitution in ALL steps, messages, and conditions |
+| `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows`, `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
+| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
+| `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm`, `callLlmWithCorrection` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
+| `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
+| `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
+| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration. See Section 5.1 | Changes affect table creation and schema registration |
+
+### Data — PGC Table Groups
+
+Full column definitions: `docs/data-architecture.md` Section 4.3. Curl cookbook: Section 5.5.
+
+| Group | Tables | Written by | Read by | Change impact |
+|---|---|---|---|---|
+| **Schema registry** | PGC_Schema, PGC_TableMap, PGC_EntitySchema | `create_domain` workflow, `schema.mjs` DDL | `table.mjs` (gatekeeper), `entity.mjs` | Breaks table validation or entity assembly for affected domains |
+| **Workflow engine** | PGC_Workflow, PGC_WorkflowRun, PGC_WorkflowRunStep | `upsert-workflow.mjs`, `run-workflow.mjs`, `step-executor.mjs` | `run-workflow.mjs`, `step-executor.mjs` | Schema changes break workflow execution |
+| **LLM runtime context** | PGC_Prompt, PGC_SystemContext, PGC_StepType, PGC_Capability | `upsert-prompt/step-type/system-context` scripts | `step-executor.mjs` (`llm_call`), `review-output.mjs` | Changes affect what instructions the LLM receives per call |
+| **Intent routing** | PGC_IntentMap, PGC_DomainHelp | `create_domain` workflow, bootstrap seed | `classify-intent.mjs` | Changes affect how user inputs are routed to workflows |
+| **Memory layer** | PGC_Memory | `write_memory` step, `memory-writer.mjs`, `save_to_memory` hook | `llm-harness.mjs` (retrieval + injection) | Changes affect memory available to every LLM call |
+| **Session layer** | PGC_Session, PGC_SessionEntry | `/chat`, `/explain`, `novia.mjs` (Sprint 5) | `/chat`, `/explain`, `novia.mjs` | Not yet live — changes affect conversation continuity |
+| **Domain data** | PGD_* (user tables) | `create_domain` DDL, domain workflow steps | Domain workflow steps (`serv_query`, `serv_entity_*`) | Scoped to that domain's workflows only |
+
+### Fault triage quick map
+
+See CLAUDE.md "Fault Domain Triage" for the five fault domains. This table maps symptom → domain → fix location:
+
+| Symptom | Fault domain | Fix location |
+|---|---|---|
+| LLM produces wrong structure (wrong types, missing fields) | Contract | Update prompt rule or example in `PGC_Prompt` (e.g. `design_table`) |
+| LLM ignores a rule that exists in the prompt | Instruction | Strengthen the rule or add an example in `PGC_Prompt` |
+| LLM output is structurally valid but wrong business decision | Generation | Novia correction — no code change required |
+| L1/L2 simulation failed to catch a bug that reached prod | Validation | Extend `simulation-engine.mjs` checks |
+| Harness rejects standard LLM output format (JSONPath, SQL ORDER BY) | Execution | Extend system code — see extend-not-prompt principle in `CLAUDE.md` |
+| Wrong workflow triggered by user input | Intent routing | Fix `PGC_IntentMap` pattern or `PGC_DomainHelp` aliases |
+| Step type handler not found at runtime | Execution | Add case to `step-executor.mjs` and register in `PGC_StepType` seed |
+| Template `{{key}}` resolves empty unexpectedly | Contract/Generation | Check `output_key` of prior step — key may be missing or wrong path |
 
 ---
 
