@@ -1,0 +1,574 @@
+# Step Type Reference
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+
+> Part of the evolving-mind-ai architecture. Main doc: `docs/architecture.md`. See also: `docs/arch-step-processor.md` for execution engine internals, `docs/arch-intent.md` for classification, `docs/arch-workflow-patterns.md` for output validation and workflow creation.
+
+### 6.5.1 Step types — the instruction set
+
+Every step in a workflow is one instruction from this set. The Step Processor has
+one handler per type. No workflow-specific code lives in the Step Processor.
+
+#### Step definition schema
+
+Every step follows this shape:
+
+```json
+{
+  "step":             "1",
+  "type":             "<step_type>",
+  "description":      "Human-readable description for workflow authors and right-brain",
+  "input":            {},
+  "output_key":       "key_in_local_state",
+  "on_success":       "next | end | step:3a",
+  "on_else":       "cancel | step:<key>"
+}
+```
+
+**Step keys are always strings.** `"1"`, `"3"`, `"3a"`, `"3b"`, `"3d"` are all
+valid step keys. `on_success: "step:3a"` is a forward or backward jump. The Step
+Processor resolves step keys by string equality — `parseInt` is never used.
+
+#### Step type reference
+
+```
+╔══════════════╦══════════════════════════════════════════════════════╦══════════════════╗
+║ Type         ║ What it does                                         ║ Status           ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ llm_call     ║ Load prompt from PGC_Prompt, call LLM, run           ║ ✅ Implemented   ║
+║              ║ review-output validation (2-attempt correction loop) ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ js_transform ║ Run a named built-in transform on local_state data   ║ ✅ Implemented   ║
+║              ║ (depricated), or evaluate a sandboxed JS expression  ║                  ║
+║              ║ via acorn AST gate + vm.runInNewContext. Built-ins:  ║                  ║
+║              ║ columnSummary,buildHelpOptions, resolveHelpContent,  ║                  ║
+║              ║ formatRecordList, buildChildInserts.                 ║                  ║
+║              ║ Generic expression field: Session 19.                ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
+║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
+║              ║ review_object. (select_one, select_many Backlog)     ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_schema  ║ Create a PGD table via SERV createTable              ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_insert  ║ INSERT one row into a PGD table via SERV             ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_query   ║ SELECT rows from a PGD table via SERV                ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ LIST assembled entities via SERV-Entity listEntities ║ ✅ Implemented   ║
+║ query        ║ — root columns + jsonb_agg child arrays. Use instead ║                  ║
+║              ║ of serv_query for domains with child tables.         ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ FETCH one assembled entity by id via SERV-Entity     ║ ✅ Implemented   ║
+║ get          ║ getEntity. Returns root columns + child arrays.      ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_update  ║ UPDATE rows in a PGD table via SERV                  ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ notify       ║ Resolve message_template from local_state, enqueue   ║ ✅ Implemented   ║
+║              ║ HUMAN_NOTIFICATION to callback                          ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ iterator     ║ Loop over an array in local_state, execute item_step ║ ✅ Implemented   ║
+║              ║ for each item sequentially                           ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ end          ║ Mark run completed, stop                             ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_entity_ ║ Load full entity schema: reads PGC_EntitySchema for   ║ ✅ Implemented   ║
+║ schema       ║ join topology + PGC_Schema for live column defs.     ║ Session 19       ║
+║              ║ Collapses the serv_query + buildEntitySchema          ║                  ║
+║              ║ two-step pattern into one step. See Section 6.5.1.    ║                  ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ sub_workflow ║ Push child workflow frame, inherit local_state        ║ ⬜ Backlog       ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ condition    ║ Evaluate {{expression}} against local_state, route   ║ ✅ Implemented   ║
+║              ║ to on_success / on_else step keys. No I/O.           ║ Session 19       ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ capability_call ║ Call a registered capability from PGC_Capability  ║ ⬜ Backlog       ║
+╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
+║ simulate       ║ Dry-run a workflow step array against named         ║ ✅ live          ║
+║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
+║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
+║               ║ execution, skip-path analysis. See Section 6.5.6.   ║ complete        ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ write_memory  ║ Persist a PGC_Memory row. Reads content string from  ║ ✅ Sprint 3      ║
+║               ║ local_state[content_key]. Never fails the run —      ║                  ║
+║               ║ errors logged only. See Section 6.13.                ║                  ║
+╚══════════════╩══════════════════════════════════════════════════════╩══════════════════╝
+```
+
+#### Step-specific schema fields by type
+
+##### **`llm_call`**
+```json
+{
+  "step": "1", "type": "llm_call",
+  "input": {
+    "prompt":    "create_domain",
+    "userInput": "{{input.userInput}}"
+  },
+  "output_key": "proposed_scaffold",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+`input.prompt` is the `intent_category` key into `PGC_Prompt`. All other `input`
+fields are available to the prompt template via `{{variable}}` substitution.
+Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
+
+**Right-brain hooks in `llm_call`.** Every `llm_call` step has two right-brain
+mechanisms wired into it by the Step Processor — no workflow definition changes needed:
+
+1. **Validation and correction loop** (Section 6.6): After the LLM responds, `review-output.mjs`
+   runs Ajv + semantic validation. On failure, a correction prompt is sent automatically.
+   If both attempts fail, the structured errors are written to `PGC_Prompt.error_log`.
+
+2. **Truncation-aware resumption** (Section 6.6): If the response is cut off mid-JSON because
+   `max_output_tokens` was reached (`output_tokens === ceiling`), a resumption prompt
+   regenerates from scratch at double the token budget, rather than sending the broken
+   partial output to the correction loop. If resumption also fails, `token_truncation` is
+   logged to `PGC_Prompt.error_log`.
+
+3. **Prompt quality monitor** (Section 6.6): After any 2-attempt failure is written to
+   `error_log`, `monitor-prompt-quality.mjs` fires asynchronously. It classifies the
+   failure pattern and, for `token_truncation` with 2+ consecutive occurrences, inserts
+   a new `PGC_Prompt` version with a raised ceiling automatically. No human intervention
+   required. Schema errors are logged as advisory for the Phase 3 right-brain loop.
+
+4. **Memory write** (Section 6.13): When `save_to_memory` is set on the step definition,
+   `llm-harness.mjs` appends a `reasoning` instruction to the prompt, extracts and strips
+   the `reasoning` field from the LLM output before schema validation, and writes it to
+   `PGC_Memory`. Zero additional LLM calls — the reasoning content is part of the existing
+   call. `save_to_memory` fields: `memory_type`, `scope` (supports `{{template}}` tokens),
+   `tags`, `priority`.
+
+5. **Memory retrieval** (Section 6.13): When `PGC_Prompt.memory_config.memory_budget_tokens > 0`,
+   `llm-harness.mjs` calls `memory-client.mjs` to retrieve scope-matching `PGC_Memory` rows
+   within the token budget, then appends the formatted memory block to the system instructions.
+
+##### `js_transform`
+
+Every `js_transform` step requires an `expression` field — a pure synchronous JavaScript
+value expression executed in a sandboxed `vm.runInNewContext` context. Two bindings are
+available in the sandbox:
+
+- **`items`** — the resolved value of `input_key` from `local_state`
+- **`local_state`** — the full local_state object, enabling cross-key reads
+
+The `expression` must evaluate to a value (no `return` keyword, no semicolons at top level).
+Wrap multi-statement logic in an IIFE: `(function() { ... })()`
+
+```json
+{
+  "step": "2", "type": "js_transform",
+  "description": "Enrich table list with columnSummary and domain field.",
+  "input_key": "proposed_scaffold.tables",
+  "output_key": "proposed_scaffold.tables",
+  "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); function enrich(tables, domain) { return tables.map(function(t) { if (!t.columns) return t; var cols = t.columns.filter(function(c){ return !SYS.has(c.name); }).slice(0,4).map(function(c){ return c.name; }); return Object.assign({}, t, { columnSummary: cols.join(', '), domain: domain }); }); } return enrich(items, local_state.proposed_scaffold.domain); })()",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+Reading cross-key values via `local_state` — used when the primary input is insufficient:
+
+```json
+{
+  "step": "3c", "type": "js_transform",
+  "input_key": "proposed_scaffold.tables",
+  "output_key": "proposed_scaffold.tables",
+  "expression": "(function() { var newTable = local_state.new_table; var merged = newTable ? items.concat([newTable]) : items; return merged; })()"
+}
+```
+
+**Sandbox constraints:** pure synchronous transforms only — no `require`, no `import`, no
+async, no network, no filesystem. Timeout: 200ms. Safe globals available: `JSON`, `Math`,
+`Array`, `Object`, `String`, `Number`, `Boolean`, `Date`.
+
+**`transform_type` built-ins removed (Session 20).** All five named built-ins
+(`columnSummary`, `buildHelpOptions`, `resolveHelpContent`, `formatRecordList`,
+`buildChildInserts`) have been replaced by self-contained `expression` steps in the seed
+workflows. Any step using `transform_type` now throws a hard error at runtime — no silent
+fallback.
+
+The constraint boundary: `js_transform` is restricted to **pure synchronous data transformation** —
+##### `human_gate`
+```json
+{
+  "step": "3", "type": "human_gate",
+  "gate_type":        "edit_list",
+  "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
+  "context_key":      "proposed_scaffold.tables",
+  "item_primary_key": "tableName",
+  "item_secondary_key": "columnSummary",
+  "options": [
+    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
+    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
+    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+  ],
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+###### Context key 
+`context_key` is a dot-path into `local_state` — the data bound to the dialog.
+`options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
+jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
+
+###### `reveal` (optional, all gate types)
+
+Renders an inline `task_card` block above the gate buttons. The definition is always
+visible — no click required. The gate remains suspended; the card is read-only.
+
+```json
+"reveal": {
+  "button_label": "Show Definition",
+  "content": "{{some.template}}"
+}
+```
+
+`content` is resolved via `resolveTemplate` before the HUMAN_GATE SQS message is
+built. `button_label` becomes the `task_card` title. Both fields are required and
+must be non-empty strings — L1 validation rejects steps where either is missing.
+`callback.mjs` renders the block using `randomUUID()` for `task_id` and
+`status: "complete"` — posted directly in the gate message, not as a thread reply.
+
+###### `iterator` on options (choice gate only)
+
+Any option in a `choice` gate may carry `iterator: '<local_state_key>'`. At runtime
+`buildDialog` expands that option into **one button per item** in
+`localState[iterator]`, resolving `label`, `value`, and `description` tokens against
+`{...localState, ...item}` for each element. Only one option object per gate should
+carry `iterator`. A Cancel option without `iterator` must always appear as a separate
+entry. The `iterator` field is stripped from the rendered buttons.
+
+```json
+{
+  "step": "3", "type": "human_gate", "gate_type": "choice",
+  "message_template": "Select a deck to quiz:\n{{decks_list}}",
+  "output_key": "selected_deck_id",
+  "options": [
+    { "value": "{{id}}", "label": "{{name}}", "description": "{{card_count}} cards",
+      "on_select": "next", "iterator": "decks" },
+    { "value": "cancel", "label": "Cancel", "description": "Stop", "on_select": "cancel" }
+  ],
+  "on_success": "next", "on_else": "cancel"
+}
+```
+
+Use `iterator` instead of a preceding `js_transform` step when gate options come
+from a variable-length array. L1 validation skips the unresolved-key check for
+options that carry `iterator` (tokens resolve at runtime against each item).
+
+###### Template syntax
+
+Templates appear in `message_template`, `input` values, and `context_key`. The
+template resolver (`template-resolver.mjs`) supports:
+
+```
+{{key}}              → local_state["key"]
+{{key.field}}        → local_state["key"]["field"]
+{{key.0.field}}      → local_state["key"][0]["field"]
+{{item}}             → current iterator item (inside item_step only)
+{{item.field}}       → field on current iterator item
+{{input.field}}      → run.input["field"] — original input to the workflow
+```
+
+Unresolved templates (key not found in local_state) resolve to the empty string
+`""` — they do not throw. This means a workflow author must ensure that every
+template reference has a corresponding `output_key` written by a prior step.
+
+##### `iterator`
+```json
+{
+  "step": "5", "type": "iterator",
+  "items_key":      "proposed_scaffold.tables",
+  "item_step":      { "type": "serv_schema", "input": { "table": "{{item}}" } },
+  "output_key":     "created_tables",
+  "execution_mode": "sequential",
+  "on_complete":    "next"
+}
+```
+`items_key` is a dot-path to an array in `local_state`. `item_step` is executed
+once per item — the current item is available as `{{item}}` and `{{item.field}}`
+inside `item_step.input`. Results are collected into an array at `output_key`.
+`execution_mode: "sequential"` is **always required** — omitting it is a workflow defect.
+
+#### Iterator taxonomy — non-suspending vs suspending
+
+Two categories of iterator exist based on whether the `item_step` suspends execution.
+
+**Non-suspending iterator** — `item_step` is a service step (`serv_schema`, `serv_insert`,
+`serv_update`, `serv_delete`, `serv_query`, `llm_call`, `js_transform`). All items execute
+inline within a single Lambda invocation in `executeIteratorInline`. No SQS hop per item.
+This is the common case — `create_domain` step 5 (DDL), step 9, step 10b are all
+non-suspending iterators.
+
+**Suspending iterator** — `item_step` is `human_gate`. Each item requires one full
+suspend/resume cycle: the iterator breaks after building the gate, a gate frame is pushed,
+the run suspends. When the user responds, `resume_gate` pops the gate frame and the iterator
+frame becomes the top frame. `resumeGate` detects `parentFrame.type === 'iterator'` and:
+1. Strips the `item` binding from `localState` before merging state back onto the iterator frame
+   (prevents `item` from leaking into the frame-level state).
+2. Increments `parentFrame.current_index` — advancing to the next item.
+3. Does **not** set `current_step` — iterator frames use `current_index`, not `current_step`.
+
+The next `execute_top` re-enters `executeIteratorInline` at the incremented index.
+
+`step_ref.options` is resolved from the template string (e.g. `"{{item.options}}"`) to a live
+array before the gate frame is persisted — required because `resume_gate` calls
+`options.find()` to match the user's response value.
+
+**When to use a suspending iterator vs the flat loop pattern:**
+
+| | Suspending iterator | Flat loop (backward step reference) |
+|---|---|---|
+| Use when | Fixed list of independent questions, each needing one answer | Loop with inter-item state (score, accumulated data, conditional branching per item) |
+| Output | Results array at `output_key` | State accumulated in `local_state` via `js_transform` |
+| Loop control | Iterator exhausts automatically | Explicit index + condition step |
+| Guard 3 safety | N/A — no backward reference | Requires `human_gate` on every loop path |
+
+Prefer the flat loop pattern when each iteration needs to read results from previous
+iterations, or when loop termination depends on accumulated state. See `create_domain_example`
+in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz).
+
+##### `serv_query` / `serv_insert` / `serv_update` / `serv_delete`**
+```json
+{
+  "step": "1", "type": "serv_query",
+  "input": {
+    "tableName": "PGD_Recipes",
+    "filters":   [{ "column": "id", "op": "eq", "value": "{{input.id}}" }]
+  },
+  "output_key": "results",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+##### `serv_entity_query` / `serv_entity_get`
+```json
+{
+  "step": "1", "type": "serv_entity_query",
+  "input": {
+    "entityName": "Recipe",
+    "filters":    [{ "column": "name", "op": "like", "value": "{{input.search}}" }],
+    # orderBy removed — hardcoded "name" column is domain-specific assumption
+    "limit":      20
+  },
+  "output_key": "results",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+`entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`, not `Recipes`.
+Returns assembled entities with root columns plus child arrays (`ingredients`, `steps`, etc.).
+Use instead of `serv_query` for domains with child tables or when full entity display is needed.
+
+`serv_entity_get` fetches a single entity by id:
+```json
+{
+  "step": "1", "type": "serv_entity_get",
+  "input": { "entityName": "Recipe", "id": "{{input.id}}" },
+  "output_key": "result",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+##### `notify`
+```json
+{
+  "step": "11", "type": "notify",
+  "message_template": "Domain {{proposed_scaffold.domain}} created. Try: {{generated.domainHelp.commands.0.syntax}}",
+  "notify_type": "HUMAN_NOTIFICATION",
+  "on_success": "next"
+}
+```
+
+##### `end`
+```json
+{ "step": "12", "type": "end" }
+```
+
+##### `simulate`
+```json
+{
+  "step":        "4",
+  "type":        "simulate",
+  "input": {
+    "steps_key":        "draft_workflow.steps",
+    "mock_outputs_key": "mock_outputs",
+    "paths_key":        "simulation_paths"
+  },
+  "output_key":  "simulation_result",
+  "on_success":  "next",
+  "on_else":  "step:3"
+}
+```
+All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
+and `paths_key` are optional — if absent, the `simulate` step runs Level 1
+static analysis only. `on_else` routes back to the step where the user can
+review and correct the workflow definition before re-simulating.
+Full schema, validation levels, and result structure: see **Section 6.5.6**.
+
+##### Post-write L1 validation
+
+`create_workflow` and `fix_workflow` run `runLevel1StaticAnalysis` on the generated
+steps array **before** calling SERV to persist the workflow. If issues are found the
+write is blocked and a `422` response is returned with the structured issue list.
+`upsert-workflow.mjs` surfaces L1 errors clearly in terminal output. This prevents
+dead-routing or structurally invalid workflows from entering `PGC_Workflow` at all.
+
+The check is performed in PROC (not SERV) because `runLevel1StaticAnalysis` lives in
+`simulation-engine.mjs` which is a PROC-tier module — SERV has no access to it.
+
+**Skeleton vs full L1:** `serv_step_missing_required_input` is a content completeness
+check (verifies `tableName`, `row`, `filters`, `updates` are declared). It is skipped
+when the simulate step sets `input.skeleton: true` (routing skeleton validation, step 21b)
+because skeleton steps are intentionally input-free. All topology checks run in both modes.
+The final pre-write simulate (step 25) always runs full L1 with `skeleton` unset.
+
+##### `condition`
+```json
+{
+  "step": "1",
+  "type": "condition",
+  "description": "Route to id lookup or name search depending on which input field is set.",
+  "expression": "{{input.id}}",
+  "on_success": "2",
+  "on_else":  "3"
+}
+```
+`expression` is resolved via `resolveTemplate` against `local_state`. Truthy: resolved value is
+non-empty, not `"null"`, not `"undefined"`, not `"0"`, and does not contain `{{` (unresolved
+template literals are treated as falsy — the key was not set). `on_success` and `on_else` are
+bare step keys (e.g. `"2"`, `"3"`) — the executor prefixes them to `step:N` internally.
+No output_key is written — condition steps produce no state output.
+
+**Constraint:** `on_success` and `on_else` must reference step keys that exist in the workflow.
+Level 1 static analysis validates both targets as `step:N` routing tokens.
+
+##### `js_transform` — full detail
+
+Only one mode: `expression`. The `transform_type` field is removed — all built-ins replaced
+by self-contained expressions. Any step using `transform_type` throws immediately at runtime.
+
+**Sandbox bindings (Session 20)**
+
+| Binding | Source | Notes |
+|---|---|---|
+| `items` | `resolvePath(localState, step.input_key)` | Primary input — resolved value at `input_key` |
+| `local_state` | Full `localState` object | Cross-key reads — required when input_key is insufficient |
+| `JSON`, `Math`, `Array`, `Object`, `String`, `Number`, `Boolean`, `Date` | Safe globals | No Node.js APIs |
+
+`local_state` enables workflows generated by `create_workflow` to be fully self-contained —
+an expression can read any key already written to the workflow state without needing a
+dedicated step type for every combination.
+
+**Constraint boundary.** `js_transform` is restricted to **pure synchronous data transformation** —
+operate on data already in `local_state` and return a new value. It never fetches, never writes,
+never calls external services.
+
+- "Transform data I already have" → `js_transform` with `expression`
+- "Fetch data I don't have" → `serv_*` step type or `capability_call` (Backlog)
+
+**AST gate — rejection rules.** The acorn parser walks the AST before `vm.runInNewContext` is called.
+Any of the following causes an immediate throw:
+
+| Rejected AST node | What it blocks |
+|---|---|
+| `ImportDeclaration` | `import` statements |
+| `CallExpression` where callee is Identifier `require` | `require()` calls |
+| `MemberExpression` with object Identifier `process` or `global` | Node.js globals |
+| `AwaitExpression` | Any `await` |
+| `FunctionDeclaration` or `ArrowFunctionExpression` with `async: true` | Async functions |
+| `NewExpression` where callee is Identifier `Function` | `new Function()` |
+| `CallExpression` where callee resolves to `eval`, `fetch`, `XMLHttpRequest` | Network and eval |
+
+`vm.runInNewContext({ timeout: 200 })` reliably kills synchronous infinite loops.
+
+**Example expressions:**
+
+| Use case | Expression |
+|---|---|
+| Enrich tables with columnSummary | `(function() { var SYS = new Set(['id','created_at','updated_at']); return items.map(function(t) { var cols = (t.columns||[]).filter(function(c){return !SYS.has(c.name);}).slice(0,4).map(function(c){return c.name;}); return Object.assign({},t,{columnSummary:cols.join(', ')}); }); })()` |
+| Merge new_table from local_state | `(function() { var n = local_state.new_table; return n ? items.concat([n]) : items; })()` |
+| Count passing results | `items.filter(r => r.score > 0).length` |
+| Sum a numeric field | `items.reduce((acc, r) => acc + (r.score || 0), 0)` |
+| Filter by field | `items.filter(r => r.status === 'active')` |
+| Read cross-key value | `items.concat(local_state.extra_items || [])` |
+
+**Former built-ins and their replacements (for migration reference)**
+
+| Former `transform_type` | Replaced by | Workflow / step |
+|---|---|---|
+| `columnSummary` | Expression reading `local_state.proposed_scaffold.domain` | `create_domain` steps 2, 3c |
+| `buildHelpOptions` | Expression over `items` (registered_domains) | `help` step 2 |
+| `resolveHelpContent` | Expression reading `local_state.help_selection` + `local_state.help_options` | `help` step 4 |
+| `formatRecordList` | Expression with root_only variant | `get_entity` step 4, `list_entity` step 2 |
+| `buildChildInserts` | Expression reading `local_state.full_entity_schema`, `local_state.parsed_entity`, `local_state.new_record` | `add_entity` step 5 |
+
+##### `serv_entity_schema`
+```json
+{
+  "step": "1",
+  "type": "serv_entity_schema",
+  "input": { "entityName": "{{input.entity_name}}" },
+  "output_key": "full_entity_schema",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+Loads a full entity schema by combining `PGC_EntitySchema` (join topology) with `PGC_Schema`
+(live column definitions for all tables in the entity). Replaces the two-step pattern
+(`serv_query PGC_EntitySchema` → `js_transform buildEntitySchema`) with a single step.
+I/O does not belong in `js_transform`.
+
+`entityName` is the PascalCase singular name from `PGC_EntitySchema.entity_name` — e.g. `Recipe`.
+Supports `{{template}}` substitution.
+
+**Output shape written to `output_key`:**
+```json
+{
+  "entity_name": "Recipe",
+  "description": "A cooking recipe with ingredients and steps",
+  "root": {
+    "table":   "PGD_Recipes",
+    "columns": [{ "name": "name", "type": "text" }]
+  },
+  "children": [
+    {
+      "table":      "PGD_RecipeIngredients",
+      "alias":      "ingredients",
+      "fk_column":  "recipe_id",
+      "output_key": "ingredients",
+      "columns":    [{ "name": "ingredient_name", "type": "text" }]
+    }
+  ]
+}
+```
+System columns (`id`, `created_at`, `updated_at`) and FK columns are excluded from all column lists.
+Column definitions are read from `PGC_Schema` at runtime — not cached — so new columns are
+immediately visible without recreating the domain.
+
+##### `write_memory`
+```json
+{
+  "step": "16c", "type": "write_memory",
+  "description": "Persist confirmed schema snapshot as semantic domain memory.",
+  "input": {
+    "memory_type": "semantic",
+    "scope":       { "domain": "{{proposed_scaffold.domain}}" },
+    "content_key": "domain_semantic_content",
+    "tags":        ["schema_snapshot", "insert_expectations"],
+    "priority":    2
+  },
+  "on_success": "next",
+  "on_else": "next"
+}
+```
+`content_key` names a `local_state` key whose string value becomes the memory content.
+`token_estimate` is computed automatically: `Math.ceil(content.length / 4)`.
+Scope values support `{{template}}` substitution resolved at write time.
+No `output_key` — the step returns `outputValue: null`. Errors are logged but never fail the run.
+See Section 6.13 for the full memory layer design.

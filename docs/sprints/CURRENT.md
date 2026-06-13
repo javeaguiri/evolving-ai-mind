@@ -162,7 +162,7 @@ Validate AC5 with a `create_workflow` run that includes a deterministic algorith
 - [ ] All ACs above validated from Slack
 - [ ] `CLAUDE.md` "Current State" updated
 - [ ] `docs/architecture.md` updated: minds-eye agent / MINDS_EYE / MINDS_EYE_RESUME / minds-eye.mjs, PGC_Session/PGC_SessionEntry, new SQS types
-- [ ] `docs/data-architecture.md` updated: PGC_Session, PGC_SessionEntry, PGC_Prompt.domain, PGC_WorkflowRun.session_id
+- [ ] `docs/arch-data.md` updated: PGC_Session, PGC_SessionEntry, PGC_Prompt.domain, PGC_WorkflowRun.session_id
 - [ ] `docs/novia-design.md` updated with any decisions resolved from Open Questions section
 - [ ] `docs/session-chat-design.md` updated: implementation status table updated as /chat and /explain are built
 - [ ] `openapi.yaml` updated: /chat, /explain, /novia endpoints added before implementation
