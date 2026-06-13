@@ -1,11 +1,27 @@
-# Novia — Agentic Process Design
+# Minds-Eye Agent Design
 ## evolving-mind-ai — Sprint 5+ Feature Spec
+## (Display name "Novia" — configurable in PGC_SystemContext)
 
 ---
 
 ## 1. Overview
 
-Novia is the agentic layer of evolving-mind-ai. Where the existing system executes **pre-defined workflows** in response to classified intents, Novia reasons dynamically about the system's current state and decides its own action sequence. It is invoked conversationally via Slack and operates within explicit boundaries defined by fault domain triage.
+### 1.0 Naming Architecture
+
+The agent has two distinct names:
+
+| Name | Where it lives | How to change it |
+|---|---|---|
+| **`minds-eye`** | System code: `minds-eye.mjs`, SQS types `MINDS_EYE` / `MINDS_EYE_RESUME`, `session_type = 'minds_eye'` | Code change required — this is a static system name |
+| **"Novia"** (or any name the user prefers) | `PGC_SystemContext.minds_eye_preferences.name` | One `updateRows` curl — no code touch, no migration |
+
+This follows the Static System vs Evolving Artifacts boundary. The system code is stable; the user's preferred name for the agent is a runtime preference. All user-facing messages read the display name from `PGC_SystemContext` at session start.
+
+The `/novia` Slack slash command name is registered in the Slack app dashboard (not in system code). It can be changed by reconfiguring the Slack app — no Lambda deployment required.
+
+### 1.1 Agent Overview
+
+The minds-eye agent is the agentic layer of evolving-mind-ai. Where the existing system executes **pre-defined workflows** in response to classified intents, the agent reasons dynamically about the system's current state and decides its own action sequence. It is invoked conversationally via Slack and operates within explicit boundaries defined by fault domain triage.
 
 ### 1.1 How Novia Differs from Existing Mechanisms
 
@@ -19,30 +35,32 @@ Novia is the agentic layer of evolving-mind-ai. Where the existing system execut
 
 ### 1.2 Primary Roles
 
-1. **Extender** — chains workflows together, handles cross-domain reasoning, performs tasks that currently require multiple human-triggered commands.
-2. **Corrector (bounded)** — corrects artifact-level Generation decisions: subjective LLM choices that are observable at runtime and fixable without code changes. See Section 6.
+1. **Extender** — extends and improves existing workflows and domain schemas; chains workflows together; handles cross-domain reasoning; performs tasks that currently require multiple human-triggered commands. This is the primary role.
+2. **Improver (bounded)** — improves artifact-level Generation decisions: subjective LLM choices that are observable at runtime and correctable without code changes. Fixing workflow routing, improving step sequencing, and correcting field type mismatches are the first concrete use cases. See Section 6.
 
-Novia is **not** a substitute for fixing Instruction domain failures (those require prompt updates and human judgment) or Execution domain failures (those require code changes).
+The agent is **not** a substitute for fixing Instruction domain failures (those require prompt updates and human judgment) or Execution domain failures (those require code changes).
 
 ---
 
 ## 2. Architecture Position
 
-Novia lives entirely in the PROC tier. It follows all existing tier boundary rules.
+The minds-eye agent lives entirely in the PROC tier. It follows all existing tier boundary rules.
 
 ```
-Slack /novia → EXP slackbot → SQS WorkflowQueue (NOVIA_MESSAGE) → PROC novia.mjs
-                                                                         ↓
-                                                              [agentic loop — n turns]
-                                                                         ↓
-                                                     SQS SlackResultsQueue → EXP reply
+Slack /novia → EXP slackbot → SQS WorkflowQueue (MINDS_EYE) → PROC minds-eye.mjs
+                                                                       ↓
+                                                            [agentic loop — n turns]
+                                                                       ↓
+                                                   SQS SlackResultsQueue → EXP reply
 ```
 
-New SQS message type: **`NOVIA_MESSAGE`** (fire-and-forget, no workflowRunId).
+New SQS message types:
+- **`MINDS_EYE`** — fire-and-forget entry (no workflowRunId); new session or thread continuation
+- **`MINDS_EYE_RESUME`** — resume after a human gate (Continue/Pause/Cancel at turn limit, or action tool approval); routes to `minds-eye.mjs` separately from workflow `resume_gate`
 
-Thread continuation works identically to `general_chat`: the callback handler matches `slack_thread_ts` → `PGC_Session` → resumes the Novia session.
+Thread continuation works identically to `general_chat`: the callback handler matches `slack_thread_ts` → `PGC_Session` → resumes the agent session.
 
-Novia creates its own `PGC_Session` row (`session_type = 'novia'`) on first invocation and appends `PGC_SessionEntry` rows per turn, exactly as designed in `session-chat-design.md`.
+The agent creates its own `PGC_Session` row (`session_type = 'minds_eye'`) on first invocation and appends `PGC_SessionEntry` rows per turn, exactly as designed in `session-chat-design.md`.
 
 ---
 
@@ -52,7 +70,7 @@ Before Novia reasons about a task, it assembles situational awareness from three
 
 ### 3.1 System Context (Layer 1 — Static)
 
-Injected from `PGC_SystemContext`. A new entry with key `novia_system_prompt` describes Novia's role, fault domain authority, available tools, and the tables it may read and write. A second entry `novia_context_index` is a structured JSON index of what to query for situational awareness:
+Injected from `PGC_SystemContext`. A new entry with key `minds_eye_system_prompt` describes the agent's role, fault domain authority, available tools, and the tables it may read and write. A second entry `minds_eye_context_index` is a structured JSON index of what to query for situational awareness. A third entry `minds_eye_preferences` holds user-configurable settings (name, turn_limit, model, max_actions_per_session).
 
 ```json
 {
@@ -135,18 +153,18 @@ Novia's "tools" are structured action types it can invoke. Each maps to existing
 
 ## 5. Use Cases
 
-### UC-1: Fix a workflow (Generation fault domain)
+### UC-1: Improve a workflow (Generation fault domain)
 > "Novia, the quiz workflow is routing incorrectly after step 3"
 
-1. Novia reads `PGC_Workflow` steps + run history for the target workflow
+1. Agent reads `PGC_Workflow` steps + run history for the target workflow
 2. Runs `simulate_workflow` (L1) on current steps
-3. Reads memory for prior fix attempts
-4. Reasons about the routing issue and produces a corrected steps array
+3. Reads memory for prior improvement attempts
+4. Reasons about the routing issue and produces an improved steps array
 5. Posts confirmation gate: "I will change step 3's `on_success` from `step:5` to `step:4`. [Diff]. Approve?"
 6. On approval: `fix_workflow_steps` → upserts to PGC_Workflow → re-runs L1
-7. Writes episodic memory: what was wrong, what was changed, whether L1 passed
+7. Writes episodic memory: what was observed, what was changed, whether L1 passed
 
-**Boundary:** If the issue is in a prompt the workflow calls (Instruction domain), Novia surfaces the diagnosis and defers to UC-2 rather than patching the workflow around the bad prompt output.
+**Boundary:** If the issue is in a prompt the workflow calls (Instruction domain), the agent surfaces the diagnosis and defers to UC-2 rather than patching the workflow around the bad prompt output.
 
 ### UC-2: Fix a prompt (Instruction fault domain)
 > "Novia, design_table keeps generating `real` for columns with decimal constraints"
@@ -210,16 +228,19 @@ This is read-only. No confirmation gate.
 
 ## 6. Agentic Loop Design
 
-Novia's reasoning loop is **not** implemented as a `PGC_Workflow` row. Pre-defined workflows cannot decide their own next action. Novia's loop lives in `novia.mjs` as a new PROC endpoint.
+The agent's reasoning loop is **not** implemented as a `PGC_Workflow` row. Pre-defined workflows cannot decide their own next action. The loop lives in `minds-eye.mjs` as a new PROC endpoint.
 
 ### 6.1 Loop Structure
 
 ```
-receive NOVIA_MESSAGE (or thread continuation)
+receive MINDS_EYE (new session or thread continuation)
   ↓
-assemble context (Layer 1 + 2; Layer 3 if correction task)
+load minds_eye_preferences from PGC_SystemContext
+  (name, turn_limit, model, max_actions_per_session)
   ↓
-[reason turn]
+assemble context (Layer 1 + 2; Layer 3 if improvement task)
+  ↓
+[reason turn — increment turn_count]
   LLM call: given context + conversation history, decide next action
   Output: { action: "tool_name", params: {...}, reasoning: "..." } | { action: "respond", message: "..." }
   ↓
@@ -228,11 +249,14 @@ if action == "respond":
 if action is read tool:
   execute → append result to session → loop (reason again)
 if action is action tool:
-  post HUMAN_GATE → await resume_gate
+  post HUMAN_GATE (confirm/cancel) → enqueue MINDS_EYE_RESUME
     on approve: execute → append result → loop (reason again)
     on cancel: post cancellation message → end turn
-if loop_count > MAX_TURNS:
-  post "I've reached my reasoning limit for this task. Here is what I found: [summary]" → end turn
+if turn_count >= turn_limit:
+  post HUMAN_GATE (choice: Continue / Pause / Cancel)
+    Continue → reset turn_count → loop (reason again)
+    Pause    → save session state → post "Session paused. Resume with /novia continue." → end
+    Cancel   → close session → end
 ```
 
 ### 6.2 Session Continuity
@@ -243,11 +267,14 @@ Each Novia turn appends to `PGC_SessionEntry`:
 
 ### 6.3 Safety Limits
 
-| Limit | Value | Reason |
-|---|---|---|
-| MAX_TURNS per NOVIA_MESSAGE | 8 | Prevent runaway loops |
-| MAX_HUMAN_GATES per session | 3 | Prevent approval fatigue |
-| MAX_ACTION_TOOLS total | 5 | Hard cap on system mutations per session |
+All limits are read from `PGC_SystemContext.minds_eye_preferences` at session start — not hardcoded.
+
+| Limit | Default | Preference key | Behaviour at limit |
+|---|---|---|---|
+| Turn limit | 8 | `turn_limit` | Human gate — Continue / Pause / Cancel |
+| Max action tools per session | 5 | `max_actions_per_session` | Post summary and end session |
+
+Changing a limit is one `updateRows` against `PGC_SystemContext WHERE key = 'minds_eye_preferences'` — no deploy required.
 
 ---
 
@@ -288,9 +315,9 @@ The existing `PGC_Session` design (see `session-chat-design.md`) is extended wit
 
 | Field | Type | Notes |
 |---|---|---|
-| `session_type` | varchar | Added value: `'novia'` |
-| `novia_turn_count` | integer | Loop counter; stops at MAX_TURNS |
-| `novia_action_count` | integer | Action tool counter; stops at MAX_ACTION_TOOLS |
+| `session_type` | varchar | Added value: `'minds_eye'` |
+| `minds_eye_turn_count` | integer | Loop counter; triggers human gate at `turn_limit` |
+| `minds_eye_action_count` | integer | Action tool counter; session ends at `max_actions_per_session` |
 
 No new tables required. Tool call log entries use `role = 'tool'` in `PGC_SessionEntry`.
 
@@ -300,15 +327,15 @@ No new tables required. Tool call log entries use `role = 'tool'` in `PGC_Sessio
 
 These require decisions before implementation begins:
 
-1. **Prompt architecture for Novia's reasoning turn:** Should the reasoning LLM call use `claude-sonnet-4-6` (full capability) or a fast/cheap model for simple tool decisions? The action selection step is the critical one — likely `smart` model. Tool result summarization could be `cheap`.
+1. **Prompt architecture for reasoning turn:** Should the reasoning LLM call use `model` from `minds_eye_preferences` (default `anthropic/claude-sonnet-4-6`) for all turns, or use a cheaper model for tool result summarization? Start with one model; optimize later.
 
-2. **Tool call format:** Novia's LLM output for an action must be a structured JSON object. Should it use the native LLM tool-use API (function calling), or the existing `llm_call` + `review-output.mjs` pattern with a fixed output schema? The native tool-use API is cleaner but requires confirming it's available via the Perplexity gateway.
+2. **Tool call format:** The agent's LLM output for an action must be a structured JSON object. Use the existing `llm_call` + `review-output.mjs` pattern with a fixed output schema — this reuses tested infrastructure. Native function-calling API (if available via Perplexity) is a future optimization.
 
-3. **Resume gate routing:** When a human approves a Novia action gate, the resume SQS message currently routes to `run-workflow.mjs` (for workflow runs). Novia needs its own resume path to `novia.mjs`. Options: (a) new `NOVIA_RESUME` SQS action, (b) reuse `resume_gate` with a `session_type` discriminator.
+3. **Resume gate routing — DECIDED:** Use `MINDS_EYE_RESUME` as a new SQS type routing to `minds-eye.mjs`. This keeps the agent loop and workflow Step Processor completely independent — no `session_type` discriminator needed in `interactive.mjs`.
 
-4. **Instruction domain fixes:** UC-2 describes Novia proposing prompt changes for human approval. Should this be a full human-collaborative turn (Novia drafts, human edits inline, then approves) or a gate (Novia drafts, human sees the diff, approves or rejects)? The latter is simpler to implement first.
+4. **Instruction domain fixes:** UC-2 — gate (agent drafts, human sees diff, approves or rejects) is simpler and sufficient for Phase 1. Full inline editing is Phase 2.
 
-5. **Novia vs. fix_workflow boundary:** `fix_workflow` already exists as a user-triggered workflow. Does Novia replace it, wrap it, or run alongside it? Recommended: Novia wraps `invoke_workflow fix_workflow` for user-reported bugs but can also read and propose direct step fixes for cases `fix_workflow` can't handle (e.g. cross-step routing restructuring).
+5. **Agent vs. fix_workflow boundary:** The agent wraps `invoke_workflow fix_workflow` for simple cases. For complex multi-step routing restructuring that `fix_workflow` can't handle, the agent proposes direct step changes via `fix_workflow_steps`. `fix_workflow` remains as a standalone user-triggered option — the agent does not replace it.
 
 ---
 
@@ -317,17 +344,16 @@ These require decisions before implementation begins:
 Prerequisites (from open work list):
 - `PGC_Session` / `PGC_SessionEntry` tables bootstrapped (session-chat-design.md §11)
 - `/chat` and `/explain` commands implemented (session-chat-design.md §11)
-- `PGC_Prompt.domain` column (X2) in place
+- `PGC_Prompt.domain` column (Track P, X2) in place
 
 Sprint 5 build order:
-1. `PGC_SystemContext` seeds: `novia_system_prompt`, `novia_context_index`
-2. `NOVIA_MESSAGE` SQS type registered in `handler.mjs` dispatcher
-3. `novia.mjs` PROC endpoint — context assembly + reasoning loop (read tools only first)
+1. `PGC_SystemContext` seeds: `minds_eye_system_prompt`, `minds_eye_context_index`, `minds_eye_preferences`
+2. `MINDS_EYE` and `MINDS_EYE_RESUME` SQS types registered in `handler.mjs` dispatcher
+3. `minds-eye.mjs` PROC endpoint — context assembly + reasoning loop (read tools only first)
 4. `/novia` Slack command — EXP routing + intent map entry
-5. Action tools with confirmation gates (fix_workflow_steps first — lowest risk)
-6. Memory read/write integration
-7. UC-1 (fix workflow) validated end-to-end from Slack
-8. UC-5 (inspect data) validated — highest-frequency use case
-9. Remaining use cases in priority order
-
-> Full sprint scope to be confirmed at Sprint 5 scoping.
+5. Human gate at turn limit (Continue / Pause / Cancel)
+6. Action tools with confirmation gates (`fix_workflow_steps` first — lowest risk, highest value)
+7. Memory read/write integration
+8. UC-1 (improve workflow, Generation domain) validated end-to-end from Slack
+9. UC-5 (inspect data) validated — highest-frequency use case
+10. Remaining use cases in priority order

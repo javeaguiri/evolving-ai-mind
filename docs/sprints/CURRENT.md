@@ -16,10 +16,10 @@ Implement Novia Phase 1: context assembly, read tools, and the `/novia` Slack co
 
 ## Acceptance Criteria
 
-- **AC1 — `/novia` command:** `/novia <prompt>` invokes Novia, assembles context (system + memory layers), responds in a Slack thread. Thread replies continue the session.
-- **AC2 — Read tools:** Novia can query any PGC or PGD table, read memory, and simulate a workflow — all without a confirmation gate.
+- **AC1 — `/novia` command:** `/novia <prompt>` invokes the minds-eye agent (`minds-eye.mjs`), assembles context (system + memory layers), responds in a Slack thread. Thread replies continue the session. Display name ("Novia") is read from `PGC_SystemContext.minds_eye_preferences.name` at runtime — not hardcoded.
+- **AC2 — Read tools:** The agent can query any PGC or PGD table, read memory, and simulate a workflow — all without a confirmation gate.
 - **AC3 — UC-5 (inspect data):** "show me my flashcard decks" returns a structured Slack response with deck names and card counts.
-- **AC4 — UC-1 (fix workflow, Generation domain):** Novia diagnoses a routing issue in a domain workflow, posts a confirmation gate with the proposed diff, applies the fix on approval, re-runs L1 to confirm it passes.
+- **AC4 — UC-1 (improve workflow, Generation domain):** The agent diagnoses a routing issue in a domain workflow, proposes an improvement, posts a confirmation gate with the proposed diff, applies the change on approval, re-runs L1 to confirm it passes.
 - **AC5 — Track P:** `create_workflow` generates domain workflows where domain-specific `llm_call` steps carry `prompt_draft`/`prompt_category`/`prompt_model` fields; a `design_workflow_prompts` step classifies each as reuse/create/convert and registers new `PGC_Prompt` rows with `domain` set.
 - **AC6 — design_table Contract fix:** `design_table` prompt no longer allows `real` for columns with decimal boundary constraints. Validated by running `create_domain` with a schema that includes such a column.
 - **AC7 — WorkflowRunStep decision:** Either `PGC_WorkflowRunStep` rows are written consistently (fix identified and deployed) or the table is formally removed from the step audit log design and backlog updated.
@@ -52,24 +52,25 @@ Full design: `docs/novia-design.md`
 - Validate both commands from Slack before proceeding to N1
 
 **N1. Context assembly + endpoint**
-- `PGC_SystemContext` seeds: `novia_system_prompt`, `novia_context_index`
-- `NOVIA_MESSAGE` SQS type registered in `handler.mjs` dispatcher
-- `novia.mjs` PROC endpoint: receives NOVIA_MESSAGE, assembles Layer 1 (system context query) + Layer 2 (memory read), constructs initial Novia session (`PGC_Session` row, `session_type = 'novia'`)
-- `/novia` Slack command → EXP routing → intent map entry
-- `PGC_Session` extended with `novia_turn_count` + `novia_action_count` columns
+- `PGC_SystemContext` seeds: `minds_eye_system_prompt`, `minds_eye_context_index`, `minds_eye_preferences` (JSONB: `{ "name": "Novia", "turn_limit": 8, "model": "anthropic/claude-sonnet-4-6", "max_actions_per_session": 5 }`)
+- `MINDS_EYE` SQS type registered in `handler.mjs` dispatcher
+- `minds-eye.mjs` PROC endpoint: receives MINDS_EYE, assembles Layer 1 (system context query) + Layer 2 (memory read), constructs initial session (`PGC_Session` row, `session_type = 'minds_eye'`)
+- `/novia` Slack command → EXP routing → intent map entry (display name is a user preference; the Slack command name is fixed at Slack app config time)
+- `PGC_Session` extended with `minds_eye_turn_count` + `minds_eye_action_count` columns
 
 **N2. Reasoning loop + read tools**
 - LLM reasoning turn: given context + conversation history, output `{ action, params, reasoning }` or `{ action: "respond", message }`
 - Read tools: `query_table`, `query_entity`, `read_memory`, `simulate_workflow`, `read_workflow`, `read_prompt`, `get_run_history`
 - Tool calls appended to `PGC_SessionEntry` as `role = 'tool'`
-- Safety limits: MAX_TURNS = 8 per NOVIA_MESSAGE
+- Turn limit: read from `PGC_SystemContext.minds_eye_preferences.turn_limit` (default 8) — not hardcoded
+- When turn limit is reached: post a `human_gate` (choice type) with options Continue / Pause / Cancel — do NOT hard-stop
 - Validate AC2 + AC3 (read-only use cases) before proceeding to N3
 
 **N3. Action tools + confirmation gates**
-- `fix_workflow_steps` action tool: reads current steps, proposes corrected steps, posts HUMAN_GATE with diff
-- Resume gate routing: `NOVIA_RESUME` SQS action → `novia.mjs` (separate from workflow `resume_gate`)
-- Safety limits: MAX_ACTION_TOOLS = 5 per session
-- Validate AC4 (UC-1: fix workflow) end-to-end
+- `fix_workflow_steps` action tool: reads current steps, proposes improved steps, posts HUMAN_GATE with diff
+- Resume gate routing: `MINDS_EYE_RESUME` SQS action → `minds-eye.mjs` (separate from workflow `resume_gate`)
+- Max action tools: read from `PGC_SystemContext.minds_eye_preferences.max_actions_per_session` (default 5)
+- Validate AC4 (UC-1: improve workflow) end-to-end
 
 **N4. Memory write**
 - After each completed session: write episodic memory (what was diagnosed, what was changed, whether fix passed L1)
@@ -120,11 +121,18 @@ Validate AC5 with a `create_workflow` run that includes a deterministic algorith
 - Confirm no recursive loop auto-remediation events since session 21
 - Document finding in session notes
 
-**L2. Add CloudWatch alarm**
+**L2. Add CloudWatch alarms**
 - Alarm: `WorkflowQueue` ApproximateNumberOfMessagesVisible > 50 for 2 consecutive 1-minute periods → SNS notification
 - Alarm: `evolving-mind-ai-proc` ConcurrentExecutions > 20 → SNS notification
 - These fire before AWS auto-remediation (threshold 16 Lambda hops), giving visibility and time to intervene
 - Add alarm definitions to `template.yaml`
+
+**L2b. Auto-halt on alarm**
+- SNS alarm → Lambda (or SNS subscription to existing PROC HTTP endpoint) → `updateRows PGC_WorkflowRun WHERE status IN ('running', 'awaiting_human_gate') SET status = 'cancelled'`
+- This is `/shutdown` triggered automatically — equivalent to running it from Slack but without requiring a human to be watching
+- SQS messages already in flight continue to arrive but are immediately discarded (run status = cancelled)
+- Queue drains naturally at its own delivery rate; no purge needed
+- Note: `/shutdown` does not interrupt a currently-executing Lambda invocation, only prevents future ones from proceeding
 
 **L3. Cold-start risk assessment**
 - Check configured SQS visibility timeout on WorkflowQueue — if < Lambda cold-start + execution time, a timeout expiry could cause redelivery
@@ -140,7 +148,7 @@ Validate AC5 with a `create_workflow` run that includes a deterministic algorith
 ## Test Scenarios
 
 1. `/novia show me my flashcard decks` → returns structured deck list — AC2, AC3
-2. `/novia the quiz workflow has a routing bug at step X` → Novia reads workflow, simulates, posts confirmation gate, applies fix on approval, L1 passes — AC4
+2. `/novia the quiz workflow routes incorrectly after step X` → agent reads workflow, simulates, proposes improvement, posts confirmation gate with diff, applies change on approval, L1 passes — AC4
 3. `create_workflow` run with a domain that includes a deterministic algorithm → `design_workflow_prompts` classifies it as convert, step rewritten as js_transform, no inline prompt in final workflow — AC5
 4. `create_domain` with a column that has a decimal boundary constraint → generated schema uses `numeric(p,s)` not `real` — AC6
 5. CloudWatch alarm threshold test (manual): send 60 test SQS messages to WorkflowQueue → verify alarm fires — AC8
@@ -153,7 +161,7 @@ Validate AC5 with a `create_workflow` run that includes a deterministic algorith
 - [ ] Simulate Level 1+2 pass on `create_workflow` (with Track P changes) and any new Novia workflows
 - [ ] All ACs above validated from Slack
 - [ ] `CLAUDE.md` "Current State" updated
-- [ ] `docs/architecture.md` updated: Novia/NOVIA_MESSAGE, NOVIA_RESUME, novia.mjs, PGC_Session/PGC_SessionEntry, new SQS types
+- [ ] `docs/architecture.md` updated: minds-eye agent / MINDS_EYE / MINDS_EYE_RESUME / minds-eye.mjs, PGC_Session/PGC_SessionEntry, new SQS types
 - [ ] `docs/data-architecture.md` updated: PGC_Session, PGC_SessionEntry, PGC_Prompt.domain, PGC_WorkflowRun.session_id
 - [ ] `docs/novia-design.md` updated with any decisions resolved from Open Questions section
 - [ ] `docs/session-chat-design.md` updated: implementation status table updated as /chat and /explain are built
