@@ -1,4 +1,7 @@
 # Security Architecture — evolving-mind-ai
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`.
 
 ## 1. Threat Model
 

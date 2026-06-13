@@ -1,4 +1,7 @@
 # Data Architecture — evolving-mind-ai
+<!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
+
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine).
 
 ### 4.1 One PostgreSQL Instances, two login URLs
 

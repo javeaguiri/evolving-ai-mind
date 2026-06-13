@@ -87,7 +87,7 @@ Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. 
 - [ ] Simulate Level 1+2 pass on any new or modified workflows
 - [ ] `CLAUDE.md` "Current State" updated
 - [ ] `docs/architecture.md` updated if any architectural decisions were made **or any `.mjs` file was added/removed/renamed**
-- [ ] `docs/data-architecture.md` updated if any schema changes
+- [ ] `docs/arch-data.md` updated if any schema changes
 - [ ] `README.md` updated if environment setup, bootstrap steps, or infrastructure changed
 - [ ] `docs/backlog.md` updated — items completed, new items added
 - [ ] `docs/sprints/CURRENT.md` renamed to `docs/sprints/sprint-NN.md` with outcome notes
@@ -184,7 +184,7 @@ This produces per-event notifications in the conversation as each matching log l
 
 Full architecture: `docs/architecture.md` — tier structure, transport-agnostic pattern, SQS queues, Step Processor, step types, all decisions and invariants.
 Component quick reference (impact index, fault triage map): `docs/architecture.md` Section 1.5.
-Full data/SERV API + curl cookbook: `docs/data-architecture.md` — PGC schema, SERV endpoints, filter operators, common queries.
+Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV endpoints, filter operators, common queries.
 
 ---
 
@@ -196,7 +196,7 @@ Full data/SERV API + curl cookbook: `docs/data-architecture.md` — PGC schema, 
   // Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
   // See LICENSE file in the project root for full license terms.
   ```
-- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture.md` for new SQS message types, step types, and gate types. Update `docs/data-architecture.md` for new or modified PGC tables.
+- **Spec first:** Add entries to `openapi.yaml` before implementing new endpoints. Update `docs/architecture.md` for new SQS message types, step types, and gate types. Update `docs/arch-data.md` for new or modified PGC tables.
 - **Seed files** use `\uXXXX` escape sequences (native `JSON.stringify` output). `.gitattributes` enforces LF line endings.
 - **Template JSON files** in `src/serv/templates/pgc/*.json` are ES module static imports bundled by esbuild — not read via `fs` at runtime.
 - **Environment:** All secrets are in AWS SSM Parameter Store. No `.env` files at runtime. Use `.env.test.template` for local test setup.
@@ -240,12 +240,23 @@ Full data/SERV API + curl cookbook: `docs/data-architecture.md` — PGC schema, 
 
 ## Key Reference Files
 
-- `docs/architecture.md` — full architecture decision log: component quick reference (Section 1.5), tier structure, SQS queues, Step Processor, step types, human gates, workflows
-- `docs/data-architecture.md` — PGC/PGD database schema, all 16 PGC table definitions, SERV API reference (SERV-Schema, SERV-Table, SERV-Entity), dev scripts, **curl cookbook (Section 5.5)**
-- `docs/session-chat-design.md` — session and diagnostic chat design: PGC_Session, PGC_SessionEntry, llm_call diagnostics, `/chat` and `/explain` commands, implementation sequence
-- `docs/novia-design.md` — Novia agentic process design: tool catalog, use cases, agentic loop, fault domain correction scope, implementation sequence
-- `docs/security-architecture.md` — threat model, Slack signing secret, PROC/SERV API key enforcement, implementation status
-- `docs/backlog.md` — tech debt register (active + unresolved), tangential feature designs, build history
+### Architecture (read the narrowest doc that covers your task)
+
+| Doc | What's in it |
+|---|---|
+| `docs/architecture.md` | System overview, component quick ref (§1.5), tier structure, SQS queues, directory structure, inter-module call rules, PGC config table roles |
+| `docs/arch-intent.md` | Intent classification pipeline — Pass 1a/1b/1c/2/3, I/O contracts, handoff() routing, generic CRUD workflows |
+| `docs/arch-step-types.md` | Step type reference — every field, schema, and example for `llm_call`, `serv_*`, `iterator`, `human_gate`, `condition`, `js_transform`, `simulate`, `write_memory`, `notify`, `end` |
+| `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle, simulation (L1/L2) |
+| `docs/arch-workflow-patterns.md` | Output validation, workflow authoring (create_domain, create_workflow), session, memory layer, self-repair, monitoring |
+| `docs/arch-data.md` | PGC/PGD schema (all 16 tables), SERV API reference, **curl cookbook (§5.5)** |
+| `docs/arch-security.md` | Threat model, Slack signing, PROC/SERV API key enforcement |
+
+### Design and process
+
+- `docs/session-chat-design.md` — `/chat`, `/explain`, PGC_Session/PGC_SessionEntry
+- `docs/novia-design.md` — Minds-eye agent: tool catalog, use cases, agentic loop, implementation sequence
+- `docs/backlog.md` — tech debt register, tangential feature designs
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure
