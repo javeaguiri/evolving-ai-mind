@@ -45,26 +45,25 @@ Implement Novia Phase 1: context assembly, read tools, and the `/novia` Slack co
 
 Full design: `docs/novia-design.md`
 
-**N0. Prerequisites** *(do before any Novia code)*
-- Bootstrap `PGC_Session` + `PGC_SessionEntry` tables (session-chat-design.md §11)
-- Implement `/chat` proc endpoint + thread continuation (session-chat-design.md §6.1)
-- Implement `/explain` proc endpoint (session-chat-design.md §6.2)
-- Validate both commands from Slack before proceeding to N1
+**N0. Prerequisites** ✅ DONE (2026-06-14) — /chat and /explain validated from Slack.
 
-**N1. Context assembly + endpoint**
-- `PGC_SystemContext` seeds: `minds_eye_system_prompt`, `minds_eye_context_index`, `minds_eye_preferences` (JSONB: `{ "name": "Novia", "turn_limit": 8, "model": "anthropic/claude-sonnet-4-6", "max_actions_per_session": 5 }`)
-- `MINDS_EYE` SQS type registered in `handler.mjs` dispatcher
-- `minds-eye.mjs` PROC endpoint: receives MINDS_EYE, assembles Layer 1 (system context query) + Layer 2 (memory read), constructs initial session (`PGC_Session` row, `session_type = 'minds_eye'`)
-- `/novia` Slack command → EXP routing → intent map entry (display name is a user preference; the Slack command name is fixed at Slack app config time)
-- `PGC_Session` extended with `minds_eye_turn_count` + `minds_eye_action_count` columns
+**N1. Context assembly + endpoint** ✅ DONE (2026-06-14)
+- minds_eye_preferences (id:31), minds_eye_context_index (id:32), minds_eye_system_prompt (id:33) seeded
+- MINDS_EYE + MINDS_EYE_RESUME SQS types registered in proc/handler.mjs
+- minds-eye.mjs PROC endpoint: Layer 1 (PGC_Workflow + PGC_Prompt) + Layer 2 (PGC_Memory) assembly, session create, agentic loop with 6 read tools, HUMAN_NOTIFICATION on respond
+- minds-eye.mjs EXP: /novia Slack command → 'minds-eye' route → MINDS_EYE SQS
+- PGC_Session extended: minds_eye_turn_count, minds_eye_action_count columns added
+- PGC_SessionEntry extended: compressed column added
+- schema.mjs: modifyConstraint endpoint added; session_type constraint updated to include 'minds_eye'
+- Validated: agent self-described capabilities correctly, enumerated workflows/prompts from DB, advisory fired autonomously on duplicate prompt versions
 
-**N2. Reasoning loop + read tools**
-- LLM reasoning turn: given context + conversation history, output `{ action, params, reasoning }` or `{ action: "respond", message }`
-- Read tools: `query_table`, `query_entity`, `read_memory`, `simulate_workflow`, `read_workflow`, `read_prompt`, `get_run_history`
-- Tool calls appended to `PGC_SessionEntry` as `role = 'tool'`
-- Turn limit: read from `PGC_SystemContext.minds_eye_preferences.turn_limit` (default 8) — not hardcoded
-- When turn limit is reached: post a `human_gate` (choice type) with options Continue / Pause / Cancel — do NOT hard-stop
-- Validate AC2 + AC3 (read-only use cases) before proceeding to N3
+**N2. Reasoning loop + read tools** ✅ DONE (2026-06-14)
+- Agentic loop with tool dispatch: `search_domain_help`, `list_tables`, `query_table`, `query_entity`, `read_memory`, `read_workflow`, `read_prompt`, `simulate_workflow`
+- Tool calls appended to `PGC_SessionEntry` as `role = 'tool'` (constraint updated: `chk_pgc_sessionentry_role` now includes `'tool'`)
+- Discovery sequence validated: agent called `search_domain_help` → `list_tables` → `query_table` in correct order — no table name guessing
+- `PGC_DomainHelp` pgvector semantic search used to identify domain; `PGC_Schema` used to resolve exact table names and columns
+- Layer 1 context trimmed: prompt list removed (agent uses `read_prompt` on demand); workflow list retained
+- AC2 + AC3 validated: `/novia show me my flashcard decks` returned real structured data with correct deck names from DB; advisory fired on duplicate deck name from real data
 
 **N3. Action tools + confirmation gates**
 - `fix_workflow_steps` action tool: reads current steps, proposes improved steps, posts HUMAN_GATE with diff
