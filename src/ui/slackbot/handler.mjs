@@ -25,6 +25,7 @@ import { handle as shutdown      } from './shutdown.mjs';
 import { handle as mind          } from './mind.mjs';
 import { handle as chat          } from './chat.mjs';
 import { handle as explain       } from './explain.mjs';
+import { handle as mindsEye      } from './minds-eye.mjs';
 
 // ---------------------------------------------------------------------------
 // Slack signature verification
@@ -115,6 +116,7 @@ export async function handler(event) {
     case 'mind':          return mind(req);
     case 'chat':          return chat(req);
     case 'explain':       return explain(req);
+    case 'minds-eye':     return mindsEye(req);
 
     default:
       return err(404, `Slackbot route "${route}" not found`, req.correlationId);
