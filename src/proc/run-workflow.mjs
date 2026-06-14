@@ -1127,18 +1127,22 @@ async function checkIdempotency(runId, frameId, stepKey) {
 
 async function recordStepAudit(runId, frameId, stepNumber, stepType,
     status, inputSnapshot, outputSnapshot, errorMsg, durationMs) {
-  await insertRow('PGC_WorkflowRunStep', {
-    run_id:          runId,
-    frame_id:        frameId,
-    step_number:     parseInt(stepNumber, 10) || 0,  // kept for iterator items (integer index)
-    step_key:        String(stepNumber),              // string key — "3a", "3d", "1", etc.
-    step_type:       stepType,
-    status,
-    input_snapshot:  inputSnapshot ?? null,
-    output_snapshot: outputSnapshot ?? null,
-    error:           errorMsg ? { message: errorMsg } : null,
-    duration_ms:     durationMs,
-  });
+  try {
+    await insertRow('PGC_WorkflowRunStep', {
+      run_id:          runId,
+      frame_id:        frameId,
+      step_number:     parseInt(stepNumber, 10) || 0,  // kept for iterator items (integer index)
+      step_key:        String(stepNumber),              // string key — "3a", "3d", "1", etc.
+      step_type:       stepType,
+      status,
+      input_snapshot:  inputSnapshot ?? null,
+      output_snapshot: outputSnapshot ?? null,
+      error:           errorMsg ? { message: errorMsg } : null,
+      duration_ms:     durationMs,
+    });
+  } catch (e) {
+    console.error('run-workflow: step audit write failed', { runId, frameId, stepKey: String(stepNumber), error: e.message });
+  }
 }
 
 function resolveNextStep(steps, currentStepKey, nextAction) {

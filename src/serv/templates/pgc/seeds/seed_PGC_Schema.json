@@ -640,6 +640,11 @@
         "nullable": false
       },
       {
+        "name": "step_key",
+        "type": "text",
+        "nullable": true
+      },
+      {
         "name": "step_type",
         "type": "text",
         "nullable": false
