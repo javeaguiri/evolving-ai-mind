@@ -47,6 +47,7 @@ const DEFAULT_PREFERENCES = {
 const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
+  'search_domain_help', 'list_tables',
 ]);
 
 export async function handle(req) {
@@ -120,19 +121,13 @@ export async function handle(req) {
   const actionCount = session.minds_eye_action_count ?? 0;
 
   // ── Assemble Layer 1 context ──────────────────────────────────────────────
-  const [workflowsResp, promptsResp] = await Promise.all([
-    getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50),
-    getRows('PGC_Prompt',   [], { column: 'intent_category', direction: 'asc' }, 50),
-  ]);
+  const workflowsResp = await getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50);
 
   const workflowSummary = (workflowsResp.rows ?? [])
     .map(w => `- ${w.name}${w.domain ? ` (domain: ${w.domain})` : ''} v${w.version}`)
     .join('\n');
-  const promptSummary = (promptsResp.rows ?? [])
-    .map(p => `- ${p.intent_category}${p.domain ? ` (domain: ${p.domain})` : ''} v${p.version}`)
-    .join('\n');
 
-  const layer1Context = `REGISTERED WORKFLOWS:\n${workflowSummary || '(none)'}\n\nREGISTERED PROMPTS:\n${promptSummary || '(none)'}`;
+  const layer1Context = `REGISTERED WORKFLOWS:\n${workflowSummary || '(none)'}`;
 
   // ── Assemble Layer 2 context ──────────────────────────────────────────────
   const memResp = await getRows('PGC_Memory', [], { column: 'priority', direction: 'desc' }, 5);
@@ -369,6 +364,43 @@ async function executeReadTool(action, params, traceId) {
         const { servPost } = await import('../shared/serv-client.mjs');
         const resp = await servPost('/api/v1/proc/simulate-workflow', { steps });
         return resp;
+      }
+
+      case 'search_domain_help': {
+        const { query } = params;
+        if (!query) return { error: 'query is required' };
+        const resp = await getRows(
+          'PGC_DomainHelp',
+          [],
+          null,
+          5,
+          { column: 'embedding', queryText: query, threshold: 0.5 }
+        );
+        return {
+          count: resp.count,
+          results: (resp.rows ?? []).map(r => ({
+            domain:      r.domain,
+            description: r.description,
+            aliases:     r.aliases,
+            commands:    r.commands,
+            similarity:  r.similarity,
+          })),
+        };
+      }
+
+      case 'list_tables': {
+        const { domain, prefix } = params;
+        const filters = [];
+        if (domain) filters.push({ column: 'domain', op: 'eq',   value: domain });
+        if (prefix) filters.push({ column: 'table_name', op: 'like', value: `${prefix}%` });
+        const resp = await getRows('PGC_Schema', filters, { column: 'table_name', direction: 'asc' }, 100);
+        return {
+          tables: (resp.rows ?? []).map(r => ({
+            name:    r.table_name,
+            domain:  r.domain,
+            columns: (r.columns ?? []).map(c => c.name),
+          })),
+        };
       }
 
       default:

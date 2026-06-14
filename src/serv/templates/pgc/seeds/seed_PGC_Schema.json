@@ -1347,7 +1347,7 @@
       {
         "type": "check",
         "name": "chk_pgc_sessionentry_role",
-        "expression": "role IN ('system', 'user', 'assistant')"
+        "expression": "role IN ('system', 'user', 'assistant', 'tool')"
       }
     ],
     "triggers": []
