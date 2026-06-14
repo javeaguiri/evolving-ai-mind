@@ -39,6 +39,7 @@ import { handle as chat }               from './chat.mjs';
 import { handle as explain }            from './explain.mjs';
 import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 import { handle as writeMemory }        from './memory-writer.mjs';
+import { handle as mindsEye }           from './minds-eye.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -186,6 +187,18 @@ async function processSqsBatch(records) {
       if (message.type === 'MEMORY_WRITE') {
         const req = buildReqFromSqs(message);
         await writeMemory(req);
+        continue;
+      }
+      // MINDS_EYE — agentic reasoning session (new message or thread continuation).
+      if (message.type === 'MINDS_EYE') {
+        const req = buildReqFromSqs(message);
+        await mindsEye(req);
+        continue;
+      }
+      // MINDS_EYE_RESUME — resume after a human gate (action tool approval or turn-limit gate).
+      if (message.type === 'MINDS_EYE_RESUME') {
+        const req = buildReqFromSqs(message);
+        await mindsEye(req);
         continue;
       }
 

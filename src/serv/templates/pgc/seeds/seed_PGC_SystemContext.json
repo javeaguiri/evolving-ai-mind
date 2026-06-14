@@ -1109,6 +1109,60 @@
     "content": "Workflow research contract — agreed shape between research_workflow_domain (producer) and analyze_and_design_workflow (consumer):\n\nfindings[] item: { \"topic\": \"...\", \"what_is_known\": \"...\", \"options\": [...], \"recommendation\": \"...\", \"rationale\": \"...\" }\nfindings[].options item: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n\npreference_questions[] item: { \"id\": \"...\", \"question\": \"...\", \"affects\": \"...\", \"default\": \"...\", \"options\": [...] }\npreference_questions[].options item: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n\nType 2 gap resolution: findings from right-brain research resolve Type 2 (knowledge) gaps. The left-brain consumer applies findings recommendations directly — they are not surfaced to the user as choices."
   },
   {
+    "key": "minds_eye_preferences",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": {
+      "name": "Novia",
+      "model": "anthropic/claude-sonnet-4-6",
+      "turn_limit": 8,
+      "max_actions_per_session": 5,
+      "tone": "concise",
+      "advisory_level": "proactive",
+      "response_format": "structured",
+      "technical_level": "high"
+    }
+  },
+  {
+    "key": "minds_eye_context_index",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": {
+      "on_start": [
+        { "table": "PGC_Workflow", "purpose": "available workflows", "columns": ["name", "domain", "version"] },
+        { "table": "PGC_Prompt",   "purpose": "registered LLM prompts", "columns": ["intent_category", "domain", "version"] }
+      ],
+      "on_domain_task": [
+        { "table": "PGC_Schema",       "purpose": "table definitions for the target domain" },
+        { "table": "PGC_EntitySchema", "purpose": "entity definitions for the target domain" }
+      ],
+      "on_correction_task": [
+        { "table": "PGC_WorkflowRun",  "purpose": "recent run history for the target workflow", "limit": 5 },
+        { "table": "PGC_WorkflowRunStep", "purpose": "step audit log for the failed run" }
+      ],
+      "join_paths": {
+        "run_to_session_entries": "getRows PGC_WorkflowRun by id → extract session_id → getRows PGC_SessionEntry WHERE session_id = ?",
+        "run_to_steps":           "getRows PGC_WorkflowRunStep WHERE run_id = ? ORDER BY id ASC",
+        "run_to_workflow":        "getRows PGC_Workflow WHERE id = PGC_WorkflowRun.workflow_id",
+        "workflow_stats":         "getRows PGC_WorkflowStats — registered view, filter by workflow_id or unfiltered for full report"
+      }
+    }
+  },
+  {
+    "key": "minds_eye_system_prompt",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": {
+      "text": "You are a personal AI assistant embedded in evolving-mind-ai, a cognitive automation system. You help the user inspect, understand, and improve their AI-powered workflows and data.\n\nYour name and display preferences are configured by the user. You reason step-by-step and always decide your next action in structured JSON.\n\nYOUR AUTHORITY:\nYou may diagnose and fix Generation fault domain issues only — subjective LLM decisions observable at runtime and correctable without code changes (e.g. wrong workflow routing, suboptimal step sequencing, incorrect field choices). You do not modify .mjs code files, drop or truncate tables, or fix Instruction domain failures (those require human-confirmed prompt updates).\n\nAVAILABLE TOOLS:\n- query_table: read rows from any PGC or PGD table. params: { tableName, filters?, orderBy?, limit? }\n- query_entity: return an assembled entity with all joins. params: { entityName, filters?, limit? }\n- read_memory: query PGC_Memory for relevant memories. params: { filters?, limit? }\n- read_workflow: get a workflow's steps by name. params: { workflowName }\n- read_prompt: get prompt text and schema by intent_category. params: { intentCategory }\n- simulate_workflow: run L1 static analysis on a steps array. params: { steps }\n\nOUTPUT FORMAT — every response must be exactly one of these JSON shapes:\n\nTool call (when you need more information):\n{ \"action\": \"<tool_name>\", \"params\": { ...tool params }, \"reasoning\": \"<why this tool, why these params>\" }\n\nFinal answer (when you have enough information to respond):\n{ \"action\": \"respond\", \"message\": \"<your response to the user>\", \"reasoning\": \"<why this is the complete answer>\", \"advisory\": \"<optional: cost patterns, coverage gaps, or health signals noticed in passing — keep brief, clearly separated from the direct answer>\" }\n\nRULES:\n- Call one tool per turn. Reason after each result before deciding the next step.\n- When you have sufficient information, use action: respond. Do not over-tool.\n- advisory is optional. Include only when something genuinely worth flagging is visible from data already read.\n- Never suggest modifying .mjs files, never issue DROP TABLE or TRUNCATE."
+    }
+  },
+  {
     "key": "human_gate_dialog_rules",
     "section": "dialog_design",
     "inject_always": false,

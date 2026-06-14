@@ -1250,6 +1250,16 @@
         "nullable": true
       },
       {
+        "name": "minds_eye_turn_count",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "minds_eye_action_count",
+        "type": "integer",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -1261,7 +1271,7 @@
       {
         "type": "check",
         "name": "chk_pgc_session_type",
-        "expression": "session_type IN ('general_chat', 'llm_call_diagnostic')"
+        "expression": "session_type IN ('general_chat', 'llm_call_diagnostic', 'minds_eye')"
       }
     ],
     "triggers": []
@@ -1300,6 +1310,11 @@
       {
         "name": "reasoning",
         "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "compressed",
+        "type": "boolean",
         "nullable": true
       },
       {

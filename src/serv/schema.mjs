@@ -8,14 +8,15 @@
 // It creates/alters/drops tables and keeps PGC_Schema in sync.
 //
 // Routes:
-//   POST   /serv/schema/createTable   — build DDL from JSON + register in PGC_Schema
-//   POST   /serv/schema/addColumn     — ALTER TABLE ... ADD COLUMN + PGC_Schema sync
-//   POST   /serv/schema/modifyColumn  — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
-//   POST   /serv/schema/dropColumn    — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
-//   POST   /serv/schema/listTables    — list all entries in PGC_Schema
-//   POST   /serv/schema/getTable      — get one entry by table_name
-//   POST   /serv/schema/updateTable   — update description/definition in PGC_Schema
-//   POST   /serv/schema/deleteTable   — drop table + remove from PGC_Schema
+//   POST   /serv/schema/createTable      — build DDL from JSON + register in PGC_Schema
+//   POST   /serv/schema/addColumn        — ALTER TABLE ... ADD COLUMN + PGC_Schema sync
+//   POST   /serv/schema/modifyColumn     — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
+//   POST   /serv/schema/dropColumn       — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
+//   POST   /serv/schema/modifyConstraint — DROP + ADD CONSTRAINT + PGC_Schema sync
+//   POST   /serv/schema/listTables       — list all entries in PGC_Schema
+//   POST   /serv/schema/getTable         — get one entry by table_name
+//   POST   /serv/schema/updateTable      — update description/definition in PGC_Schema
+//   POST   /serv/schema/deleteTable      — drop table + remove from PGC_Schema
 //
 // Security gate: all table names and column types are validated before any
 // SQL is executed. Raw SQL in payloads is rejected.
@@ -61,8 +62,9 @@ export async function handle(req) {
     case 'dropColumn':   return dropColumn(req);
     case 'listTables':   return listTables(req);
     case 'getTable':    return getTable(req);
-    case 'updateTable': return updateTable(req);
-    case 'deleteTable': return deleteTable(req);
+    case 'updateTable':      return updateTable(req);
+    case 'modifyConstraint': return modifyConstraint(req);
+    case 'deleteTable':      return deleteTable(req);
     default:
       return err(404, `SERV-Schema route "${req.subRoute}" not found`, req.correlationId);
   }
@@ -467,6 +469,67 @@ async function getTable(req) {
     return err(500, `getTable failed: ${error.message}`, req.correlationId);
   } finally {
     await client.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/modifyConstraint
+// Drops an existing named constraint and replaces it with a new CHECK expression.
+// Updates PGC_Schema metadata to match. Use when a CHECK constraint's expression
+// needs to change (e.g. adding a new allowed value to an IN list).
+// ---------------------------------------------------------------------------
+
+async function modifyConstraint(req) {
+  const { tableName, constraintName, expression, target = 'pgc' } = req.body;
+
+  if (!tableName || !constraintName || !expression) {
+    return err(400, 'tableName, constraintName, and expression are required', req.correlationId);
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
+  const pgcUrl = process.env.PGC_DATABASE_URL;
+
+  const dbClient  = getClient(dbUrl);
+  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+
+  try {
+    await dbClient.connect();
+    if (dbClient !== pgcClient) await pgcClient.connect();
+
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
+    );
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" ADD CONSTRAINT "${constraintName}" CHECK (${expression})`
+    );
+
+    // Update PGC_Schema constraints field
+    const schemaRow = await pgcClient.query(
+      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (schemaRow.rows.length > 0) {
+      const existing = schemaRow.rows[0].constraints ?? [];
+      const updated  = existing.map(c =>
+        c.name === constraintName ? { ...c, expression } : c
+      );
+      await pgcClient.query(
+        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+        [JSON.stringify(updated), tableName]
+      );
+    }
+
+    console.info(`schema: constraint "${constraintName}" on "${tableName}" updated`);
+    return ok({ success: true, tableName, constraintName, expression }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema modifyConstraint error:', error.message);
+    return err(500, `modifyConstraint failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
   }
 }
 
