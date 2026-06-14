@@ -98,7 +98,7 @@ Reference: `docs/arch-prompt-rules.md` — decision framework, full migration ba
 
 Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 
-**S1.** `pgd_column_type_rules` — resolves W2 contradiction. New context row injected into `create_domain`, `design_table`, `revise_domain_schema`. Revert W2 inline rule from `design_table` prompt_text. Bump all three prompt versions. Run `upsert-prompt.mjs` + `upsert-system-context.mjs`.
+**S1.** `pgd_column_type_rules` ✅ DONE (2026-06-14) — New context entry (id: 21, v1) injected into `create_domain` (v17→v18), `design_table` (v7→v8), `revise_domain_schema` (v6→v7). Inline type rules removed from all three prompt_texts and replaced with `{{pgd_column_type_rules}}` placeholder. W2 inline rule merged into unified entry. Upserted to DB.
 
 **S2.** `pgd_naming_conventions` — table/trigger/FK/constraint naming rules. Same 3 prompts. Same process.
 

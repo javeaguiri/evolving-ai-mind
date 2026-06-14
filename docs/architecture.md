@@ -580,6 +580,7 @@ programmer's intent.
 | `docs/arch-memory.md` | Memory layer — PGC_Memory write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat — PGC_Session/PGC_SessionEntry, `/chat`, `/explain` |
 | `docs/arch-minds-eye.md` | Minds-eye agent (Sprint 5) — tool catalog, use cases, agentic loop |
+| `docs/arch-prompt-rules.md` | Prompt rule placement guide — 7-category framework, migration backlog S1–S11, cross-brain contracts |
 
 ---
 
