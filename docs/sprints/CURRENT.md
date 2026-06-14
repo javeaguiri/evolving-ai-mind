@@ -120,6 +120,8 @@ Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 
 **S11.** `human_gate_dialog_rules` ✅ DONE (2026-06-14) — id: 30, v1 (Cat D). design_workflow_dialogs v7 (on_select block + Cancel requirement extracted), generate_workflow_steps v27 (placeholder added before TRANSLATION RULES). Structural gate vocabulary centralized; procedural rules remain prompt-local.
 
+**Track S validated (2026-06-14):** All 9 S-track prompts (create_domain, design_table, revise_domain_schema, analyze_and_design_workflow, analyze_workflow_gaps, research_domain_schema, research_workflow_domain, design_workflow_dialogs, generate_workflow_steps) passed live LLM integration test after Track S changes. Integration test enhanced to use real `assembleInstructions()` from `llm-harness.mjs` and apply `PGC_SystemContext` injection — matching Lambda production code path exactly.
+
 ### Track W — Engine issues (carry-forward)
 
 **W1. PGC_WorkflowRunStep not written (run 458)** ✅ DONE (2026-06-14)
