@@ -33,6 +33,21 @@ Yes → **Category E** (workflow analysis). Applies to left-brain analysis and d
 
 **The failure mode to avoid:** adding a rule directly to `prompt_text` when it expresses a principle that other prompts also need. That rule becomes invisible to those prompts, cannot be updated centrally, and will drift — producing contradictions that are only discovered at generation time.
 
+### Design vs Implementation overlap
+
+Many rules appear in both a design-phase prompt and an implementation-phase prompt (e.g. gap taxonomy in `analyze_and_design_workflow` and `analyze_workflow_gaps`; dialog rules in `design_workflow_dialogs` and `generate_workflow_steps`). The shared vocabulary belongs in a context entry; the per-phase behavior stays in the prompt.
+
+**Rule:** context entries must be written as **definitions or contracts**, never as **procedures**.
+
+- A definition answers "what does Type 3b mean?" — usable by any prompt regardless of phase.
+- A procedure answers "when you find Type 3b, set confidence=needs_schema" — only valid in one prompt's context.
+
+**The prompt-neutrality test:** could you show this context entry to someone without telling them which prompt they are working in, and would it still be useful? If yes — it is a genuine shared rule and belongs in a context entry. If the reader would ask "but am I the designer or the implementer?" — it is Category A for each prompt separately.
+
+**Ownership beats coverage:** when a rule could fit two categories, put it in the category where related violations co-occur. FK name format belongs in `pgd_fk_constraint_rules` (not `pgd_naming_conventions`) because FK name errors appear alongside FK structure errors, not alongside table name errors.
+
+**Partial extraction is valid:** if a context block is only partially shared, extract the shared structural part and leave the per-phase procedural part in each prompt. Do not force the whole block into a context entry to avoid a two-location split — a clean split is better than a context entry that is implicitly prompt-specific.
+
 ---
 
 ## 2. Categories

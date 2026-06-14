@@ -100,25 +100,25 @@ Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 
 **S1.** `pgd_column_type_rules` ✅ DONE (2026-06-14) — New context entry (id: 21, v1) injected into `create_domain` (v17→v18), `design_table` (v7→v8), `revise_domain_schema` (v6→v7). Inline type rules removed from all three prompt_texts and replaced with `{{pgd_column_type_rules}}` placeholder. W2 inline rule merged into unified entry. Upserted to DB.
 
-**S2.** `pgd_naming_conventions` — table/trigger/FK/constraint naming rules. Same 3 prompts. Same process.
+**S2.** `pgd_naming_conventions` ✅ DONE (2026-06-14) — id: 22, v1. create_domain v19, design_table v9, revise_domain_schema v8. Table name rules extracted; trigger/FK/constraint/embedding naming added.
 
-**S3.** `pgd_required_columns` — id/created_at/updated_at/trigger invariant. Same 3 prompts.
+**S3.** `pgd_required_columns` ✅ DONE (2026-06-14) — id: 23, v1. create_domain v20, design_table v10, revise_domain_schema v9. Two-line id/trigger invariant extracted from all three.
 
-**S4.** `pgd_fk_constraint_rules` — FK references format, constraint type lowercase, expression key, onDelete rules. Same 3 prompts.
+**S4.** `pgd_fk_constraint_rules` ✅ DONE (2026-06-14) — id: 24, v1. create_domain v21, design_table v11, revise_domain_schema v10. FK column/name/references/onDelete + constraint type/name/expression/empty-array rules extracted.
 
-**S5.** `single_user_constraint` — extend existing row's `inject_for` to add `"design_table"`. Run `upsert-system-context.mjs`.
+**S5.** `single_user_constraint` ✅ DONE (2026-06-14) — v2→v3. Added `"design_table"` to inject_for. Added `{{single_user_constraint}}` placeholder to design_table (v12).
 
-**S6.** `workflow_gap_taxonomy` — Type 1–4b taxonomy. New context row injected into `analyze_and_design_workflow`, `analyze_workflow_gaps`. Bump both prompt versions.
+**S6.** `workflow_gap_taxonomy` ✅ DONE (2026-06-14) — id: 25, v1. analyze_and_design_workflow v14, analyze_workflow_gaps v6. Type 1–4b definitions extracted; action-only rules remain in each prompt.
 
-**S7.** `llm_model_selection_rules` — model must be claude-sonnet-4-5 or perplexity/sonar. Same 2 prompts.
+**S7.** `llm_model_selection_rules` ✅ DONE (2026-06-14) — id: 26, v1. analyze_and_design_workflow v15, analyze_workflow_gaps v7. Model rule reframed as brain type assignment; extracted from both prompts.
 
-**S8.** `pgd_default_value_format` — SQL expression string rules for column defaults. New context row; add to all 3 schema prompts.
+**S8.** `pgd_default_value_format` ✅ DONE (2026-06-14) — id: 27, v1. create_domain v22, design_table v13, revise_domain_schema v11. Default value SQL expression rules extracted; placeholder added to design_table.
 
-**S9.** `schema_research_contract` (Cat G) — cross-brain contract between `research_domain_schema` and `create_domain`/`revise_domain_schema`. Enforces findings/preference_questions shape on both the producing and consuming side.
+**S9.** `schema_research_contract` ✅ DONE (2026-06-14) — id: 28, v1 (Cat G). Placeholder added to research_domain_schema v8, create_domain v23, revise_domain_schema v12. Defines findings[]/preference_questions[] shape and tradeoffs vs value key distinction.
 
-**S10.** `workflow_research_contract` (Cat G) — cross-brain contract between `research_workflow_domain` and `analyze_and_design_workflow`. Enforces research output shape and Type 2 gap resolution rule on both sides.
+**S10.** `workflow_research_contract` ✅ DONE (2026-06-14) — id: 29, v1 (Cat G). Placeholder added to research_workflow_domain v4, analyze_and_design_workflow v16. Defines findings/preference_questions shape + Type 2 resolution rule.
 
-**S11.** Category D dialog rules — extract gate design rules (option shape, on_select vs action, reveal, cancel obligation) from `design_workflow_dialogs` and `generate_workflow_steps` into a dedicated context entry.
+**S11.** `human_gate_dialog_rules` ✅ DONE (2026-06-14) — id: 30, v1 (Cat D). design_workflow_dialogs v7 (on_select block + Cancel requirement extracted), generate_workflow_steps v27 (placeholder added before TRANSLATION RULES). Structural gate vocabulary centralized; procedural rules remain prompt-local.
 
 ### Track W — Engine issues (carry-forward)
 
