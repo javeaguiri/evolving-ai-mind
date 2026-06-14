@@ -34,7 +34,6 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     model,
     input:        userMessage,
     instructions,
-    temperature:  0.2,
     ...(maxOutputTokens ? { max_output_tokens: parseInt(maxOutputTokens, 10) } : {}),
   };
 
@@ -162,7 +161,6 @@ export async function callLlmWithMessages(model, messages, traceId) {
   const body = {
     model,
     input:       effectiveInput,
-    temperature: 0.2,
     ...(instructions                    ? { instructions }          : {}),
     ...(isSonar && history.length > 0   ? { messages: history }     : {}),
   };
