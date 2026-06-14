@@ -997,9 +997,10 @@
     "inject_for": [
       "create_domain",
       "research_domain_schema",
-      "revise_domain_schema"
+      "revise_domain_schema",
+      "design_table"
     ],
-    "version": 2,
+    "version": 3,
     "content": "evolving-mind-ai is a single-user personal system, not a multi-user SaaS product. Never design multi-user schemas. Prohibited columns and tables: owner_id, user_id, user_fk, created_by, assigned_to, sharing tables, permission tables, access control tables, tenant_id, account_id. All data implicitly belongs to the single user running the system. If the user asks for ownership or sharing features, note that multi-user support is out of scope."
   },
   {
@@ -1013,5 +1014,109 @@
     ],
     "version": 1,
     "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) — derive precision and scale from the most precise literal in the constraint (e.g. ease_factor numeric(4,2) CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0)); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", etc.)"
+  },
+  {
+    "key": "pgd_naming_conventions",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "PGD_ table naming: start with PGD_ followed by PascalCase — NO underscores after the PGD_ prefix (e.g. PGD_Recipes, PGD_StockPrices, PGD_CardTags). NEVER use underscores in the PascalCase part (NEVER PGD_Card_Tags, NEVER PGD_Stock_Prices).\nTrigger naming: trg_<tablename_lower>_updated_at (e.g. trg_cards_updated_at).\nFK naming: fk_<childtable_lower>_<parenttable_lower> (e.g. fk_cards_decks). Required — never omit.\nConstraint naming: unique constraints use uq_<table>_<cols>; check constraints use chk_<table>_<col> (e.g. uq_cards_term, chk_cards_ease_factor).\nEmbedding column: always named \"embedding\". Never use a different name.\nDomain name: short, lowercase, snake_case (e.g. \"stock_portfolio\", \"recipes\", \"fitness\")."
+  },
+  {
+    "key": "pgd_required_columns",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Every PGD_ table must have these required columns and trigger:\n- id: serial, primaryKey: true\n- created_at: timestamptz, nullable: false, default: \"now()\"\n- updated_at: timestamptz, nullable: false, default: \"now()\"\n- trigger: { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\nNever omit any of these. They must be the first three columns in every table definition."
+  },
+  {
+    "key": "pgd_fk_constraint_rules",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Foreign key rules:\n- \"column\" field is REQUIRED — must be an actual column name in the child table\n- \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- When adding a FK column to an existing table, use onDelete: SET NULL (not CASCADE)\n- Tables with no foreign keys must have an empty foreignKeys array: []\n\nConstraint rules:\n- \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- \"name\" field is REQUIRED\n- \"columns\" must be an array of real column names that exist in the table\n- Check constraint: use key \"expression\" — NEVER \"definition\", \"condition\", \"check\", or any other word\n  Example: { \"type\": \"check\", \"name\": \"chk_table_col\", \"columns\": [\"col\"], \"expression\": \"col >= 0 AND col <= 5\" }\n- Tables with no constraints must have an empty constraints array: []"
+  },
+  {
+    "key": "workflow_gap_taxonomy",
+    "section": "workflow_analysis",
+    "inject_always": false,
+    "inject_for": [
+      "analyze_and_design_workflow",
+      "analyze_workflow_gaps"
+    ],
+    "version": 1,
+    "content": "Gap taxonomy — type definitions:\n- Type 1 (preference gap): a design decision where the correct answer depends on user preference, not domain best practice. Resolvable from user_preferences if already answered.\n- Type 2 (knowledge gap): a design question answerable by domain research, not user preference. Resolvable from right_brain_research.findings.\n- Type 3a (non-blocking schema gap): a table or column that would improve workflow quality but is not required for the workflow to function. The workflow can be built without it.\n- Type 3b (blocking schema gap): a table or column required for the workflow to function. Cannot be built without it.\n- Type 4a (missing prompt): a required LLM call step references a prompt not yet in PGC_Prompt. Must be created before the workflow can run.\n- Type 4b (missing step type): a required capability that no combination of existing step types can implement. Genuine Type 4b: sending email, calling external HTTP APIs, scheduling future execution. NOT Type 4b: interactive patterns (quiz, approval loop, form wizard) — use human_gate + js_transform + condition instead."
+  },
+  {
+    "key": "llm_model_selection_rules",
+    "section": "brain_type",
+    "inject_always": false,
+    "inject_for": [
+      "analyze_and_design_workflow",
+      "analyze_workflow_gaps"
+    ],
+    "version": 1,
+    "content": "Model selection for prompts_needed entries expresses brain type assignment for that step: \"anthropic/claude-sonnet-4-5\" — left-brain (analytical, structured, deterministic output); \"perplexity/sonar\" — right-brain (research, live web search, surfacing domain knowledge). Never use gpt-4, gpt-4o-mini, or any other model — these are not supported by the system."
+  },
+  {
+    "key": "pgd_default_value_format",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Column \"default\" values must always be strings AND must be valid SQL expressions:\n- String/text literals: include SQL single quotes inside the JSON string value (e.g. \"'active'\" not \"active\", \"'new'\" not \"new\")\n- Numeric literals: no inner quotes (\"0\", \"2.5\")\n- Boolean literals: no inner quotes (\"false\", \"true\")\n- Function calls: no inner quotes (\"now()\")\nA bare word without SQL single quotes will be treated as a column reference by PostgreSQL and cause a DDL failure."
+  },
+  {
+    "key": "schema_research_contract",
+    "section": "cross_brain_contracts",
+    "inject_always": false,
+    "inject_for": [
+      "research_domain_schema",
+      "create_domain",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Schema research contract — agreed shape between research_domain_schema (producer) and create_domain/revise_domain_schema (consumers):\n\nfindings[] item: { \"topic\": \"...\", \"what_is_known\": \"...\", \"options\": [...], \"recommendation\": \"...\", \"rationale\": \"...\" }\nfindings[].options item: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n  — \"tradeoffs\" is the correct third key in findings options. Do NOT use \"value\" here.\n\npreference_questions[] item: { \"id\": \"...\", \"question\": \"...\", \"rationale\": \"...\", \"affects\": \"...\", \"default\": \"...\", \"options\": [...] }\npreference_questions[].options item: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n  — \"value\" is the correct second key in preference_questions options. Do NOT use \"tradeoffs\" here.\n\nA topic that appears in findings cannot also appear in preference_questions."
+  },
+  {
+    "key": "workflow_research_contract",
+    "section": "cross_brain_contracts",
+    "inject_always": false,
+    "inject_for": [
+      "research_workflow_domain",
+      "analyze_and_design_workflow"
+    ],
+    "version": 1,
+    "content": "Workflow research contract — agreed shape between research_workflow_domain (producer) and analyze_and_design_workflow (consumer):\n\nfindings[] item: { \"topic\": \"...\", \"what_is_known\": \"...\", \"options\": [...], \"recommendation\": \"...\", \"rationale\": \"...\" }\nfindings[].options item: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n\npreference_questions[] item: { \"id\": \"...\", \"question\": \"...\", \"affects\": \"...\", \"default\": \"...\", \"options\": [...] }\npreference_questions[].options item: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n\nType 2 gap resolution: findings from right-brain research resolve Type 2 (knowledge) gaps. The left-brain consumer applies findings recommendations directly — they are not surfaced to the user as choices."
+  },
+  {
+    "key": "human_gate_dialog_rules",
+    "section": "dialog_design",
+    "inject_always": false,
+    "inject_for": [
+      "design_workflow_dialogs",
+      "generate_workflow_steps"
+    ],
+    "version": 1,
+    "content": "on_select routing rules:\naction and on_select are DIFFERENT things:\n  - action = UI behaviour label (confirm | cancel | request_changes | rate | etc.) — display categorisation only\n  - on_select = workflow routing token — determines where the workflow goes next\n\nValid on_select values:\n  \"next\"         — follow the step's on_success path\n  \"end\"          — go to the end step\n  \"cancel\"       — cancel the workflow\n  \"step:<label>\" — jump to a specific step label in the routing table\n\nNEVER use action names as on_select values (e.g. on_select: \"reveal\" is wrong).\nNEVER invent step key strings — only use routing tokens or step labels from the routing table.\n\nCancel requirement: every options array MUST end with: { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }\n\nreveal: UI display only — does not route and has no on_select. Do NOT add a Show Answer button to options when reveal is used."
   }
 ]
