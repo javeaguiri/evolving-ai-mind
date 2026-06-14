@@ -28,6 +28,7 @@ export async function servPost(path, body) {
   });
   const parsed      = await resp.json();
   parsed.statusCode = resp.status;
+  if (!resp.ok) throw new Error(parsed.error ?? `SERV HTTP ${resp.status}`);
   return parsed;
 }
 
@@ -49,6 +50,25 @@ export async function servGet(path) {
   const parsed      = await resp.json();
   parsed.statusCode = resp.status;
   return parsed;
+}
+
+/**
+ * Run an async SERV call as best-effort: warn and return null on failure instead
+ * of throwing. Use for cleanup operations (delete-domain, delete-workflow) where
+ * a partial failure should be logged but not abort the rest of the sequence.
+ *
+ * @param {string}   label    console.warn label
+ * @param {object}   ctx      extra fields appended to the warn log
+ * @param {Function} fn       async function to call
+ * @returns {Promise<any|null>}  fn's return value, or null on error
+ */
+export async function bestEffort(label, ctx, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    console.warn(label, { ...ctx, error: e.message });
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1028,7 +1028,7 @@ curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: a
 #### SERV-Schema — addColumn
 
 ```bash
-curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "columnName": "domain", "type": "text", "nullable": true }'
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "column": { "name": "domain", "type": "text", "nullable": true } }'
 ```
 Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update metadata without running DDL.
 
