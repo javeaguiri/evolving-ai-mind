@@ -260,6 +260,7 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 ### Process and reference
 
 - `docs/backlog.md` — tech debt register, tangential feature designs
+- `docs/arch-prompt-rules.md` — decision framework for where rules go (prompt vs system context); full migration backlog; contradiction log
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure

@@ -90,27 +90,47 @@ Full spec: `docs/sprints/sprint-04.md` Track P section
 
 Validate AC5 with a `create_workflow` run that includes a deterministic algorithm step (SM-2 is canonical convert test vehicle).
 
+### Track S — System Context Migration (new, Sprint 5)
+
+Reference: `docs/arch-prompt-rules.md` — decision framework, full migration backlog, contradiction log.
+
+**Context:** Audit of all 16 prompts (2026-06-14) found 8 categories of rules duplicated across prompts that belong in `PGC_SystemContext`. W2 exposed the pattern: adding a type rule directly to `design_table` prompt_text created a contradiction with `create_domain` and `revise_domain_schema`. The fix is to centralise these rules so they can be updated once and applied consistently.
+
+Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
+
+**S1.** `pgd_column_type_rules` — resolves W2 contradiction. New context row injected into `create_domain`, `design_table`, `revise_domain_schema`. Revert W2 inline rule from `design_table` prompt_text. Bump all three prompt versions. Run `upsert-prompt.mjs` + `upsert-system-context.mjs`.
+
+**S2.** `pgd_naming_conventions` — table/trigger/FK/constraint naming rules. Same 3 prompts. Same process.
+
+**S3.** `pgd_required_columns` — id/created_at/updated_at/trigger invariant. Same 3 prompts.
+
+**S4.** `pgd_fk_constraint_rules` — FK references format, constraint type lowercase, expression key, onDelete rules. Same 3 prompts.
+
+**S5.** `single_user_constraint` — extend existing row's `inject_for` to add `"design_table"`. Run `upsert-system-context.mjs`.
+
+**S6.** `workflow_gap_taxonomy` — Type 1–4b taxonomy. New context row injected into `analyze_and_design_workflow`, `analyze_workflow_gaps`. Bump both prompt versions.
+
+**S7.** `llm_model_selection_rules` — model must be claude-sonnet-4-5 or perplexity/sonar. Same 2 prompts.
+
+**S8.** `pgd_default_value_format` — SQL expression string rules for column defaults. New context row; add to all 3 schema prompts.
+
 ### Track W — Engine issues (carry-forward)
 
-**W1. PGC_WorkflowRunStep not written (run 458)**
-- Read `step-executor.mjs` step audit log write path — identify why rows were not written for run 458
-- Diagnose fault domain: Execution (harness bug) or Contract (schema/constraint issue)
-- Decision: fix or remove. If the table is not reliably written it is not usable for idempotency or audit — document the decision.
-- Resolves AC7.
+**W1. PGC_WorkflowRunStep not written (run 458)** ✅ DONE (2026-06-14)
+- Contract: `step_key` missing from `PGC_Schema` → SERV rejected inserts silently. Registered via `addColumn schemaOnly:true`; seed updated.
+- Execution: `servPost` now throws on non-2xx; `recordStepAudit` wrapped in try/catch (logs error, no SQS retry); `bestEffort()` utility added to `serv-client.mjs`; `delete-domain` and `delete-workflow` converted to use it.
+- Decision: table retained — now reliably written. Resolves AC7.
 
-**W2. design_table Contract fix**
-- Update `design_table` prompt: explicit rule prohibiting `real` / `float` for any column that has a decimal boundary constraint (`>= N.NN`, `<= N.NN`, `CHECK ...`). Rule: use `numeric(p,s)` with precision matching the constraint literal.
-- Add a type-matched example: `difficulty_level numeric(4,2) CHECK (difficulty_level >= 1.0 AND difficulty_level <= 5.0)`.
-- Run `upsert-prompt.mjs`. Validate AC6.
+**W2. design_table Contract fix** ✅ DONE (2026-06-14)
+- Added rule to `design_table` prompt (v6→v7): decimal-constrained columns must use `numeric(p,s)`, never `real`/`float`. Includes canonical example. Upserted to DB. AC6 validation requires a `create_domain` run by user.
 
 **W3. Domain propagation systemic audit (backlog task 12)**
 - Enumerate every boundary where `domain` crosses a system boundary or enters a PGC write
 - For each boundary: assert domain is non-null, or document that null is valid and why
 - Add unit tests per boundary point
 
-**W4. PGC_WorkflowRun.session_id column (X1)**
-- `POST /api/v1/serv/schema/addColumn`: `{ tableName: "PGC_WorkflowRun", columnName: "session_id", type: "integer", nullable: true }`
-- Update `PGC_Schema` seed. No FK constraint (PGC_Session bootstrapped in Track N).
+**W4. PGC_WorkflowRun.session_id column (X1)** ✅ DONE (2026-06-14)
+- Column and seed entry already present from prior session. No changes needed. Fixed stale `addColumn` curl example in `arch-data.md`.
 
 ### Track L — Lambda Loop Watch
 
