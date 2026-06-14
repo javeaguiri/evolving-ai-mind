@@ -114,6 +114,12 @@ Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 
 **S8.** `pgd_default_value_format` — SQL expression string rules for column defaults. New context row; add to all 3 schema prompts.
 
+**S9.** `schema_research_contract` (Cat G) — cross-brain contract between `research_domain_schema` and `create_domain`/`revise_domain_schema`. Enforces findings/preference_questions shape on both the producing and consuming side.
+
+**S10.** `workflow_research_contract` (Cat G) — cross-brain contract between `research_workflow_domain` and `analyze_and_design_workflow`. Enforces research output shape and Type 2 gap resolution rule on both sides.
+
+**S11.** Category D dialog rules — extract gate design rules (option shape, on_select vs action, reveal, cancel obligation) from `design_workflow_dialogs` and `generate_workflow_steps` into a dedicated context entry.
+
 ### Track W — Engine issues (carry-forward)
 
 **W1. PGC_WorkflowRunStep not written (run 458)** ✅ DONE (2026-06-14)
