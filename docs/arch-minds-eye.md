@@ -40,6 +40,7 @@ The minds-eye agent is the agentic layer of evolving-mind-ai. Where the existing
 
 1. **Extender** — extends and improves existing workflows and domain schemas; chains workflows together; handles cross-domain reasoning; performs tasks that currently require multiple human-triggered commands. This is the primary role.
 2. **Improver (bounded)** — improves artifact-level Generation decisions: subjective LLM choices that are observable at runtime and correctable without code changes. Fixing workflow routing, improving step sequencing, and correcting field type mismatches are the first concrete use cases. See Section 6.
+3. **Advisor** — surfaces relevant observations noticed in passing during any session: cost patterns, IntentMap coverage gaps, domain health signals, or design issues adjacent to the user's current task. Advisory content is always appended to the direct answer and clearly separated from it — never delivered as an unsolicited session. Novia does not initiate contact; it enriches responses when something worth flagging is visible from the data already read.
 
 The agent is **not** a substitute for fixing Instruction domain failures (those require prompt updates and human judgment) or Execution domain failures (those require code changes).
 
@@ -73,13 +74,28 @@ Before Novia reasons about a task, it assembles situational awareness from three
 
 ### 3.1 System Context (Layer 1 — Static)
 
-Injected from `PGC_SystemContext`. A new entry with key `minds_eye_system_prompt` describes the agent's role, fault domain authority, available tools, and the tables it may read and write. A second entry `minds_eye_context_index` is a structured JSON index of what to query for situational awareness. A third entry `minds_eye_preferences` holds user-configurable settings (name, turn_limit, model, max_actions_per_session).
+Injected from `PGC_SystemContext`. A new entry with key `minds_eye_system_prompt` describes the agent's role, fault domain authority, available tools, and the tables it may read and write. A second entry `minds_eye_context_index` is a structured JSON index of what to query for situational awareness. A third entry `minds_eye_preferences` holds all user-configurable settings — operational limits, model selection, display name, and tone preferences.
+
+```json
+{
+  "name": "Novia",
+  "model": "anthropic/claude-sonnet-4-6",
+  "turn_limit": 8,
+  "max_actions_per_session": 5,
+  "tone": "concise",
+  "advisory_level": "proactive",
+  "response_format": "structured",
+  "technical_level": "high"
+}
+```
+
+All keys are read at session start and injected into the system prompt — changing any of them via `updateRows` on `PGC_SystemContext` takes effect from the next session, no deploy required. Tone preferences can also be updated conversationally mid-session via the `update_preferences` action tool (Phase 2).
 
 ```json
 {
   "on_start": [
     { "table": "PGC_Capability",    "purpose": "what the system can do" },
-    { "table": "PGC_WorkflowStats", "purpose": "workflow health — failure rates" },
+    { "table": "PGC_WorkflowStats", "purpose": "workflow health — failure rates (registered view, use getRows)" },
     { "table": "PGC_Workflow",      "purpose": "available workflows", "columns": ["name", "domain", "version"] },
     { "table": "PGC_Prompt",        "purpose": "registered LLM prompts", "columns": ["intent_category", "domain", "version"] }
   ],
@@ -89,12 +105,18 @@ Injected from `PGC_SystemContext`. A new entry with key `minds_eye_system_prompt
   ],
   "on_correction_task": [
     { "table": "PGC_WorkflowRun",   "purpose": "recent run history for the target workflow", "limit": 5 },
-    { "table": "PGC_WorkflowRunStep","purpose": "step audit log for the failed run" }
-  ]
+    { "table": "PGC_WorkflowRunStep","purpose": "step audit log for the failed run — query only if W1 fix confirmed" }
+  ],
+  "join_paths": {
+    "run_to_session_entries": "getRows PGC_WorkflowRun by id → extract session_id → getRows PGC_SessionEntry WHERE session_id = ?",
+    "run_to_steps":           "getRows PGC_WorkflowRunStep WHERE run_id = ? ORDER BY id ASC  [W1-conditional]",
+    "run_to_workflow":        "getRows PGC_Workflow WHERE id = PGC_WorkflowRun.workflow_id",
+    "workflow_stats":         "getRows PGC_WorkflowStats — registered view, filter by workflow_id or unfiltered for full report"
+  }
 }
 ```
 
-Novia queries these tables at the start of the relevant task type, not all at once. This keeps the context window focused.
+Novia queries these tables at the start of the relevant task type, not all at once. This keeps the context window focused. The `join_paths` block is injected into the system prompt so Novia can construct multi-table chains without guessing FK relationships.
 
 ### 3.2 Memory Context (Layer 2 — Episodic + Semantic)
 
@@ -107,12 +129,23 @@ Memory budget: 800 tokens (larger than standard prompts — Novia needs more con
 
 ### 3.3 Diagnostic Context (Layer 3 — On Demand)
 
-When a correction task references a specific run, Novia can retrieve:
-- The failed `PGC_WorkflowRunStep` output snapshot
-- The `PGC_SessionEntry` reasoning from the `llm_call` that produced the bad output (via `query_id`)
-- Prior `/explain` session entries for the same run
+When a correction task references a specific run, Novia assembles the diagnostic chain via three `getRows` calls using the `PGC_WorkflowRun.session_id` FK (X1):
 
-This is the bridge between the diagnostic layer (`arch-session.md`) and the correction layer. Novia reads what the human saw in `/explain` before deciding how to fix it.
+```
+getRows PGC_WorkflowRun  WHERE id = N         → run metadata + session_id
+getRows PGC_WorkflowRunStep  WHERE run_id = N  → step-level outputs  [see W1 note below]
+getRows PGC_SessionEntry  WHERE session_id = ? → LLM reasoning for every llm_call step in the run
+```
+
+The final call surfaces what the human saw in `/explain` — the LLM's prompt, reasoning, and output for the failing step — giving Novia the same diagnostic context a human reviewer would have before deciding how to fix it.
+
+**Prerequisite: X1 (`PGC_WorkflowRun.session_id` column) must be applied before `get_run_history` is implemented.** Without it the run → session link requires parsing the `stack` JSONB to find embedded `query_id` values, which is brittle and not a reliable basis for the tool.
+
+**W1 conditional — `PGC_WorkflowRunStep`:** The middle call depends on Sprint 5 Track W1's fix-or-remove decision.
+- **If fixed:** `getRows PGC_WorkflowRunStep WHERE run_id = N` returns clean per-step rows with status, output snapshot, and retry count.
+- **If removed:** step-level data is read from `PGC_WorkflowRun.stack` JSONB directly. The data is equivalent but requires Novia to parse the stack array rather than receiving flat rows. In this case `get_run_history` should document the stack structure so the LLM can navigate it reliably.
+
+Do not implement Layer 3 until W1 is resolved.
 
 ---
 
@@ -122,25 +155,40 @@ Novia's "tools" are structured action types it can invoke. Each maps to existing
 
 ### 4.1 Read Tools (no confirmation required)
 
+All single-table lookups use `SERV getRows` directly — no new endpoints required. `PGC_WorkflowStats` is a registered view on `PGC_WorkflowRun` and is accessible via `getRows('PGC_WorkflowStats')`. Multi-table diagnostic chains are sequenced by Novia across multiple `getRows` calls; the key FK paths are documented in `minds_eye_context_index` so Novia can construct chains without guessing the schema.
+
 | Tool | Mechanism | Notes |
 |---|---|---|
-| `query_table` | SERV `getRows` | Any PGC or PGD table; domain-scoped by default |
+| `query_table` | SERV `getRows` | Any PGC or PGD table; domain-scoped by default. `PGC_WorkflowStats` accessible as a registered view. |
 | `query_entity` | SERV `serv_entity_query` | Returns assembled entity (e.g. full flashcard with reviews) |
-| `read_memory` | `memory-client.mjs` | Semantic/episodic/procedural by scope |
+| `read_memory` | SERV `getRows` on PGC_Memory | Semantic/episodic/procedural; filter by scope via `jsonb_contains` operator |
 | `read_workflow` | SERV `getRows` on PGC_Workflow | Returns steps JSON for inspection |
-| `read_prompt` | SERV `getRows` on PGC_Prompt | Returns prompt text + output schema |
-| `simulate_workflow` | `simulation-engine.mjs` L1/L2 | Validate steps before proposing a fix |
-| `get_run_history` | SERV `getRows` on PGC_WorkflowRun + PGC_WorkflowRunStep | Diagnose a failed run |
+| `read_prompt` | SERV `getRows` on PGC_Prompt | Returns prompt text + output schema; filter by intent_category + version DESC limit 1 |
+| `simulate_workflow` | `POST /proc/simulate-workflow` | Existing PROC endpoint — takes steps array, returns L1/L2 results synchronously. No new endpoint needed. |
+| `get_run_history` | Three `getRows` calls chained via session_id FK | See §3.3. **Requires X1 applied.** Shape of step-level call depends on W1 decision. |
+
+**FK join paths (documented in `minds_eye_context_index` seed):**
+
+```
+PGC_WorkflowRun.session_id  →  PGC_SessionEntry.session_id   (run → LLM reasoning)
+PGC_WorkflowRun.id          →  PGC_WorkflowRunStep.run_id    (run → step outputs, W1-conditional)
+PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow definition)
+```
+
+**Phase 2 option:** If the three-call chain for `get_run_history` proves unreliable in practice (LLM misconstructs a filter or sequence becomes long in context), consolidate into `POST /serv/run/diagnostic` — a single server-side JOIN returning run + steps + session entries. Do not build this in advance of a demonstrated need.
 
 ### 4.2 Action Tools (human confirmation gate required)
 
-| Tool | Mechanism | Fault domain | Confirmation trigger |
-|---|---|---|---|
-| `invoke_workflow` | `enqueueWorkflow` | n/a — extension | If non-read workflow (create, delete) |
-| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | Generation | Always — shows diff of proposed changes |
-| `fix_prompt` | SERV `updateRows` on PGC_Prompt | Instruction | Always — Novia proposes, human confirms |
-| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Contract | Always — high-risk, explicit approval |
-| `write_memory` | `memory-client.mjs` | n/a | Silent — episodic write of what Novia did |
+| Tool | Mechanism | Fault domain | Phase | Confirmation trigger |
+|---|---|---|---|---|
+| `invoke_workflow` | `enqueueWorkflow` | n/a — extension | 1 | If non-read workflow (create, delete) |
+| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | Generation | 1 | Always — shows diff of proposed changes |
+| `write_memory` | `memory-client.mjs` | n/a | 1 | Silent — episodic write of what Novia did |
+| `fix_prompt` | SERV `updateRows` on PGC_Prompt | Instruction | 2 | Always — Novia proposes, human confirms |
+| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Contract | 2 | Always — high-risk, explicit approval |
+| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | n/a — extension | 2 | Always — shows proposed pattern(s) before write |
+| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | n/a — extension | 2 | Always — shows proposed content diff before write |
+| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | n/a — user tuning | 2 | Lightweight — shows which keys change; takes effect next session |
 
 **Confirmation gate pattern:** Before any action tool, Novia posts a `HUMAN_GATE` with a summary of what it intends to do, the fault domain it has identified, and a diff or description of the change. The user selects Approve or Cancel.
 
@@ -160,12 +208,14 @@ Novia's "tools" are structured action types it can invoke. Each maps to existing
 > "Novia, the quiz workflow is routing incorrectly after step 3"
 
 1. Agent reads `PGC_Workflow` steps + run history for the target workflow
-2. Runs `simulate_workflow` (L1) on current steps
+2. Runs `simulate_workflow` (L1) on current steps to establish the baseline
 3. Reads memory for prior improvement attempts
-4. Reasons about the routing issue and produces an improved steps array
-5. Posts confirmation gate: "I will change step 3's `on_success` from `step:5` to `step:4`. [Diff]. Approve?"
-6. On approval: `fix_workflow_steps` → upserts to PGC_Workflow → re-runs L1
-7. Writes episodic memory: what was observed, what was changed, whether L1 passed
+4. Reasons about the routing issue, produces an improved steps array, runs L1 on the proposed steps. If issues remain, reasons again with L1 failures as additional context. Repeats until L1 passes or the turn budget is exhausted.
+5. Posts confirmation gate with the diff:
+   - L1 clean: **Approve / Cancel**
+   - L1 still has unresolved issues: **Approve anyway / Cancel** with the remaining issues listed
+6. On approval: `fix_workflow_steps` → `updateRows PGC_Workflow` (`steps` + `version + 1`) → re-runs L1 as post-write verification
+7. Writes episodic memory: what was diagnosed, what was changed, whether verification L1 passed
 
 **Boundary:** If the issue is in a prompt the workflow calls (Instruction domain), the agent surfaces the diagnosis and defers to UC-2 rather than patching the workflow around the bad prompt output.
 
@@ -211,12 +261,15 @@ This is read-only. No confirmation gate.
 
 ### UC-6: System optimization
 > "Novia, find workflows with high failure rates and tell me what's wrong"
+> "Novia, are we making too many LLM calls?"
 
 1. Novia queries `PGC_WorkflowStats` (failure_rate_pct, avg_execution_ms)
 2. For high-failure workflows, retrieves recent failed run step outputs
 3. Cross-references with PGC_Memory for known issues
 4. Produces a ranked report: workflow name, failure rate, most common failure step, suspected fault domain
 5. Does not attempt fixes — presents findings for human decision
+
+**Cost pattern variant:** Novia queries `PGC_WorkflowRun` to identify frequently-invoked workflows with no matching `PGC_IntentMap` Pass 1 entry — these pay a Tier 2 LLM inference on every call. For each gap it proposes specific patterns to add. On approval: `update_intent_map` (Phase 2). Advisory output also includes exact Slack slash command strings the user can pin as channel bookmarks to bypass the classification pipeline entirely for high-frequency actions.
 
 ### UC-7: Interact with diagnostics
 > "Novia, explain run 458 — why did step 11 fail?"
@@ -226,6 +279,21 @@ This is read-only. No confirmation gate.
 3. Retrieves any prior `/explain` session entries for the same query
 4. Synthesizes a diagnosis, identifies the fault domain, and recommends the correct fix layer
 5. If correction is within Novia's scope (Generation domain), offers to proceed to UC-1
+
+### UC-8: User help and cost guidance
+> "Novia, how do I add a flashcard?"
+> "Novia, what can I do with the flashcards domain?"
+> "Novia, how can I reduce my LLM costs?"
+
+1. Novia reads `PGC_DomainHelp` for the relevant domain and `PGC_IntentMap` for registered invocation patterns
+2. Reads `PGC_Workflow` names, descriptions, and intent keywords to surface what commands are available and how to invoke them
+3. Synthesizes a help response: available commands, exact invocation phrases, and any Slack slash command strings the user can pin as channel bookmarks for one-tap access to frequent actions
+4. If the user asks about cost: triggers the cost pattern variant of UC-6 (identify high-frequency workflows lacking Pass 1 coverage)
+5. If gaps in `PGC_DomainHelp` or `PGC_IntentMap` are identified during the session, Novia offers to improve them — proposes updated content or new patterns and posts a confirmation gate (Phase 2: `update_domain_help`, `update_intent_map`)
+
+**Boundary:** Slack bookmark/shortcut suggestions are advisory text in Novia's response — the user adds them to Slack manually. No system write is performed for this part of the response.
+
+**Read-only in Phase 1.** The help and advisory capabilities are available immediately via N2 read tools. The `update_domain_help` and `update_intent_map` action tools that close the loop (steps 5) are Phase 2.
 
 ---
 
@@ -245,7 +313,11 @@ assemble context (Layer 1 + 2; Layer 3 if improvement task)
   ↓
 [reason turn — increment turn_count]
   LLM call: given context + conversation history, decide next action
-  Output: { action: "tool_name", params: {...}, reasoning: "..." } | { action: "respond", message: "..." }
+  Output: { action: "tool_name", params: {...}, reasoning: "..." }
+        | { action: "respond", message: "...", advisory: "..." }
+  advisory is optional — included when Novia notices something worth flagging
+  from data already read (cost patterns, coverage gaps, health signals).
+  Rendered as a clearly separated section after the direct answer.
   ↓
 if action == "respond":
   post to Slack → end turn (await thread reply)
@@ -257,27 +329,48 @@ if action is action tool:
     on cancel: post cancellation message → end turn
 if turn_count >= turn_limit:
   post HUMAN_GATE (choice: Continue / Pause / Cancel)
-    Continue → reset turn_count → loop (reason again)
-    Pause    → save session state → post "Session paused. Resume with /novia continue." → end
+    Continue → compress session → reset turn_count → loop (reason again)
+    Pause    → compress session → post "Session paused. Resume with /novia continue." → end
     Cancel   → close session → end
 ```
+
+**Session compression (triggered at turn_limit gate on Continue or Pause):**
+The full `PGC_SessionEntry` history is replayed to the LLM on every turn. As sessions grow long this expands the context window and increases inference cost. At the turn-limit gate, before continuing or pausing, Novia runs a compression step:
+1. Write an episodic memory summarising the session so far — what was diagnosed, what was changed, what remains open (scope: `{ workflow: name }` or `{ domain: name }`)
+2. Mark earlier `PGC_SessionEntry` rows for this session as `compressed = true` (requires a boolean column on `PGC_SessionEntry`)
+3. On subsequent turns, replay only the compressed summary memory (from PGC_Memory) + the uncompressed tail of the session, not the full entry history
+
+This keeps the context window bounded across long sessions without losing continuity. The summary memory serves as the episodic anchor if the session is resumed later.
+
+**Prerequisite:** `PGC_SessionEntry.compressed` boolean column (nullable, default false). Add via `addColumn` at bootstrap time alongside the other Session/SessionEntry columns.
 
 ### 6.2 Session Continuity
 
 Each Novia turn appends to `PGC_SessionEntry`:
 - Tool calls are recorded as `role = 'tool'` entries (content = JSON of tool name + params + result)
-- The full conversation + tool log is replayed to the LLM on each turn, giving Novia continuity across the loop
+- On each turn, the LLM receives: any compressed session summary (from PGC_Memory) + all uncompressed `PGC_SessionEntry` rows for this session, ordered by sequence_number. Compressed rows are excluded from replay.
 
-### 6.3 Safety Limits
+### 6.3 Preferences
 
-All limits are read from `PGC_SystemContext.minds_eye_preferences` at session start — not hardcoded.
+All preferences are read from `PGC_SystemContext.minds_eye_preferences` at session start — not hardcoded.
 
-| Limit | Default | Preference key | Behaviour at limit |
-|---|---|---|---|
-| Turn limit | 8 | `turn_limit` | Human gate — Continue / Pause / Cancel |
-| Max action tools per session | 5 | `max_actions_per_session` | Post summary and end session |
+**Operational limits**
 
-Changing a limit is one `updateRows` against `PGC_SystemContext WHERE key = 'minds_eye_preferences'` — no deploy required.
+| Preference key | Default | Behaviour at limit |
+|---|---|---|
+| `turn_limit` | `8` | Human gate — Continue / Pause / Cancel |
+| `max_actions_per_session` | `5` | Post summary and end session |
+
+**Tone preferences** — injected into `minds_eye_system_prompt` at session start to shape all responses
+
+| Preference key | Default | Options |
+|---|---|---|
+| `tone` | `"concise"` | `concise` (brief, direct) · `verbose` (full explanations) · `conversational` (natural, flowing) · `formal` (professional, structured) |
+| `advisory_level` | `"proactive"` | `proactive` (always append advisory observations) · `minimal` (high-severity only) · `off` (suppress all advisory content) |
+| `response_format` | `"structured"` | `structured` (bullets, tables, headers) · `prose` (flowing text, no markdown) |
+| `technical_level` | `"high"` | `high` (technical terms, raw JSON/SQL shown) · `medium` (concepts explained in plain language) · `low` (jargon-free, outcome-focused) |
+
+Any preference can be changed with one `updateRows` on `PGC_SystemContext WHERE key = 'minds_eye_preferences'` — no deploy required, takes effect from the next session. Can also be updated conversationally: "Novia, be more concise" → `update_preferences` action tool (Phase 2) proposes the change with a lightweight confirmation gate.
 
 ---
 
