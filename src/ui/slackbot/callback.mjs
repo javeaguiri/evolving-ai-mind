@@ -158,6 +158,35 @@ function textToBlocks(text, contextText) {
 }
 
 // ---------------------------------------------------------------------------
+// markdownToBlocks — Novia reply renderer using Slack's markdown block type.
+// Splits on paragraph boundaries (double newlines) to preserve document
+// structure. Each chunk becomes a { type: 'markdown', text } block which
+// renders standard markdown: **bold**, _italic_, ~~strikethrough~~, tables,
+// fenced code blocks, and blockquotes — unlike mrkdwn which uses Slack syntax.
+// ---------------------------------------------------------------------------
+
+function markdownToBlocks(text, contextText) {
+  const BLOCK_CHAR_LIMIT = 2800;
+  const blocks = [];
+  const paragraphs = text.split(/\n\n+/);
+  let chunk = '';
+  for (const para of paragraphs) {
+    const candidate = chunk ? `${chunk}\n\n${para}` : para;
+    if (candidate.length > BLOCK_CHAR_LIMIT) {
+      if (chunk) blocks.push({ type: 'markdown', text: chunk });
+      chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
+    } else {
+      chunk = candidate;
+    }
+  }
+  if (chunk) blocks.push({ type: 'markdown', text: chunk });
+  if (contextText) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
+  }
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
 // Dev / system ping handlers — unique timing context, always short.
 // Not merged into HUMAN_NOTIFICATION because their context blocks carry
 // hop-specific timing fields that differ from the standard runId | traceId shape.
@@ -191,12 +220,14 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId } = message;
+  const { callback, traceId, workflowRunId, queryId, format } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
-  const blocks = textToBlocks(text, contextText);
+  const blocks = format === 'markdown'
+    ? markdownToBlocks(text, contextText)
+    : textToBlocks(text, contextText);
   if (queryId) {
     blocks.push({
       type:     'actions',

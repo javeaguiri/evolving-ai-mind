@@ -1113,13 +1113,13 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 1,
+    "version": 2,
     "content": {
       "name": "Novia",
       "model": "anthropic/claude-sonnet-4-6",
       "turn_limit": 8,
       "max_actions_per_session": 5,
-      "tone": "concise",
+      "tone": "concise but friendly",
       "advisory_level": "proactive",
       "response_format": "structured",
       "technical_level": "high"

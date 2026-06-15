@@ -38,7 +38,7 @@ const DEFAULT_PREFERENCES = {
   model:                  'anthropic/claude-sonnet-4-6',
   turn_limit:             8,
   max_actions_per_session:5,
-  tone:                   'concise',
+  tone:                   'concise but friendly',
   advisory_level:         'proactive',
   response_format:        'structured',
   technical_level:        'high',
@@ -78,7 +78,7 @@ export async function handle(req) {
   const baseSystemPrompt = (typeof rawSysPrompt === 'object' ? rawSysPrompt?.text : rawSysPrompt)
     ?? 'You are a helpful AI assistant for evolving-mind-ai. Respond in JSON: { action, params, reasoning } or { action: "respond", message, reasoning }.';
 
-  const systemPrompt = `${baseSystemPrompt}\n\nTone: ${prefs.tone} | Format: ${prefs.response_format} | Technical level: ${prefs.technical_level}`;
+  const systemPrompt = `${baseSystemPrompt}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
 
   // ── Load or create session ────────────────────────────────────────────────
   let session;
@@ -216,6 +216,7 @@ export async function handle(req) {
         }
         await enqueueCallback(callback, {
           type:    'HUMAN_NOTIFICATION',
+          format:  'markdown',
           traceId,
           message: replyText,
           queryId: session.query_id,
