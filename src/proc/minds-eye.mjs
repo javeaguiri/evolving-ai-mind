@@ -293,7 +293,7 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     parts.push(`CONVERSATION:\n${transcript}`);
   }
 
-  parts.push('Based on the context and conversation above, decide your next action. Respond with exactly one JSON object.');
+  parts.push('Based on the context and conversation above, decide your next action.\nRespond with exactly one JSON object. Use ONLY these action values: search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow, respond. No other action names are valid.');
 
   return parts.join('\n\n---\n\n');
 }
