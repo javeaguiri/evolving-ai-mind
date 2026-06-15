@@ -12,7 +12,7 @@
 
 Block Kit is built from three layers:
 
-- **Blocks** — visual layout components (`section`, `actions`, `input`, `context`, `divider`, `header`, `image`)
+- **Blocks** — visual layout components (`section`, `actions`, `input`, `context`, `divider`, `header`, `image`, `markdown`)
 - **Block elements** — interactive components inside blocks (`button`, `plain_text_input`, `static_select`, `radio_buttons`, `overflow`)
 - **Composition objects** — reusable text and option structures (`plain_text`, `mrkdwn`, `option`, `confirm`)
 
@@ -28,6 +28,7 @@ Blocks are placed in a `blocks` array and sent to a surface (message, modal, or 
 | `context` | Yes | Yes | Yes |
 | `divider` | Yes | Yes | Yes |
 | `header` | Yes | Yes | Yes |
+| `markdown` | Yes | No | No |
 
 *`input` blocks render in messages but their `state.values` are only populated in the interaction payload when the user clicks a button in the same message. Block Kit Builder cannot simulate this — the `value` field will appear as `null` in the builder's preview even though it populates correctly in a live Slack channel.
 
@@ -727,6 +728,47 @@ fires. Fires a `block_actions` event with the selected option's `value`.
   ]
 }
 ```
+
+---
+
+## Markdown block
+
+`type: "markdown"` renders standard CommonMark-flavored markdown directly in a Slack message. Unlike `mrkdwn` (Slack's proprietary syntax), the `markdown` block type accepts the syntax LLMs naturally produce — `**bold**` instead of `*bold*`, `~~strikethrough~~`, fenced code blocks, tables, and standard link syntax.
+
+**Used in evolving-mind-ai:** Novia (minds-eye agent) replies set `format: 'markdown'` on the `HUMAN_NOTIFICATION` callback payload, which routes to `markdownToBlocks()` in `callback.mjs` and emits `{ type: 'markdown', text }` blocks.
+
+**Not available in Block Kit Builder** — test only in a live workspace.
+
+### Formatting reference
+
+```json
+{
+  "type": "markdown",
+  "text": "Text can be **bold**, _italic_, ~~strikethrough~~, or `inline code`.\n\nCombine them: **_bold italic_** and [links](https://api.slack.com).\n\n> Blockquotes work too, with **formatting** inside."
+}
+```
+
+### Code block example
+
+````json
+{
+  "type": "markdown",
+  "text": "Here is a JavaScript function:\n\n```javascript\nfunction greet(name) {\n  return \"Hello, \" + name + \"!\";\n}\n\nconsole.log(greet(\"world\"));\n```"
+}
+````
+
+### mrkdwn vs markdown syntax
+
+| Feature | `mrkdwn` | `markdown` block |
+|---|---|---|
+| Bold | `*bold*` | `**bold**` |
+| Italic | `_italic_` | `_italic_` |
+| Strikethrough | `~strike~` | `~~strikethrough~~` |
+| Inline code | `` `code` `` | `` `code` `` |
+| Fenced code block | Not supported | ` ```lang ``` ` |
+| Link | `<url\|text>` | `[text](url)` |
+| Blockquote | `>text` | `> text` |
+| Table | Not supported | Standard markdown table |
 
 ---
 
