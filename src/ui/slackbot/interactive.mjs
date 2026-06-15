@@ -405,19 +405,6 @@ async function handleMindsEyeFollowupButton(buttonValue, payload, correlationId)
     return err(400, 'minds_eye_followup button value missing sessionId', correlationId);
   }
 
-  if (channel && threadTs) {
-    try {
-      await slack.chat.update({
-        channel,
-        ts:     threadTs,
-        text:   '🧠 Continuing conversation…',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🧠 Continuing conversation…' } }],
-      });
-    } catch (error) {
-      console.warn('interactive: minds_eye_followup chat.update failed (non-fatal)', { error: error.message, traceId });
-    }
-  }
-
   if (triggerId) {
     try {
       await slack.views.open({
