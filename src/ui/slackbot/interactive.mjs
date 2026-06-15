@@ -91,6 +91,12 @@ export async function handle(req) {
     return handleExplainFollowupButton(buttonValue, payload, req.correlationId);
   }
 
+  // minds_eye_followup — "Continue with Novia" button on a Novia response.
+  // Routes to MINDS_EYE with existingSessionId.
+  if (buttonValue.action === 'minds_eye_followup') {
+    return handleMindsEyeFollowupButton(buttonValue, payload, req.correlationId);
+  }
+
   // peek_reveal — reveal button on a human_gate. Opens a read-only modal showing
   // the resolved content. Does NOT advance or resume the gate.
   if (buttonValue.action === 'peek_reveal') {
@@ -383,12 +389,83 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
   return { statusCode: 200, body: '' };
 }
 
+// handleMindsEyeFollowupButton — "Continue with Novia" clicked on a Novia response.
+// Opens a modal whose submission routes to MINDS_EYE with existingSessionId.
+// ---------------------------------------------------------------------------
+
+async function handleMindsEyeFollowupButton(buttonValue, payload, correlationId) {
+  const { sessionId } = buttonValue;
+  const triggerId     = payload.trigger_id;
+  const channel       = payload.channel?.id;
+  const threadTs      = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId       = correlationId || randomUUID();
+
+  if (!sessionId) {
+    console.warn('interactive: minds_eye_followup missing sessionId', { traceId });
+    return err(400, 'minds_eye_followup button value missing sessionId', correlationId);
+  }
+
+  if (channel && threadTs) {
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   '🧠 Continuing conversation…',
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🧠 Continuing conversation…' } }],
+      });
+    } catch (error) {
+      console.warn('interactive: minds_eye_followup chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+  }
+
+  if (triggerId) {
+    try {
+      await slack.views.open({
+        trigger_id: triggerId,
+        view: {
+          type:             'modal',
+          callback_id:      'minds_eye_followup_modal',
+          notify_on_close:  false,
+          private_metadata: JSON.stringify({ sessionId, channel, threadTs, traceId }),
+          title:  { type: 'plain_text', text: 'Ask Novia' },
+          submit: { type: 'plain_text', text: 'Send' },
+          close:  { type: 'plain_text', text: 'Cancel' },
+          blocks: [{
+            type:     'input',
+            block_id: 'novia_input_block',
+            label:    { type: 'plain_text', text: 'Your message' },
+            element: {
+              type:        'plain_text_input',
+              action_id:   'novia_input_value',
+              multiline:   true,
+              placeholder: { type: 'plain_text', text: 'Continue the conversation with Novia…' },
+            },
+          }],
+        },
+      });
+      console.info('interactive: minds_eye_followup modal opened', { sessionId, traceId });
+    } catch (error) {
+      console.error('interactive: minds_eye_followup views.open failed', { error: error.message, traceId });
+      return err(500, `views.open failed: ${error.message}`, correlationId);
+    }
+  } else {
+    console.warn('interactive: minds_eye_followup missing trigger_id', { sessionId, traceId });
+  }
+
+  return { statusCode: 200, body: '' };
+}
+
 async function handleViewSubmission(payload, correlationId) {
   const traceId = correlationId || randomUUID();
 
   // explain_followup_modal — routes to EXPLAIN_QUERY, not resume_gate
   if (payload.view?.callback_id === 'explain_followup_modal') {
     return handleExplainViewSubmission(payload, traceId);
+  }
+
+  // minds_eye_followup_modal — routes to MINDS_EYE with existingSessionId
+  if (payload.view?.callback_id === 'minds_eye_followup_modal') {
+    return handleMindsEyeViewSubmission(payload, traceId);
   }
 
   let meta;
@@ -510,6 +587,77 @@ async function handleExplainViewSubmission(payload, traceId) {
     }));
   } catch (error) {
     console.error('interactive: explain_followup_modal SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, traceId);
+  }
+
+  return { statusCode: 200, body: '' };
+}
+
+// handleMindsEyeViewSubmission — minds_eye_followup_modal submitted.
+// Enqueues MINDS_EYE with existingSessionId to continue the agentic session.
+// ---------------------------------------------------------------------------
+
+async function handleMindsEyeViewSubmission(payload, traceId) {
+  let meta;
+  try {
+    meta = JSON.parse(payload.view?.private_metadata ?? '{}');
+  } catch {
+    console.warn('interactive: minds_eye_followup_modal private_metadata parse failed', { traceId });
+    return err(400, 'Invalid private_metadata', traceId);
+  }
+
+  const { sessionId, channel, threadTs, traceId: metaTraceId } = meta;
+  if (!sessionId || !channel) {
+    console.warn('interactive: minds_eye_followup_modal missing sessionId or channel', { meta, traceId });
+    return err(400, 'minds_eye_followup_modal private_metadata must contain sessionId and channel', traceId);
+  }
+
+  const stateValues = payload.view?.state?.values ?? {};
+  let inputValue = null;
+  for (const blockValues of Object.values(stateValues)) {
+    for (const actionValue of Object.values(blockValues)) {
+      const text = actionValue?.value?.trim();
+      if (text && !inputValue) inputValue = text;
+    }
+  }
+
+  if (!inputValue) {
+    console.warn('interactive: minds_eye_followup_modal empty submission', { sessionId, traceId });
+    return { statusCode: 200, body: '' };
+  }
+
+  let ackTs;
+  try {
+    const ack = await slack.chat.postMessage({
+      channel,
+      thread_ts: threadTs || undefined,
+      text:      `🧠 "${inputValue}"`,
+    });
+    ackTs = ack.ts;
+  } catch (error) {
+    console.warn('interactive: minds_eye_followup echo failed (non-fatal)', { error: error.message });
+  }
+
+  const effectiveTrace = metaTraceId ?? traceId;
+  console.info('interactive: minds_eye_followup_modal — enqueuing MINDS_EYE', {
+    sessionId, traceId: effectiveTrace,
+  });
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:              'MINDS_EYE',
+        traceId:           effectiveTrace,
+        prompt:            inputValue,
+        existingSessionId: sessionId,
+        slackUser:         payload.user?.id,
+        callback:          { provider: 'slack', channel, threadId: ackTs ?? threadTs },
+        enqueuedAt:        new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: minds_eye_followup_modal SQS enqueue failed', { error: error.message, traceId });
     return err(500, `SQS enqueue failed: ${error.message}`, traceId);
   }
 

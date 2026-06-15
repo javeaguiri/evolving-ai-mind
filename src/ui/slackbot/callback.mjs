@@ -220,7 +220,7 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -228,7 +228,17 @@ async function postHumanNotification(message) {
   const blocks = format === 'markdown'
     ? markdownToBlocks(text, contextText)
     : textToBlocks(text, contextText);
-  if (queryId) {
+  if (format === 'markdown' && sessionId) {
+    blocks.push({
+      type:     'actions',
+      elements: [{
+        type:      'button',
+        text:      { type: 'plain_text', text: 'Continue with Novia' },
+        action_id: 'minds_eye_followup',
+        value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
+      }],
+    });
+  } else if (queryId) {
     blocks.push({
       type:     'actions',
       elements: [{
