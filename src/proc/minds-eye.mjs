@@ -215,11 +215,12 @@ export async function handle(req) {
           replyText += `\n\n---\n_Advisory: ${advisory}_`;
         }
         await enqueueCallback(callback, {
-          type:    'HUMAN_NOTIFICATION',
-          format:  'markdown',
+          type:      'HUMAN_NOTIFICATION',
+          format:    'markdown',
           traceId,
-          message: replyText,
-          queryId: session.query_id,
+          message:   replyText,
+          queryId:   session.query_id,
+          sessionId: session.id,
         });
       }
 
