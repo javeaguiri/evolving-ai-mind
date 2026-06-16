@@ -177,21 +177,21 @@ PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow
 
 ### 4.2 Action Tools (human confirmation gate required)
 
-All write operations require a `HUMAN_GATE` before execution. The gate must show: (1) the table and row(s) affected, (2) the exact change — new field values, a steps diff, or a DDL statement — so the user can evaluate the change before approving. The user selects **Approve** or **Cancel**. Novia never writes without an explicit approval on that turn.
+**Gate policy:** Only destructive operations require a confirmation gate. Change / add / modify / update operations execute immediately — permission is implicit from the request.
 
-| Tool | Mechanism | Scope | Phase | Gate content |
+| Tool | Mechanism | Scope | Phase | Gate |
 |---|---|---|---|---|
-| `update_data` | SERV `updateRows` on any PGD table | User data | 1 | Table name, filter that selects the row(s), old vs new field values |
-| `insert_data` | SERV `insertRow` on any PGD table | User data | 1 | Table name, full row values to be inserted |
-| `delete_data` | SERV `deleteRows` on any PGD table | User data | 1 | Table name, filter and count of rows that will be deleted |
-| `invoke_workflow` | `enqueueWorkflow` | Extension | 1 | Workflow name + input params; only for non-read workflows |
-| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | PGC config | 1 | Diff of current vs proposed steps |
-| `write_memory` | `memory-client.mjs` | Memory | 1 | Silent — episodic write of what Novia did; no gate required |
-| `fix_prompt` | SERV `updateRows` on PGC_Prompt | PGC config | 2 | Full prompt text diff — Novia proposes, human confirms wording |
-| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Schema | 2 | DDL statement + downstream impact (constraint violations, affected rows) |
-| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | PGC config | 2 | Proposed pattern(s) before write |
-| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | PGC config | 2 | Content diff before write |
-| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | PGC config | 2 | Keys changing and new values; takes effect next session |
+| `update_data` | SERV `updateRows` on any PGD table | User data | 1 | None — executes immediately |
+| `insert_data` | SERV `insertRow` on any PGD table | User data | 1 | None — executes immediately |
+| `delete_data` | SERV `deleteRows` on any PGD table | User data | 1 | **Delete gate** — shows table, filter, row count; requires explicit approval |
+| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | PGC config | 1 | None — executes immediately |
+| `invoke_workflow` | `enqueueWorkflow` | Extension | 1 | None for read workflows; gate for destructive workflows (delete_domain etc.) |
+| `write_memory` | `memory-client.mjs` | Memory | 1 | None — silent episodic write |
+| `fix_prompt` | SERV `updateRows` on PGC_Prompt | PGC config | 2 | **Confirmation gate** — shows full prompt diff; human confirms wording |
+| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Schema | 2 | **Confirmation gate** — shows DDL + downstream impact |
+| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | PGC config | 2 | None — executes immediately |
+| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | PGC config | 2 | None — executes immediately |
+| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | PGC config | 2 | None — takes effect next session |
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 

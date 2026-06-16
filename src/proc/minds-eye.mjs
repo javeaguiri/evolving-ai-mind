@@ -7,19 +7,28 @@
 // Agentic reasoning loop:
 //   1. Load preferences (model, turn_limit, max_actions_per_session) from PGC_SystemContext
 //   2. Load or create PGC_Session (session_type = 'minds_eye')
-//   3. Assemble Layer 1 context (PGC_Workflow + PGC_Prompt summaries)
+//   3. Assemble Layer 1 context (PGC_Workflow summaries)
 //   4. Assemble Layer 2 context (relevant PGC_Memory entries)
 //   5. Reason loop: callLlm → { action, params, reasoning } | { action: "respond", message }
-//      - Read tool action → execute → append tool entry → continue loop
-//      - "respond" action → post to Slack → end turn
-//      - turn_count >= turn_limit → post Continue/Pause/Cancel gate → end
+//      - Read tool          → execute → append result → continue loop
+//      - Inline write tool  → execute directly → append result → continue loop (no gate)
+//      - Gated write tool   → store __pending__ entry → post HUMAN_GATE → end turn
+//      - "respond"          → post to Slack → end turn
+//      - turn_count >= turn_limit → post turn-limit notification → end
+//
+// Write tool gate policy:
+//   update_data, insert_data, fix_workflow_steps — inline, no confirmation gate
+//   delete_data — gated (destructive; requires explicit approval)
+//
+// MINDS_EYE_RESUME — gate approval:
+//   Load session → find __pending__ entry → execute (approved) or record cancel → continue loop
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
-import { ok, err }                             from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, updateRows }       from '../shared/serv-client.mjs';
-import { callLlm }                             from '../shared/llm-client.mjs';
-import { enqueueCallback }                     from '../shared/sqs-callback.mjs';
+import { ok, err }                                         from '../shared/lambda-utils.mjs';
+import { getRows, insertRow, updateRows, deleteRows }       from '../shared/serv-client.mjs';
+import { callLlm }                                         from '../shared/llm-client.mjs';
+import { enqueueCallback }                                 from '../shared/sqs-callback.mjs';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -50,10 +59,26 @@ const READ_TOOLS = new Set([
   'search_domain_help', 'list_tables',
 ]);
 
+// Inline write tools — execute immediately, no confirmation gate required.
+const INLINE_WRITE_TOOLS = new Set([
+  'update_data', 'insert_data', 'fix_workflow_steps',
+]);
+
+// Gated write tools — post a HUMAN_GATE before executing (destructive operations).
+const GATED_WRITE_TOOLS = new Set([
+  'delete_data',
+]);
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
+
+  // MINDS_EYE_RESUME — gate approval/rejection routes here
+  if (body.type === 'MINDS_EYE_RESUME') {
+    return handleGateResume(body, callback, traceId, req);
+  }
+
   const { prompt, sessionId: existingSessionId, slackUser } = body;
 
   if (!prompt?.trim()) {
@@ -63,27 +88,12 @@ export async function handle(req) {
 
   console.info('proc/minds-eye: received', { traceId, slackUser, existingSessionId });
 
-  // ── Load preferences ──────────────────────────────────────────────────────
-  const prefResp = await getRows('PGC_SystemContext', [
-    { column: 'key', op: 'eq', value: 'minds_eye_preferences' },
-  ]);
-  const prefContent = prefResp.rows?.[0]?.content ?? {};
-  const prefs = { ...DEFAULT_PREFERENCES, ...prefContent };
-
-  // ── Load system prompt ────────────────────────────────────────────────────
-  const sysCtxResp = await getRows('PGC_SystemContext', [
-    { column: 'key', op: 'eq', value: 'minds_eye_system_prompt' },
-  ]);
-  const rawSysPrompt = sysCtxResp.rows?.[0]?.content;
-  const baseSystemPrompt = (typeof rawSysPrompt === 'object' ? rawSysPrompt?.text : rawSysPrompt)
-    ?? 'You are a helpful AI assistant for evolving-mind-ai. Respond in JSON: { action, params, reasoning } or { action: "respond", message, reasoning }.';
-
-  const systemPrompt = `${baseSystemPrompt}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
+  const { prefs, systemPrompt } = await loadPrefsAndPrompt();
 
   // ── Load or create session ────────────────────────────────────────────────
+  const threadTs = callback?.threadId ?? null;
   let session;
   let existingEntries = [];
-  const threadTs = callback?.threadId ?? null;
 
   if (existingSessionId) {
     const sessResp = await getRows('PGC_Session', [
@@ -95,7 +105,6 @@ export async function handle(req) {
       if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'Session not found. Start a new conversation.' });
       return;
     }
-    // Load existing entries (uncompressed only)
     const entriesResp = await getRows(
       'PGC_SessionEntry',
       [
@@ -107,37 +116,19 @@ export async function handle(req) {
     existingEntries = entriesResp.rows ?? [];
   } else {
     const sessResp = await insertRow('PGC_Session', {
-      session_type:              'minds_eye',
-      slack_thread_ts:           threadTs,
-      minds_eye_turn_count:      0,
-      minds_eye_action_count:    0,
+      session_type:           'minds_eye',
+      slack_thread_ts:        threadTs,
+      minds_eye_turn_count:   0,
+      minds_eye_action_count: 0,
     });
     if (!sessResp.success) throw new Error(`PGC_Session insert failed: ${sessResp.error}`);
     session = sessResp.row;
     console.info('proc/minds-eye: session created', { sessionId: session.id, traceId });
   }
 
-  const turnCount   = session.minds_eye_turn_count   ?? 0;
-  const actionCount = session.minds_eye_action_count ?? 0;
+  const { layer1Context, layer2Context } = await assembleContext();
 
-  // ── Assemble Layer 1 context ──────────────────────────────────────────────
-  const workflowsResp = await getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50);
-
-  const workflowSummary = (workflowsResp.rows ?? [])
-    .map(w => `- ${w.name}${w.domain ? ` (domain: ${w.domain})` : ''} v${w.version}`)
-    .join('\n');
-
-  const layer1Context = `REGISTERED WORKFLOWS:\n${workflowSummary || '(none)'}`;
-
-  // ── Assemble Layer 2 context ──────────────────────────────────────────────
-  const memResp = await getRows('PGC_Memory', [], { column: 'priority', direction: 'desc' }, 5);
-  const memSummary = (memResp.rows ?? [])
-    .map(m => `[${m.memory_type}] ${m.content}`)
-    .join('\n');
-
-  const layer2Context = memSummary ? `RECENT MEMORIES:\n${memSummary}` : '';
-
-  // ── Save user message as next session entry ───────────────────────────────
+  // Save user message
   const nextSeq = existingEntries.length > 0
     ? Math.max(...existingEntries.map(e => e.sequence_number)) + 1
     : 1;
@@ -149,35 +140,159 @@ export async function handle(req) {
     content:         prompt.trim(),
   });
 
-  // ── Agentic reasoning loop ────────────────────────────────────────────────
-  let currentTurnCount  = turnCount;
-  let currentActionCount = actionCount;
-  // Working history: all prior entries + the new user message
   const workingHistory = [
     ...existingEntries,
     { role: 'user', content: prompt.trim(), sequence_number: nextSeq },
   ];
-  let currentSeq = nextSeq + 1;
+
+  await runReasoningLoop({
+    session,
+    prefs,
+    systemPrompt,
+    layer1Context,
+    layer2Context,
+    workingHistory,
+    callback,
+    traceId,
+    currentTurnCount:   session.minds_eye_turn_count   ?? 0,
+    currentActionCount: session.minds_eye_action_count ?? 0,
+    currentSeq:         nextSeq + 1,
+    threadTs:           threadTs ?? session.slack_thread_ts,
+  });
+
+  if (req.source === 'http') {
+    return ok({ success: true, sessionId: session.id }, req.correlationId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MINDS_EYE_RESUME — execute an approved gated write tool and continue the loop
+// ---------------------------------------------------------------------------
+
+async function handleGateResume(body, callback, traceId, req) {
+  const { sessionId, approved } = body;
+
+  const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
+  const session  = sessResp.rows?.[0] ?? null;
+  if (!session) {
+    console.warn('proc/minds-eye: resume session not found', { sessionId, traceId });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'Session not found — cannot resume.' });
+    return;
+  }
+
+  const entriesResp = await getRows(
+    'PGC_SessionEntry',
+    [
+      { column: 'session_id', op: 'eq', value: session.id },
+      { column: 'compressed', op: 'neq', value: true },
+    ],
+    { column: 'sequence_number', direction: 'asc' }
+  );
+  const entries = entriesResp.rows ?? [];
+
+  // Find the most recent __pending__ entry
+  const pendingEntry = [...entries].reverse().find(e => {
+    if (e.role !== 'tool') return false;
+    try { return JSON.parse(e.content)?.tool === '__pending__'; }
+    catch { return false; }
+  });
+
+  if (!pendingEntry) {
+    console.warn('proc/minds-eye: no pending action found for resume', { sessionId, traceId });
+    if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'No pending action to resume.' });
+    return;
+  }
+
+  let pendingData;
+  try { pendingData = JSON.parse(pendingEntry.content); }
+  catch { pendingData = {}; }
+
+  const { action, params } = pendingData;
+  const currentSeq = Math.max(...entries.map(e => e.sequence_number)) + 1;
+  const workingHistory = [...entries];
+
+  if (!approved) {
+    const cancelEntry = JSON.stringify({ tool: '__cancelled__', action, params });
+    await insertRow('PGC_SessionEntry', {
+      session_id:      session.id,
+      sequence_number: currentSeq,
+      role:            'tool',
+      content:         cancelEntry,
+    });
+    if (callback) {
+      await enqueueCallback(callback, {
+        type:      'HUMAN_NOTIFICATION',
+        format:    'markdown',
+        traceId,
+        message:   'Action cancelled.',
+        sessionId: session.id,
+      });
+    }
+    console.info('proc/minds-eye: action cancelled', { sessionId, action, traceId });
+    return;
+  }
+
+  // Execute the approved gated action
+  const result    = await executeWriteTool(action, params, traceId);
+  const resultStr = JSON.stringify({ tool: action, params, result });
+  await insertRow('PGC_SessionEntry', {
+    session_id:      session.id,
+    sequence_number: currentSeq,
+    role:            'tool',
+    content:         resultStr,
+  });
+  workingHistory.push({ role: 'tool', content: resultStr, sequence_number: currentSeq });
+
+  const newActionCount = (session.minds_eye_action_count ?? 0) + 1;
+  await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+    minds_eye_action_count: newActionCount,
+  });
+
+  console.info('proc/minds-eye: gated action executed', { sessionId, action, traceId });
+
+  const { prefs, systemPrompt } = await loadPrefsAndPrompt();
+  const { layer1Context, layer2Context } = await assembleContext();
+
+  await runReasoningLoop({
+    session,
+    prefs,
+    systemPrompt,
+    layer1Context,
+    layer2Context,
+    workingHistory,
+    callback,
+    traceId,
+    currentTurnCount:   session.minds_eye_turn_count ?? 0,
+    currentActionCount: newActionCount,
+    currentSeq:         currentSeq + 1,
+    threadTs:           callback?.threadId ?? session.slack_thread_ts,
+  });
+
+  if (req?.source === 'http') {
+    return ok({ success: true, sessionId: session.id }, req.correlationId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared reasoning loop — called from both handle() and handleGateResume()
+// ---------------------------------------------------------------------------
+
+async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs }) {
+  let turnCount   = currentTurnCount;
+  let actionCount = currentActionCount;
+  let seq         = currentSeq;
 
   for (let iteration = 0; iteration < prefs.turn_limit; iteration++) {
-    if (currentTurnCount >= prefs.turn_limit) {
-      // Post turn-limit gate — Continue / Pause / Cancel
+    if (turnCount >= prefs.turn_limit) {
       await postTurnLimitGate(session.id, callback, traceId);
       break;
     }
 
-    // Build user message: context + history transcript + task
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
 
     let decision;
     try {
-      decision = await callLlm(
-        prefs.model,
-        systemPrompt,
-        userMessage,
-        ACTION_SCHEMA,
-        traceId
-      );
+      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId);
     } catch (llmError) {
       console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
       if (callback) {
@@ -190,23 +305,22 @@ export async function handle(req) {
       break;
     }
 
-    currentTurnCount += 1;
+    turnCount += 1;
 
     const { action, params = {}, reasoning, message, advisory } = decision;
 
     if (action === 'respond') {
-      // Final answer — post to Slack and end loop
       const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory });
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
-        sequence_number: currentSeq,
+        sequence_number: seq,
         role:            'assistant',
         content:         assistantContent,
       });
 
       await updateRows('PGC_Session',
         [{ column: 'id', op: 'eq', value: session.id }],
-        { minds_eye_turn_count: currentTurnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+        { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
       );
 
       if (callback) {
@@ -224,28 +338,78 @@ export async function handle(req) {
         });
       }
 
-      console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: currentTurnCount });
+      console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
       break;
 
     } else if (READ_TOOLS.has(action)) {
-      // Execute read tool and append result to history
       const toolResult = await executeReadTool(action, params, traceId);
       const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult });
 
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
-        sequence_number: currentSeq,
+        sequence_number: seq,
         role:            'tool',
         content:         toolEntry,
       });
 
-      workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: currentSeq });
-      currentSeq += 1;
+      workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
+      seq += 1;
 
-      console.info('proc/minds-eye: tool executed', { action, sessionId: session.id, traceId });
+      console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
+
+    } else if (INLINE_WRITE_TOOLS.has(action)) {
+      if (actionCount >= prefs.max_actions_per_session) {
+        if (callback) {
+          await enqueueCallback(callback, {
+            type:      'HUMAN_NOTIFICATION',
+            format:    'markdown',
+            traceId,
+            message:   `Action limit reached (${prefs.max_actions_per_session} per session). Start a new session to continue.`,
+            sessionId: session.id,
+          });
+        }
+        break;
+      }
+
+      const writeResult = await executeWriteTool(action, params, traceId);
+      const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult });
+
+      await insertRow('PGC_SessionEntry', {
+        session_id:      session.id,
+        sequence_number: seq,
+        role:            'tool',
+        content:         writeEntry,
+      });
+
+      actionCount += 1;
+      await updateRows('PGC_Session',
+        [{ column: 'id', op: 'eq', value: session.id }],
+        { minds_eye_action_count: actionCount }
+      );
+
+      workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
+      seq += 1;
+
+      console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
+
+    } else if (GATED_WRITE_TOOLS.has(action)) {
+      if (actionCount >= prefs.max_actions_per_session) {
+        if (callback) {
+          await enqueueCallback(callback, {
+            type:      'HUMAN_NOTIFICATION',
+            format:    'markdown',
+            traceId,
+            message:   `Action limit reached (${prefs.max_actions_per_session} per session). Start a new session to continue.`,
+            sessionId: session.id,
+          });
+        }
+        break;
+      }
+
+      await postActionGate({ session, action, params, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
+      break;
 
     } else {
-      // Unknown action — treat as error and surface to user
       console.warn('proc/minds-eye: unknown action', { action, traceId });
       if (callback) {
         await enqueueCallback(callback, {
@@ -257,10 +421,157 @@ export async function handle(req) {
       break;
     }
   }
+}
 
-  if (req.source === 'http') {
-    return ok({ success: true, sessionId: session.id }, req.correlationId);
+// ---------------------------------------------------------------------------
+// Post an action gate — stores __pending__ entry, posts HUMAN_GATE
+// ---------------------------------------------------------------------------
+
+async function postActionGate({ session, action, params, callback, traceId, currentTurnCount, currentSeq }) {
+  const gateText = await buildGateText(action, params, traceId);
+
+  await insertRow('PGC_SessionEntry', {
+    session_id:      session.id,
+    sequence_number: currentSeq,
+    role:            'tool',
+    content:         JSON.stringify({ tool: '__pending__', action, params }),
+  });
+
+  await updateRows('PGC_Session',
+    [{ column: 'id', op: 'eq', value: session.id }],
+    { minds_eye_turn_count: currentTurnCount }
+  );
+
+  if (callback) {
+    await enqueueCallback(callback, {
+      type:      'HUMAN_GATE',
+      gate_type: 'minds_eye_gate',
+      sessionId: session.id,
+      dialog:    { fields: [{ type: 'typography', value: gateText }] },
+      traceId,
+    });
   }
+
+  console.info('proc/minds-eye: gated action posted', { action, sessionId: session.id, traceId });
+}
+
+// ---------------------------------------------------------------------------
+// Build human-readable gate text for gated write tools
+// ---------------------------------------------------------------------------
+
+async function buildGateText(action, params, traceId) {
+  try {
+    switch (action) {
+
+      case 'delete_data': {
+        const { tableName, filters = [] } = params;
+        let count = '?';
+        try {
+          const resp = await getRows(tableName, filters, null, 100);
+          count = resp.count ?? resp.rows?.length ?? '?';
+        } catch { /* best-effort */ }
+        const filterDesc = filters.map(f => `${f.column} ${f.op} ${JSON.stringify(f.value)}`).join(' AND ');
+        return `**Proposed deletion:** \`${tableName}\`\nFilter: \`${filterDesc || '(all rows)'}\`\n\nThis will permanently delete **${count}** row(s).`;
+      }
+
+      default:
+        return `**Proposed action:** \`${action}\`\n\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``;
+    }
+  } catch (error) {
+    console.warn('proc/minds-eye: buildGateText error', { action, traceId, error: error.message });
+    return `**Proposed action:** \`${action}\``;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Execute a write tool (inline or gated)
+// ---------------------------------------------------------------------------
+
+async function executeWriteTool(action, params, traceId) {
+  try {
+    switch (action) {
+
+      case 'update_data': {
+        const { tableName, filters = [], updates = {} } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        return await updateRows(tableName, filters, updates);
+      }
+
+      case 'insert_data': {
+        const { tableName, row = {} } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        const resp = await insertRow(tableName, row);
+        return { success: resp.success, row: resp.row };
+      }
+
+      case 'delete_data': {
+        const { tableName, filters = [] } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        return await deleteRows(tableName, filters);
+      }
+
+      case 'fix_workflow_steps': {
+        const { workflowName, steps } = params;
+        if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
+        const wf = wfResp.rows?.[0];
+        if (!wf) return { error: `Workflow "${workflowName}" not found` };
+        const resp = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: wf.id }], { steps, version: wf.version + 1 });
+        return { success: resp.success, newVersion: wf.version + 1 };
+      }
+
+      default:
+        return { error: `Unknown write tool: ${action}` };
+    }
+  } catch (error) {
+    console.error('proc/minds-eye: executeWriteTool error', { action, traceId, error: error.message });
+    return { error: error.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Load preferences and system prompt from PGC_SystemContext
+// ---------------------------------------------------------------------------
+
+async function loadPrefsAndPrompt() {
+  const [prefResp, sysCtxResp] = await Promise.all([
+    getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_preferences' }]),
+    getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_system_prompt' }]),
+  ]);
+
+  const prefContent = prefResp.rows?.[0]?.content ?? {};
+  const prefs       = { ...DEFAULT_PREFERENCES, ...prefContent };
+
+  const rawSysPrompt     = sysCtxResp.rows?.[0]?.content;
+  const baseSystemPrompt = (typeof rawSysPrompt === 'object' ? rawSysPrompt?.text : rawSysPrompt)
+    ?? 'You are a helpful AI assistant for evolving-mind-ai. Respond in JSON: { action, params, reasoning } or { action: "respond", message, reasoning }.';
+
+  const systemPrompt = `${baseSystemPrompt}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
+
+  return { prefs, systemPrompt };
+}
+
+// ---------------------------------------------------------------------------
+// Assemble Layer 1 (workflows) and Layer 2 (memory) context
+// ---------------------------------------------------------------------------
+
+async function assembleContext() {
+  const [workflowsResp, memResp] = await Promise.all([
+    getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50),
+    getRows('PGC_Memory',   [], { column: 'priority', direction: 'desc' }, 5),
+  ]);
+
+  const workflowSummary = (workflowsResp.rows ?? [])
+    .map(w => `- ${w.name}${w.domain ? ` (domain: ${w.domain})` : ''} v${w.version}`)
+    .join('\n');
+  const layer1Context = `REGISTERED WORKFLOWS:\n${workflowSummary || '(none)'}`;
+
+  const memSummary = (memResp.rows ?? [])
+    .map(m => `[${m.memory_type}] ${m.content}`)
+    .join('\n');
+  const layer2Context = memSummary ? `RECENT MEMORIES:\n${memSummary}` : '';
+
+  return { layer1Context, layer2Context };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +596,8 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
       if (e.role === 'tool') {
         try {
           const parsed = JSON.parse(e.content);
+          if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
+          if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
           return `Tool (${parsed.tool}): ${JSON.stringify(parsed.result).slice(0, 500)}`;
         } catch { return `Tool: ${e.content.slice(0, 500)}`; }
       }
@@ -294,7 +607,20 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     parts.push(`CONVERSATION:\n${transcript}`);
   }
 
-  parts.push('Based on the context and conversation above, decide your next action.\nRespond with exactly one JSON object. Use ONLY these action values: search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow, respond. No other action names are valid.');
+  parts.push(
+    'Based on the context and conversation above, decide your next action.\n' +
+    'Respond with exactly one JSON object. Use ONLY these action values:\n' +
+    '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
+    '- Write without gate (executes immediately): update_data, insert_data, fix_workflow_steps\n' +
+    '- Write with gate (requires approval — destructive): delete_data\n' +
+    '- respond (final answer to user)\n' +
+    'Params for write tools:\n' +
+    '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
+    '  insert_data: { tableName, row: {field: value} }\n' +
+    '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
+    '  fix_workflow_steps: { workflowName, steps: [...] }\n' +
+    'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
+  );
 
   return parts.join('\n\n---\n\n');
 }
@@ -393,7 +719,7 @@ async function executeReadTool(action, params, traceId) {
       case 'list_tables': {
         const { domain, prefix } = params;
         const filters = [];
-        if (domain) filters.push({ column: 'domain', op: 'eq',   value: domain });
+        if (domain) filters.push({ column: 'domain',     op: 'eq',   value: domain });
         if (prefix) filters.push({ column: 'table_name', op: 'like', value: `${prefix}%` });
         const resp = await getRows('PGC_Schema', filters, { column: 'table_name', direction: 'asc' }, 100);
         return {
@@ -415,7 +741,7 @@ async function executeReadTool(action, params, traceId) {
 }
 
 // ---------------------------------------------------------------------------
-// Post a turn-limit human gate (Continue / Pause / Cancel)
+// Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
 async function postTurnLimitGate(sessionId, callback, traceId) {

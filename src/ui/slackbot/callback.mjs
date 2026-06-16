@@ -380,6 +380,36 @@ async function postHumanGate(message) {
     return;
   }
 
+  // minds_eye_gate \u2014 Novia deletion gate. Renders with sessionId buttons instead of workflowRunId.
+  if (gateType === 'minds_eye_gate') {
+    const { sessionId } = message;
+    const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm deletion';
+    const gateBlocks = [
+      ...markdownToBlocks(gateText),
+      {
+        type: 'actions',
+        elements: [
+          {
+            type:      'button',
+            style:     'danger',
+            text:      { type: 'plain_text', text: 'Delete' },
+            action_id: 'minds_eye_delete_approve',
+            value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Cancel' },
+            action_id: 'minds_eye_delete_cancel',
+            value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
+          },
+        ],
+      },
+    ];
+    await routeCallback(callback, gateText.slice(0, 150), gateBlocks);
+    console.info('callback: minds_eye_gate posted', { sessionId, traceId });
+    return;
+  }
+
   const blocks = dialogToBlocks(dialog, workflowRunId);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate \u2014 please review and respond.';
