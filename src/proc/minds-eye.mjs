@@ -28,7 +28,7 @@
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
 import { getRows, insertRow, updateRows, deleteRows }       from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
-import { enqueueCallback }                                 from '../shared/sqs-callback.mjs';
+import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -67,6 +67,11 @@ const INLINE_WRITE_TOOLS = new Set([
 // Gated write tools — post a HUMAN_GATE before executing (destructive operations).
 const GATED_WRITE_TOOLS = new Set([
   'delete_data',
+]);
+
+// Trigger tools — dispatch a registered workflow to the step-executor engine.
+const TRIGGER_TOOLS = new Set([
+  'run_workflow',
 ]);
 
 export async function handle(req) {
@@ -281,13 +286,9 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let turnCount   = currentTurnCount;
   let actionCount = currentActionCount;
   let seq         = currentSeq;
+  let responded   = false;
 
   for (let iteration = 0; iteration < prefs.turn_limit; iteration++) {
-    if (turnCount >= prefs.turn_limit) {
-      await postTurnLimitGate(session.id, callback, traceId);
-      break;
-    }
-
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
 
     let decision;
@@ -338,6 +339,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         });
       }
 
+      responded = true;
       console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
       break;
 
@@ -409,6 +411,22 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       await postActionGate({ session, action, params, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
       break;
 
+    } else if (TRIGGER_TOOLS.has(action)) {
+      const triggerResult = await executeTriggerTool(action, params, callback, traceId);
+      const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult });
+
+      await insertRow('PGC_SessionEntry', {
+        session_id:      session.id,
+        sequence_number: seq,
+        role:            'tool',
+        content:         triggerEntry,
+      });
+
+      workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
+      seq += 1;
+
+      console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
+
     } else {
       console.warn('proc/minds-eye: unknown action', { action, traceId });
       if (callback) {
@@ -420,6 +438,10 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       }
       break;
     }
+  }
+
+  if (!responded) {
+    await postTurnLimitGate(session.id, callback, traceId);
   }
 }
 
@@ -530,6 +552,53 @@ async function executeWriteTool(action, params, traceId) {
 }
 
 // ---------------------------------------------------------------------------
+// Execute a trigger tool — dispatches a registered workflow to the step executor
+// ---------------------------------------------------------------------------
+
+async function executeTriggerTool(action, params, callback, traceId) {
+  try {
+    switch (action) {
+
+      case 'run_workflow': {
+        const { workflowName, input = {} } = params;
+        if (!workflowName) return { error: 'workflowName is required' };
+
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
+        const wf = wfResp.rows?.[0];
+        if (!wf) return { error: `Workflow "${workflowName}" not found` };
+
+        const runResp = await insertRow('PGC_WorkflowRun', {
+          workflow_id:  wf.id,
+          trace_id:     traceId,
+          triggered_by: 'minds_eye',
+          status:       'pending',
+          input:        input,
+          stack:        [],
+          state:        {},
+          callback,
+        });
+        if (!runResp.success) return { error: `Failed to create workflow run: ${runResp.error}` };
+
+        await enqueueWorkflow({
+          type:          'WORKFLOW_STEP',
+          action:        'execute_top',
+          workflowRunId: runResp.row.id,
+          traceId,
+        });
+
+        return { triggered: true, workflowName, workflowRunId: runResp.row.id };
+      }
+
+      default:
+        return { error: `Unknown trigger tool: ${action}` };
+    }
+  } catch (error) {
+    console.error('proc/minds-eye: executeTriggerTool error', { action, traceId, error: error.message });
+    return { error: error.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Load preferences and system prompt from PGC_SystemContext
 // ---------------------------------------------------------------------------
 
@@ -613,12 +682,15 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
     '- Write without gate (executes immediately): update_data, insert_data, fix_workflow_steps\n' +
     '- Write with gate (requires approval — destructive): delete_data\n' +
+    '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
     '  insert_data: { tableName, row: {field: value} }\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
     '  fix_workflow_steps: { workflowName, steps: [...] }\n' +
+    'Params for trigger tools:\n' +
+    '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. The workflow runs asynchronously and interacts with the user via Slack directly. Pass any already-known values (e.g. deck_id, domain) in input to pre-populate workflow context. After calling run_workflow, respond immediately to confirm it was started.\n' +
     'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
   );
 
