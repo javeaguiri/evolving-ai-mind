@@ -380,6 +380,36 @@ async function postHumanGate(message) {
     return;
   }
 
+  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Continue resumes the loop; Cancel ends the session.
+  if (gateType === 'minds_eye_continue_gate') {
+    const { sessionId } = message;
+    const gateText = "I've reached my turn limit for this response. Continue to keep reasoning, or Cancel to end the session.";
+    const gateBlocks = [
+      ...markdownToBlocks(gateText),
+      {
+        type: 'actions',
+        elements: [
+          {
+            type:      'button',
+            style:     'primary',
+            text:      { type: 'plain_text', text: 'Continue' },
+            action_id: 'minds_eye_continue_approve',
+            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Cancel' },
+            action_id: 'minds_eye_continue_cancel',
+            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false }),
+          },
+        ],
+      },
+    ];
+    await routeCallback(callback, gateText, gateBlocks);
+    console.info('callback: minds_eye_continue_gate posted', { sessionId, traceId });
+    return;
+  }
+
   // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
   if (gateType === 'minds_eye_gate') {
     const { sessionId, confirmLabel = 'Approve', confirmStyle } = message;

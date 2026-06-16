@@ -176,7 +176,7 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 async function handleGateResume(body, callback, traceId, req) {
-  const { sessionId, approved } = body;
+  const { sessionId, approved, resumeType } = body;
 
   const sessResp = await getRows('PGC_Session', [{ column: 'id', op: 'eq', value: sessionId }]);
   const session  = sessResp.rows?.[0] ?? null;
@@ -196,7 +196,36 @@ async function handleGateResume(body, callback, traceId, req) {
   );
   const entries = entriesResp.rows ?? [];
 
-  // Find the most recent __pending__ entry
+  // Turn-limit continue — reset turn count and re-enter the reasoning loop.
+  if (resumeType === 'continue') {
+    if (!approved) {
+      console.info('proc/minds-eye: turn-limit gate cancelled', { sessionId, traceId });
+      return;
+    }
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_turn_count: 0,
+    });
+    const { prefs, systemPrompt } = await loadPrefsAndPrompt();
+    const { layer1Context, layer2Context } = await assembleContext();
+    await runReasoningLoop({
+      session,
+      prefs,
+      systemPrompt,
+      layer1Context,
+      layer2Context,
+      workingHistory:     [...entries],
+      callback,
+      traceId,
+      currentTurnCount:   0,
+      currentActionCount: session.minds_eye_action_count ?? 0,
+      currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
+      threadTs:           callback?.threadId ?? session.slack_thread_ts,
+    });
+    if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
+    return;
+  }
+
+  // Action gate — find the most recent __pending__ entry and execute or cancel it.
   const pendingEntry = [...entries].reverse().find(e => {
     if (e.role !== 'tool') return false;
     try { return JSON.parse(e.content)?.tool === '__pending__'; }
@@ -214,7 +243,7 @@ async function handleGateResume(body, callback, traceId, req) {
   catch { pendingData = {}; }
 
   const { action, params } = pendingData;
-  const currentSeq = Math.max(...entries.map(e => e.sequence_number)) + 1;
+  const currentSeq    = Math.max(...entries.map(e => e.sequence_number)) + 1;
   const workingHistory = [...entries];
 
   if (!approved) {
@@ -882,10 +911,9 @@ async function executeReadTool(action, params, traceId) {
 async function postTurnLimitGate(sessionId, callback, traceId) {
   if (!callback) return;
   await enqueueCallback(callback, {
-    type:      'HUMAN_NOTIFICATION',
-    format:    'markdown',
-    traceId,
-    message:   "I've reached my turn limit for this response. Use **Continue with Novia** below to keep going.",
+    type:      'HUMAN_GATE',
+    gate_type: 'minds_eye_continue_gate',
     sessionId,
+    traceId,
   });
 }
