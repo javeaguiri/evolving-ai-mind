@@ -567,9 +567,6 @@ async function executeTriggerTool(action, params, callback, traceId) {
         const wf = wfResp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
 
-        // Strip threadId so the workflow posts as a fresh top-level message,
-        // not as a reply inside the Novia session thread.
-        const workflowCallback = callback ? { ...callback, threadId: null } : callback;
         const runResp = await insertRow('PGC_WorkflowRun', {
           workflow_id:  wf.id,
           trace_id:     traceId,
@@ -578,7 +575,7 @@ async function executeTriggerTool(action, params, callback, traceId) {
           input:        input,
           stack:        [],
           state:        {},
-          callback:     workflowCallback,
+          callback,
         });
         if (!runResp.success) return { error: `Failed to create workflow run: ${runResp.error}` };
 
