@@ -774,7 +774,7 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
     '  insert_data: { tableName, row: {field: value} }\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
-    '  fix_workflow_steps: { workflowName, steps: [...] }\n' +
+    '  fix_workflow_steps: { workflowName, steps: [...] } — use this when YOU have diagnosed a workflow issue and produced a corrected steps array yourself. Do NOT invoke run_workflow with "fix_workflow" for your own corrections — that is the user-facing interactive repair workflow, not your tool.\n' +
     'Params for trigger tools:\n' +
     '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. The workflow runs asynchronously and interacts with the user via Slack directly. Pass any already-known values (e.g. deck_id, domain) in input to pre-populate workflow context. After calling run_workflow, respond immediately to confirm it was started.\n' +
     'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
