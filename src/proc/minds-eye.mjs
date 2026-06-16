@@ -190,6 +190,44 @@ async function handleGateResume(body, callback, traceId, req) {
   );
   const entries = entriesResp.rows ?? [];
 
+  // Follow-up question — add user message, reset turns, run loop, re-post continue gate after response.
+  if (resumeType === 'followup') {
+    const { followupText } = body;
+    if (!followupText?.trim()) {
+      console.warn('proc/minds-eye: followup missing text', { sessionId, traceId });
+      return;
+    }
+    const newSeq = Math.max(...entries.map(e => e.sequence_number), 0) + 1;
+    await insertRow('PGC_SessionEntry', {
+      session_id:      session.id,
+      sequence_number: newSeq,
+      role:            'user',
+      content:         followupText.trim(),
+    });
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_turn_count: 0,
+    });
+    const { prefs, systemPrompt } = await loadPrefsAndPrompt();
+    const { layer1Context, layer2Context } = await assembleContext();
+    await runReasoningLoop({
+      session,
+      prefs,
+      systemPrompt,
+      layer1Context,
+      layer2Context,
+      workingHistory:               [...entries, { role: 'user', content: followupText.trim(), sequence_number: newSeq }],
+      callback,
+      traceId,
+      currentTurnCount:             0,
+      currentActionCount:           session.minds_eye_action_count ?? 0,
+      currentSeq:                   newSeq + 1,
+      threadTs:                     callback?.threadId ?? session.slack_thread_ts,
+      postContinueGateAfterRespond: true,
+    });
+    if (req?.source === 'http') return ok({ success: true, sessionId: session.id }, req.correlationId);
+    return;
+  }
+
   // Turn-limit continue — reset turn count and re-enter the reasoning loop.
   if (resumeType === 'continue') {
     if (!approved) {
@@ -306,7 +344,7 @@ async function handleGateResume(body, callback, traceId, req) {
 // Shared reasoning loop — called from both handle() and handleGateResume()
 // ---------------------------------------------------------------------------
 
-async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs }) {
+async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
   let turnCount   = currentTurnCount;
   let actionCount = currentActionCount;
   let seq         = currentSeq;
@@ -468,7 +506,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     }
   }
 
-  if (!responded) {
+  if (!responded || postContinueGateAfterRespond) {
     await postTurnLimitGate(session.id, callback, traceId);
   }
 }
