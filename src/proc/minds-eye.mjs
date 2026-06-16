@@ -17,7 +17,8 @@
 //      - turn_count >= turn_limit → post turn-limit notification → end
 //
 // Write tool gate policy:
-//   update_data, insert_data, fix_workflow_steps — inline, no confirmation gate
+//   update_data, insert_data — inline, no confirmation gate
+//   fix_workflow_steps — gated (shows step diff for human review before writing)
 //   delete_data — gated (destructive; requires explicit approval)
 //
 // MINDS_EYE_RESUME — gate approval:
@@ -61,12 +62,12 @@ const READ_TOOLS = new Set([
 
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
-  'update_data', 'insert_data', 'fix_workflow_steps',
+  'update_data', 'insert_data',
 ]);
 
-// Gated write tools — post a HUMAN_GATE before executing (destructive operations).
+// Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
-  'delete_data',
+  'fix_workflow_steps', 'delete_data',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -453,8 +454,15 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 // Post an action gate — stores __pending__ entry, posts HUMAN_GATE
 // ---------------------------------------------------------------------------
 
+function gateButtonConfig(action) {
+  if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
+  if (action === 'fix_workflow_steps')   return { confirmLabel: 'Apply',  confirmStyle: null };
+  return                                        { confirmLabel: 'Approve', confirmStyle: null };
+}
+
 async function postActionGate({ session, action, params, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
+  const { confirmLabel, confirmStyle } = gateButtonConfig(action);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -470,10 +478,12 @@ async function postActionGate({ session, action, params, callback, traceId, curr
 
   if (callback) {
     await enqueueCallback(callback, {
-      type:      'HUMAN_GATE',
-      gate_type: 'minds_eye_gate',
-      sessionId: session.id,
-      dialog:    { fields: [{ type: 'typography', value: gateText }] },
+      type:         'HUMAN_GATE',
+      gate_type:    'minds_eye_gate',
+      sessionId:    session.id,
+      dialog:       { fields: [{ type: 'typography', value: gateText }] },
+      confirmLabel,
+      confirmStyle,
       traceId,
     });
   }
@@ -488,6 +498,48 @@ async function postActionGate({ session, action, params, callback, traceId, curr
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
+
+      case 'fix_workflow_steps': {
+        const { workflowName, steps: proposedSteps = [] } = params;
+        let currentSteps = [];
+        try {
+          const resp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
+          currentSteps = resp.rows?.[0]?.steps ?? [];
+        } catch { /* best-effort */ }
+
+        const currentMap  = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
+        const proposedMap = Object.fromEntries(proposedSteps.map(s => [String(s.step), s]));
+        const allKeys     = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
+
+        const added   = allKeys.filter(k => !currentMap[k]);
+        const removed = allKeys.filter(k => !proposedMap[k]);
+        const changed = allKeys.filter(k => currentMap[k] && proposedMap[k] && JSON.stringify(currentMap[k]) !== JSON.stringify(proposedMap[k]));
+
+        const lines = [
+          `**Proposed workflow fix: \`${workflowName}\`**`,
+          `${currentSteps.length} steps → ${proposedSteps.length} steps\n`,
+        ];
+        if (added.length)   lines.push(`Added steps: ${added.join(', ')}`);
+        if (removed.length) lines.push(`Removed steps: ${removed.join(', ')}`);
+
+        const DIFF_FIELDS = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
+        for (const key of changed) {
+          const cur  = currentMap[key];
+          const prop = proposedMap[key];
+          lines.push(`\n**Step ${key}** — ${cur.description ?? cur.type}:`);
+          for (const field of DIFF_FIELDS) {
+            if (JSON.stringify(cur[field]) !== JSON.stringify(prop[field])) {
+              lines.push(`  \`${field}\`: \`${JSON.stringify(cur[field])}\` → \`${JSON.stringify(prop[field])}\``);
+            }
+          }
+        }
+
+        if (!added.length && !removed.length && !changed.length) {
+          lines.push('_(No differences detected — proposed steps match current version.)_');
+        }
+
+        return lines.join('\n');
+      }
 
       case 'delete_data': {
         const { tableName, filters = [] } = params;
@@ -691,8 +743,8 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     'Based on the context and conversation above, decide your next action.\n' +
     'Respond with exactly one JSON object. Use ONLY these action values:\n' +
     '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
-    '- Write without gate (executes immediately): update_data, insert_data, fix_workflow_steps\n' +
-    '- Write with gate (requires approval — destructive): delete_data\n' +
+    '- Write without gate (executes immediately): update_data, insert_data\n' +
+    '- Write with gate (requires approval): fix_workflow_steps, delete_data\n' +
     '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +

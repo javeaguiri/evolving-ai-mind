@@ -380,22 +380,23 @@ async function postHumanGate(message) {
     return;
   }
 
-  // minds_eye_gate \u2014 Novia deletion gate. Renders with sessionId buttons instead of workflowRunId.
+  // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
   if (gateType === 'minds_eye_gate') {
-    const { sessionId } = message;
-    const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm deletion';
+    const { sessionId, confirmLabel = 'Approve', confirmStyle } = message;
+    const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm action';
+    const approveButton = {
+      type:      'button',
+      text:      { type: 'plain_text', text: confirmLabel },
+      action_id: 'minds_eye_delete_approve',
+      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
+    };
+    if (confirmStyle) approveButton.style = confirmStyle;
     const gateBlocks = [
       ...markdownToBlocks(gateText),
       {
         type: 'actions',
         elements: [
-          {
-            type:      'button',
-            style:     'danger',
-            text:      { type: 'plain_text', text: 'Delete' },
-            action_id: 'minds_eye_delete_approve',
-            value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
-          },
+          approveButton,
           {
             type:      'button',
             text:      { type: 'plain_text', text: 'Cancel' },
