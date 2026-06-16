@@ -113,10 +113,7 @@ export async function handle(req) {
     }
     const entriesResp = await getRows(
       'PGC_SessionEntry',
-      [
-        { column: 'session_id', op: 'eq', value: session.id },
-        { column: 'compressed', op: 'neq', value: true },
-      ],
+      [{ column: 'session_id', op: 'eq', value: session.id }],
       { column: 'sequence_number', direction: 'asc' }
     );
     existingEntries = entriesResp.rows ?? [];
@@ -188,10 +185,7 @@ async function handleGateResume(body, callback, traceId, req) {
 
   const entriesResp = await getRows(
     'PGC_SessionEntry',
-    [
-      { column: 'session_id', op: 'eq', value: session.id },
-      { column: 'compressed', op: 'neq', value: true },
-    ],
+    [{ column: 'session_id', op: 'eq', value: session.id }],
     { column: 'sequence_number', direction: 'asc' }
   );
   const entries = entriesResp.rows ?? [];
