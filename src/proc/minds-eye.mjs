@@ -287,8 +287,9 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let actionCount = currentActionCount;
   let seq         = currentSeq;
   let responded   = false;
+  let turnCost    = 0;
 
-  for (let iteration = 0; iteration < prefs.turn_limit; iteration++) {
+  while (turnCost < prefs.turn_limit) {
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
 
     let decision;
@@ -357,6 +358,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
+      turnCost += toolResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -392,6 +394,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
+      turnCost += writeResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
@@ -425,6 +428,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
+      turnCost += triggerResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
     } else {
