@@ -81,7 +81,7 @@ export async function handle(req) {
   const traceId  = req.traceId  ?? req.correlationId;
 
   // MINDS_EYE_RESUME — gate approval/rejection routes here
-  if (body.type === 'MINDS_EYE_RESUME') {
+  if (req.route === 'minds-eye-resume') {
     return handleGateResume(body, callback, traceId, req);
   }
 
