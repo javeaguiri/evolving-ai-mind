@@ -380,10 +380,11 @@ async function postHumanGate(message) {
     return;
   }
 
-  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Continue resumes the loop; Cancel ends the session.
+  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
+  // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
   if (gateType === 'minds_eye_continue_gate') {
     const { sessionId } = message;
-    const gateText = "I've reached my turn limit for this response. Continue to keep reasoning, or Cancel to end the session.";
+    const gateText = "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
     const gateBlocks = [
       ...markdownToBlocks(gateText),
       {
@@ -395,6 +396,12 @@ async function postHumanGate(message) {
             text:      { type: 'plain_text', text: 'Continue' },
             action_id: 'minds_eye_continue_approve',
             value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Follow-up' },
+            action_id: 'minds_eye_continue_followup',
+            value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId }),
           },
           {
             type:      'button',
