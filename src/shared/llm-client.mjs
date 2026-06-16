@@ -106,7 +106,13 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 
   try {
     return JSON.parse(clean);
-  } catch (error) {
+  } catch (firstError) {
+    // LLM prepended prose before the JSON object — find the first { and retry.
+    const jsonStart = clean.indexOf('{');
+    if (jsonStart > 0) {
+      try { return JSON.parse(clean.slice(jsonStart)); } catch { /* fall through */ }
+    }
+    const error = firstError;
     const parseErr = new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
     parseErr.rawOutput = clean;
     // Truncation detection: output_tokens exactly equals the ceiling — the model was cut
