@@ -826,9 +826,10 @@ async function executeReadTool(action, params, traceId) {
 async function postTurnLimitGate(sessionId, callback, traceId) {
   if (!callback) return;
   await enqueueCallback(callback, {
-    type:    'HUMAN_NOTIFICATION',
+    type:      'HUMAN_NOTIFICATION',
+    format:    'markdown',
     traceId,
-    message: 'The agent has reached its turn limit. You can continue the conversation by clicking "Continue" or start fresh.',
-    queryId: null,
+    message:   "I've reached my turn limit for this response. Use **Continue with Novia** below to keep going.",
+    sessionId,
   });
 }
