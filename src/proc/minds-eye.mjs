@@ -18,7 +18,7 @@
 //
 // Write tool gate policy:
 //   update_data, insert_data — inline, no confirmation gate
-//   fix_workflow_steps — gated (shows step diff for human review before writing)
+//   propose_workflow_fix — gated (shows step diff for human review before writing)
 //   delete_data — gated (destructive; requires explicit approval)
 //
 // MINDS_EYE_RESUME — gate approval:
@@ -67,7 +67,7 @@ const INLINE_WRITE_TOOLS = new Set([
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
-  'fix_workflow_steps', 'delete_data',
+  'propose_workflow_fix', 'delete_data',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -479,7 +479,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
 function gateButtonConfig(action) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
-  if (action === 'fix_workflow_steps')   return { confirmLabel: 'Apply',  confirmStyle: null };
+  if (action === 'propose_workflow_fix')   return { confirmLabel: 'Apply',  confirmStyle: null };
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
@@ -522,7 +522,7 @@ async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
 
-      case 'fix_workflow_steps': {
+      case 'propose_workflow_fix': {
         const { workflowName, steps: proposedSteps = [] } = params;
         let currentSteps = [];
         try {
@@ -611,7 +611,7 @@ async function executeWriteTool(action, params, traceId) {
         return await deleteRows(tableName, filters);
       }
 
-      case 'fix_workflow_steps': {
+      case 'propose_workflow_fix': {
         const { workflowName, steps } = params;
         if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
         const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
@@ -767,16 +767,16 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     'Respond with exactly one JSON object. Use ONLY these action values:\n' +
     '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
     '- Write without gate (executes immediately): update_data, insert_data\n' +
-    '- Write with gate (requires approval): fix_workflow_steps, delete_data\n' +
+    '- Write with gate (requires approval): propose_workflow_fix, delete_data\n' +
     '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
     '  insert_data: { tableName, row: {field: value} }\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
-    '  fix_workflow_steps: { workflowName, steps: [...] } — use this when YOU have diagnosed a workflow issue and produced a corrected steps array yourself. Do NOT invoke run_workflow with "fix_workflow" for your own corrections — that is the user-facing interactive repair workflow, not your tool.\n' +
+    '  propose_workflow_fix: { workflowName, steps: [...] } — your own tool for correcting workflow steps; posts a diff gate for human approval before writing.\n' +
     'Params for trigger tools:\n' +
-    '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. The workflow runs asynchronously and interacts with the user via Slack directly. Pass any already-known values (e.g. deck_id, domain) in input to pre-populate workflow context. After calling run_workflow, respond immediately to confirm it was started.\n' +
+    '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
     'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
   );
 
@@ -827,7 +827,7 @@ async function executeReadTool(action, params, traceId) {
         );
         const wf = resp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
-        return { name: wf.name, version: wf.version, domain: wf.domain, steps: wf.steps };
+        return { name: wf.name, version: wf.version, domain: wf.domain, description: wf.description ?? null, steps: wf.steps };
       }
 
       case 'read_prompt': {
