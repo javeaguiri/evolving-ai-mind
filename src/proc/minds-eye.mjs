@@ -791,8 +791,8 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
           const parsed = JSON.parse(e.content);
           if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
           if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
-          return `Tool (${parsed.tool}): ${JSON.stringify(parsed.result).slice(0, 500)}`;
-        } catch { return `Tool: ${e.content.slice(0, 500)}`; }
+          return `Tool (${parsed.tool}): ${JSON.stringify(parsed.result).slice(0, 15000)}`;
+        } catch { return `Tool: ${e.content.slice(0, 15000)}`; }
       }
       return '';
     }).filter(Boolean).join('\n\n');
