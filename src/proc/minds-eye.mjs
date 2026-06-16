@@ -570,7 +570,7 @@ async function executeTriggerTool(action, params, callback, traceId) {
         const runResp = await insertRow('PGC_WorkflowRun', {
           workflow_id:  wf.id,
           trace_id:     traceId,
-          triggered_by: 'minds_eye',
+          triggered_by: 'system',
           status:       'pending',
           input:        input,
           stack:        [],
