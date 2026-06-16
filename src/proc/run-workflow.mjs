@@ -78,17 +78,17 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 export async function dispatchSqs(message) {
-  const { action, workflowRunId, userResponse, responseData, message_ts, traceId } = message;
-  return dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source: 'sqs' });
+  const { action, workflowRunId, userResponse, responseData, message_ts, traceId, stepExecutionId } = message;
+  return dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source: 'sqs', stepExecutionId });
 }
 
 // ---------------------------------------------------------------------------
 // Core dispatch
 // ---------------------------------------------------------------------------
 
-async function dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source }) {
+async function dispatch({ action, workflowRunId, userResponse, responseData, message_ts, traceId, source, stepExecutionId }) {
   switch (action) {
-    case 'execute_top': return executeTop({ workflowRunId, traceId, source });
+    case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
     case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
@@ -100,7 +100,7 @@ async function dispatch({ action, workflowRunId, userResponse, responseData, mes
 // execute_top
 // ---------------------------------------------------------------------------
 
-async function executeTop({ workflowRunId, traceId, source }) {
+async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 
   const run = await loadRun(workflowRunId, traceId);
 
@@ -192,8 +192,10 @@ async function executeTop({ workflowRunId, traceId, source }) {
     return { skipped: true, reason: 'step_not_found' };
   }
 
-  // Idempotency check
-  const alreadyRan = await checkIdempotency(run.id, frame.frame_id, frame.current_step);
+  // Idempotency check — use stepExecutionId when present so loop re-entries
+  // (same step key, new iteration) are not blocked by prior-iteration audit rows.
+  const idempotencyKey = stepExecutionId ?? String(frame.current_step);
+  const alreadyRan = await checkIdempotency(run.id, frame.frame_id, idempotencyKey);
   if (alreadyRan) {
     // Lightweight Guard 1 — stuck-step detection.
     // If the same step keeps hitting idempotency, the workflow routing is broken.
@@ -350,13 +352,13 @@ async function executeTop({ workflowRunId, traceId, source }) {
 
   const durationMs = Date.now() - stepStart;
 
-  // Write step audit row
+  // Write step audit row — step_key uses idempotencyKey so redeliveries match this row.
   await recordStepAudit(
     run.id, frame.frame_id, frame.current_step, step.type,
     'completed',
     { step: frame.current_step, type: step.type },
     result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 200) } : null,
-    null, durationMs
+    null, durationMs, idempotencyKey
   );
 
   // Clear any stuck-step state now that a step executed successfully
@@ -1126,13 +1128,13 @@ async function checkIdempotency(runId, frameId, stepKey) {
 }
 
 async function recordStepAudit(runId, frameId, stepNumber, stepType,
-    status, inputSnapshot, outputSnapshot, errorMsg, durationMs) {
+    status, inputSnapshot, outputSnapshot, errorMsg, durationMs, stepKey) {
   try {
     await insertRow('PGC_WorkflowRunStep', {
       run_id:          runId,
       frame_id:        frameId,
       step_number:     parseInt(stepNumber, 10) || 0,  // kept for iterator items (integer index)
-      step_key:        String(stepNumber),              // string key — "3a", "3d", "1", etc.
+      step_key:        stepKey ?? String(stepNumber),  // UUID per execution or string step label
       step_type:       stepType,
       status,
       input_snapshot:  inputSnapshot ?? null,
