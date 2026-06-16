@@ -97,10 +97,16 @@ export async function handle(req) {
     return handleMindsEyeFollowupButton(buttonValue, payload, req.correlationId);
   }
 
-  // minds_eye_action_gate — Approve/Cancel on a Novia deletion gate.
+  // minds_eye_action_gate — Approve/Cancel on a Novia action gate.
   // Routes to MINDS_EYE_RESUME with sessionId + approved flag.
   if (buttonValue.action === 'minds_eye_action_gate') {
     return handleMindsEyeActionGate(buttonValue, payload, req.correlationId);
+  }
+
+  // minds_eye_continue_gate — Continue/Cancel on a Novia turn-limit gate.
+  // Routes to MINDS_EYE_RESUME with resumeType: 'continue' — no modal, no pending action.
+  if (buttonValue.action === 'minds_eye_continue_gate') {
+    return handleMindsEyeContinueGate(buttonValue, payload, req.correlationId);
   }
 
   // peek_reveal — reveal button on a human_gate. Opens a read-only modal showing
@@ -510,6 +516,58 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
   }
 
   console.info('interactive: minds_eye_action_gate enqueued MINDS_EYE_RESUME', { sessionId, approved, traceId });
+  return { statusCode: 200, body: '' };
+}
+
+// handleMindsEyeContinueGate — Continue/Cancel clicked on a Novia turn-limit gate.
+// Enqueues MINDS_EYE_RESUME with resumeType: 'continue' — no modal, no pending action lookup.
+// ---------------------------------------------------------------------------
+
+async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
+  const { sessionId, approved } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
+
+  if (!sessionId) {
+    console.warn('interactive: minds_eye_continue_gate missing sessionId', { traceId });
+    return err(400, 'minds_eye_continue_gate button value missing sessionId', correlationId);
+  }
+
+  const confirmText = approved ? '▶ Continuing…' : '⏹ Session ended.';
+  if (channel && threadTs) {
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   confirmText,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+      });
+    } catch (error) {
+      console.warn('interactive: minds_eye_continue_gate chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:       'MINDS_EYE_RESUME',
+        resumeType: 'continue',
+        sessionId,
+        approved:   !!approved,
+        slackUser:  payload.user?.id,
+        callback:   { provider: 'slack', channel, threadId: threadTs },
+        traceId,
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: minds_eye_continue_gate SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  console.info('interactive: minds_eye_continue_gate enqueued MINDS_EYE_RESUME', { sessionId, approved, traceId });
   return { statusCode: 200, body: '' };
 }
 
