@@ -412,7 +412,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       break;
 
     } else if (TRIGGER_TOOLS.has(action)) {
-      const triggerResult = await executeTriggerTool(action, params, callback, traceId);
+      const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
       const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult });
 
       await insertRow('PGC_SessionEntry', {
@@ -555,7 +555,7 @@ async function executeWriteTool(action, params, traceId) {
 // Execute a trigger tool — dispatches a registered workflow to the step executor
 // ---------------------------------------------------------------------------
 
-async function executeTriggerTool(action, params, callback, traceId) {
+async function executeTriggerTool(action, params, callback, traceId, threadTs) {
   try {
     switch (action) {
 
@@ -567,6 +567,13 @@ async function executeTriggerTool(action, params, callback, traceId) {
         const wf = wfResp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
 
+        // Ensure the workflow runs in the Novia session thread. The raw SQS
+        // callback may have threadId null (e.g. first-message invocation), but
+        // threadTs is resolved from session.slack_thread_ts by the caller.
+        const workflowCallback = (callback && threadTs)
+          ? { ...callback, threadId: threadTs }
+          : callback;
+
         const runResp = await insertRow('PGC_WorkflowRun', {
           workflow_id:  wf.id,
           trace_id:     traceId,
@@ -575,7 +582,7 @@ async function executeTriggerTool(action, params, callback, traceId) {
           input:        input,
           stack:        [],
           state:        {},
-          callback,
+          callback:     workflowCallback,
         });
         if (!runResp.success) return { error: `Failed to create workflow run: ${runResp.error}` };
 
