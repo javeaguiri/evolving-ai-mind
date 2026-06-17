@@ -349,6 +349,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let actionCount = currentActionCount;
   let seq         = currentSeq;
   let responded   = false;
+  let earlyExit   = false;
   let turnCost    = 0;
 
   while (turnCost < prefs.turn_limit) {
@@ -366,6 +367,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           message: `Agent reasoning failed: ${llmError.message}`,
         });
       }
+      earlyExit = true;
       break;
     }
 
@@ -434,6 +436,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             sessionId: session.id,
           });
         }
+        earlyExit = true;
         break;
       }
 
@@ -470,10 +473,12 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
             sessionId: session.id,
           });
         }
+        earlyExit = true;
         break;
       }
 
       await postActionGate({ session, action, params, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
+      earlyExit = true;
       break;
 
     } else if (TRIGGER_TOOLS.has(action)) {
@@ -502,11 +507,12 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
         });
       }
+      earlyExit = true;
       break;
     }
   }
 
-  if (!responded || postContinueGateAfterRespond) {
+  if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
     await postTurnLimitGate(session.id, callback, traceId);
   }
 }
