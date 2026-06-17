@@ -159,27 +159,45 @@ function textToBlocks(text, contextText) {
 
 // ---------------------------------------------------------------------------
 // markdownToBlocks — Novia reply renderer using Slack's markdown block type.
-// Splits on paragraph boundaries (double newlines) to preserve document
-// structure. Each chunk becomes a { type: 'markdown', text } block which
-// renders standard markdown: **bold**, _italic_, ~~strikethrough~~, tables,
-// fenced code blocks, and blockquotes — unlike mrkdwn which uses Slack syntax.
+// Splits text into code-block and prose segments first. Code blocks become a
+// dedicated single block each — splitting on \n\n inside a code block would
+// break the ``` pair across separate Slack blocks (each renders independently),
+// leaving fences unclosed. Prose segments are then split on paragraph
+// boundaries as before.
 // ---------------------------------------------------------------------------
 
 function markdownToBlocks(text, contextText) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
-  const paragraphs = text.split(/\n\n+/);
-  let chunk = '';
-  for (const para of paragraphs) {
-    const candidate = chunk ? `${chunk}\n\n${para}` : para;
-    if (candidate.length > BLOCK_CHAR_LIMIT) {
-      if (chunk) blocks.push({ type: 'markdown', text: chunk });
-      chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
+
+  // Split on fenced code blocks (capturing so delimiters stay in array).
+  const segments = text.split(/(```[\s\S]*?```)/);
+
+  for (const seg of segments) {
+    if (seg.startsWith('```')) {
+      // Code block — single block, never split internally.
+      const block = seg.length > BLOCK_CHAR_LIMIT
+        ? `${seg.slice(0, BLOCK_CHAR_LIMIT - 7)}...\n\`\`\``
+        : seg;
+      blocks.push({ type: 'markdown', text: block });
     } else {
-      chunk = candidate;
+      // Prose — split on paragraph boundaries and accumulate into chunks.
+      const paragraphs = seg.split(/\n\n+/);
+      let chunk = '';
+      for (const para of paragraphs) {
+        if (!para.trim()) continue;
+        const candidate = chunk ? `${chunk}\n\n${para}` : para;
+        if (candidate.length > BLOCK_CHAR_LIMIT) {
+          if (chunk) blocks.push({ type: 'markdown', text: chunk });
+          chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
+        } else {
+          chunk = candidate;
+        }
+      }
+      if (chunk) blocks.push({ type: 'markdown', text: chunk });
     }
   }
-  if (chunk) blocks.push({ type: 'markdown', text: chunk });
+
   if (contextText) {
     blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
   }
