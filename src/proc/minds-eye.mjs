@@ -699,8 +699,40 @@ async function executeWriteTool(action, params, traceId) {
         const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
         const wf = wfResp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
+
+        const currentSteps = wf.steps ?? [];
+        const currentMap   = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
+        const proposedMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
+        const allKeys      = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
+        const DIFF_FIELDS  = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
+
+        const diff = {};
+        for (const key of allKeys) {
+          if (!currentMap[key]) {
+            diff[key] = { change: 'added' };
+          } else if (!proposedMap[key]) {
+            diff[key] = { change: 'removed' };
+          } else {
+            const fieldChanges = {};
+            for (const field of DIFF_FIELDS) {
+              if (JSON.stringify(currentMap[key][field]) !== JSON.stringify(proposedMap[key][field])) {
+                fieldChanges[field] = { from: currentMap[key][field], to: proposedMap[key][field] };
+              }
+            }
+            if (Object.keys(fieldChanges).length > 0) diff[key] = fieldChanges;
+          }
+        }
+
         const resp = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: wf.id }], { steps, version: wf.version + 1 });
-        return { success: resp.success, newVersion: wf.version + 1 };
+        return {
+          success:          resp.success,
+          newVersion:       wf.version + 1,
+          stepCountBefore:  currentSteps.length,
+          stepCountAfter:   steps.length,
+          stepCountMismatch: currentSteps.length !== steps.length,
+          diff,
+          steps_written:    steps,
+        };
       }
 
       case 'propose_schema_fix': {
