@@ -96,13 +96,15 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 
   if (!rawText) throw new Error('LLM returned empty response');
 
-  // Extract JSON from the response. Models sometimes wrap output in markdown fences
-  // and may prepend reasoning text before the opening fence or append explanations
-  // after the closing fence. Extract content between the first ``` pair when present;
-  // otherwise use the raw text directly.
-  const fenceMatch    = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const openingStrip  = rawText.replace(/^```(?:json)?\s*/i, '').trim();
-  const clean         = fenceMatch ? fenceMatch[1].trim() : openingStrip;
+  // Extract JSON from the response. Models sometimes wrap output in markdown fences.
+  // Only strip fences when the raw output ITSELF starts with ``` — if the output is
+  // already a JSON object, any ``` inside it belong to embedded code blocks in string
+  // values and must not be extracted (they would yield "javascript..." which fails parse).
+  const trimmedRaw = rawText.trim();
+  const fenceMatch = trimmedRaw.startsWith('```')
+    ? trimmedRaw.match(/^```(?:json)?\s*([\s\S]*?)```/i)
+    : null;
+  const clean = fenceMatch ? fenceMatch[1].trim() : trimmedRaw;
 
   try {
     return JSON.parse(clean);
