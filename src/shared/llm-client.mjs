@@ -112,6 +112,20 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     if (jsonStart > 0) {
       try { return JSON.parse(clean.slice(jsonStart)); } catch { /* fall through */ }
     }
+    // LLM embedded invalid escape sequences in markdown message strings — e.g. a bare \
+    // followed by a literal newline (line-continuation style) or non-JSON escapes like
+    // \d \s from regex in code snippets. Sanitize and retry before giving up.
+    const sanitized = clean
+      .replace(/\\\n/g, '\\n')
+      .replace(/\\\r/g, '\\r')
+      .replace(/\\(?!["\\\/bfnrtu])/g, '\\\\');
+    if (sanitized !== clean) {
+      try { return JSON.parse(sanitized); } catch { /* fall through */ }
+      const sanitizedStart = sanitized.indexOf('{');
+      if (sanitizedStart > 0) {
+        try { return JSON.parse(sanitized.slice(sanitizedStart)); } catch { /* fall through */ }
+      }
+    }
     const error = firstError;
     const parseErr = new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
     parseErr.rawOutput = clean;
