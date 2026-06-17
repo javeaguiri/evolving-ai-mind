@@ -414,6 +414,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       if (callback) {
         let replyText = message ?? '(no message)';
+        // Slack requires ``` to be on its own line; normalize before sending.
+        replyText = replyText.replace(/([^\n])(`{3})/g, '$1\n$2').replace(/(`{3})([^\n])/g, '$1\n$2');
         if (advisory && prefs.advisory_level !== 'off') {
           replyText += `\n\n---\n_Advisory: ${advisory}_`;
         }
