@@ -73,9 +73,11 @@ Full design: `docs/novia-design.md`
 - AC4 validated (2026-06-17): corrupted step 17 `on_else: "18"` → Novia diagnosed routing defect, proposed correct fix (gate diff: `"18" → "9"`), applied on approval, workflow now at v2 with `on_else: "9"`. ✅
 - Caveat: Novia's respond explanation after gate approval was a hallucination — she described a fabricated step 7 `Array.isArray()` fix that was never applied. The gate diff and actual DB write were correct; the post-approval narrative was not. Noted as a Generation fault pattern to watch.
 
-**N4. Memory write**
-- After each completed session: write episodic memory (what was diagnosed, what was changed, whether fix passed L1)
-- Memory scope: `{ workflow: name }` for correction tasks, `{ domain: name }` for domain tasks
+**N4. Memory write** ✅ DONE (2026-06-17)
+- Harness (factual): `writeFactualMemory` called in `handleGateResume` after every successful gated write — diff summary, step counts, outcome, scope derived from params. Tagged `novia_fix`.
+- Novia (diagnostic): `write_memory` housekeeping tool — no gate, no action limit, scope auto-derived from tool call history via `deriveScope`. Novia writes diagnostic reasoning before final respond.
+- System prompt v13→v14: step 0 `read_memory` (scope-filtered) added to each diagnosis protocol; MEMORY WRITE block added.
+- Validated session 550: factual row (id 77) + diagnostic row (id 78) written with correct scope `{ workflow: "spaced_repetition_quiz" }`. Novia's response grounded in diff — hallucination resolved.
 
 ### Track P — design_workflow_prompts (carry-forward)
 
