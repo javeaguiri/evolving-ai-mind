@@ -67,7 +67,7 @@ const INLINE_WRITE_TOOLS = new Set([
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
-  'propose_workflow_fix', 'delete_data',
+  'propose_workflow_fix', 'propose_schema_fix', 'delete_data',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -521,15 +521,19 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 // Post an action gate — stores __pending__ entry, posts HUMAN_GATE
 // ---------------------------------------------------------------------------
 
-function gateButtonConfig(action) {
+function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
-  if (action === 'propose_workflow_fix')   return { confirmLabel: 'Apply',  confirmStyle: null };
+  if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
+  if (action === 'propose_schema_fix') {
+    const isDrop = params.operation === 'dropColumn';
+    return { confirmLabel: isDrop ? 'Drop' : 'Apply', confirmStyle: isDrop ? 'danger' : null };
+  }
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
 async function postActionGate({ session, action, params, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
-  const { confirmLabel, confirmStyle } = gateButtonConfig(action);
+  const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
 
   await insertRow('PGC_SessionEntry', {
     session_id:      session.id,
@@ -608,6 +612,40 @@ async function buildGateText(action, params, traceId) {
         return lines.join('\n');
       }
 
+      case 'propose_schema_fix': {
+        const { operation, tableName } = params;
+        if (!operation || !tableName) {
+          return `**Proposed schema fix** — missing operation or tableName`;
+        }
+        const lines = [`**Proposed schema fix: \`${tableName}\`** — \`${operation}\``];
+        switch (operation) {
+          case 'addColumn': {
+            const { column = {} } = params;
+            lines.push(`Add column: \`${column.name}\` (${column.type}${column.nullable === false ? ', NOT NULL' : ''})`);
+            break;
+          }
+          case 'modifyColumn': {
+            const { columnName, newType, nullable, using: usingExpr } = params;
+            if (newType)               lines.push(`Change \`${columnName}\` type → \`${newType}\`${usingExpr ? ` USING ${usingExpr}` : ''}`);
+            if (nullable !== undefined) lines.push(`Set \`${columnName}\` nullable: ${nullable}`);
+            break;
+          }
+          case 'dropColumn': {
+            const { columnName } = params;
+            lines.push(`Drop column \`${columnName}\` — irreversible, cascades to dependent constraints.`);
+            break;
+          }
+          case 'modifyConstraint': {
+            const { constraintName, expression } = params;
+            lines.push(`Replace constraint \`${constraintName}\` with: \`CHECK (${expression})\``);
+            break;
+          }
+          default:
+            lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
+        }
+        return lines.join('\n');
+      }
+
       case 'delete_data': {
         const { tableName, filters = [] } = params;
         let count = '?';
@@ -663,6 +701,15 @@ async function executeWriteTool(action, params, traceId) {
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
         const resp = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: wf.id }], { steps, version: wf.version + 1 });
         return { success: resp.success, newVersion: wf.version + 1 };
+      }
+
+      case 'propose_schema_fix': {
+        const { operation, tableName, ...rest } = params;
+        if (!operation || !tableName) return { error: 'operation and tableName are required' };
+        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint']);
+        if (!allowed.has(operation)) return { error: `Unknown schema operation: ${operation}` };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost(`/api/v1/serv/schema/${operation}`, { tableName, ...rest });
       }
 
       default:
@@ -811,14 +858,19 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     'Respond with exactly one JSON object. Use ONLY these action values:\n' +
     '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
     '- Write without gate (executes immediately): update_data, insert_data\n' +
-    '- Write with gate (requires approval): propose_workflow_fix, delete_data\n' +
+    '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data\n' +
     '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
     '  insert_data: { tableName, row: {field: value} }\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
-    '  propose_workflow_fix: { workflowName, steps: [...] } — your own tool for correcting workflow steps; posts a diff gate for human approval before writing.\n' +
+    '  propose_workflow_fix: { workflowName, steps: [...] } — corrects workflow steps; posts a diff gate for human approval before writing.\n' +
+    '  propose_schema_fix: { operation, tableName, ...opParams } — applies a schema change; posts description for human approval before executing.\n' +
+    '    addColumn:        { operation: "addColumn", tableName, column: { name, type, nullable? } }\n' +
+    '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
+    '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
+    '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
     'Params for trigger tools:\n' +
     '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
     'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
