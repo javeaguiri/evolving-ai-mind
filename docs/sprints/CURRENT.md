@@ -70,8 +70,8 @@ Full design: `docs/novia-design.md`
 - `buildGateText` diffs current vs proposed steps — shows only changed fields per step
 - `callback.mjs` `minds_eye_gate` accepts `confirmLabel`/`confirmStyle` — fix_workflow_steps renders "Apply", delete_data renders "Delete" (danger)
 - `gateButtonConfig` helper determines label/style per action type
-- Test setup: `spaced_repetition_quiz` step 17 `on_else` corrupted `"9"` → `"18"` (quiz jumps to session summary after 1 card)
-- Validate AC4 end-to-end from Slack: `/novia the quiz workflow ends after the first card`
+- AC4 validated (2026-06-17): corrupted step 17 `on_else: "18"` → Novia diagnosed routing defect, proposed correct fix (gate diff: `"18" → "9"`), applied on approval, workflow now at v2 with `on_else: "9"`. ✅
+- Caveat: Novia's respond explanation after gate approval was a hallucination — she described a fabricated step 7 `Array.isArray()` fix that was never applied. The gate diff and actual DB write were correct; the post-approval narrative was not. Noted as a Generation fault pattern to watch.
 
 **N4. Memory write**
 - After each completed session: write episodic memory (what was diagnosed, what was changed, whether fix passed L1)
