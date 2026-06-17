@@ -75,6 +75,11 @@ const TRIGGER_TOOLS = new Set([
   'run_workflow',
 ]);
 
+// Housekeeping tools — execute immediately, no gate, do not count against action limit.
+const HOUSEKEEPING_TOOLS = new Set([
+  'write_memory',
+]);
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
@@ -310,6 +315,8 @@ async function handleGateResume(body, callback, traceId, req) {
   });
   workingHistory.push({ role: 'tool', content: resultStr, sequence_number: currentSeq });
 
+  await writeFactualMemory(action, params, result, session.id, traceId);
+
   const newActionCount = (session.minds_eye_action_count ?? 0) + 1;
   await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
     minds_eye_action_count: newActionCount,
@@ -424,6 +431,26 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       turnCost += toolResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
+
+    } else if (HOUSEKEEPING_TOOLS.has(action)) {
+      const enrichedParams = action === 'write_memory'
+        ? { ...params, scope: deriveScope(workingHistory) }
+        : params;
+      const hkResult = await executeWriteTool(action, enrichedParams, traceId);
+      const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult });
+
+      await insertRow('PGC_SessionEntry', {
+        session_id:      session.id,
+        sequence_number: seq,
+        role:            'tool',
+        content:         hkEntry,
+      });
+
+      workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
+      seq += 1;
+
+      turnCost += hkResult.error ? 0.5 : 1.0;
+      console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
       if (actionCount >= prefs.max_actions_per_session) {
@@ -693,6 +720,20 @@ async function executeWriteTool(action, params, traceId) {
         return await deleteRows(tableName, filters);
       }
 
+      case 'write_memory': {
+        const { content, memory_type = 'episodic', scope = {}, tags = [], priority = 5 } = params;
+        if (!content) return { error: 'content is required' };
+        const resp = await insertRow('PGC_Memory', {
+          memory_type,
+          scope,
+          content,
+          tags,
+          priority,
+          token_estimate: Math.ceil(content.length / 4),
+        });
+        return { success: resp.success, scope };
+      }
+
       case 'propose_workflow_fix': {
         const { workflowName, steps } = params;
         if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
@@ -808,6 +849,79 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
 }
 
 // ---------------------------------------------------------------------------
+// Derive memory scope from session tool call history (pure — no I/O)
+// ---------------------------------------------------------------------------
+
+function deriveScope(workingHistory) {
+  const scope = {};
+  for (const entry of workingHistory) {
+    if (entry.role !== 'tool') continue;
+    let parsed;
+    try { parsed = JSON.parse(entry.content); } catch { continue; }
+    const { tool, params = {}, result = {} } = parsed;
+    if (tool === 'propose_workflow_fix' && params.workflowName)           scope.workflow = params.workflowName;
+    if (tool === 'read_workflow'         && params.workflowName && !scope.workflow) scope.workflow = params.workflowName;
+    if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
+    if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
+    if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
+  }
+  return scope;
+}
+
+// ---------------------------------------------------------------------------
+// Write a harness-authored factual memory row after a successful gated write
+// ---------------------------------------------------------------------------
+
+async function writeFactualMemory(action, params, result, sessionId, traceId) {
+  try {
+    let scope   = {};
+    let content = '';
+
+    if (action === 'propose_workflow_fix') {
+      const { workflowName } = params;
+      scope = { workflow: workflowName };
+      const diffSummary = result.diff
+        ? Object.entries(result.diff).map(([step, changes]) => {
+            if (changes.change === 'added')   return `step ${step}: added`;
+            if (changes.change === 'removed') return `step ${step}: removed`;
+            return Object.entries(changes)
+              .map(([field, { from, to }]) => `step ${step} ${field}: ${JSON.stringify(from)} → ${JSON.stringify(to)}`)
+              .join('; ');
+          }).join('. ')
+        : 'diff unavailable';
+      const countNote = result.stepCountMismatch
+        ? ` (step count changed: ${result.stepCountBefore} → ${result.stepCountAfter})`
+        : '';
+      content = `Session ${sessionId}: fixed ${workflowName} v${(result.newVersion ?? 1) - 1}→v${result.newVersion ?? '?'}. ${diffSummary}${countNote}. Outcome: ${result.success ? 'success' : 'failed'}.`;
+
+    } else if (action === 'propose_schema_fix') {
+      const { operation, tableName } = params;
+      let domain = null;
+      try {
+        const schemaResp = await getRows('PGC_Schema', [{ column: 'table_name', op: 'eq', value: tableName }], null, 1);
+        domain = schemaResp.rows?.[0]?.domain ?? null;
+      } catch { /* best-effort */ }
+      scope   = domain ? { domain, table: tableName } : { table: tableName };
+      content = `Session ${sessionId}: schema fix on ${tableName} — ${operation}. Outcome: ${result.success ? 'success' : 'failed'}.`;
+    }
+
+    if (!content) return;
+
+    await insertRow('PGC_Memory', {
+      memory_type:    'episodic',
+      scope,
+      content,
+      tags:           ['novia_fix'],
+      priority:       5,
+      token_estimate: Math.ceil(content.length / 4),
+    });
+    console.info('proc/minds-eye: factual memory written', { action, scope, traceId });
+  } catch (error) {
+    console.warn('proc/minds-eye: writeFactualMemory failed (non-fatal)', { traceId, error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Load preferences and system prompt from PGC_SystemContext
 // ---------------------------------------------------------------------------
 
@@ -891,6 +1005,7 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
     '- Write without gate (executes immediately): update_data, insert_data\n' +
     '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data\n' +
+    '- Memory (no gate, no action limit): write_memory\n' +
     '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +
@@ -903,6 +1018,7 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
     '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
     '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
+    '  write_memory: { content, memory_type? } — record diagnostic reasoning; call before final respond after any change or notable finding. Scope is auto-derived from your tool history — do not set scope.\n' +
     'Params for trigger tools:\n' +
     '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
     'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
