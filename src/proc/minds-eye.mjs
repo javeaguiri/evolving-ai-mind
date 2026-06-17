@@ -401,6 +401,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         if (advisory && prefs.advisory_level !== 'off') {
           replyText += `\n\n---\n_Advisory: ${advisory}_`;
         }
+        replyText += `\n\n_Session ${session.id}_`;
         await enqueueCallback(callback, {
           type:      'HUMAN_NOTIFICATION',
           format:    'markdown',
