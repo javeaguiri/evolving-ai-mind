@@ -366,16 +366,32 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     try {
       decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId);
     } catch (llmError) {
-      console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
-      if (callback) {
-        await enqueueCallback(callback, {
-          type:    'HUMAN_NOTIFICATION',
-          traceId,
-          message: `Agent reasoning failed: ${llmError.message}`,
-        });
+      if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
+        // Generation fault: LLM produced valid content but invalid JSON escaping.
+        // One correction turn (0.5 cost) — send raw output back and ask for reformat.
+        try {
+          const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
+          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId);
+          turnCost += 0.5;
+          console.info('proc/minds-eye: JSON parse corrected', { traceId });
+        } catch (corrErr) {
+          console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
+          if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: `Agent reasoning failed: ${llmError.message}` });
+          earlyExit = true;
+          break;
+        }
+      } else {
+        console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
+        if (callback) {
+          await enqueueCallback(callback, {
+            type:    'HUMAN_NOTIFICATION',
+            traceId,
+            message: `Agent reasoning failed: ${llmError.message}`,
+          });
+        }
+        earlyExit = true;
+        break;
       }
-      earlyExit = true;
-      break;
     }
 
     turnCount += 1;
