@@ -901,7 +901,7 @@ async function handleMindsEyeViewSubmission(payload, traceId) {
         type:              'MINDS_EYE',
         traceId:           effectiveTrace,
         prompt:            inputValue,
-        existingSessionId: sessionId,
+        sessionId,
         slackUser:         payload.user?.id,
         callback:          { provider: 'slack', channel, threadId: ackTs ?? threadTs },
         enqueuedAt:        new Date().toISOString(),
