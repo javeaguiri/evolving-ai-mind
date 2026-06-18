@@ -558,14 +558,15 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
     await sqs.send(new SendMessageCommand({
       QueueUrl:    process.env.SQS_WORKFLOW_URL,
       MessageBody: JSON.stringify({
-        type:       'MINDS_EYE_RESUME',
-        resumeType: 'continue',
+        type:             'MINDS_EYE_RESUME',
+        resumeType:       'continue',
         sessionId,
-        approved:   !!approved,
-        slackUser:  payload.user?.id,
-        callback:   { provider: 'slack', channel, threadId: threadTs },
+        approved:         !!approved,
+        resetActionCount: !!buttonValue.resetActionCount,
+        slackUser:        payload.user?.id,
+        callback:         { provider: 'slack', channel, threadId: threadTs },
         traceId,
-        enqueuedAt: new Date().toISOString(),
+        enqueuedAt:       new Date().toISOString(),
       }),
     }));
   } catch (error) {
