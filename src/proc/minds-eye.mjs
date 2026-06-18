@@ -27,7 +27,7 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, updateRows, deleteRows }       from '../shared/serv-client.mjs';
+import { getRows, insertRow, insertRows, updateRows, deleteRows } from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 
@@ -727,9 +727,18 @@ async function executeWriteTool(action, params, traceId) {
       }
 
       case 'insert_data': {
-        const { tableName, row = {} } = params;
+        const { tableName, row, rows } = params;
         if (!tableName) return { error: 'tableName is required' };
-        const resp = await insertRow(tableName, row);
+        if (Array.isArray(rows) && rows.length > 0) {
+          const CHUNK = 100;
+          let inserted = 0;
+          for (let i = 0; i < rows.length; i += CHUNK) {
+            const resp = await insertRows(tableName, rows.slice(i, i + CHUNK));
+            inserted += resp.count ?? 0;
+          }
+          return { success: true, count: inserted };
+        }
+        const resp = await insertRow(tableName, row ?? {});
         return { success: resp.success, row: resp.row };
       }
 
@@ -1029,7 +1038,8 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '- respond (final answer to user)\n' +
     'Params for write tools:\n' +
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
-    '  insert_data: { tableName, row: {field: value} }\n' +
+    '  insert_data: { tableName, row: {field: value} }                          -- single row\n' +
+    '  insert_data: { tableName, rows: [{field: value}, ...] }                 -- batch (any size, counts as one action)\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
     '  propose_workflow_fix: { workflowName, steps: [...] } — corrects workflow steps; posts a diff gate for human approval before writing.\n' +
     '  propose_schema_fix: { operation, tableName, ...opParams } — applies a schema change; posts description for human approval before executing.\n' +
