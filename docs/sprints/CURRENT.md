@@ -145,36 +145,9 @@ Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 **W4. PGC_WorkflowRun.session_id column (X1)** ✅ DONE (2026-06-14)
 - Column and seed entry already present from prior session. No changes needed. Fixed stale `addColumn` curl example in `arch-data.md`.
 
-### Track L — Lambda Loop Watch
+### Track L — Lambda Loop Watch → **Deferred to Sprint 6**
 
-**Context:** Sprint 4 session 21 identified and fixed the recursive loop amplifier: `enqueueWorkflow` on the idempotency path in `run-workflow.mjs` was re-enqueuing on every `stuckCount===1` hit, causing N duplicate messages to sustain until AWS recursion counter hit 16. Fix removed that call. Whether a cold-start can trigger a new recursion path is unconfirmed.
-
-**L1. Verify fix held**
-- Check CloudWatch Lambda metrics (invocations, concurrent executions) and SQS ApproximateNumberOfMessagesVisible on WorkflowQueue for the period 2026-06-10 → present
-- Confirm no recursive loop auto-remediation events since session 21
-- Document finding in session notes
-
-**L2. Add CloudWatch alarms**
-- Alarm: `WorkflowQueue` ApproximateNumberOfMessagesVisible > 50 for 2 consecutive 1-minute periods → SNS notification
-- Alarm: `evolving-mind-ai-proc` ConcurrentExecutions > 20 → SNS notification
-- These fire before AWS auto-remediation (threshold 16 Lambda hops), giving visibility and time to intervene
-- Add alarm definitions to `template.yaml`
-
-**L2b. Auto-halt on alarm**
-- SNS alarm → Lambda (or SNS subscription to existing PROC HTTP endpoint) → `updateRows PGC_WorkflowRun WHERE status IN ('running', 'awaiting_human_gate') SET status = 'cancelled'`
-- This is `/shutdown` triggered automatically — equivalent to running it from Slack but without requiring a human to be watching
-- SQS messages already in flight continue to arrive but are immediately discarded (run status = cancelled)
-- Queue drains naturally at its own delivery rate; no purge needed
-- Note: `/shutdown` does not interrupt a currently-executing Lambda invocation, only prevents future ones from proceeding
-
-**L3. Cold-start risk assessment**
-- Check configured SQS visibility timeout on WorkflowQueue — if < Lambda cold-start + execution time, a timeout expiry could cause redelivery
-- Confirm idempotency path in `run-workflow.mjs` is safe without the re-enqueue: redelivered message → idempotency hit → skip + return (no SQS re-enqueue) → message deleted
-- Document result: if safe, add a comment in `run-workflow.mjs` explaining the invariant
-
-**L4. Monitor during Sprint 5 testing**
-- Novia will produce new SQS patterns (NOVIA_MESSAGE, tool calls, resume gates). Monitor ConcurrentExecutions after each Novia test session.
-- If any new recursive pattern is observed, stop and diagnose before proceeding.
+No recursive loop events observed since the Sprint 4 fix. No active risk signals. Deferred to Sprint 6 to focus on higher-priority domain work.
 
 ---
 
