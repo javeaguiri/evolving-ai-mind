@@ -2797,6 +2797,98 @@ paths:
         '500':
           description: LLM call or DB write failed
 
+  /api/v1/ui/slack/minds-eye:
+    post:
+      summary: /novia Slack slash command — start or continue a Novia agentic session
+      description: >
+        Receives the /novia slash command from Slack. Validates the prompt, returns an
+        ephemeral ACK to Slack within 3 seconds, then enqueues a MINDS_EYE message to
+        WorkflowQueue for async processing by proc/minds-eye.mjs.
+        Thread replies automatically continue the session — the Slack thread_ts is the
+        session lookup key in PGC_Session.
+      tags: [Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [text, user_id, channel_id]
+              properties:
+                text:
+                  type: string
+                  description: User prompt text following /novia
+                user_id:
+                  type: string
+                  description: Slack user ID
+                channel_id:
+                  type: string
+                  description: Slack channel ID
+      responses:
+        '200':
+          description: Ephemeral ACK — Novia is thinking
+        '400':
+          description: Missing prompt — usage hint returned
+
+  /api/v1/proc/minds-eye:
+    post:
+      summary: Novia agentic reasoning loop (HTTP test path)
+      description: >
+        HTTP test path for the MINDS_EYE and MINDS_EYE_RESUME SQS message types.
+        Assembles Novia context (Layer 1 — PGC_Workflow catalog + PGC_Prompt list;
+        Layer 2 — PGC_Memory scope-filtered), runs the agentic reasoning loop
+        (up to turn_limit iterations), executes read/write tools per action,
+        posts HUMAN_GATE for gated writes, and delivers the final respond via
+        HUMAN_NOTIFICATION. In production, /novia enqueues MINDS_EYE to SQS.
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userInput]
+              properties:
+                userInput:
+                  type: string
+                  description: User prompt for Novia
+                sessionId:
+                  type: integer
+                  description: Existing PGC_Session.id — omit to start a new session
+                callback:
+                  $ref: '#/components/schemas/Callback'
+            examples:
+              new_session:
+                summary: Start a new Novia session
+                value:
+                  userInput: "show me my flashcard decks"
+              continue_session:
+                summary: Continue an existing session
+                value:
+                  userInput: "now fix the routing issue on step 17"
+                  sessionId: 42
+      responses:
+        '200':
+          description: Agentic loop completed — respond action posted to Slack
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  sessionId:
+                    type: integer
+                  turns:
+                    type: integer
+                    description: Reasoning turns consumed
+        '400':
+          description: Missing userInput
+        '500':
+          description: Agentic loop error
+
   # ── SERV ───────────────────────────────────────────────────────────────────
 
   /api/v1/serv/ping-db:

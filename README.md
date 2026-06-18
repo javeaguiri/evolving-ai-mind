@@ -1,6 +1,6 @@
 # evolving-mind-ai
 
-> A self-evolving, low-cost cognitive automation brain — v3.3
+> A self-evolving, low-cost cognitive automation brain — v3.5
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
 [![AWS SAM](https://img.shields.io/badge/infra-AWS%20SAM-orange)](https://docs.aws.amazon.com/serverless-application-model/)
@@ -145,14 +145,14 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | **PGC** | `PGC_*` | System config — workflow definitions, prompts, schemas, intent maps |
 | **PGD** | `PGD_*` | User domain data — everything the brain creates at runtime |
 
-### PGC System Tables (13 bootstrapped)
+### PGC System Tables (15 bootstrapped)
 
 | Table | Role |
 |---|---|
 | `PGC_Schema` | Registry of every table in the system, including itself (self-referential) |
 | `PGC_TableMap` | Security gatekeeper — SERV-Table rejects writes to any unregistered table |
 | `PGC_EntitySchema` | Multi-table business entity definitions for `jsonb_agg` queries |
-| `PGC_DomainHelp` | User-facing command aliases and help text per domain |
+| `PGC_DomainHelp` | User-facing command aliases and help text per domain; pgvector embedding for semantic search |
 | `PGC_Workflow` | Reusable workflow definitions, versioned, with quality scores and guardrail thresholds |
 | `PGC_WorkflowRun` | One row per execution — holds live execution stack, state, and safety counters |
 | `PGC_WorkflowRunStep` | Append-only audit log — idempotency + debugging |
@@ -163,6 +163,8 @@ The execution stack lives in `PGC_WorkflowRun.stack`. A sequential iterator **ne
 | `PGC_StepType` | Catalogue of valid step types with input/output contracts |
 | `PGC_Capability` | Registry of what the system can currently do — injected into LLM prompts |
 | `PGC_Memory` | Persistent memory store — episodic, semantic, and procedural memories injected into LLM calls by scope and budget |
+| `PGC_Session` | One row per Novia / chat / explain session — tracks turn and action counts, Slack thread_ts |
+| `PGC_SessionEntry` | One row per turn — reconstructs LLM messages array; `role = 'tool'` for Novia tool calls |
 
 A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical table. Used by PROC when building LLM prompts for workflow evaluation.
 
@@ -175,14 +177,15 @@ A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical
 | `src/shared/llm-client.mjs` | `callLlm()`, `callLlmWithCorrection()` — shared LLM caller |
 | `src/shared/serv-client.mjs` | `servPost()`, `getRows()`, `insertRow()`, `updateRows()` — shared SERV HTTP client |
 
-### Semantic Search — pgvector (Designed, Not Yet Enabled)
+### Semantic Search — pgvector (Active)
 
-When enabled, `text-embedding-3-small` (OpenAI, 1536 dimensions) will power:
-- **Intent matching** — find the right workflow by semantic similarity, not just keywords
-- **`/help` search** — find a domain from a natural language description
+`text-embedding-3-small` (OpenAI, 1536 dimensions) is live and powering:
+- **Domain matching** — Novia's `search_domain_help` tool and the intent classifier's Pass 2 both use pgvector cosine similarity on `PGC_DomainHelp.embedding`
+- **`/help` search** — domain lookup by semantic similarity, not just keyword matching
+
+Planned:
+- **Intent matching** — `PGC_Workflow.intent_embedding` for Pass 1.5 semantic intent routing
 - **Prompt deduplication** — prevent generating duplicate prompts
-
-Enable with: `CREATE EXTENSION IF NOT EXISTS vector;` on RDS PostgreSQL 15+.
 
 ---
 
@@ -217,6 +220,9 @@ evolving-mind-ai/
 │   │       ├── help.mjs              # /help — ACK + enqueues HELP to WorkflowQueue
 │   │       ├── shutdown.mjs          # /shutdown — calls PROC synchronously, cancels active runs
 │   │       ├── interactive.mjs       # /interactive — Block Kit button clicks → resume_gate SQS
+│   │       ├── minds-eye.mjs         # /novia — ACK + enqueues MINDS_EYE to WorkflowQueue
+│   │       ├── chat.mjs              # /chat — ACK + enqueues CHAT_MESSAGE to WorkflowQueue
+│   │       ├── explain.mjs           # /explain — ACK + enqueues EXPLAIN_QUERY to WorkflowQueue
 │   │       └── callback.mjs          # SQS SlackResultsQueue consumer — routes on message type
 │   │
 │   ├── proc/                         # Process tier — all business logic
@@ -233,7 +239,10 @@ evolving-mind-ai/
 │   │   ├── delete-domain.mjs         # /proc/delete-domain — drop PGD tables + deregister
 │   │   ├── llm-harness.mjs           # Central LLM call assembly — memory retrieval + save_to_memory hook
 │   │   ├── memory-client.mjs         # retrieveMemories(), expandScope(), formatMemoryBlock()
-│   │   └── memory-writer.mjs         # MEMORY_WRITE SQS handler — fire-and-forget episodic writes
+│   │   ├── memory-writer.mjs         # MEMORY_WRITE SQS handler — fire-and-forget episodic writes
+│   │   ├── minds-eye.mjs             # MINDS_EYE + MINDS_EYE_RESUME SQS handler — Novia agentic loop
+│   │   ├── chat.mjs                  # CHAT_MESSAGE SQS handler — /chat companion
+│   │   └── explain.mjs               # EXPLAIN_QUERY SQS handler — /explain diagnostic
 │   │
 │   └── serv/                         # Service tier — DB access only
 │       ├── handler.mjs               # Route dispatcher
@@ -295,6 +304,9 @@ evolving-mind-ai/
 | Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
 | Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
 | Workflow versioning | ✅ Working | `dev_scripts/upsert-workflow.mjs` — push new versions without deploy |
+| `/novia` — Novia Phase 1 | ✅ Working | Agentic reasoning loop: context assembly (Layer 1 PGC catalog + Layer 2 memory), read tools (query_table, read_workflow, simulate_workflow, etc.), gated write tools (propose_workflow_fix, update_data, etc.), turn + action limit gates with Continue/Follow-up/Cancel, thread session continuity, factual + diagnostic memory writes |
+| pgvector semantic search | ✅ Active | `PGC_DomainHelp.embedding` populated; used by Novia `search_domain_help` and intent classifier Pass 2 domain alias matching |
+| PGC_Session / PGC_SessionEntry | ✅ Live | Session storage for Novia, /chat, /explain; `minds_eye_turn_count`, `minds_eye_action_count` counters; `compressed` column for future context compression; `role = 'tool'` for Novia tool-call transcript |
 
 ### Step Types
 
@@ -457,6 +469,7 @@ In the [Slack API dashboard](https://api.slack.com/apps):
    | `/mind` | `mind` | Natural language intent — primary command |
    | `/m` | `mind` | Alias for `/mind` (same URL) |
    | `/shutdown` | `shutdown` | Emergency stop — cancel all active workflow runs |
+   | `/novia` | `minds-eye` | Novia agentic assistant — inspect data, fix workflows, diagnose issues |
 
 2. **Interactivity** → Request URL:
    ```
@@ -491,6 +504,8 @@ In the [Slack API dashboard](https://api.slack.com/apps):
 | Gap 1 (interactive `/help`) + Gap 4 (entity schema) + structural refactoring | `v3.2-create-domain-complete-w-help` | ✅ Done |
 | Sprint 2 — create_workflow generates working domain workflows end-to-end; R/L brain pipeline operational; routing matrix + smoke test replace broken L2 path execution | `sprint/02-create-workflow-reliability` | ✅ Done |
 | Sprint 3 — Memory layer complete: PGC_Memory, write_memory step, llm-harness.mjs, memory-client.mjs, memory-writer.mjs, MEMORY_WRITE SQS. create_domain writes episodic + semantic memories. fix_workflow retrieves procedural memories. Domain workflow completions write episodic summaries. quiz_flashcards workflow runs end-to-end in prod | `sprint/03-memory-quiz` | ✅ Done |
+| Sprint 4 — create_workflow quality: R/L brain pipeline, skeleton-first generation (AC removed), L1 routing + JS smoke tests, js_transform sandbox, SRS schema fixes, domain propagation B1–B5. PGC_Session/PGC_SessionEntry bootstrapped. /chat + /explain validated | `sprint/04-create-workflow-quality` | ✅ Done |
+| Sprint 5 — Novia Phase 1: minds-eye.mjs agentic loop, /novia Slack command, 8 read tools, gated write tools (propose_workflow_fix, update_data, insert_data, delete_data, propose_schema_fix), turn + action limit gates, thread session continuity, factual + diagnostic memory writes. pgvector active. Domain propagation audit (W3) complete | `sprint/05-novia-phase1` | ✅ Done |
 
 ---
 

@@ -170,6 +170,7 @@ callback routing, and runtime safety counters.
 | steps_in_window | integer | Steps executed since last `human_gate` completion. Reset to 0 when a human_gate step completes. Used by Guard 1 |
 | window_started_at | timestamptz | Timestamp when current velocity window started. Reset with `steps_in_window`. Used by Guard 1 |
 | error | jsonb | Last error details |
+| session_id | integer FK | ✦ → PGC_Session.id nullable — set when a Novia session triggers a sub-workflow run via `run_workflow` tool |
 | started_at | timestamptz | |
 | completed_at | timestamptz | |
 | created_at | timestamptz | |
@@ -503,41 +504,47 @@ call diagnostics. Full design, DDL, messages array reconstruction, and Slack com
 flows are specified in `docs/arch-session.md`.
 
 ##### PGC_Session
-One row per session, regardless of session type. Created at the start of any `/chat`
+One row per session, regardless of session type. Created at the start of any `/novia`, `/chat`,
 or `/explain` command, or by the `llm_call` step handler when diagnostics are enabled
 for the current workflow.
 
 ```sql
 CREATE TABLE "PGC_Session" (
-  id              SERIAL PRIMARY KEY,
-  session_type    VARCHAR(30)   NOT NULL,          -- 'general_chat' | 'llm_call_diagnostic'
-  query_id        UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
-  slack_thread_ts VARCHAR(50)   NULL,              -- general_chat lookup key (Slack thread_ts)
-  workflow_name   VARCHAR(100)  NULL,              -- llm_call_diagnostic: PGC_Workflow.name
-  run_id          UUID          NULL,              -- llm_call_diagnostic
-  trace_id        VARCHAR(100)  NULL,              -- llm_call_diagnostic; matches Slack trace
-  step_id         VARCHAR(50)   NULL,              -- llm_call_diagnostic: workflow step ID
-  intent_category VARCHAR(100)  NULL,              -- llm_call_diagnostic
-  created_at      TIMESTAMP     NOT NULL DEFAULT NOW()
+  id                    SERIAL PRIMARY KEY,
+  session_type          VARCHAR(30)   NOT NULL,   -- 'minds_eye' | 'general_chat' | 'llm_call_diagnostic'
+  query_id              UUID          NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+  slack_thread_ts       VARCHAR(50)   NULL,        -- session lookup key (Slack thread_ts)
+  workflow_name         VARCHAR(100)  NULL,        -- llm_call_diagnostic: PGC_Workflow.name
+  run_id                UUID          NULL,        -- llm_call_diagnostic
+  trace_id              VARCHAR(100)  NULL,        -- llm_call_diagnostic; matches Slack trace
+  step_id               VARCHAR(50)   NULL,        -- llm_call_diagnostic: workflow step ID
+  intent_category       VARCHAR(100)  NULL,        -- llm_call_diagnostic
+  minds_eye_turn_count  INTEGER       NOT NULL DEFAULT 0,  -- turns consumed in this Novia session
+  minds_eye_action_count INTEGER      NOT NULL DEFAULT 0,  -- write-tool actions consumed
+  created_at            TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 ```
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
-| session_type | varchar(30) NOT NULL | `general_chat` \| `llm_call_diagnostic` |
+| session_type | varchar(30) NOT NULL | `minds_eye` \| `general_chat` \| `llm_call_diagnostic` |
 | query_id | uuid UNIQUE NOT NULL | User-facing reference; appears in Slack diagnostic notifications and is the `/explain` argument |
-| slack_thread_ts | varchar(50) NULL | `general_chat` follow-up lookup key; `llm_call_diagnostic` sessions also populate this when a Slack reply is posted |
+| slack_thread_ts | varchar(50) NULL | Session follow-up lookup key (Slack thread_ts); used by Novia thread continuation and /chat |
 | workflow_name | varchar(100) NULL | `llm_call_diagnostic` only: `PGC_Workflow.name` — stored without ID join for readability |
 | run_id | uuid NULL | `llm_call_diagnostic` only |
 | trace_id | varchar(100) NULL | `llm_call_diagnostic` only; consistent with trace shown in Slack replies |
 | step_id | varchar(50) NULL | `llm_call_diagnostic` only |
 | intent_category | varchar(100) NULL | `llm_call_diagnostic` only |
+| minds_eye_turn_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — reasoning turns consumed; compared against `minds_eye_preferences.turn_limit` |
+| minds_eye_action_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — write-tool actions consumed; compared against `minds_eye_preferences.max_actions_per_session` |
 | created_at | timestamp | |
 
 Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`
 
-**Field rules:** All `llm_call_diagnostic` fields are NULL for `general_chat` sessions and vice versa.
+**`chk_pgc_session_type` constraint:** `session_type IN ('minds_eye', 'general_chat', 'llm_call_diagnostic')`
+
+**Field rules:** `minds_eye_turn_count` and `minds_eye_action_count` are only meaningful for `minds_eye` sessions. `llm_call_diagnostic` fields are NULL for other session types.
 
 ##### PGC_SessionEntry
 One row per turn in the conversation. Reconstructs the LLM messages array by ordering
@@ -548,9 +555,10 @@ CREATE TABLE "PGC_SessionEntry" (
   id              SERIAL PRIMARY KEY,
   session_id      INTEGER       NOT NULL REFERENCES "PGC_Session"(id),
   sequence_number INTEGER       NOT NULL,          -- 1-based; preserves messages array order
-  role            VARCHAR(15)   NOT NULL,          -- 'system' | 'user' | 'assistant'
+  role            VARCHAR(15)   NOT NULL,          -- 'system' | 'user' | 'assistant' | 'tool'
   content         TEXT          NOT NULL,          -- raw message content sent/received
   reasoning       TEXT          NULL,              -- populated on 'assistant' rows only for diagnostic sessions
+  compressed      BOOLEAN       NOT NULL DEFAULT FALSE,  -- true when this entry has been summarised for context compression
   created_at      TIMESTAMP     NOT NULL DEFAULT NOW(),
   UNIQUE (session_id, sequence_number)
 );
@@ -561,10 +569,13 @@ CREATE TABLE "PGC_SessionEntry" (
 | id | serial PK | |
 | session_id | integer FK NOT NULL | → PGC_Session.id |
 | sequence_number | integer NOT NULL | 1-based; UNIQUE per session; drives messages array order |
-| role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` — mirrors LLM API convention |
+| role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` \| `tool` — `tool` rows store Novia tool call results in the reasoning transcript |
 | content | text NOT NULL | Raw message content sent to or received from the LLM |
 | reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows when `diagnostics_config` enables the workflow; **never** included in the reconstructed messages array |
+| compressed | boolean NOT NULL DEFAULT FALSE | ✦ When `true`, this entry's content has been summarised into a later compression entry and is excluded from the active context window |
 | created_at | timestamp | |
+
+**`chk_pgc_sessionentry_role` constraint:** `role IN ('system', 'user', 'assistant', 'tool')`
 
 **Messages array reconstruction:**
 ```sql
