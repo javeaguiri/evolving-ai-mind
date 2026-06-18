@@ -137,10 +137,11 @@ Ordered by impact (see §5 of arch-prompt-rules.md for rationale):
 **W2. design_table Contract fix** ✅ DONE (2026-06-14)
 - Added rule to `design_table` prompt (v6→v7): decimal-constrained columns must use `numeric(p,s)`, never `real`/`float`. Includes canonical example. Upserted to DB. AC6 validation requires a `create_domain` run by user.
 
-**W3. Domain propagation systemic audit (backlog task 12)**
-- Enumerate every boundary where `domain` crosses a system boundary or enters a PGC write
-- For each boundary: assert domain is non-null, or document that null is valid and why
-- Add unit tests per boundary point
+**W3. Domain propagation systemic audit (backlog task 12)** ✅ DONE (2026-06-18)
+- Audited all 6 system boundaries: B1–B5 previously fixed and covered by domain-propagation.test.mjs
+- Found one uncovered boundary: `deriveCallScope` in llm-harness.mjs (memory retrieval + save scope derivation during llm_call steps)
+- Fix: exported `deriveCallScope`; added 6 B6 tests to domain-propagation.test.mjs asserting priority order, fallback, and scope.domain omission for system workflows
+- All 358 unit tests pass
 
 **W4. PGC_WorkflowRun.session_id column (X1)** ✅ DONE (2026-06-14)
 - Column and seed entry already present from prior session. No changes needed. Fixed stale `addColumn` curl example in `arch-data.md`.
