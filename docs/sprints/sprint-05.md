@@ -19,6 +19,37 @@ All in-scope tracks complete. AC1–AC4, AC7 validated. AC5, AC6, AC8, Track L e
 
 **Deferred to Sprint 6:** Track P (design_workflow_prompts), AC5, AC6 (create_domain validation), AC8 (Lambda loop CloudWatch alarm), Track L, /chat dead code removal, reference table entity separation, PGC_DomainHelp embedding on insert.
 
+## Retro
+
+### Findings → Sprint 6 actions
+
+**R1 — Artifact patch shortcut (Instruction/Contract fault domain misassignment)**
+Analysis suggestions sometimes framed artifact defects (nullable schema column, wrong type) as "patch the artifact" rather than "what was missing from `create_domain` or `create_workflow` that allowed this to be generated?" Every domain or workflow artifact defect is a symptom — the root is always in a generation prompt or system context rule. The fix belongs in `design_table`, `generate_workflow_steps`, etc., not in the artifact.
+→ Sprint 6: add fault domain question to CLAUDE.md diagnosis flow: "If the affected object is a `PGC_Workflow` or `PGD_*` artifact, what prompt or context rule was missing at generation time?"
+
+**R2 — User-specific names in system seeds (Static/Evolving boundary violation)**
+SystemContext entries and prompt examples contained `flashcard`, `quiz_flashcards`, `PGD_Flashcards`, etc. CLAUDE.md is explicit: system-level artifacts must use generic placeholders only. User domain references belong exclusively in `PGD_*` tables and user-created `PGC_Workflow` rows.
+→ Sprint 6 prep: audit `seed_PGC_SystemContext.json` and `seed_PGC_Prompt.json` for any user-domain names and replace with generic equivalents before any new workflow generation runs.
+
+**R3 — `markdownToBlocks` wrong first fix (Execution fault domain misfire)**
+Commit 50149ce applied an escape sanitizer. The real issue was code-block-aware splitting (commit 58d3e21). Fixing in the wrong domain — a code path that worked correctly for the wrong input — added noise before the real fix landed.
+→ No process change needed; awareness item. Diagnosis step: reproduce the failure case before coding.
+
+**R4 — Continue with Novia session key mismatch (critical stateless regression)**
+`existingSessionId` enqueued vs `sessionId` read in minds-eye.mjs made every multi-turn Novia session stateless from launch. Should have been caught in the first thread-continuation test. Root cause: no unit test for the SQS payload shape between interactive.mjs and minds-eye.mjs.
+→ Sprint 6 backlog: add unit test for MINDS_EYE SQS payload shape — assert `sessionId` key is present when continuing a session.
+
+**R5 — L1 false positive on cross-step array methods**
+`mastered_card_ids.indexOf` flagged by simulator because it cannot trace array initialization across steps. Adds noise that makes real L1 warnings harder to spot.
+→ Sprint 6 backlog (Low Priority already logged): cross-step type inference. Interim: suppress known-false-positive patterns for array-initialized variables where init step is reachable from all paths.
+
+**R6 — API key material in transcript (security)**
+`echo "${INTERNAL_API_KEY:0:6}..."` was used to verify env vars are set. Even 6 chars reduces entropy. Now that personal data is live in evolving-mind, no key material — even truncated — should appear in session transcripts.
+→ Correct pattern: `[ -n "$INTERNAL_API_KEY" ] && echo "set" || echo "NOT SET"`. Apply to all env var checks going forward.
+
+**R7 — Harness-extension instinct (positive)**
+Correctly identified and implemented harness extensions (normalizeOrderBy, tokenizePath, batch insert_data rows array, markdownToBlocks code-block splitting) rather than adding prompt rules to constrain LLM output. Pushed back correctly when the tradeoff was mischaracterized. Keep this pattern.
+
 ---
 
 **Sprint 4 closed 2026-06-11. See `docs/sprints/sprint-04.md` for retro.**
