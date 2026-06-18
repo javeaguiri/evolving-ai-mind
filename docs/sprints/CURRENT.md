@@ -174,3 +174,5 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 ## Session Notes
 
 **2026-06-18 (session 1):** Sprint 6 scoped. Retro written to sprint-05.md. Goal: Pantry + Expenses domains, Track P complete, MVP hardening. Sprint 7 intent: release-readiness (usability, log hygiene, README, test environment). Branch: `sprint/06-pantry-expenses-trackp`.
+
+**2026-06-18 (session 2):** Sprint 5 merged to main and pushed. Prod deployment confirmed current (sam deploy — no changes, all 4 bundles matched). Sprint 6 implementation starts next session with P0 seed audit.
