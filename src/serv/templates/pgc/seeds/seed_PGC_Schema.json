@@ -640,6 +640,11 @@
         "nullable": false
       },
       {
+        "name": "step_key",
+        "type": "text",
+        "nullable": true
+      },
+      {
         "name": "step_type",
         "type": "text",
         "nullable": false
@@ -1245,6 +1250,16 @@
         "nullable": true
       },
       {
+        "name": "minds_eye_turn_count",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "minds_eye_action_count",
+        "type": "integer",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -1256,7 +1271,7 @@
       {
         "type": "check",
         "name": "chk_pgc_session_type",
-        "expression": "session_type IN ('general_chat', 'llm_call_diagnostic')"
+        "expression": "session_type IN ('general_chat', 'llm_call_diagnostic', 'minds_eye')"
       }
     ],
     "triggers": []
@@ -1298,6 +1313,11 @@
         "nullable": true
       },
       {
+        "name": "compressed",
+        "type": "boolean",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -1327,7 +1347,7 @@
       {
         "type": "check",
         "name": "chk_pgc_sessionentry_role",
-        "expression": "role IN ('system', 'user', 'assistant')"
+        "expression": "role IN ('system', 'user', 'assistant', 'tool')"
       }
     ],
     "triggers": []

@@ -158,6 +158,53 @@ function textToBlocks(text, contextText) {
 }
 
 // ---------------------------------------------------------------------------
+// markdownToBlocks — Novia reply renderer using Slack's markdown block type.
+// Splits text into code-block and prose segments first. Code blocks become a
+// dedicated single block each — splitting on \n\n inside a code block would
+// break the ``` pair across separate Slack blocks (each renders independently),
+// leaving fences unclosed. Prose segments are then split on paragraph
+// boundaries as before.
+// ---------------------------------------------------------------------------
+
+function markdownToBlocks(text, contextText) {
+  const BLOCK_CHAR_LIMIT = 2800;
+  const blocks = [];
+
+  // Split on fenced code blocks (capturing so delimiters stay in array).
+  const segments = text.split(/(```[\s\S]*?```)/);
+
+  for (const seg of segments) {
+    if (seg.startsWith('```')) {
+      // Code block — single block, never split internally.
+      const block = seg.length > BLOCK_CHAR_LIMIT
+        ? `${seg.slice(0, BLOCK_CHAR_LIMIT - 7)}...\n\`\`\``
+        : seg;
+      blocks.push({ type: 'markdown', text: block });
+    } else {
+      // Prose — split on paragraph boundaries and accumulate into chunks.
+      const paragraphs = seg.split(/\n\n+/);
+      let chunk = '';
+      for (const para of paragraphs) {
+        if (!para.trim()) continue;
+        const candidate = chunk ? `${chunk}\n\n${para}` : para;
+        if (candidate.length > BLOCK_CHAR_LIMIT) {
+          if (chunk) blocks.push({ type: 'markdown', text: chunk });
+          chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
+        } else {
+          chunk = candidate;
+        }
+      }
+      if (chunk) blocks.push({ type: 'markdown', text: chunk });
+    }
+  }
+
+  if (contextText) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
+  }
+  return blocks;
+}
+
+// ---------------------------------------------------------------------------
 // Dev / system ping handlers — unique timing context, always short.
 // Not merged into HUMAN_NOTIFICATION because their context blocks carry
 // hop-specific timing fields that differ from the standard runId | traceId shape.
@@ -191,13 +238,25 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
-  const blocks = textToBlocks(text, contextText);
-  if (queryId) {
+  const blocks = format === 'markdown'
+    ? markdownToBlocks(text, contextText)
+    : textToBlocks(text, contextText);
+  if (format === 'markdown' && sessionId) {
+    blocks.push({
+      type:     'actions',
+      elements: [{
+        type:      'button',
+        text:      { type: 'plain_text', text: 'Continue with Novia' },
+        action_id: 'minds_eye_followup',
+        value:     JSON.stringify({ action: 'minds_eye_followup', sessionId }),
+      }],
+    });
+  } else if (queryId) {
     blocks.push({
       type:     'actions',
       elements: [{
@@ -336,6 +395,76 @@ async function postHumanGate(message) {
     ];
     await routeCallback(callback, promptText.slice(0, 150), blocks);
     console.info('callback: HUMAN_GATE followup_prompt posted', { workflowRunId, traceId });
+    return;
+  }
+
+  // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
+  // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
+  if (gateType === 'minds_eye_continue_gate') {
+    const { sessionId, resetActionCount = false } = message;
+    const gateText = resetActionCount
+      ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
+      : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+    const gateBlocks = [
+      ...markdownToBlocks(gateText),
+      {
+        type: 'actions',
+        elements: [
+          {
+            type:      'button',
+            style:     'primary',
+            text:      { type: 'plain_text', text: 'Continue' },
+            action_id: 'minds_eye_continue_approve',
+            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: true, resetActionCount }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Follow-up' },
+            action_id: 'minds_eye_continue_followup',
+            value:     JSON.stringify({ action: 'minds_eye_continue_followup', sessionId }),
+          },
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Cancel' },
+            action_id: 'minds_eye_continue_cancel',
+            value:     JSON.stringify({ action: 'minds_eye_continue_gate', sessionId, approved: false }),
+          },
+        ],
+      },
+    ];
+    await routeCallback(callback, gateText, gateBlocks);
+    console.info('callback: minds_eye_continue_gate posted', { sessionId, resetActionCount, traceId });
+    return;
+  }
+
+  // minds_eye_gate \u2014 Novia action gate. Renders with sessionId buttons instead of workflowRunId.
+  if (gateType === 'minds_eye_gate') {
+    const { sessionId, confirmLabel = 'Approve', confirmStyle } = message;
+    const gateText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'Confirm action';
+    const approveButton = {
+      type:      'button',
+      text:      { type: 'plain_text', text: confirmLabel },
+      action_id: 'minds_eye_delete_approve',
+      value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
+    };
+    if (confirmStyle) approveButton.style = confirmStyle;
+    const gateBlocks = [
+      ...markdownToBlocks(gateText),
+      {
+        type: 'actions',
+        elements: [
+          approveButton,
+          {
+            type:      'button',
+            text:      { type: 'plain_text', text: 'Cancel' },
+            action_id: 'minds_eye_delete_cancel',
+            value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: false }),
+          },
+        ],
+      },
+    ];
+    await routeCallback(callback, gateText.slice(0, 150), gateBlocks);
+    console.info('callback: minds_eye_gate posted', { sessionId, traceId });
     return;
   }
 

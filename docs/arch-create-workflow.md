@@ -1,7 +1,7 @@
 # create_workflow Workflow Design
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.9.
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.9, `docs/arch-prompt-rules.md` (prompt rule placement guide).
 
 `create_workflow` is the workflow that makes the brain self-extending. When a user
 says `/m create a workflow Spanish vocabulary quiz`, the brain researches the domain,

@@ -215,23 +215,25 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-**Sprint 5 active (branch `sprint/05-novia-phase1`, target close 2026-06-27).** Goal: Novia Phase 1 (context assembly, read tools, `/novia` command), Track P (design_workflow_prompts), engine issues (W1–W4), Lambda loop alarm. No code written yet — session 1 scoped, designed, and documented. Full scope in `docs/sprints/CURRENT.md`.
+**Sprint 5 closed 2026-06-18 (branch `sprint/05-novia-phase1`, merged to main).** Novia Phase 1 complete: `/novia` command, minds-eye.mjs agentic loop, read + gated write tools, turn + action limit gates, factual + diagnostic memory writes, domain propagation audit (W3), modal cancel fix. See `docs/sprints/sprint-05.md` for retro and full outcome notes.
 
-### Open Work
+**Sprint 6 not yet scoped.** Next session: run retro → scope Sprint 6 → create new `docs/sprints/CURRENT.md`.
 
-1. Track P — `design_workflow_prompts`: X2 (`PGC_Prompt.domain` column), update `generate_workflow_steps` prompt, add `design_workflow_prompts` step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`.
-2. `PGC_WorkflowRunStep` audit log not written (run 458) — fix-or-remove decision required before Lambda death resilience work.
-3. `design_table` prompt — replace type rule + constraint expression rule with type-matched literal casting (**Contract** fault domain fix).
-4. Domain propagation systemic audit — backlog task 12.
-5. `PGC_WorkflowRun.session_id` column (X1) — not yet applied.
-6. Novia `/chat` + Mode 4 agentic loop — Sprint 5. Novia's correction scope: **Generation** fault domain only (subjective LLM decisions, no code change required). Not a substitute for Instruction or Execution fixes.
+### Open Work (carry-forward to Sprint 6)
+
+1. Track P — `design_workflow_prompts`: X2 (`PGC_Prompt.domain` column), update `generate_workflow_steps` prompt, add `design_workflow_prompts` step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`. Requires recreating flashcard/quiz artifacts.
+2. AC6 — `design_table` Contract fix validation: `create_domain` run with a decimal-boundary column to confirm `numeric(p,s)` generated (not `real`). Prompt already updated (W2); validation deferred.
+3. Track L — Lambda loop CloudWatch alarm. No recursive loop events since Sprint 4 fix; deferred.
+4. `create_domain` — reference table entity separation. See backlog High Priority.
+5. `PGC_DomainHelp` embedding on insert (backlog High Priority).
+6. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
 
 ### Deferred
 
 - Richer episodic memory content (distil session outcomes vs generic one-liners)
 - `PGC_Memory` semantic deduplication / TTL cleanup
 - Pass 2 keyword scan excludes `domain: null` workflows (unnecessary Tier 2 LLM calls)
-- History threading (Track H) — Sprint 5+
+- History threading (Track H) — Sprint 6+
 - `design-domain.mjs` Phase 4 — HUMAN_GATE refactor
 
 > Full tech debt register: `docs/backlog.md`
@@ -260,6 +262,7 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 ### Process and reference
 
 - `docs/backlog.md` — tech debt register, tangential feature designs
+- `docs/arch-prompt-rules.md` — decision framework for where rules go (prompt vs system context); full migration backlog; contradiction log
 - `docs/code-review-checklist.md` — enforced patterns and anti-patterns
 - `openapi.yaml` — all HTTP endpoint specs
 - `template.yaml` — SAM/CloudFormation infrastructure

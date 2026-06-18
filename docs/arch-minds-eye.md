@@ -31,18 +31,16 @@ The minds-eye agent is the agentic layer of evolving-mind-ai. Where the existing
 | | Workflow execution | general_chat | Novia |
 |---|---|---|---|
 | **Reasoning** | Declarative, pre-defined | Single-pass LLM | Multi-step agentic loop |
-| **Actions** | Step types (serv_query, llm_call, …) | None — chat only | Tools (query, invoke, fix, inspect) |
+| **Actions** | Step types (serv_query, llm_call, …) | None — chat only | Tools (query, write, invoke, fix, inspect) |
 | **State** | PGC_WorkflowRun stack | PGC_SessionEntry | PGC_SessionEntry + tool call log |
 | **Scope** | Single workflow | Conversational | Cross-system |
-| **Correction authority** | fix_workflow (human-triggered) | None | Generation fault domain only |
+| **Data authority** | fix_workflow (human-triggered) | None | Full CRUD on PGD + PGC config + schema — all gated by human confirmation |
 
 ### 1.2 Primary Roles
 
 1. **Extender** — extends and improves existing workflows and domain schemas; chains workflows together; handles cross-domain reasoning; performs tasks that currently require multiple human-triggered commands. This is the primary role.
-2. **Improver (bounded)** — improves artifact-level Generation decisions: subjective LLM choices that are observable at runtime and correctable without code changes. Fixing workflow routing, improving step sequencing, and correcting field type mismatches are the first concrete use cases. See Section 6.
+2. **Improver** — modifies data (PGD), configuration (PGC), and schema across all fault domains (Contract, Instruction, Generation). Every write is gated by a human confirmation step. Instruction-domain fixes (prompt rewrites) are proposed and human-confirmed before write. Execution-domain failures (harness bugs) are identified and reported, but not fixed — those require code changes.
 3. **Advisor** — surfaces relevant observations noticed in passing during any session: cost patterns, IntentMap coverage gaps, domain health signals, or design issues adjacent to the user's current task. Advisory content is always appended to the direct answer and clearly separated from it — never delivered as an unsolicited session. Novia does not initiate contact; it enriches responses when something worth flagging is visible from the data already read.
-
-The agent is **not** a substitute for fixing Instruction domain failures (those require prompt updates and human judgment) or Execution domain failures (those require code changes).
 
 ---
 
@@ -179,18 +177,21 @@ PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow
 
 ### 4.2 Action Tools (human confirmation gate required)
 
-| Tool | Mechanism | Fault domain | Phase | Confirmation trigger |
-|---|---|---|---|---|
-| `invoke_workflow` | `enqueueWorkflow` | n/a — extension | 1 | If non-read workflow (create, delete) |
-| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | Generation | 1 | Always — shows diff of proposed changes |
-| `write_memory` | `memory-client.mjs` | n/a | 1 | Silent — episodic write of what Novia did |
-| `fix_prompt` | SERV `updateRows` on PGC_Prompt | Instruction | 2 | Always — Novia proposes, human confirms |
-| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Contract | 2 | Always — high-risk, explicit approval |
-| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | n/a — extension | 2 | Always — shows proposed pattern(s) before write |
-| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | n/a — extension | 2 | Always — shows proposed content diff before write |
-| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | n/a — user tuning | 2 | Lightweight — shows which keys change; takes effect next session |
+**Gate policy:** Only destructive operations require a confirmation gate. Change / add / modify / update operations execute immediately — permission is implicit from the request.
 
-**Confirmation gate pattern:** Before any action tool, Novia posts a `HUMAN_GATE` with a summary of what it intends to do, the fault domain it has identified, and a diff or description of the change. The user selects Approve or Cancel.
+| Tool | Mechanism | Scope | Phase | Gate |
+|---|---|---|---|---|
+| `update_data` | SERV `updateRows` on any PGD table | User data | 1 | None — executes immediately |
+| `insert_data` | SERV `insertRow` on any PGD table | User data | 1 | None — executes immediately |
+| `delete_data` | SERV `deleteRows` on any PGD table | User data | 1 | **Delete gate** — shows table, filter, row count; requires explicit approval |
+| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | PGC config | 1 | None — executes immediately |
+| `invoke_workflow` | `enqueueWorkflow` | Extension | 1 | None for read workflows; gate for destructive workflows (delete_domain etc.) |
+| `write_memory` | `memory-client.mjs` | Memory | 1 | None — silent episodic write |
+| `fix_prompt` | SERV `updateRows` on PGC_Prompt | PGC config | 2 | **Confirmation gate** — shows full prompt diff; human confirms wording |
+| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Schema | 2 | **Confirmation gate** — shows DDL + downstream impact |
+| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | PGC config | 2 | None — executes immediately |
+| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | PGC config | 2 | None — executes immediately |
+| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | PGC config | 2 | None — takes effect next session |
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
@@ -203,6 +204,17 @@ PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow
 ---
 
 ## 5. Use Cases
+
+### UC-0: Direct data modification
+> "Change the name of Deck 2 to 'Test Deck' and set the description to 'June 1, 2024'"
+
+1. Novia identifies the domain table (e.g. `PGD_flashcard_decks`) using `search_domain_help` + `list_tables`
+2. Reads the current row with `query_table` to confirm identity and show current values
+3. Posts confirmation gate: table name, row ID, old vs new field values
+4. On approval: `update_data` → `updateRows` on the PGD table
+5. Reads the row back to confirm the change applied
+
+This is the baseline Novia data interaction — no fault domain analysis required. Any PGD table row can be updated, inserted, or deleted through this pattern.
 
 ### UC-1: Improve a workflow (Generation fault domain)
 > "Novia, the quiz workflow is routing incorrectly after step 3"
