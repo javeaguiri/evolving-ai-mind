@@ -233,15 +233,15 @@ async function handleGateResume(body, callback, traceId, req) {
     return;
   }
 
-  // Turn-limit continue — reset turn count and re-enter the reasoning loop.
+  // Turn-limit or action-limit continue — reset counts and re-enter the reasoning loop.
   if (resumeType === 'continue') {
     if (!approved) {
-      console.info('proc/minds-eye: turn-limit gate cancelled', { sessionId, traceId });
+      console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
     }
-    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
-      minds_eye_turn_count: 0,
-    });
+    const resetFields = { minds_eye_turn_count: 0 };
+    if (body.resetActionCount) resetFields.minds_eye_action_count = 0;
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], resetFields);
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
     await runReasoningLoop({
@@ -473,15 +473,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
       if (actionCount >= prefs.max_actions_per_session) {
-        if (callback) {
-          await enqueueCallback(callback, {
-            type:      'HUMAN_NOTIFICATION',
-            format:    'markdown',
-            traceId,
-            message:   `Action limit reached (${prefs.max_actions_per_session} per session). Start a new session to continue.`,
-            sessionId: session.id,
-          });
-        }
+        await postTurnLimitGate(session.id, callback, traceId, true);
         earlyExit = true;
         break;
       }
@@ -510,15 +502,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
       if (actionCount >= prefs.max_actions_per_session) {
-        if (callback) {
-          await enqueueCallback(callback, {
-            type:      'HUMAN_NOTIFICATION',
-            format:    'markdown',
-            traceId,
-            message:   `Action limit reached (${prefs.max_actions_per_session} per session). Start a new session to continue.`,
-            sessionId: session.id,
-          });
-        }
+        await postTurnLimitGate(session.id, callback, traceId, true);
         earlyExit = true;
         break;
       }
@@ -1175,12 +1159,13 @@ async function executeReadTool(action, params, traceId) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId) {
+async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false) {
   if (!callback) return;
   await enqueueCallback(callback, {
-    type:      'HUMAN_GATE',
-    gate_type: 'minds_eye_continue_gate',
+    type:             'HUMAN_GATE',
+    gate_type:        'minds_eye_continue_gate',
     sessionId,
     traceId,
+    resetActionCount,
   });
 }
