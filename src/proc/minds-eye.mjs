@@ -1117,7 +1117,7 @@ async function executeReadTool(action, params, traceId) {
           [],
           null,
           5,
-          { column: 'embedding', queryText: query, threshold: 0.5 }
+          { column: 'embedding', queryText: query, threshold: 0.4 }
         );
         return {
           count: resp.count,
