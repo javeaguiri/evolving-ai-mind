@@ -37,7 +37,7 @@ function resolveModelAlias(model, contextRows) {
  * Derive the call scope for memory retrieval from the run context and
  * the resolved step input (which may carry 'domain' from the workflow).
  */
-function deriveCallScope(run, resolvedInput) {
+export function deriveCallScope(run, resolvedInput) {
   const scope = {};
   const domain = resolvedInput?.domain ?? run?.input?.domain ?? null;
   const workflowName = run?.workflow_name ?? null;

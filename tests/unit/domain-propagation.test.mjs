@@ -18,6 +18,7 @@ import assert            from 'node:assert/strict';
 
 import { resolvePath, resolveInput } from '../../src/proc/template-resolver.mjs';
 import { matchIntentMap, matchDomainAlias } from '../../src/proc/classify-intent-tiers.mjs';
+import { deriveCallScope }            from '../../src/proc/llm-harness.mjs';
 import { domainHelpRows }             from '../fixtures/domain-help-rows.js';
 import { allIntentRows }              from '../fixtures/intent-map-rows.js';
 
@@ -77,6 +78,59 @@ describe('domain propagation — template-resolver (B1/B2)', () => {
     assert.equal(runWithNullDomain.input?.domain ?? null, null);
     assert.equal(runWithNoDomain.input?.domain   ?? null, null);
     assert.equal(runWithNoInput.input?.domain    ?? null, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B6 — llm-harness deriveCallScope: domain flows into memory retrieval / save scope
+// ---------------------------------------------------------------------------
+
+describe('domain propagation — llm-harness deriveCallScope (B6)', () => {
+  it('resolvedInput.domain takes priority over run.input.domain', () => {
+    const scope = deriveCallScope(
+      { workflow_name: 'add_recipe', input: { domain: 'recipes' } },
+      { domain: 'overriding_domain' },
+    );
+    assert.equal(scope.domain, 'overriding_domain');
+  });
+
+  it('falls back to run.input.domain when resolvedInput has no domain', () => {
+    const scope = deriveCallScope(
+      { workflow_name: 'add_recipe', input: { domain: 'recipes' } },
+      { someOtherField: 'value' },
+    );
+    assert.equal(scope.domain, 'recipes');
+  });
+
+  it('scope.domain is omitted (not null) when both resolvedInput and run.input have no domain', () => {
+    const scope = deriveCallScope(
+      { workflow_name: 'fix_workflow', input: {} },
+      {},
+    );
+    assert.ok(!('domain' in scope), 'scope.domain must be omitted, not set to null');
+  });
+
+  it('scope.workflow is always set from run.workflow_name', () => {
+    const scope = deriveCallScope(
+      { workflow_name: 'add_recipe', input: { domain: 'recipes' } },
+      {},
+    );
+    assert.equal(scope.workflow, 'add_recipe');
+  });
+
+  it('handles null run gracefully', () => {
+    const scope = deriveCallScope(null, { domain: 'recipes' });
+    assert.equal(scope.domain, 'recipes');
+    assert.ok(!('workflow' in scope));
+  });
+
+  it('system workflow with null domain produces scope with only workflow key', () => {
+    const scope = deriveCallScope(
+      { workflow_name: 'fix_workflow', input: { domain: null } },
+      {},
+    );
+    assert.ok(!('domain' in scope), 'null domain must be omitted from scope');
+    assert.equal(scope.workflow, 'fix_workflow');
   });
 });
 

@@ -18,7 +18,7 @@
 
 import { ok, err }         from '../shared/lambda-utils.mjs';
 import { enqueueCallback } from '../shared/sqs-callback.mjs';
-import { getRows, deleteRows } from '../shared/serv-client.mjs';
+import { getRows, deleteRows, bestEffort } from '../shared/serv-client.mjs';
 
 export async function handle(req) {
   const { name } = req.body ?? {};
@@ -124,16 +124,10 @@ async function runDeleteWorkflow({ name, traceId }) {
   // --- Step 3: Delete PGC_WorkflowRunStep rows ---
   let deletedRunStepCount = 0;
   if (runIds.length > 0) {
-    const runStepResp = await deleteRows(
-      'PGC_WorkflowRunStep',
-      [{ column: 'run_id', op: 'in', value: runIds }]
-    );
-    if (!runStepResp.success) {
-      console.warn('delete-workflow: PGC_WorkflowRunStep delete failed', { name, error: runStepResp.error, traceId });
-    } else {
-      deletedRunStepCount = runStepResp.deletedCount ?? 0;
-      console.info('delete-workflow: PGC_WorkflowRunStep rows removed', { name, deletedRunStepCount, traceId });
-    }
+    const runStepResp = await bestEffort('delete-workflow: PGC_WorkflowRunStep delete failed', { name, traceId },
+      () => deleteRows('PGC_WorkflowRunStep', [{ column: 'run_id', op: 'in', value: runIds }]));
+    deletedRunStepCount = runStepResp?.deletedCount ?? 0;
+    if (runStepResp) console.info('delete-workflow: PGC_WorkflowRunStep rows removed', { name, deletedRunStepCount, traceId });
   }
 
   // --- Step 4: Delete PGC_WorkflowRun rows ---

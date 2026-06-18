@@ -12,6 +12,7 @@
 // Never called on the HTTP path — HTTP responses go directly to API Gateway.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { randomUUID }                    from 'crypto';
 
 const sqs = new SQSClient({});
 
@@ -52,9 +53,15 @@ export async function enqueueCallback(callback, payload) {
  * @returns {Promise<void>}
  */
 export async function enqueueWorkflow(payload) {
+  // Stamp every execute_top message with a unique stepExecutionId so the
+  // idempotency check can distinguish SQS redeliveries from legitimate loop
+  // re-entries (same step key, different iteration).
+  const enriched = (payload.action === 'execute_top' && !payload.stepExecutionId)
+    ? { ...payload, stepExecutionId: randomUUID() }
+    : payload;
   await sqs.send(new SendMessageCommand({
     QueueUrl:    process.env.SQS_WORKFLOW_URL,
-    MessageBody: JSON.stringify(payload),
+    MessageBody: JSON.stringify(enriched),
   }));
 
   console.info('sqs-callback: workflow message enqueued', {

@@ -85,8 +85,9 @@ async function servPost(path, body) {
 // ---------------------------------------------------------------------------
 // Content fingerprint -- canonical JSON with sorted keys so field ordering
 // differences between seed and DB do not produce false diffs.
-// Covers: prompt_text, model, output_schema, input_variables, memory_config.
-// Excludes: was_successful, probe_input, max_output_tokens (operational metadata).
+// Covers: prompt_text, model, output_schema, input_variables, memory_config, probe_input.
+// Excludes: was_successful, max_output_tokens (operational metadata set at runtime).
+// probe_input IS included — it is seed-managed test data, not a runtime value.
 // ---------------------------------------------------------------------------
 // JSONB round-trips sort object keys at every nesting level — sortedJson must
 // be recursive so fingerprints are stable for nested structures like output_schema.
@@ -106,6 +107,7 @@ function fingerprint(entry) {
     JSON.stringify(sortKeys(entry.input_variables ?? null)),
     String(entry.max_output_tokens ?? ''),
     JSON.stringify(sortKeys(entry.memory_config ?? null)),
+    JSON.stringify(sortKeys(entry.probe_input ?? null)),
   ].join('\x00');
   return createHash('sha256').update(canonical, 'utf8').digest('hex').slice(0, 16);
 }

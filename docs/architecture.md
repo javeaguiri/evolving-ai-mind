@@ -3,10 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.4
-Status: Active development — Sprint 5 in progress
-Last updated: 2026-06-13 (Sprint 5 — Component Quick Reference added; Section 1.5 index; architecture.md/CLAUDE.md documentation restructure)
-Previously: session 32 — generate_workflow_steps context reduction: removed create_domain_example and step_usage_patterns from inject_for, moved Rules 4/5a/5b/5c into SystemContext homes; session 31 — create_domain modal routing verified; architecture-*.md files consolidated into this file
+Version: 3.5
+Status: Active development — Sprint 5 closed; Sprint 6 upcoming
+Last updated: 2026-06-18 (Sprint 5 close — Novia Phase 1 complete; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live; domain propagation audit W3 complete)
+Previously: 3.4 — 2026-06-13 — Component Quick Reference added; Section 1.5 index; architecture.md/CLAUDE.md documentation restructure
 
 ---
 
@@ -42,6 +42,7 @@ For authoritative detail follow the section references in each row.
 | `src/proc/run-workflow.mjs` | PROC | Step Processor outer loop — loads run, checks idempotency, dispatches to step-executor, enqueues next SQS. See Section 6.5 | Changes affect execution of ALL workflows |
 | `src/proc/step-executor.mjs` | PROC | Step type dispatch — one case per step type, zero workflow-specific logic. See Section 6.5.1 | Adding a case = new step type; changing a case = affects every workflow using that type |
 | `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
+| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
 | `src/proc/simulation-engine.mjs` | PROC | L1/L2 static analysis + path simulation — pure function, no I/O. See Section 6.5.6 | Changes affect the pre-write workflow validation gate used by create_workflow, fix_workflow, and upsert-workflow.mjs |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state` | Changes affect template substitution in ALL steps, messages, and conditions |
@@ -63,7 +64,7 @@ Full column definitions: `docs/arch-data.md` Section 4.3. Curl cookbook: Section
 | **LLM runtime context** | PGC_Prompt, PGC_SystemContext, PGC_StepType, PGC_Capability | `upsert-prompt/step-type/system-context` scripts | `step-executor.mjs` (`llm_call`), `review-output.mjs` | Changes affect what instructions the LLM receives per call |
 | **Intent routing** | PGC_IntentMap, PGC_DomainHelp | `create_domain` workflow, bootstrap seed | `classify-intent.mjs` | Changes affect how user inputs are routed to workflows |
 | **Memory layer** | PGC_Memory | `write_memory` step, `memory-writer.mjs`, `save_to_memory` hook | `llm-harness.mjs` (retrieval + injection) | Changes affect memory available to every LLM call |
-| **Session layer** | PGC_Session, PGC_SessionEntry | `/chat`, `/explain`, `novia.mjs` (Sprint 5) | `/chat`, `/explain`, `novia.mjs` | Not yet live — changes affect conversation continuity |
+| **Session layer** | PGC_Session, PGC_SessionEntry | `/chat`, `/explain`, `/novia` (minds-eye.mjs) | `/chat`, `/explain`, `minds-eye.mjs` | Live — Sprint 5; changes affect Novia session continuity and /chat /explain diagnostic threads |
 | **Domain data** | PGD_* (user tables) | `create_domain` DDL, domain workflow steps | Domain workflow steps (`serv_query`, `serv_entity_*`) | Scoped to that domain's workflows only |
 
 ### Fault triage quick map
@@ -225,6 +226,8 @@ entry messages, which carry no run ID and are consumed once.
 | `DELETE_DOMAIN` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-domain.mjs |
 | `DELETE_WORKFLOW` | — | 1 — fire-and-forget | SlackbotFunction / classify-intent.mjs | proc/delete-workflow.mjs |
 | `MEMORY_WRITE` | — | 1 — fire-and-forget | run-workflow.mjs (on qualifying domain workflow completion) | proc/memory-writer.mjs |
+| `MINDS_EYE` | — | 1 — fire-and-forget | SlackbotFunction (minds-eye.mjs `/novia`), interactive.mjs (Continue/Follow-up modal) | proc/minds-eye.mjs |
+| `MINDS_EYE_RESUME` | — | 1 — fire-and-forget | interactive.mjs (gate approval or turn-limit Continue) | proc/minds-eye.mjs |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
@@ -320,6 +323,9 @@ All other Lambda handlers follow the same HTTP dispatch pattern.
 ```
 src/
   ui/slackbot/        Experience tier — Slack I/O, ACK, SQS enqueue. No business logic.
+    minds-eye.mjs      /novia slash command — enqueues MINDS_EYE to WorkflowQueue
+    chat.mjs           /chat slash command — enqueues CHAT_MESSAGE to WorkflowQueue
+    explain.mjs        /explain slash command — enqueues EXPLAIN_QUERY to WorkflowQueue
   proc/               Process tier — all business logic. No AWS SDK in endpoint modules.
     handler.mjs        Dual dispatch: HTTP (httpMethod) vs SQS (Records)
     run-workflow.mjs   Step Processor outer loop
@@ -329,6 +335,9 @@ src/
     simulation-engine.mjs  Pure L1/L2 simulator — no I/O, imported by step-executor + dev_scripts
     llm-harness.mjs    LLM call assembly + memory injection
     review-output.mjs  Ajv + semantic + routing validation of all LLM output
+    minds-eye.mjs      Novia agentic loop — MINDS_EYE + MINDS_EYE_RESUME SQS handler
+    chat.mjs           /chat companion — CHAT_MESSAGE SQS handler
+    explain.mjs        /explain diagnostic — EXPLAIN_QUERY SQS handler
   serv/               Service tier — pg client only. No LLM, no SQS.
     schema.mjs         DDL + PGC_Schema/TableMap registration
     table.mjs          Row-level DML gated by PGC_TableMap
@@ -580,6 +589,7 @@ programmer's intent.
 | `docs/arch-memory.md` | Memory layer — PGC_Memory write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat — PGC_Session/PGC_SessionEntry, `/chat`, `/explain` |
 | `docs/arch-minds-eye.md` | Minds-eye agent (Sprint 5) — tool catalog, use cases, agentic loop |
+| `docs/arch-prompt-rules.md` | Prompt rule placement guide — 7-category framework, migration backlog S1–S11, cross-brain contracts |
 
 ---
 

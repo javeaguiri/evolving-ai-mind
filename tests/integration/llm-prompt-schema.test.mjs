@@ -16,12 +16,18 @@
 //
 // NOTE: node --test strips custom CLI args. Use environment variables.
 //
-// USAGE (cmd.exe):
+// USAGE:
+//   Source .env.test first (LLM_API_KEY, LLM_AGENT_URL, SERV_API_URL are all in there):
+//     set -a && source .env.test && set +a
+//
 //   All prompts:
-//     set TEST_ALL=1 && set LLM_API_KEY=pplx-... && set LLM_AGENT_URL=https://api.perplexity.ai/v1/agent && set SERV_API_URL=https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod && node --test --test-reporter=spec tests/integration/llm-prompt-schema.test.mjs
+//     TEST_ALL=1 node --test --test-reporter=spec tests/integration/llm-prompt-schema.test.mjs
 //
 //   Specific prompts:
-//     set TEST_PROMPTS=generate_workflow_steps,fix_workflow_steps && ...
+//     TEST_PROMPTS=create_domain,design_table node --test --test-reporter=spec tests/integration/llm-prompt-schema.test.mjs
+//
+//   Dry run (no LLM call — validate assembly only):
+//     TEST_PROMPTS=create_domain DRY_RUN=1 VERBOSE=1 node --test --test-reporter=spec tests/integration/llm-prompt-schema.test.mjs
 //
 //   No env vars → single skipped test, safe in CI:
 //     node --test tests/integration/llm-prompt-schema.test.mjs
@@ -32,10 +38,13 @@
 //   LLM_API_KEY           — Perplexity API key
 //   LLM_AGENT_URL         — Perplexity agent endpoint
 //   SERV_API_URL          — SERV base URL
+//   VERBOSE=1             — print assembled prompt + injected context keys before each call
+//   DRY_RUN=1             — assemble + print but skip the actual LLM call (no API cost)
 
 import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { callLlm } from '../../src/shared/llm-client.mjs';
+import { assembleInstructions } from '../../src/proc/llm-harness.mjs';
 
 // ---------------------------------------------------------------------------
 // Run mode
@@ -45,9 +54,14 @@ const TEST_ALL     = process.env.TEST_ALL === '1' || process.env.TEST_ALL === 't
 const TEST_PROMPTS = process.env.TEST_PROMPTS
   ? process.env.TEST_PROMPTS.split(',').map(s => s.trim()).filter(Boolean)
   : null;
+const VERBOSE      = process.env.VERBOSE === '1' || process.env.VERBOSE === 'true';
+const DRY_RUN      = process.env.DRY_RUN === '1' || process.env.DRY_RUN === 'true';
 
 const shouldRun    = TEST_ALL || (TEST_PROMPTS && TEST_PROMPTS.length > 0);
-const envVarsOk    = ['LLM_API_KEY', 'LLM_AGENT_URL', 'SERV_API_URL'].every(k => process.env[k]);
+// DRY_RUN only needs SERV_API_URL (no LLM keys required)
+const envVarsOk    = DRY_RUN
+  ? ['SERV_API_URL'].every(k => process.env[k])
+  : ['LLM_API_KEY', 'LLM_AGENT_URL', 'SERV_API_URL'].every(k => process.env[k]);
 
 // ---------------------------------------------------------------------------
 // Skip path
@@ -93,24 +107,56 @@ async function fetchPromptRows() {
   return latest;
 }
 
-function substituteProbeInput(promptText, probeInput) {
-  if (!probeInput || typeof probeInput !== 'object') return promptText;
-  return Object.entries(probeInput).reduce((text, [key, val]) => {
-    const sub = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
-    return text.split(`{{${key}}}`).join(sub);
-  }, promptText);
+async function fetchContextRows() {
+  const resp = await fetch(`${process.env.SERV_API_URL}/api/v1/serv/table/getRows`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
+    body:    JSON.stringify({ tableName: 'PGC_SystemContext' }),
+  });
+  if (!resp.ok) throw new Error(`SERV getRows (context) failed: HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (!data.success) throw new Error(`SERV getRows (context) error: ${data.error}`);
+  return data.rows ?? [];
 }
 
-async function probePrompt(row) {
-  const { model, prompt_text, output_schema, probe_input, max_output_tokens } = row;
-  const instructions = substituteProbeInput(prompt_text, probe_input);
-  const userMessage  = probe_input ? JSON.stringify(probe_input) : 'probe';
+// assembleInstructions() imported from llm-harness.mjs — same code path as Lambda.
+// probe_input acts as resolvedInput; no memory injection in probe tests.
+
+async function probePrompt(row, contextRows, t) {
+  const { model, output_schema, probe_input, max_output_tokens, intent_category } = row;
+  // Use the real assembleInstructions — same code path as Lambda.
+  // probe_input acts as resolvedInput; no memory injection in probe tests.
+  const instructions = assembleInstructions(row, probe_input ?? {}, contextRows, null, intent_category);
+
+  // Warn if any {{placeholders}} remain unresolved after context + probe_input
+  const unresolved = [...instructions.matchAll(/\{\{[^}]+\}\}/g)].map(m => m[0]);
+
+  if (VERBOSE || DRY_RUN) {
+    const injectedKeys = (contextRows ?? [])
+      .filter(r => r.inject_always || (Array.isArray(r.inject_for) && r.inject_for.includes(intent_category)))
+      .map(r => r.key);
+    t.diagnostic(`--- ASSEMBLED PROMPT (${instructions.length} chars) ---`);
+    t.diagnostic(`Injected context keys: [${injectedKeys.join(', ') || 'none'}]`);
+    if (unresolved.length) t.diagnostic(`Unresolved placeholders: ${unresolved.join(', ')}`);
+    // Print in 2000-char chunks so node:test doesn't truncate
+    for (let i = 0; i < instructions.length; i += 2000) {
+      t.diagnostic(instructions.slice(i, i + 2000));
+    }
+    t.diagnostic(`--- USER MESSAGE ---`);
+    t.diagnostic(probe_input ? JSON.stringify(probe_input) : 'probe');
+  }
+
+  if (DRY_RUN) {
+    return { passed: true, is400: false, unresolved, dryRun: true };
+  }
+
+  const userMessage = probe_input ? JSON.stringify(probe_input) : 'probe';
   try {
-    await callLlm(model, instructions, userMessage, output_schema, 'probe-test', max_output_tokens ?? 2048);
-    return { passed: true, is400: false };
+    await callLlm(model, instructions, userMessage, output_schema, 'probe-test', max_output_tokens ?? undefined);
+    return { passed: true, is400: false, unresolved };
   } catch (err) {
     const is400 = err.message.includes('400');
-    return { passed: false, is400, error: err.message };
+    return { passed: false, is400, error: err.message, unresolved };
   }
 }
 
@@ -122,7 +168,7 @@ if (shouldRun && envVarsOk) {
   // Top-level await (ESM) — fetch rows before registering tests so node:test
   // can create one it() per prompt. All tests are visible in the runner output
   // and counted individually in the metrics.
-  const promptRows = await fetchPromptRows();
+  const [promptRows, contextRows] = await Promise.all([fetchPromptRows(), fetchContextRows()]);
 
   const targets = TEST_ALL
     ? [...promptRows.values()]
@@ -144,9 +190,16 @@ if (shouldRun && envVarsOk) {
         }
 
         const probeTag = probe_input ? '' : ' [no probe_input — add to seed]';
-        t.diagnostic(`Probing${probeTag}`);
+        const dryTag   = DRY_RUN ? ' [DRY_RUN — no LLM call]' : '';
+        t.diagnostic(`Probing${probeTag}${dryTag}`);
 
-        const { passed, is400, error } = await probePrompt(row);
+        const { passed, is400, error, unresolved, dryRun } = await probePrompt(row, contextRows, t);
+
+        if (unresolved.length) {
+          t.diagnostic(`⚠️  Unresolved placeholders after context injection: ${unresolved.join(', ')}`);
+        }
+
+        if (dryRun) return; // assembly validated — no LLM result to check
 
         if (is400) {
           // HTTP 400 — API rejected the request — always a hard failure

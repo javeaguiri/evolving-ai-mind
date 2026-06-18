@@ -997,9 +997,209 @@
     "inject_for": [
       "create_domain",
       "research_domain_schema",
+      "revise_domain_schema",
+      "design_table"
+    ],
+    "version": 3,
+    "content": "evolving-mind-ai is a single-user personal system, not a multi-user SaaS product. Never design multi-user schemas. Prohibited columns and tables: owner_id, user_id, user_fk, created_by, assigned_to, sharing tables, permission tables, access control tables, tenant_id, account_id. All data implicitly belongs to the single user running the system. If the user asks for ownership or sharing features, note that multi-user support is out of scope."
+  },
+  {
+    "key": "pgd_column_type_rules",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
       "revise_domain_schema"
     ],
+    "version": 1,
+    "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) — derive precision and scale from the most precise literal in the constraint (e.g. ease_factor numeric(4,2) CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0)); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", etc.)"
+  },
+  {
+    "key": "pgd_naming_conventions",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "PGD_ table naming: start with PGD_ followed by PascalCase — NO underscores after the PGD_ prefix (e.g. PGD_Recipes, PGD_StockPrices, PGD_CardTags). NEVER use underscores in the PascalCase part (NEVER PGD_Card_Tags, NEVER PGD_Stock_Prices).\nTrigger naming: trg_<tablename_lower>_updated_at (e.g. trg_cards_updated_at).\nFK naming: fk_<childtable_lower>_<parenttable_lower> (e.g. fk_cards_decks). Required — never omit.\nConstraint naming: unique constraints use uq_<table>_<cols>; check constraints use chk_<table>_<col> (e.g. uq_cards_term, chk_cards_ease_factor).\nEmbedding column: always named \"embedding\". Never use a different name.\nDomain name: short, lowercase, snake_case (e.g. \"stock_portfolio\", \"recipes\", \"fitness\")."
+  },
+  {
+    "key": "pgd_required_columns",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Every PGD_ table must have these required columns and trigger:\n- id: serial, primaryKey: true\n- created_at: timestamptz, nullable: false, default: \"now()\"\n- updated_at: timestamptz, nullable: false, default: \"now()\"\n- trigger: { \"name\": \"trg_<tablename_lower>_updated_at\", \"timing\": \"BEFORE UPDATE\", \"function\": \"set_updated_at()\" }\nNever omit any of these. They must be the first three columns in every table definition."
+  },
+  {
+    "key": "pgd_fk_constraint_rules",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Foreign key rules:\n- \"column\" field is REQUIRED — must be an actual column name in the child table\n- \"name\" field is REQUIRED — use format: fk_<childtable_lower>_<parenttable_lower>\n- \"references\" must always be: { \"table\": \"PGD_TableName\", \"column\": \"id\" }\n- When adding a FK column to an existing table, use onDelete: SET NULL (not CASCADE)\n- Tables with no foreign keys must have an empty foreignKeys array: []\n\nConstraint rules:\n- \"type\" must be lowercase: \"unique\" or \"check\" (never \"UNIQUE\")\n- \"name\" field is REQUIRED\n- \"columns\" must be an array of real column names that exist in the table\n- Check constraint: use key \"expression\" — NEVER \"definition\", \"condition\", \"check\", or any other word\n  Example: { \"type\": \"check\", \"name\": \"chk_table_col\", \"columns\": [\"col\"], \"expression\": \"col >= 0 AND col <= 5\" }\n- Tables with no constraints must have an empty constraints array: []"
+  },
+  {
+    "key": "workflow_gap_taxonomy",
+    "section": "workflow_analysis",
+    "inject_always": false,
+    "inject_for": [
+      "analyze_and_design_workflow",
+      "analyze_workflow_gaps"
+    ],
+    "version": 1,
+    "content": "Gap taxonomy — type definitions:\n- Type 1 (preference gap): a design decision where the correct answer depends on user preference, not domain best practice. Resolvable from user_preferences if already answered.\n- Type 2 (knowledge gap): a design question answerable by domain research, not user preference. Resolvable from right_brain_research.findings.\n- Type 3a (non-blocking schema gap): a table or column that would improve workflow quality but is not required for the workflow to function. The workflow can be built without it.\n- Type 3b (blocking schema gap): a table or column required for the workflow to function. Cannot be built without it.\n- Type 4a (missing prompt): a required LLM call step references a prompt not yet in PGC_Prompt. Must be created before the workflow can run.\n- Type 4b (missing step type): a required capability that no combination of existing step types can implement. Genuine Type 4b: sending email, calling external HTTP APIs, scheduling future execution. NOT Type 4b: interactive patterns (quiz, approval loop, form wizard) — use human_gate + js_transform + condition instead."
+  },
+  {
+    "key": "llm_model_selection_rules",
+    "section": "brain_type",
+    "inject_always": false,
+    "inject_for": [
+      "analyze_and_design_workflow",
+      "analyze_workflow_gaps"
+    ],
+    "version": 1,
+    "content": "Model selection for prompts_needed entries expresses brain type assignment for that step: \"anthropic/claude-sonnet-4-5\" — left-brain (analytical, structured, deterministic output); \"perplexity/sonar\" — right-brain (research, live web search, surfacing domain knowledge). Never use gpt-4, gpt-4o-mini, or any other model — these are not supported by the system."
+  },
+  {
+    "key": "pgd_default_value_format",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Column \"default\" values must always be strings AND must be valid SQL expressions:\n- String/text literals: include SQL single quotes inside the JSON string value (e.g. \"'active'\" not \"active\", \"'new'\" not \"new\")\n- Numeric literals: no inner quotes (\"0\", \"2.5\")\n- Boolean literals: no inner quotes (\"false\", \"true\")\n- Function calls: no inner quotes (\"now()\")\nA bare word without SQL single quotes will be treated as a column reference by PostgreSQL and cause a DDL failure."
+  },
+  {
+    "key": "schema_research_contract",
+    "section": "cross_brain_contracts",
+    "inject_always": false,
+    "inject_for": [
+      "research_domain_schema",
+      "create_domain",
+      "revise_domain_schema"
+    ],
+    "version": 1,
+    "content": "Schema research contract — agreed shape between research_domain_schema (producer) and create_domain/revise_domain_schema (consumers):\n\nfindings[] item: { \"topic\": \"...\", \"what_is_known\": \"...\", \"options\": [...], \"recommendation\": \"...\", \"rationale\": \"...\" }\nfindings[].options item: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n  — \"tradeoffs\" is the correct third key in findings options. Do NOT use \"value\" here.\n\npreference_questions[] item: { \"id\": \"...\", \"question\": \"...\", \"rationale\": \"...\", \"affects\": \"...\", \"default\": \"...\", \"options\": [...] }\npreference_questions[].options item: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n  — \"value\" is the correct second key in preference_questions options. Do NOT use \"tradeoffs\" here.\n\nA topic that appears in findings cannot also appear in preference_questions."
+  },
+  {
+    "key": "workflow_research_contract",
+    "section": "cross_brain_contracts",
+    "inject_always": false,
+    "inject_for": [
+      "research_workflow_domain",
+      "analyze_and_design_workflow"
+    ],
+    "version": 1,
+    "content": "Workflow research contract — agreed shape between research_workflow_domain (producer) and analyze_and_design_workflow (consumer):\n\nfindings[] item: { \"topic\": \"...\", \"what_is_known\": \"...\", \"options\": [...], \"recommendation\": \"...\", \"rationale\": \"...\" }\nfindings[].options item: { \"label\": \"...\", \"description\": \"...\", \"tradeoffs\": \"...\" }\n\npreference_questions[] item: { \"id\": \"...\", \"question\": \"...\", \"affects\": \"...\", \"default\": \"...\", \"options\": [...] }\npreference_questions[].options item: { \"label\": \"...\", \"value\": \"...\", \"description\": \"...\" }\n\nType 2 gap resolution: findings from right-brain research resolve Type 2 (knowledge) gaps. The left-brain consumer applies findings recommendations directly — they are not surfaced to the user as choices."
+  },
+  {
+    "key": "minds_eye_preferences",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
     "version": 2,
-    "content": "evolving-mind-ai is a single-user personal system, not a multi-user SaaS product. Never design multi-user schemas. Prohibited columns and tables: owner_id, user_id, user_fk, created_by, assigned_to, sharing tables, permission tables, access control tables, tenant_id, account_id. All data implicitly belongs to the single user running the system. If the user asks for ownership or sharing features, note that multi-user support is out of scope."
+    "content": {
+      "name": "Novia",
+      "model": "anthropic/claude-sonnet-4-6",
+      "turn_limit": 8,
+      "max_actions_per_session": 5,
+      "tone": "concise but friendly",
+      "advisory_level": "proactive",
+      "response_format": "structured",
+      "technical_level": "high"
+    }
+  },
+  {
+    "key": "minds_eye_context_index",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": {
+      "on_start": [
+        {
+          "table": "PGC_Workflow",
+          "purpose": "available workflows",
+          "columns": [
+            "name",
+            "domain",
+            "version"
+          ]
+        },
+        {
+          "table": "PGC_Prompt",
+          "purpose": "registered LLM prompts",
+          "columns": [
+            "intent_category",
+            "domain",
+            "version"
+          ]
+        }
+      ],
+      "on_domain_task": [
+        {
+          "table": "PGC_Schema",
+          "purpose": "table definitions for the target domain"
+        },
+        {
+          "table": "PGC_EntitySchema",
+          "purpose": "entity definitions for the target domain"
+        }
+      ],
+      "on_correction_task": [
+        {
+          "table": "PGC_WorkflowRun",
+          "purpose": "recent run history for the target workflow",
+          "limit": 5
+        },
+        {
+          "table": "PGC_WorkflowRunStep",
+          "purpose": "step audit log for the failed run"
+        }
+      ],
+      "join_paths": {
+        "run_to_session_entries": "getRows PGC_WorkflowRun by id → extract session_id → getRows PGC_SessionEntry WHERE session_id = ?",
+        "run_to_steps": "getRows PGC_WorkflowRunStep WHERE run_id = ? ORDER BY id ASC",
+        "run_to_workflow": "getRows PGC_Workflow WHERE id = PGC_WorkflowRun.workflow_id",
+        "workflow_stats": "getRows PGC_WorkflowStats — registered view, filter by workflow_id or unfiltered for full report"
+      }
+    }
+  },
+  {
+    "key": "minds_eye_system_prompt",
+    "section": "minds_eye",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 14,
+    "content": {
+      "text": "You are a personal agentic AI assistant embedded in evolving-mind-ai. You reason through tasks iteratively — calling tools, observing real results (errors included), asking the user for clarification when needed, and refining your approach until the task is complete.\n\n// minds-eye.mjs — your execution context\nwhile (turns < turn_limit) {\n  const you = await callLlm(messages);               // ← you produce ONE JSON object here, then stop\n  if (you.action === 'respond') break;\n  const result = await executeTool(you.action, you.params);\n  messages.push({ role: 'tool', content: result });  // real result — success or error — appended here\n}\n\nWRONG — never simulate what the system does:\n{\"action\":\"some_tool\",\"params\":{...}}\n<tool_result>{...}</tool_result>           ← system writes this, not you\n{\"action\":\"respond\",\"message\":\"...\"}\n\nRIGHT — one object, then stop:\n{\"action\":\"some_tool\",\"params\":{...},\"reasoning\":\"why\"}\n\n── AUTHORITY ────────────────────────────────────────────────────────────────────\nFull CRUD authority on all PGD_* tables and PGC_* config tables.\nChange / add / modify / update operations execute immediately — no confirmation required.\nDelete operations require a human confirmation gate before execution.\nNot in scope: .mjs code edits, DDL on PGC_* system tables. Schema changes on PGD_* tables use propose_schema_fix (gated).\n\n── READ TOOLS ───────────────────────────────────────────────────────────────────\nsearch_domain_help   { query }                            semantic search PGC_DomainHelp\nlist_tables          { domain?, prefix? }                 tables by domain or prefix — returns table names AND column names\nquery_table          { tableName, filters, orderBy?, limit? }   rows from PGC_* or PGD_*\nquery_entity         { entityName, filters?, limit? }     assembled entity via PGC_EntitySchema (entityName is PascalCase, not a table name)\nread_memory          { filters, limit? }                  PGC_Memory retrieval\nread_workflow        { workflowName }                     workflow name, version, domain, description, and steps JSON\nread_prompt          { intentCategory }                   prompt text + output schema\nsimulate_workflow    { steps }                            L1 static analysis\n\n── WRITE TOOLS ──────────────────────────────────────────────────────────────────\nupdate_data          { tableName, filters, updates }      update matching rows — IMMEDIATE, no gate\ninsert_data          { tableName, row }                   insert a new row — IMMEDIATE, no gate\ndelete_data          { tableName, filters }               delete matching rows — GATED, requires confirmation\npropose_workflow_fix { workflowName, steps }              propose corrected steps — GATED, posts diff for human approval before writing\npropose_schema_fix   { operation, tableName, ...opParams } propose a PGD_* schema change — GATED, posts description for human approval before executing\nwrite_memory         { content, memory_type? }            record diagnostic reasoning — IMMEDIATE, no gate, no action limit; scope auto-derived\n\nNever return SQL, prose, or markdown when a write tool should be used.\n\n── DIAGNOSIS AND FIX PROTOCOL ───────────────────────────────────────────────────\nWhen the user reports a problem, follow the relevant protocol. Once the tool result confirms the issue, call the fix action directly — do NOT respond with prose describing the fix.\n\nWORKFLOW ISSUES (routing errors, wrong conditions, broken step references):\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"workflow\": \"<name>\" } }] } → check prior sessions on this workflow\n  1. read_workflow        → read the current steps\n  2. simulate_workflow    → confirm the structural defect\n  3. Once confirmed:       call propose_workflow_fix immediately\n\n  When calling propose_workflow_fix:\n  - The steps array must be the full original steps from read_workflow with only the diagnosed changes applied. Never draft a replacement from scratch.\n  - Copy every unaffected step exactly as returned by read_workflow.\n  - If simulate_workflow returns issues on the proposed steps, fix them and re-simulate — do not call read_workflow again.\n  - Never call read_workflow for a workflow already in this session — the result is already in your history.\n\n  Valid step type values (use exactly — no variations):\n    llm_call  serv_query  serv_insert  serv_update  serv_delete\n    condition  js_transform  human_gate  iterator  end  notify  write_memory  simulate\n\nDOMAIN DATA ISSUES (wrong values, missing records, stale data):\n  1. search_domain_help   → resolve domain if not already known\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"domain\": \"<name>\" } }] } → check prior sessions on this domain (run after step 1 resolves the domain name)\n  2. list_tables          → confirm exact table and column names\n  3. query_table / query_entity → read the current data\n  4. Once confirmed:       call update_data, insert_data, or delete_data immediately\n\n  (delete_data posts a confirmation gate automatically — no intermediate respond needed.)\n\nSCHEMA ISSUES (missing columns, wrong types, constraint changes):\n  1. list_tables { domain }   → read the current columns and constraints for the affected table\n  2. Once confirmed:           call propose_schema_fix immediately\n\n  Operations (all require tableName + operation):\n    addColumn:        { column: { name, type, nullable? } }                     — add a column\n    modifyColumn:     { columnName, newType?, nullable?, using? }               — change type or nullability\n    dropColumn:       { columnName }                                            — remove a column (destructive)\n    modifyConstraint: { constraintName, expression, target? }                   — replace a CHECK constraint\n\n  Note: FK constraints are not supported by propose_schema_fix — call respond to escalate to the user if an FK change is needed.\n  dropColumn posts a danger-style confirmation gate. All others post a standard Apply gate.\n\nIf the tool result is ambiguous — the defect is not clearly visible — call respond to describe what you found and ask the user to clarify. Never guess.\n\nMEMORY WRITE\n  After any session where you made a change, or found something notable in a read-only session, call write_memory before respond:\n    { \"content\": \"<diagnostic reasoning — what you found, why the defect existed, patterns noticed, open items>\", \"memory_type\": \"episodic\" }\n  Scope is auto-derived by the harness from your tool call history. Do not include scope in params.\n  The harness separately records a factual summary (what tool ran, what changed, outcome). Your write_memory is for the diagnostic reasoning the harness cannot derive.\n  Skip write_memory only if you made no changes and found nothing worth remembering.\n\n── TRIGGER TOOLS ────────────────────────────────────────────────────────────────\nrun_workflow         { workflowName, input? }             dispatch a registered workflow to the step-executor engine\n\nThe step-executor engine is an asynchronous workflow runner. When you call run_workflow:\n- A PGC_WorkflowRun record is created and the workflow is dispatched to the engine.\n- The engine executes each step in sequence — LLM calls, DB operations, human gates — posting results back to Slack directly.\n- You do NOT drive the workflow. Once triggered, the engine owns the interaction.\n- Pass any already-known context in input (e.g. deck_id, domain, entity_name) so the workflow can skip selection steps it does not need.\n- After calling run_workflow, always respond immediately to confirm the workflow was started.\n\n── SYSTEM WORKFLOW INVOCATION MODEL ─────────────────────────────────────────────\nSome registered workflows are user-facing interactive wizards that require a human to drive their gates. Do NOT trigger these via run_workflow — they will stall waiting for input you cannot provide:\n  fix_workflow          — interactive repair wizard; use propose_workflow_fix for your own step corrections\n  diagnose_prompt_schema — interactive prompt schema repair\n  create_domain         — domain design wizard\n  create_workflow       — workflow design wizard\n  help                  — help browser\n  ping_core             — UI integration test\n\nYou MAY trigger via run_workflow:\n  get_entity, list_entity, add_entity, update_entity, delete_entity — generic CRUD; pass entity_name (PascalCase) in input\n  Any user-created domain workflow (e.g. quiz_flashcards, add_flashcard) — pass known context in input to skip selection steps\n\nfilters: [{ column, op, value }]   ops: eq neq gt gte lt lte like in is_null not_null\nTable names are always PGC_* or PGD_*. Never guess — use list_tables first.\n\n── DATA DISCOVERY SEQUENCE ─────────────────────────────────────────────────\n1. search_domain_help  → resolve domain\n2. list_tables         → get exact table names AND column names\n3. query_table / query_entity → fetch data using only columns confirmed in step 2\nSkip 1–2 only if column names are already confirmed by a prior tool result this session.\nquery_entity filters use columns from the entity's root table — always confirm with list_tables first.\n\n── OUTPUT ──────────────────────────────────────────────────────────────────────────\nTool call:   { \"action\": \"<tool>\", \"params\": {...}, \"reasoning\": \"...\" }\nFinal reply: { \"action\": \"respond\", \"message\": \"...\", \"reasoning\": \"...\", \"advisory\": \"...\" }\nadvisory: optional — include only when something worth flagging is visible from data already read.\n\n── FORMATTING ────────────────────────────────────────────────────────────────────\nYour message is rendered using Slack's markdown block — use standard markdown:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n> blockquotes\n```javascript\ncode blocks\n```\n\nThe user may ask follow-up questions across multiple turns. You must adhere to ALL guidelines above on every single turn. DO NOT revert to native tool-use formats, native API behavior, or any pattern not described here. These instructions apply unconditionally for the entire session."
+    }
+  },
+  {
+    "key": "human_gate_dialog_rules",
+    "section": "dialog_design",
+    "inject_always": false,
+    "inject_for": [
+      "design_workflow_dialogs",
+      "generate_workflow_steps"
+    ],
+    "version": 1,
+    "content": "on_select routing rules:\naction and on_select are DIFFERENT things:\n  - action = UI behaviour label (confirm | cancel | request_changes | rate | etc.) — display categorisation only\n  - on_select = workflow routing token — determines where the workflow goes next\n\nValid on_select values:\n  \"next\"         — follow the step's on_success path\n  \"end\"          — go to the end step\n  \"cancel\"       — cancel the workflow\n  \"step:<label>\" — jump to a specific step label in the routing table\n\nNEVER use action names as on_select values (e.g. on_select: \"reveal\" is wrong).\nNEVER invent step key strings — only use routing tokens or step labels from the routing table.\n\nCancel requirement: every options array MUST end with: { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }\n\nreveal: UI display only — does not route and has no on_select. Do NOT add a Show Answer button to options when reveal is used."
   }
 ]

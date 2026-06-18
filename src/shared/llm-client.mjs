@@ -34,7 +34,6 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     model,
     input:        userMessage,
     instructions,
-    temperature:  0.2,
     ...(maxOutputTokens ? { max_output_tokens: parseInt(maxOutputTokens, 10) } : {}),
   };
 
@@ -97,19 +96,27 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
 
   if (!rawText) throw new Error('LLM returned empty response');
 
-  // Extract JSON from the response. Models sometimes wrap output in markdown fences
-  // and may prepend reasoning text before the opening fence or append explanations
-  // after the closing fence. Extract content between the first ``` pair when present;
-  // otherwise use the raw text directly.
-  const fenceMatch    = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const openingStrip  = rawText.replace(/^```(?:json)?\s*/i, '').trim();
-  const clean         = fenceMatch ? fenceMatch[1].trim() : openingStrip;
+  // Extract JSON from the response. Models sometimes wrap output in markdown fences.
+  // Only strip fences when the raw output ITSELF starts with ``` — if the output is
+  // already a JSON object, any ``` inside it belong to embedded code blocks in string
+  // values and must not be extracted (they would yield "javascript..." which fails parse).
+  const trimmedRaw = rawText.trim();
+  const fenceMatch = trimmedRaw.startsWith('```')
+    ? trimmedRaw.match(/^```(?:json)?\s*([\s\S]*?)```/i)
+    : null;
+  const clean = fenceMatch ? fenceMatch[1].trim() : trimmedRaw;
 
   try {
     return JSON.parse(clean);
-  } catch (error) {
-    const parseErr = new Error(`LLM returned invalid JSON: ${error.message}\nRaw: ${rawText.slice(0, 200)}`);
-    parseErr.rawOutput = clean;
+  } catch (firstError) {
+    // LLM prepended prose before the JSON object — find the first { and retry.
+    const jsonStart = clean.indexOf('{');
+    if (jsonStart > 0) {
+      try { return JSON.parse(clean.slice(jsonStart)); } catch { /* fall through */ }
+    }
+    const parseErr = new Error(`LLM returned invalid JSON: ${firstError.message}\nRaw: ${rawText.slice(0, 200)}`);
+    parseErr.isParseError = true;
+    parseErr.rawOutput    = rawText;
     // Truncation detection: output_tokens exactly equals the ceiling — the model was cut
     // off mid-response, not confused. A correction prompt won't help; a resumption will.
     if (maxOutputTokens && outputTokens >= parseInt(maxOutputTokens, 10)) {
@@ -162,7 +169,6 @@ export async function callLlmWithMessages(model, messages, traceId) {
   const body = {
     model,
     input:       effectiveInput,
-    temperature: 0.2,
     ...(instructions                    ? { instructions }          : {}),
     ...(isSonar && history.length > 0   ? { messages: history }     : {}),
   };
