@@ -495,7 +495,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
     const runResp = await insertRow('PGC_WorkflowRun', {
       workflow_id:  workflowId,
       trace_id:     traceId,
-      triggered_by: 'slack',
+      triggered_by: 'intent_classify',
       status:       'pending',
       input:        workflowInput,
       stack:        [],
