@@ -208,6 +208,7 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 | output_schema | jsonb | Expected JSON shape of the LLM response. Used to validate output and guard downstream steps |
 | output_sample | jsonb | Representative successful output stored on first clean run. Used for regression checking when prompt is evolved |
 | probe_input | jsonb | ✦ Minimal substitution map for integration testing — mirrors the `input_variables` contract. Used by `llm-prompt-schema.test.mjs` to substitute template vars before firing the live LLM call |
+| domain | text nullable | Domain this prompt belongs to (e.g. `flashcards`, `pantry`). NULL for system-level prompts shared across all domains. Set by `design_workflow_prompts` (P3). Deleted by `delete_domain` / `delete_workflow` via `deleteRows WHERE domain = ?` |
 | model | text | Which LLM was used |
 | max_output_tokens | integer | ✦ Per-prompt output token ceiling forwarded to `callLlm`. NULL = use LLM default |
 | memory_config | jsonb | ✦ Controls memory retrieval for this prompt. `{ memory_budget_tokens, memory_types, scope_additions }`. NULL = no memory injection. `memory_budget_tokens: 0` disables memory. See §4.3.4 |
