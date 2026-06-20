@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 15,
+    "version": 16,
     "steps": [
       {
         "step": "1",
@@ -127,7 +127,7 @@
         "description": "Skip preference gates if research found no structural decisions to ask.",
         "expression": "{{preference_gates.length}}",
         "on_success": "9",
-        "on_else": "10"
+        "on_else": "9a"
       },
       {
         "step": "9",
@@ -150,8 +150,17 @@
         },
         "execution_mode": "sequential",
         "output_key": "user_preferences",
-        "on_complete": "10",
+        "on_complete": "9a",
         "on_else": "cancel"
+      },
+      {
+        "step": "9a",
+        "type": "js_transform",
+        "description": "Enrich user_preferences answers with question text and option description from preference_gates so the design LLM has full context for each preference decision.",
+        "output_key": "user_preferences",
+        "on_success": "next",
+        "on_else": "next",
+        "expression": "(function(){var answers=local_state.user_preferences||[];var gates=local_state.preference_gates||[];if(!answers.length)return answers;var gateMap={};gates.forEach(function(g){gateMap[g.id]=g;});return answers.map(function(ans){var gate=gateMap[ans.id];if(!gate)return ans;var opt=(gate.options||[]).filter(function(o){return o.value===ans.value;})[0];return{id:ans.id,question:gate.question,value:ans.value,description:opt?opt.description:''};});})()"
       },
       {
         "step": "10",
