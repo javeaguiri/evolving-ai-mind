@@ -117,6 +117,7 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
       error_type:              'llm_correction_failed',
       error_message:           error.message,
       attempt1_errors:         attempt1Errors,
+      failing_values:          resolveFailingValues(attempt1Errors, output),
       attempt1_output_excerpt: JSON.stringify(output).slice(0, 800),
       recovery_action:         'halt',
     });
@@ -156,6 +157,7 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
     error_type:              errorType,
     error_message:           `Validation failed after 2 attempts — ${attempt2Errors.length} error(s)`,
     ajv_errors:              attempt2Errors,
+    failing_values:          resolveFailingValues(attempt2Errors, output),
     attempt1_output_excerpt: JSON.stringify(output).slice(0, 800),
     recovery_action:         'halt',
   });
@@ -299,6 +301,32 @@ function runSemanticRules(scaffold) {
  * The most actionable distinction is schema_contract (wrong array element shape)
  * vs schema_violation (missing fields, wrong enum, etc.).
  */
+/**
+ * Walk AJV instancePaths into the output object and collect the actual values
+ * at each failing location. Returns { "/tables/4/columns/7/type": "float", ... }
+ * so callers can see what the LLM produced, not just where it was wrong.
+ */
+function resolveFailingValues(errors, output) {
+  if (!errors?.length || !output) return {};
+  const result = {};
+  for (const e of errors) {
+    const path = e.instancePath;
+    if (!path) continue;
+    try {
+      const segments = path.split('/').filter(Boolean);
+      let node = output;
+      for (const seg of segments) {
+        if (node == null) break;
+        node = node[seg];
+      }
+      result[path] = node !== undefined ? node : null;
+    } catch {
+      result[path] = null;
+    }
+  }
+  return result;
+}
+
 function classifyAjvErrors(errors) {
   if (!errors || errors.length === 0) return 'unknown';
   const firstErr = errors[0];
