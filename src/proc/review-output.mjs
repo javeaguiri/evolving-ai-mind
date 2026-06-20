@@ -302,9 +302,9 @@ function runSemanticRules(scaffold) {
  * vs schema_violation (missing fields, wrong enum, etc.).
  */
 /**
- * Walk AJV instancePaths into the output object and collect the actual values
- * at each failing location. Returns { "/tables/4/columns/7/type": "float", ... }
- * so callers can see what the LLM produced, not just where it was wrong.
+ * Walk AJV instancePaths into the output object and return a map of
+ * path → { actual, keyword, message, params } so each failing location
+ * has both the LLM's value and the AJV error context in one place.
  */
 function resolveFailingValues(errors, output) {
   if (!errors?.length || !output) return {};
@@ -312,17 +312,21 @@ function resolveFailingValues(errors, output) {
   for (const e of errors) {
     const path = e.instancePath;
     if (!path) continue;
+    let actual = null;
     try {
-      const segments = path.split('/').filter(Boolean);
       let node = output;
-      for (const seg of segments) {
+      for (const seg of path.split('/').filter(Boolean)) {
         if (node == null) break;
         node = node[seg];
       }
-      result[path] = node !== undefined ? node : null;
-    } catch {
-      result[path] = null;
-    }
+      actual = node !== undefined ? node : null;
+    } catch { /* leave null */ }
+    result[path] = {
+      actual,
+      keyword: e.keyword,
+      message: e.message,
+      ...(e.params && Object.keys(e.params).length ? { params: e.params } : {}),
+    };
   }
   return result;
 }
