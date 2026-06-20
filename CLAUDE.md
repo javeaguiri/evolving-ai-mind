@@ -68,7 +68,7 @@ Sprint 4 examples: `real` vs `numeric(4,2)` for ease_factor → Contract bug fro
 ## Development Process — Sprint Cycles
 
 ### Session start
-Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. It contains the active sprint goal, branch, acceptance criteria, and test scenarios.
+Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md` and `docs/arch-data.md` §5.5 (curl cookbook). `CURRENT.md` contains the active sprint goal, branch, acceptance criteria, and test scenarios. `arch-data.md` §5.5 contains the canonical curl commands for all SERV routes — read it before making any API calls, never guess route names.
 
 ### Sprint lifecycle
 
