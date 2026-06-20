@@ -1126,7 +1126,7 @@ async function executeReadTool(action, params, traceId) {
         );
         const p = resp.rows?.[0];
         if (!p) return { error: `Prompt "${intentCategory}" not found` };
-        return { intent_category: p.intent_category, version: p.version, domain: p.domain, prompt_text: p.prompt_text, output_schema: p.output_schema };
+        return { id: p.id, intent_category: p.intent_category, version: p.version, domain: p.domain, prompt_text: p.prompt_text, output_schema: p.output_schema, max_output_tokens: p.max_output_tokens ?? null, error_log: p.error_log ?? null };
       }
 
       case 'simulate_workflow': {
