@@ -29,6 +29,37 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
 - **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
 - **AC11 — UC-P5 (subtract ingredients):** Recipe ingredients deducted from pantry using `llm_call` unit conversion. Confirmation gate before writes. Track P "create" case: unit conversion prompt registered as `PGC_Prompt` with `domain='pantry'`.
+- **AC12 — PGC_Prompt.domain column live:** Column exists in DB and seed. `sm2_calculate` (id=79) tagged `domain='flashcards'`. P3 can read domain during `design_workflow_prompts`.
+- **AC13 — Prompt cleanup in delete flows:** `delete_workflow` deletes `PGC_Prompt` rows where `domain = workflow.domain`. `delete_domain` deletes `PGC_Prompt` rows where `domain = input.domain`. No orphaned domain prompts after a delete run.
+- **AC14 — `quiz_flashcards` workflow recreated:** Existing workflow deleted and regenerated via `create_workflow`. SM-2 convert case fires: `sm2_calculate` llm_call rewritten as `js_transform`. Quiz runs end-to-end from Slack.
+- **AC15 — `chk_triggered_by` constraint updated:** `PGC_WorkflowRun.triggered_by` accepts `minds_eye` and `intent_classify` without constraint violation. No new Novia or classify-intent run rejected by DB.
+- **AC16 — R4 unit test passes:** `tests/unit/` contains assertion that MINDS_EYE SQS payload uses `sessionId` key (not `existingSessionId`) when continuing an existing session.
+- **AC17 — `openapi.yaml` in sync:** All active routes in `handler.mjs` (slackbot + proc) have corresponding spec entries. Stale ping variants removed. `/novia` and `/proc/minds-eye` present and accurate.
+
+---
+
+## Track → AC Map
+
+| Track item | AC(s) |
+|---|---|
+| P0 Seed audit | AC1 |
+| P1 PGC_Prompt.domain column | AC12 |
+| P2 generate_workflow_steps prompt | AC3 |
+| P3 design_workflow_prompts step | AC3 |
+| P4 Prompt cleanup in delete flows | AC13 |
+| D1 Recreate Recipe domain | AC4 |
+| D2 Delete + recreate quiz_flashcards | AC3, AC14 |
+| D3 Create Pantry domain | AC5 |
+| D4 Create Expenses domain | AC8 |
+| W1 UC-P4 receipt → pantry | AC6 |
+| W2 UC-P4 extended cross-domain | AC7 |
+| W3 UC-E3 expense receipt | AC9 |
+| W4 UC-E4 budget report | AC10 |
+| W5 UC-P5 subtract ingredients | AC3, AC11 |
+| E1 Embedding on insert | AC2 |
+| H1 chk_triggered_by fix | AC15 |
+| H2 R4 unit test | AC16 |
+| H3 openapi.yaml sync | AC17 |
 
 ---
 
