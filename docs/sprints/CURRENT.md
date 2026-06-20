@@ -52,10 +52,10 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Replace with generic placeholders. Run `upsert-system-context.mjs` and `upsert-prompt.mjs`.
 - Replaced: 5 SystemContext rows (loop_state generic pattern, runtime_bindings example, minds_eye tool list); 8 Prompt rows (probe_inputs → book_reviews domain, step label examples, flashcard-specific dialog copy).
 
-**P1 — X2: PGC_Prompt.domain column**
+**P1 — X2: PGC_Prompt.domain column** ✅ DONE (2026-06-20)
 - `POST /api/v1/serv/schema/addColumn` → `PGC_Prompt.domain text nullable`
 - Update `PGC_Schema` seed to register column
-- Backfill `sm2_calculate` (id=79) → `domain: 'flashcards'`
+- Backfill `sm2_calculate` (id=79) → `domain: 'flashcards'` (user-created artifact, updated via SERV updateRows)
 
 **P2 — Update `generate_workflow_steps` prompt**
 - Domain-specific `llm_call` steps emit `prompt_draft` / `prompt_category` / `prompt_model` / `output_schema` fields
