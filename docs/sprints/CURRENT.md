@@ -168,11 +168,11 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ### Track E — Embedding on insert
 
-**E1 — Extend `table.mjs` `insertRow`**
-- When `embed_source` is defined for the table in `PGC_Schema`, call `embedText()` on the concatenated embed_source fields and write to the vector column
-- Mirrors the existing `updateRows` embed path
-- Extend-not-prompt principle: SERV owns all embedding; callers never supply the vector value
-- All three new domains discoverable immediately after `create_domain`
+**E1 — Extend `table.mjs` `insertRow`** ✅ DONE (already implemented — verified 2026-06-20)
+- `insertRow` already calls `getEmbedColumns` + `resolveEmbedding` on every insert (lines 350–366).
+- `PGC_DomainHelp.embedding` has `embed_source: [domain, description, aliases]` in `PGC_Schema`.
+- New domains are embedded automatically on `create_domain` — no `backfill-embeddings.mjs` run needed.
+- Stale "NULL until backfill" note removed from `docs/arch-data.md`.
 
 ---
 
