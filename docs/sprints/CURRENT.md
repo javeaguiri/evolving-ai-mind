@@ -103,10 +103,12 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - `arch-create-workflow.md` updated with Phase 4.5 table and LLM model row.
 - Run `upsert-prompt.mjs` + `upsert-workflow.mjs create_workflow`.
 
-**P4 — Prompt cleanup in `delete_workflow` / `delete_domain`**
-- `delete_workflow`: add `serv_delete PGC_Prompt WHERE domain = workflow.domain`
-- `delete_domain`: extend to `serv_delete PGC_Prompt WHERE domain = input.domain`
-- Run `upsert-workflow.mjs`
+**P4 — Prompt cleanup in `delete-workflow.mjs` / `delete-domain.mjs`** ✅ DONE (2026-06-20)
+- Both are system code Lambda handlers, not workflows — no new workflow artifacts needed.
+- `delete-domain.mjs`: added step 5a — `deleteRows PGC_Prompt WHERE domain = domain` (bestEffort, after IntentMap cleanup). Result and notification updated.
+- `delete-workflow.mjs`: added step 5a — `deleteRows PGC_Prompt WHERE domain = workflowDomain`, guarded by `if (workflowDomain)` so system workflows (domain: null) don't wipe shared prompts. Result and notification updated.
+- `PGC_Prompt.allow_delete` flipped to `true` in DB and `seed_PGC_TableMap.json`.
+- Stale backlog item "delete-domain.mjs missing PGC_Workflow + PGC_IntentMap cleanup" removed (was already fixed in Sprint 2).
 
 **Validation test vehicles:**
 - SM-2 (`sm2_calculate`) — convert case: domain-specific llm_call → rewritten as `js_transform`
