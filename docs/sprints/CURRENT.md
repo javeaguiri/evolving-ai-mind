@@ -47,9 +47,10 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ### Track P — design\_workflow\_prompts
 
-**P0 — Seed audit (prep, do first)**
+**P0 — Seed audit (prep, do first)** ✅ DONE (2026-06-20)
 - Audit `seed_PGC_SystemContext.json` and `seed_PGC_Prompt.json` for user-specific names (flashcard, quiz, PGD_Flashcards, spaced_repetition, sm2, etc.)
 - Replace with generic placeholders. Run `upsert-system-context.mjs` and `upsert-prompt.mjs`.
+- Replaced: 5 SystemContext rows (loop_state generic pattern, runtime_bindings example, minds_eye tool list); 8 Prompt rows (probe_inputs → book_reviews domain, step label examples, flashcard-specific dialog copy).
 
 **P1 — X2: PGC_Prompt.domain column**
 - `POST /api/v1/serv/schema/addColumn` → `PGC_Prompt.domain text nullable`
@@ -176,3 +177,5 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 **2026-06-18 (session 1):** Sprint 6 scoped. Retro written to sprint-05.md. Goal: Pantry + Expenses domains, Track P complete, MVP hardening. Sprint 7 intent: release-readiness (usability, log hygiene, README, test environment). Branch: `sprint/06-pantry-expenses-trackp`.
 
 **2026-06-18 (session 2):** Sprint 5 merged to main and pushed. Prod deployment confirmed current (sam deploy — no changes, all 4 bundles matched). Fixed CURRENT.md on main (sprint/05 merge had brought over stale Sprint 5 version). Sprint 6 implementation starts next session with P0 seed audit.
+
+**2026-06-20 (session 3):** P0 seed audit complete. Removed flashcard/quiz/Spanish/sm2/spaced_repetition references from 5 SystemContext rows and 8 Prompt rows. Generic replacement domain: book_reviews (PGD_Books). Loop variables genericised to loop_state/loop_done/current_item. Both upsert scripts run; DB confirmed current. Next: P1 (PGC_Prompt.domain column).
