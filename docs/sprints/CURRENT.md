@@ -163,9 +163,10 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Confirmation gate → insert `PGD_Expenses` root + `PGD_ExpenseItems` children
 
 **W4 — UC-E4: monthly budget report**
-- Reads all expenses for current month, groups by category, compares to `PGD_Budget` limits
-- `llm_call` over rows for arithmetic (MVP acceptable at household scale)
-- If `llm_call` is unreliable for arithmetic, scope `serv_aggregate` step type as a backlog item
+- After D4, manually create a DB view `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount) WHERE current month) and register it in PGC_Schema + PGC_TableMap
+- Workflow: `serv_getRows` on the view → `serv_getRows` on `PGD_Budget` → `llm_call` to format the comparison as readable Slack output (LLM for *formatting*, not *math*)
+- No `llm_call` aggregation — view handles all arithmetic at the DB level
+- `createView` SERV endpoint added to backlog for future domains
 
 **W5 — UC-P5: subtract recipe ingredients from pantry**
 - Reads recipe ingredients + current pantry state
