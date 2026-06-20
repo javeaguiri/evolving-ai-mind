@@ -36,6 +36,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC16 — R4 unit test passes:** `tests/unit/` contains assertion that MINDS_EYE SQS payload uses `sessionId` key (not `existingSessionId`) when continuing an existing session.
 - **AC17 — `openapi.yaml` in sync:** All active routes in `handler.mjs` (slackbot + proc) have corresponding spec entries. Stale ping variants removed. `/novia` and `/proc/minds-eye` present and accurate.
 - **AC18 — User alias input in `create_domain`:** Step 17c text_input gate allows user to supply additional aliases (comma-separated). Step 18 merges them with LLM-generated aliases. Blank input proceeds without additional aliases.
+- **AC19 — Novia recovery tools:** After a failed `create_domain` run that leaves orphaned PGD tables, Novia can list physical tables not registered in `PGC_Schema` (`list_physical_tables`) and drop them individually (`drop_table`, danger gate, force=true). No manual DB intervention required.
 
 ---
 
@@ -62,6 +63,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | H2 R4 unit test | AC16 |
 | H3 openapi.yaml sync | AC17 |
 | D0 create_domain alias input | AC18 |
+| H4 Novia recovery tools | AC19 |
 
 ---
 
@@ -200,6 +202,12 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
   2. `slackbot/interactive.mjs` sends `sessionId` key (not `existingSessionId`) in MINDS_EYE SQS payload
 - All 360 unit tests pass
 
+**H4 — Novia recovery tools** ✅ DONE (2026-06-20)
+- `listPhysicalTables` SERV endpoint: queries `information_schema.tables` for physical PGD tables, returns `registered:bool` per table (cross-referenced against `PGC_Schema`)
+- `deleteTable` extended with `force: true`: skips 404 when no `PGC_Schema` row exists, assumes `pgd` target, best-effort cleanup of schema/tablemap rows
+- `minds-eye.mjs`: `list_physical_tables` → `READ_TOOLS`; `drop_table` → `GATED_WRITE_TOOLS` (danger gate); scope tracking added
+- `minds_eye_system_prompt` v15→v16: both tools documented with use cases and recovery flow
+
 **H3 — `openapi.yaml` sync audit** ✅ DONE (2026-06-20)
 - `/novia` and `/proc/minds-eye` already present — confirmed accurate
 - Added missing slackbot routes: `/api/v1/ui/slack/help`, `/api/v1/ui/slack/explain`
@@ -228,5 +236,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 **2026-06-18 (session 1):** Sprint 6 scoped. Retro written to sprint-05.md. Goal: Pantry + Expenses domains, Track P complete, MVP hardening. Sprint 7 intent: release-readiness (usability, log hygiene, README, test environment). Branch: `sprint/06-pantry-expenses-trackp`.
 
 **2026-06-18 (session 2):** Sprint 5 merged to main and pushed. Prod deployment confirmed current (sam deploy — no changes, all 4 bundles matched). Fixed CURRENT.md on main (sprint/05 merge had brought over stale Sprint 5 version). Sprint 6 implementation starts next session with P0 seed audit.
+
+**2026-06-20 (session 4):** Three `create_domain` failures diagnosed and fixed: (1) `design_table` prompt restructured into 7 numbered sections; `pgd_column_type_rules` and `pgd_naming_conventions` system context updated to close type/naming gaps (Instruction fault). (2) Topological sort step (16d) added to `create_domain` to order tables by FK dependency before `createTable` iterator (Execution fault). (3) `user_preferences` enrichment step (9a) added — answers now carry question text and option description so LLM has full context (Instruction fault). `delete-domain.mjs` fixed to report `deletedDomainHelpCount` integer in Slack notification. Novia recovery tools implemented: `listPhysicalTables` SERV endpoint + `deleteTable` force flag + `list_physical_tables`/`drop_table` tools in `minds-eye.mjs` + `minds_eye_system_prompt` v16 (H4 / AC19). CLAUDE.md session-start updated to reference `arch-data.md` §5.5.
 
 **2026-06-20 (session 3):** P0 seed audit complete. Removed flashcard/quiz/Spanish/sm2/spaced_repetition references from 5 SystemContext rows and 8 Prompt rows. Generic replacement domain: book_reviews (PGD_Books). Loop variables genericised to loop_state/loop_done/current_item. Both upsert scripts run; DB confirmed current. P1–P4 complete (PGC_Prompt.domain column, generate_workflow_steps P2 extension, design_workflow_prompts P3 steps 23a–23h, delete prompt cleanup). E1 confirmed already implemented. Track H complete (chk_triggered_by constraint, R4 unit test, openapi.yaml sync). D0 (alias input gate in create_domain step 17c) complete. W4 scoped to DB view approach (no LLM math). createView added to backlog. arch-create-domain.md and arch-data.md updated. 360/360 unit tests pass. Next: Track D (D1 recreate Recipe domain) and Track W from Slack.
