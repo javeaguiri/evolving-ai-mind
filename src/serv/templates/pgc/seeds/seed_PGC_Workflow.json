@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 14,
+    "version": 15,
     "steps": [
       {
         "step": "1",
@@ -379,10 +379,19 @@
         "on_else": "next"
       },
       {
+        "step": "16d",
+        "type": "js_transform",
+        "description": "Topologically sort tables by FK dependency so parent tables are created before child tables.",
+        "output_key": "sorted_tables",
+        "on_success": "next",
+        "on_else": "next",
+        "expression": "(function(){var tables=local_state.proposed_scaffold&&local_state.proposed_scaffold.tables||[];if(tables.length<=1)return tables;var nameSet={};tables.forEach(function(t){nameSet[t.tableName]=true;});var deps={};var inDegree={};var tableMap={};tables.forEach(function(t){deps[t.tableName]=[];inDegree[t.tableName]=0;tableMap[t.tableName]=t;});tables.forEach(function(t){(t.foreignKeys||[]).forEach(function(fk){var ref=fk.references&&fk.references.table;if(ref&&nameSet[ref]&&ref!==t.tableName){deps[ref].push(t.tableName);inDegree[t.tableName]++;}});});var queue=[];tables.forEach(function(t){if(inDegree[t.tableName]===0)queue.push(t.tableName);});var result=[];while(queue.length>0){var name=queue.shift();result.push(tableMap[name]);(deps[name]||[]).forEach(function(dep){inDegree[dep]--;if(inDegree[dep]===0)queue.push(dep);});}return result.length===tables.length?result:tables;})()"
+      },
+      {
         "step": "17",
         "type": "iterator",
         "description": "Create each confirmed PGD table via SERV-Schema createTable.",
-        "items_key": "proposed_scaffold.tables",
+        "items_key": "sorted_tables",
         "item_step": {
           "type": "serv_schema",
           "input": "{{item}}",
