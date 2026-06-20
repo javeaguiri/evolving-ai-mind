@@ -114,7 +114,7 @@ being written — aliases are not assumed from LLM output alone.
 | aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
 | description | text | |
 | commands | jsonb | Array of command definitions with examples |
-| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. NULL until backfill script runs. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. ⬜ Column added via addColumn endpoint in Session 26 |
+| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. Populated automatically by `insertRow` on domain creation — no backfill needed. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
