@@ -88,16 +88,18 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Update `PGC_Schema` seed to register column
 - Backfill `sm2_calculate` (id=79) → `domain: 'flashcards'` (user-created artifact, updated via SERV updateRows)
 
-**P2 — Update `generate_workflow_steps` prompt**
+**P2 — Update `generate_workflow_steps` prompt** ✅ DONE (2026-06-20)
 - Domain-specific `llm_call` steps emit `prompt_draft` / `prompt_category` / `prompt_model` / `output_schema` fields
 - System prompts (intent_category) keep existing shape unchanged
-- Update `PGC_StepType` `llm_call` input_contract. Run `upsert-prompt.mjs` + `upsert-step-type.mjs`.
+- Updated `PGC_StepType` `llm_call` input_contract with 4 new optional fields. Upserts run.
+- `prompt_model` uses alias names (`"cheap"` / `"smart"`); `llm-harness.mjs` resolves to actual model IDs at runtime via `llm_model_aliases` — never hardcode model ID strings in domain prompt drafts.
 
 **P3 — Add `design_workflow_prompts` step to `create_workflow`**
 - New `llm_call` step between `generate_workflow_steps` and L1 simulate
 - Input: draft steps + existing `PGC_Prompt.intent_category` list
 - Output: `capability_decisions` (reuse/create/convert per step)
 - Iterator applies decisions: create → `serv_insert PGC_Prompt` with domain; reuse → record `intent_category`; convert → rewrite step as `js_transform`
+- **Model alias design:** when inserting a new `PGC_Prompt` row, store `prompt_model` alias verbatim in `PGC_Prompt.model` — do NOT resolve to a model ID. Resolution happens at call time in `llm-harness.mjs` via `llm_model_aliases`. New models require only one `llm_model_aliases` update, not per-prompt changes.
 - Run `upsert-workflow.mjs`
 
 **P4 — Prompt cleanup in `delete_workflow` / `delete_domain`**
