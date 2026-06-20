@@ -35,6 +35,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC15 — `chk_triggered_by` constraint updated:** `PGC_WorkflowRun.triggered_by` accepts `minds_eye` and `intent_classify` without constraint violation. No new Novia or classify-intent run rejected by DB.
 - **AC16 — R4 unit test passes:** `tests/unit/` contains assertion that MINDS_EYE SQS payload uses `sessionId` key (not `existingSessionId`) when continuing an existing session.
 - **AC17 — `openapi.yaml` in sync:** All active routes in `handler.mjs` (slackbot + proc) have corresponding spec entries. Stale ping variants removed. `/novia` and `/proc/minds-eye` present and accurate.
+- **AC18 — User alias input in `create_domain`:** Step 17c text_input gate allows user to supply additional aliases (comma-separated). Step 18 merges them with LLM-generated aliases. Blank input proceeds without additional aliases.
 
 ---
 
@@ -60,6 +61,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | H1 chk_triggered_by fix | AC15 |
 | H2 R4 unit test | AC16 |
 | H3 openapi.yaml sync | AC17 |
+| D0 create_domain alias input | AC18 |
 
 ---
 
@@ -118,9 +120,16 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ### Track D — Domain creation
 
+**D0 — create_domain alias input** ✅ DONE (2026-06-20)
+- Added step 17c (human_gate text_input) between LLM alias generation (17b) and js_transform (18)
+- User can type comma-separated custom aliases (or leave blank + Done to use only AI-generated ones)
+- Step 18 js_transform merges user aliases into the aliases Set alongside LLM-generated ones
+- `create_domain` v14 in seed; upserted to DB (DB v43). All 360 unit tests pass.
+
 **D1 — Recreate Recipe domain**
 - Delete existing recipe domain (PGD tables + PGC rows)
 - Run `create_domain` → validates create_domain quality post seed-audit
+- After domain creation: verify `PGC_DomainHelp.embedding` is non-null (AC2 check — confirms embed-on-insert is working without a backfill run)
 - Validate UC-R1, UC-R2, UC-R3 from Slack
 
 **D2 — Delete `quiz_flashcards` workflow + recreate**
@@ -178,18 +187,23 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ### Track H — Housekeeping
 
-**H1 — `chk_triggered_by` constraint fix**
-- ALTER TABLE `PGC_WorkflowRun` — add `minds_eye` and `intent_classify` as valid values
-- Update `PGC_Schema` seed, `executeTriggerTool` in `minds-eye.mjs`, `classify-intent.mjs`
+**H1 — `chk_triggered_by` constraint fix** ✅ DONE (2026-06-20)
+- `modifyConstraint` call updated constraint to: `triggered_by IN ('slack', 'api', 'workflow', 'system', 'minds_eye', 'intent_classify')`
+- `seed_PGC_Schema.json` constraint expression updated to match
+- `minds-eye.mjs`: `triggered_by: 'system'` → `triggered_by: 'minds_eye'`
+- `classify-intent.mjs`: `triggered_by: 'slack'` → `triggered_by: 'intent_classify'`
 
-**H2 — R4 unit test: MINDS_EYE SQS payload**
-- Assert `sessionId` key (not `existingSessionId`) is present in the SQS payload when continuing a session
-- Add to `tests/unit/`
+**H2 — R4 unit test: MINDS_EYE SQS payload** ✅ DONE (2026-06-20)
+- Created `tests/unit/minds-eye-contract.test.mjs` — 2 assertions:
+  1. `proc/minds-eye.mjs` reads `body.sessionId` (aliased as `existingSessionId`) — not `body.existingSessionId`
+  2. `slackbot/interactive.mjs` sends `sessionId` key (not `existingSessionId`) in MINDS_EYE SQS payload
+- All 360 unit tests pass
 
-**H3 — `openapi.yaml` sync audit**
-- Remove or update stale ping endpoint variants
-- Confirm all active routes in `handler.mjs` (slackbot + proc) have corresponding entries
-- `/novia` and `/proc/minds-eye` added this sprint (already done); verify completeness
+**H3 — `openapi.yaml` sync audit** ✅ DONE (2026-06-20)
+- `/novia` and `/proc/minds-eye` already present — confirmed accurate
+- Added missing slackbot routes: `/api/v1/ui/slack/help`, `/api/v1/ui/slack/explain`
+- Added missing proc routes: `/api/v1/proc/troubleshoot-workflow`, `/api/v1/proc/fix-workflow`, `/api/v1/proc/diagnose-prompt-schema`, `/api/v1/proc/monitor-prompt-quality`
+- No stale ping variants found — unified `/ui/slack/ping` already covers all types
 
 ---
 
@@ -214,4 +228,4 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 **2026-06-18 (session 2):** Sprint 5 merged to main and pushed. Prod deployment confirmed current (sam deploy — no changes, all 4 bundles matched). Fixed CURRENT.md on main (sprint/05 merge had brought over stale Sprint 5 version). Sprint 6 implementation starts next session with P0 seed audit.
 
-**2026-06-20 (session 3):** P0 seed audit complete. Removed flashcard/quiz/Spanish/sm2/spaced_repetition references from 5 SystemContext rows and 8 Prompt rows. Generic replacement domain: book_reviews (PGD_Books). Loop variables genericised to loop_state/loop_done/current_item. Both upsert scripts run; DB confirmed current. Next: P1 (PGC_Prompt.domain column).
+**2026-06-20 (session 3):** P0 seed audit complete. Removed flashcard/quiz/Spanish/sm2/spaced_repetition references from 5 SystemContext rows and 8 Prompt rows. Generic replacement domain: book_reviews (PGD_Books). Loop variables genericised to loop_state/loop_done/current_item. Both upsert scripts run; DB confirmed current. P1–P4 complete (PGC_Prompt.domain column, generate_workflow_steps P2 extension, design_workflow_prompts P3 steps 23a–23h, delete prompt cleanup). E1 confirmed already implemented. Track H complete (chk_triggered_by constraint, R4 unit test, openapi.yaml sync). D0 (alias input gate in create_domain step 17c) complete. Next: Track D (D1 recreate Recipe domain) and Track W from Slack.
