@@ -1012,8 +1012,8 @@
       "design_table",
       "revise_domain_schema"
     ],
-    "version": 1,
-    "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) \u2014 derive precision and scale from the most precise literal in the constraint (e.g. ease_factor numeric(4,2) CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0)); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", etc.)"
+    "version": 2,
+    "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) \u2014 derive precision and scale from the most precise literal in the constraint (e.g. ease_factor CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0) uses numeric(4,2) because 1.0 has 1 integer digit and 1 decimal place, giving precision 4 and scale 2); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", \"interval\", \"time\", etc.). For storing multiple values in a single column, use jsonb \u2014 array types (text[], integer[], etc.) are not supported."
   },
   {
     "key": "pgd_naming_conventions",
@@ -1024,8 +1024,8 @@
       "design_table",
       "revise_domain_schema"
     ],
-    "version": 1,
-    "content": "PGD_ table naming: start with PGD_ followed by PascalCase \u2014 NO underscores after the PGD_ prefix (e.g. PGD_Recipes, PGD_StockPrices, PGD_CardTags). NEVER use underscores in the PascalCase part (NEVER PGD_Card_Tags, NEVER PGD_Stock_Prices).\nTrigger naming: trg_<tablename_lower>_updated_at (e.g. trg_cards_updated_at).\nFK naming: fk_<childtable_lower>_<parenttable_lower> (e.g. fk_cards_decks). Required \u2014 never omit.\nConstraint naming: unique constraints use uq_<table>_<cols>; check constraints use chk_<table>_<col> (e.g. uq_cards_term, chk_cards_ease_factor).\nEmbedding column: always named \"embedding\". Never use a different name.\nDomain name: short, lowercase, snake_case (e.g. \"stock_portfolio\", \"recipes\", \"fitness\")."
+    "version": 2,
+    "content": "PGD_ table naming: start with PGD_ followed by PascalCase \u2014 NO underscores after the PGD_ prefix (e.g. PGD_Recipes, PGD_StockPrices, PGD_CardTags). NEVER use underscores in the PascalCase part (NEVER PGD_Card_Tags, NEVER PGD_Stock_Prices).\nTrigger naming: trg_<tablename_lower>_updated_at (e.g. trg_cards_updated_at).\nFK naming: fk_<childtable_lower>_<parenttable_lower> (e.g. fk_cards_decks). Required \u2014 never omit.\nConstraint naming: unique constraints use uq_<table>_<cols>; check constraints use chk_<table>_<col> (e.g. uq_cards_term, chk_cards_ease_factor).\nEmbedding column: name it <source_field>_embedding (e.g. name_embedding, description_embedding, title_embedding). Multiple embedding columns on one table are allowed, one per source field.\nDomain name: short, lowercase, snake_case (e.g. \"stock_portfolio\", \"recipes\", \"fitness\")."
   },
   {
     "key": "pgd_required_columns",
