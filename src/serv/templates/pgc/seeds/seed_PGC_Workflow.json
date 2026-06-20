@@ -1099,11 +1099,7 @@
         "type": "serv_query",
         "description": "Load existing PGC_Prompt entries so design_workflow_prompts can identify reuse candidates.",
         "input": {
-          "tableName": "PGC_Prompt",
-          "columns": [
-            "intent_category",
-            "domain"
-          ]
+          "tableName": "PGC_Prompt"
         },
         "output_key": "existing_prompt_categories",
         "on_success": "next",

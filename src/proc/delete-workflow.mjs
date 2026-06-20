@@ -59,7 +59,8 @@ export async function handle(req) {
     if (req.source === 'http') return ok(result, req.correlationId);
 
     if (callback) {
-      const message = `Workflow \`${result.name}\` deleted.\n• Run history removed: ${result.deletedRunCount} run(s), ${result.deletedRunStepCount} step(s)\n• Intent patterns removed: ${result.deletedIntentCount}`;
+      const promptNote = result.deletedPromptCount > 0 ? `\n• Domain prompts removed: ${result.deletedPromptCount}` : '';
+      const message = `Workflow \`${result.name}\` deleted.\n• Run history removed: ${result.deletedRunCount} run(s), ${result.deletedRunStepCount} step(s)\n• Intent patterns removed: ${result.deletedIntentCount}${promptNote}`;
       await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     }
 
@@ -104,8 +105,9 @@ async function runDeleteWorkflow({ name, traceId }) {
     return runDeleteWorkflow({ name: likeResp.rows[0].name, traceId });
   }
 
-  const workflowId = workflowResp.rows[0].id;
-  console.info('delete-workflow: found workflow', { name, workflowId, traceId });
+  const workflowId     = workflowResp.rows[0].id;
+  const workflowDomain = workflowResp.rows[0].domain ?? null;
+  console.info('delete-workflow: found workflow', { name, workflowId, workflowDomain, traceId });
 
   // --- Step 2: Fetch run ids for this workflow ---
   const runResp = await getRows(
@@ -156,6 +158,17 @@ async function runDeleteWorkflow({ name, traceId }) {
     console.info('delete-workflow: PGC_IntentMap rows removed', { name, deletedIntentCount, traceId });
   }
 
+  // --- Step 5a: Delete PGC_Prompt rows for this workflow's domain ---
+  // Only runs when the workflow has a domain — system workflows (domain: null) share
+  // prompts across all workflows and must not have their prompts wiped here.
+  let deletedPromptCount = 0;
+  if (workflowDomain) {
+    const promptResp = await bestEffort('delete-workflow: PGC_Prompt delete failed', { name, workflowDomain, traceId },
+      () => deleteRows('PGC_Prompt', [{ column: 'domain', op: 'eq', value: workflowDomain }]));
+    deletedPromptCount = promptResp?.deletedCount ?? 0;
+    if (promptResp) console.info('delete-workflow: PGC_Prompt rows removed', { name, workflowDomain, deletedPromptCount, traceId });
+  }
+
   // --- Step 6: Delete PGC_Workflow row ---
   const wfDeleteResp = await deleteRows(
     'PGC_Workflow',
@@ -166,7 +179,8 @@ async function runDeleteWorkflow({ name, traceId }) {
   }
 
   console.info('delete-workflow: complete', {
-    name, workflowId, deletedRunStepCount, deletedRunCount, deletedIntentCount, traceId,
+    name, workflowId, workflowDomain, deletedRunStepCount, deletedRunCount,
+    deletedIntentCount, deletedPromptCount, traceId,
   });
 
   return {
@@ -176,6 +190,7 @@ async function runDeleteWorkflow({ name, traceId }) {
     deletedRunStepCount,
     deletedRunCount,
     deletedIntentCount,
+    deletedPromptCount,
     workflowDeleted:     true,
   };
 }
