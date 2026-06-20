@@ -37,6 +37,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC17 — `openapi.yaml` in sync:** All active routes in `handler.mjs` (slackbot + proc) have corresponding spec entries. Stale ping variants removed. `/novia` and `/proc/minds-eye` present and accurate.
 - **AC18 — User alias input in `create_domain`:** Step 17c text_input gate allows user to supply additional aliases (comma-separated). Step 18 merges them with LLM-generated aliases. Blank input proceeds without additional aliases.
 - **AC19 — Novia recovery tools:** After a failed `create_domain` run that leaves orphaned PGD tables, Novia can list physical tables not registered in `PGC_Schema` (`list_physical_tables`) and drop them individually (`drop_table`, danger gate, force=true). No manual DB intervention required.
+- **AC20 — Novia token truncation fix:** When a workflow `llm_call` step fails with `error_type: token_truncation`, Novia can diagnose it via `read_prompt` (returns `error_log`, `max_output_tokens`, `id`) and fix it by doubling `max_output_tokens` via `update_data` — no manual DB intervention required. ✅ DONE (2026-06-20)
 
 ---
 
@@ -64,6 +65,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | H3 openapi.yaml sync | AC17 |
 | D0 create_domain alias input | AC18 |
 | H4 Novia recovery tools | AC19 |
+| H5 Novia token truncation fix | AC20 |
 
 ---
 
