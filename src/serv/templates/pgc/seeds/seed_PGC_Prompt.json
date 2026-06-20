@@ -2763,5 +2763,89 @@
       "user_input": "ingredients used in my cooking recipes"
     },
     "max_output_tokens": 512
+  },
+  {
+    "intent_category": "design_workflow_prompts",
+    "version": 1,
+    "model": "smart",
+    "was_successful": null,
+    "input_variables": [
+      {
+        "name": "draft_steps",
+        "required": true,
+        "description": "Step array from generate_workflow_steps \u2014 may contain llm_call steps with prompt_draft fields"
+      },
+      {
+        "name": "existing_categories",
+        "required": true,
+        "description": "Array of {intent_category, domain} objects from PGC_Prompt \u2014 used to detect reuse candidates"
+      },
+      {
+        "name": "workflow_domain",
+        "required": false,
+        "description": "Domain this workflow belongs to \u2014 written to PGC_Prompt.domain for created prompts"
+      }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": [
+        "decisions"
+      ],
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "step_key",
+              "action",
+              "prompt_category"
+            ],
+            "properties": {
+              "step_key": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "reuse",
+                  "create",
+                  "convert"
+                ]
+              },
+              "prompt_category": {
+                "type": "string"
+              },
+              "prompt_text": {
+                "type": "string"
+              },
+              "prompt_model": {
+                "type": "string",
+                "enum": [
+                  "cheap",
+                  "smart"
+                ]
+              },
+              "output_schema": {
+                "type": "object"
+              },
+              "js_expression": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "output_sample": null,
+    "probe_input": {
+      "draft_steps": "[{\"step\":\"5\",\"type\":\"llm_call\",\"description\":\"Convert ingredient quantities to pantry units\",\"input\":{\"prompt\":\"pantry_unit_conversion\",\"ingredients\":\"{{recipe_ingredients}}\",\"pantry_units\":\"{{pantry_unit_list}}\"},\"prompt_category\":\"pantry_unit_conversion\",\"prompt_draft\":\"Convert the following recipe ingredient quantities to pantry measurement units.\\n\\nIngredients:\\n{{ingredients}}\\n\\nAvailable pantry units:\\n{{pantry_units}}\\n\\nReturn JSON only: { \\\"conversions\\\": [ { \\\"ingredient\\\": string, \\\"quantity\\\": number, \\\"unit\\\": string } ] }\",\"prompt_model\":\"cheap\",\"output_schema\":{\"type\":\"object\",\"required\":[\"conversions\"],\"properties\":{\"conversions\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"ingredient\",\"quantity\",\"unit\"],\"properties\":{\"ingredient\":{\"type\":\"string\"},\"quantity\":{\"type\":\"number\"},\"unit\":{\"type\":\"string\"}}}}}},\"output_key\":\"unit_conversions\",\"on_success\":\"next\"},{\"step\":\"8\",\"type\":\"llm_call\",\"description\":\"Apply SM-2 algorithm to update card state\",\"input\":{\"prompt\":\"sm2_calculate\",\"current_card\":\"{{current_card}}\",\"quality_rating\":\"{{quality_rating}}\"},\"prompt_category\":\"sm2_calculate\",\"output_key\":\"sm2_result\",\"on_success\":\"next\"}]",
+      "existing_categories": "[{\"intent_category\":\"sm2_calculate\",\"domain\":\"flashcards\"},{\"intent_category\":\"create_domain\",\"domain\":null}]",
+      "workflow_domain": "pantry"
+    },
+    "max_output_tokens": null,
+    "memory_config": null,
+    "domain": null,
+    "prompt_text": "You are a prompt capability classifier for evolving-mind-ai.\n\nYour job: examine domain-specific llm_call steps in a draft workflow and decide how each prompt should be handled. Only inspect steps that have a prompt_draft field. Ignore all other steps.\n\nFor each step with a prompt_draft field, choose ONE action:\n\n  reuse  \u2014 prompt_category exactly matches an intent_category in existing_categories.\n            No DB write needed. The step already has the correct input.prompt value.\n\n  create \u2014 prompt_category is NOT in existing_categories AND the task requires genuine\n            LLM reasoning (extraction, classification, inference, natural language understanding).\n            A new PGC_Prompt row will be inserted. You MUST return:\n              prompt_text   \u2014 complete, self-contained prompt with {{template}} variables\n              prompt_model  \u2014 alias only: \"cheap\" (classification/formatting) or \"smart\"\n                              (multi-step reasoning, complex extraction). Never a raw model ID.\n              output_schema \u2014 JSON Schema object for the expected output\n\n  convert \u2014 The task is purely deterministic and can be implemented correctly in a\n             synchronous JS IIFE with no LLM inference required (e.g. simple arithmetic,\n             date arithmetic, string formatting, array mapping against known values).\n             You MUST return:\n               js_expression \u2014 synchronous IIFE. Use local_state.key for prior outputs.\n                               No async, no fetch, no require. Return a plain value or object.\n\nDraft workflow steps:\n{{draft_steps}}\n\nExisting PGC_Prompt entries (array of {intent_category, domain} objects):\n{{existing_categories}}\n\nWorkflow domain: {{workflow_domain}}\n\nReturn JSON only \u2014 no markdown, no explanation, no backticks.\n\nExample output:\n{\n  \"decisions\": [\n    { \"step_key\": \"5\", \"action\": \"create\", \"prompt_category\": \"pantry_unit_conversion\", \"prompt_text\": \"Convert ...\", \"prompt_model\": \"cheap\", \"output_schema\": { \"type\": \"object\", \"required\": [\"conversions\"], \"properties\": { \"conversions\": { \"type\": \"array\" } } } },\n    { \"step_key\": \"8\", \"action\": \"reuse\", \"prompt_category\": \"sm2_calculate\" },\n    { \"step_key\": \"3\", \"action\": \"convert\", \"prompt_category\": \"total_formatter\", \"js_expression\": \"(function(){ return { total: local_state.line_items.reduce(function(s,i){ return s + i.amount; }, 0) }; })()\" }\n  ]\n}"
   }
 ]

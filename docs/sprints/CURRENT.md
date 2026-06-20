@@ -94,13 +94,14 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Updated `PGC_StepType` `llm_call` input_contract with 4 new optional fields. Upserts run.
 - `prompt_model` uses alias names (`"cheap"` / `"smart"`); `llm-harness.mjs` resolves to actual model IDs at runtime via `llm_model_aliases` — never hardcode model ID strings in domain prompt drafts.
 
-**P3 — Add `design_workflow_prompts` step to `create_workflow`**
-- New `llm_call` step between `generate_workflow_steps` and L1 simulate
-- Input: draft steps + existing `PGC_Prompt.intent_category` list
-- Output: `capability_decisions` (reuse/create/convert per step)
-- Iterator applies decisions: create → `serv_insert PGC_Prompt` with domain; reuse → record `intent_category`; convert → rewrite step as `js_transform`
-- **Model alias design:** when inserting a new `PGC_Prompt` row, store `prompt_model` alias verbatim in `PGC_Prompt.model` — do NOT resolve to a model ID. Resolution happens at call time in `llm-harness.mjs` via `llm_model_aliases`. New models require only one `llm_model_aliases` update, not per-prompt changes.
-- Run `upsert-workflow.mjs`
+**P3 — Add `design_workflow_prompts` step to `create_workflow`** ✅ DONE (2026-06-20)
+- 8 new steps (23a–23h) inserted between `generate_workflow_steps` (23) and user review (24).
+- 23a counts domain-specific llm_call steps; 23b short-circuits to step 24 if count is 0 (no LLM call, no DB query for pure CRUD workflows).
+- 23c loads existing PGC_Prompt categories; 23d classifies (reuse/create/convert); 23e–23g insert new prompts; 23h applies decisions and strips draft fields from `draft_workflow.steps`.
+- New `design_workflow_prompts` prompt (id=80, model=smart) added to seed and DB.
+- Model alias stored verbatim in `PGC_Prompt.model`; `llm-harness.mjs` resolves at runtime via `llm_model_aliases` — new models need only one alias update.
+- `arch-create-workflow.md` updated with Phase 4.5 table and LLM model row.
+- Run `upsert-prompt.mjs` + `upsert-workflow.mjs create_workflow`.
 
 **P4 — Prompt cleanup in `delete_workflow` / `delete_domain`**
 - `delete_workflow`: add `serv_delete PGC_Prompt WHERE domain = workflow.domain`
