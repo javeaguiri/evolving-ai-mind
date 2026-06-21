@@ -583,10 +583,24 @@ async function executeServSchema({ step, localState, traceId }) {
 
 async function executeServInsert({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input, localState);
-  const { tableName, row } = resolvedInput;
+  const { tableName, row, check_exists_by } = resolvedInput;
 
   if (!tableName) throw new Error('serv_insert step missing input.tableName');
   if (!row)       throw new Error('serv_insert step missing input.row');
+
+  // check_exists_by: column name to use for a find-first check before inserting.
+  // If a row already exists with that column value, return it without inserting.
+  // Used by the ref-data seeding iterator to skip values that are already in the table.
+  if (check_exists_by && row[check_exists_by] !== undefined) {
+    const existing = await getRows(tableName, [{ column: check_exists_by, op: 'eq', value: row[check_exists_by] }], undefined, 1);
+    if (existing.success && (existing.count ?? 0) > 0) {
+      console.info('step-executor: serv_insert check_exists_by — row exists, skipping', { tableName, check_exists_by, traceId });
+      return {
+        outputValue: existing.rows[0],
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+  }
 
   if (tableName === 'PGC_Workflow' && Array.isArray(row?.steps)) {
     const l1 = runLevel1StaticAnalysis(row.steps);
@@ -984,7 +998,7 @@ async function executeServEntityInsert({ step, localState, traceId }) {
   for (const refFk of (entitySchema.root.ref_fk_columns ?? [])) {
     const raw = rootRow[refFk.column];
     if (raw != null && typeof raw === 'string') {
-      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, refFk.create_with, traceId);
+      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
     }
   }
 
@@ -1057,7 +1071,7 @@ async function executeServEntityInsert({ step, localState, traceId }) {
         for (const refFk of refFkColumns) {
           const raw = row[refFk.column];
           if (raw != null && typeof raw === 'string') {
-            row[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, refFk.create_with, traceId);
+            row[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
           }
         }
       }
@@ -1094,22 +1108,13 @@ async function executeServEntityInsert({ step, localState, traceId }) {
  * Handles lookup tables (PGD_Ingredients, PGD_MeasurementUnits, etc.) whose string
  * values are supplied by the LLM and must be mapped to DB IDs before child insert.
  */
-async function resolveRefTableId(refTable, lookupColumn, nameValue, createWith, traceId) {
+async function resolveRefTableId(refTable, lookupColumn, nameValue, traceId) {
   const existing = await getRows(refTable, [{ column: lookupColumn, op: 'eq', value: nameValue }], undefined, 1);
   if (existing.success && (existing.count ?? 0) > 0) return existing.rows[0].id;
-  // Build create payload. Tables with required columns beyond the lookup key (e.g.
-  // unit_type, abbreviation on PGD_MeasurementUnits) get nameValue as a default for
-  // each required text column so the NOT NULL constraint is satisfied.
-  const row = { [lookupColumn]: nameValue };
-  for (const col of (createWith ?? [])) {
-    if (!(col in row)) row[col] = nameValue;
-  }
-  const inserted = await insertRow(refTable, row);
-  if (!inserted.success) {
-    throw new Error(`serv_entity_insert: ref table insert failed for "${refTable}" (${lookupColumn}="${nameValue}"): ${inserted.error}`);
-  }
-  console.info('step-executor: serv_entity_insert created ref row', { refTable, lookupColumn, nameValue, traceId });
-  return inserted.row.id;
+  throw new Error(
+    `serv_entity_insert: ref value "${nameValue}" not found in ${refTable}.${lookupColumn} — ` +
+    `confirm reference records before inserting the entity`
+  );
 }
 
 /**

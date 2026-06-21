@@ -2164,7 +2164,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 2,
+    "version": 3,
     "steps": [
       {
         "step": "1",
@@ -2187,8 +2187,93 @@
           "entity_schema": "{{full_entity_schema}}"
         },
         "output_key": "parsed_entity",
-        "on_success": "next",
+        "on_success": "2a",
         "on_else": "cancel"
+      },
+      {
+        "step": "2a",
+        "type": "js_transform",
+        "description": "Collect all ref FK string values from parsed_entity, grouped by ref table, so the LLM can produce complete records for each.",
+        "expression": "(function(){ var schema=local_state.full_entity_schema; var parsed=local_state.parsed_entity; if(!schema||!parsed) return {ref_candidates:[],entity_name:'',domain:''}; var byTable={}; function add(refFks,rows){ (refFks||[]).forEach(function(rf){ if(!byTable[rf.ref_table]) byTable[rf.ref_table]={ref_table:rf.ref_table,lookup_column:rf.lookup_column,create_with:rf.create_with||[rf.lookup_column],values:{}}; (Array.isArray(rows)?rows:[rows]).forEach(function(r){ if(r){ var v=r[rf.column]; if(v!==null&&v!==undefined&&typeof v==='string') byTable[rf.ref_table].values[v]=1; } }); }); } add((schema.root||{}).ref_fk_columns||[],[parsed.root||{}]); (schema.children||[]).forEach(function(c){ add(c.ref_fk_columns||[],((parsed.children||{})[c.output_key])||[]); }); var candidates=Object.values(byTable).map(function(e){ return {ref_table:e.ref_table,lookup_column:e.lookup_column,create_with:e.create_with,values:Object.keys(e.values)}; }).filter(function(c){ return c.values.length>0; }); return {ref_candidates:candidates,entity_name:schema.entity_name,domain:local_state.domain||''}; })()",
+        "output_key": "ref_data_ctx",
+        "on_success": "2b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2b",
+        "type": "condition",
+        "description": "Skip reference data enrichment if no ref FK values were found in the parsed entity.",
+        "expression": "local_state.ref_data_ctx && local_state.ref_data_ctx.ref_candidates && local_state.ref_data_ctx.ref_candidates.length > 0",
+        "on_success": "2c",
+        "on_else": "3"
+      },
+      {
+        "step": "2c",
+        "type": "llm_call",
+        "description": "LLM produces complete, accurate records for each ref table value \u2014 proper abbreviations, unit types, etc.",
+        "input": {
+          "prompt": "enrich_ref_records",
+          "domain": "{{ref_data_ctx.domain}}",
+          "entity_name": "{{ref_data_ctx.entity_name}}",
+          "ref_candidates": "{{ref_data_ctx.ref_candidates}}"
+        },
+        "output_key": "proposed_ref_records",
+        "on_success": "2d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2d",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User confirms the reference records to be created before the entity insert.",
+        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to ensure these reference records exist. Does this look right?",
+        "context_key": "proposed_ref_records",
+        "options": [
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "2e"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "2e",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "2e",
+        "type": "js_transform",
+        "description": "Flatten proposed_ref_records to a row-per-item array for the insert iterator.",
+        "expression": "(function(){ var result=[]; var recs=local_state.proposed_ref_records; var arr=Array.isArray(recs)?recs:(recs&&recs.proposed_ref_records?recs.proposed_ref_records:[]); arr.forEach(function(entry){ (entry.rows||[]).forEach(function(row){ result.push({ref_table:entry.ref_table,lookup_column:entry.lookup_column,row:row}); }); }); return result; })()",
+        "output_key": "ref_rows_to_insert",
+        "on_success": "2f",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2f",
+        "type": "iterator",
+        "description": "Insert each confirmed reference record, skipping rows that already exist.",
+        "items_key": "ref_rows_to_insert",
+        "execution_mode": "sequential",
+        "output_key": "ref_insert_results",
+        "on_else": "cancel",
+        "item_step": {
+          "type": "serv_insert",
+          "description": "Insert ref row if it does not already exist (check_exists_by skips duplicates).",
+          "input": {
+            "tableName": "{{item.ref_table}}",
+            "row": "{{item.row}}",
+            "check_exists_by": "{{item.lookup_column}}"
+          },
+          "output_key": "inserted_ref_row",
+          "on_success": "next",
+          "on_else": "next"
+        },
+        "on_complete": "3"
       },
       {
         "step": "3",
