@@ -77,7 +77,10 @@ export function matchIntentMap(userInput, intentRows) {
  * @returns {object|null}        First matching domain row, or null
  */
 export function matchDomainAlias(userInput, domainRows) {
-  const input = userInput.toLowerCase();
+  // Scan only the first line — the command prefix (verb + domain) is always there.
+  // Body text (recipe descriptions, notes, etc.) can contain common words like
+  // "system" that would match unrelated domain aliases if the full input were scanned.
+  const input = userInput.split('\n')[0].slice(0, 200).toLowerCase();
   for (const row of domainRows) {
     if (input.includes(row.domain.toLowerCase())) return row;
     const aliases = Array.isArray(row.aliases) ? row.aliases : [];
