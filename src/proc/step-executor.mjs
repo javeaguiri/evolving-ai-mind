@@ -823,6 +823,17 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     return (cols.find(c => PREFERRED.has(c.name)) ?? cols[0])?.name ?? 'name';
   }
 
+  // Returns names of all non-system text columns for a ref table.
+  // Used to build a minimal create payload when auto-creating a ref row — tables
+  // with required columns beyond the lookup key (e.g. unit_type, abbreviation on
+  // PGD_MeasurementUnits) will have all text columns filled with the name value.
+  const STR_TYPES = new Set(['varchar', 'text', 'char']);
+  function refTextColumns(tableName) {
+    return (schemaByTable[tableName] ?? [])
+      .filter(c => !SYSTEM.has(c.name) && STR_TYPES.has((c.type ?? '').split('(')[0]) && !/^vector/i.test(c.type ?? ''))
+      .map(c => c.name);
+  }
+
   const rootColumns    = userColumns(rootTable);
 
   // Root table may have FKs to reference tables (e.g. yield_unit_fk → PGD_MeasurementUnits).
@@ -835,6 +846,7 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       column:        fk.column,
       ref_table:     fk.references.table,
       lookup_column: getLookupColumn(fk.references.table),
+      create_with:   refTextColumns(fk.references.table),
     }));
 
   // table → alias lookup — used to resolve FK references to parent aliases
@@ -878,6 +890,7 @@ async function executeServEntitySchema({ step, localState, traceId }) {
           column:        fk.column,
           ref_table:     fk.references,
           lookup_column: getLookupColumn(fk.references),
+          create_with:   refTextColumns(fk.references),
         });
       }
     }
@@ -971,7 +984,7 @@ async function executeServEntityInsert({ step, localState, traceId }) {
   for (const refFk of (entitySchema.root.ref_fk_columns ?? [])) {
     const raw = rootRow[refFk.column];
     if (raw != null && typeof raw === 'string') {
-      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, refFk.create_with, traceId);
     }
   }
 
@@ -1044,7 +1057,7 @@ async function executeServEntityInsert({ step, localState, traceId }) {
         for (const refFk of refFkColumns) {
           const raw = row[refFk.column];
           if (raw != null && typeof raw === 'string') {
-            row[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+            row[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, refFk.create_with, traceId);
           }
         }
       }
@@ -1081,10 +1094,17 @@ async function executeServEntityInsert({ step, localState, traceId }) {
  * Handles lookup tables (PGD_Ingredients, PGD_MeasurementUnits, etc.) whose string
  * values are supplied by the LLM and must be mapped to DB IDs before child insert.
  */
-async function resolveRefTableId(refTable, lookupColumn, nameValue, traceId) {
+async function resolveRefTableId(refTable, lookupColumn, nameValue, createWith, traceId) {
   const existing = await getRows(refTable, [{ column: lookupColumn, op: 'eq', value: nameValue }], undefined, 1);
   if (existing.success && (existing.count ?? 0) > 0) return existing.rows[0].id;
-  const inserted = await insertRow(refTable, { [lookupColumn]: nameValue });
+  // Build create payload. Tables with required columns beyond the lookup key (e.g.
+  // unit_type, abbreviation on PGD_MeasurementUnits) get nameValue as a default for
+  // each required text column so the NOT NULL constraint is satisfied.
+  const row = { [lookupColumn]: nameValue };
+  for (const col of (createWith ?? [])) {
+    if (!(col in row)) row[col] = nameValue;
+  }
+  const inserted = await insertRow(refTable, row);
   if (!inserted.success) {
     throw new Error(`serv_entity_insert: ref table insert failed for "${refTable}" (${lookupColumn}="${nameValue}"): ${inserted.error}`);
   }
