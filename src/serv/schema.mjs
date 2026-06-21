@@ -66,6 +66,7 @@ export async function handle(req) {
     case 'getTable':    return getTable(req);
     case 'updateTable':      return updateTable(req);
     case 'modifyConstraint': return modifyConstraint(req);
+    case 'dropConstraint':   return dropConstraint(req);
     case 'deleteTable':      return deleteTable(req);
     default:
       return err(404, `SERV-Schema route "${req.subRoute}" not found`, req.correlationId);
@@ -581,6 +582,60 @@ async function modifyConstraint(req) {
   } catch (error) {
     console.error('schema modifyConstraint error:', error.message);
     return err(500, `modifyConstraint failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/dropConstraint
+// Drops a named constraint from the physical table and removes it from
+// PGC_Schema.constraints. Supports any constraint type (unique, check, fk).
+// ---------------------------------------------------------------------------
+
+async function dropConstraint(req) {
+  const { tableName, constraintName, target = 'pgc' } = req.body;
+
+  if (!tableName || !constraintName) {
+    return err(400, 'tableName and constraintName are required', req.correlationId);
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
+  const pgcUrl = process.env.PGC_DATABASE_URL;
+
+  const dbClient  = getClient(dbUrl);
+  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+
+  try {
+    await dbClient.connect();
+    if (dbClient !== pgcClient) await pgcClient.connect();
+
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
+    );
+
+    const schemaRow = await pgcClient.query(
+      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (schemaRow.rows.length > 0) {
+      const existing = schemaRow.rows[0].constraints ?? [];
+      const updated  = existing.filter(c => c.name !== constraintName);
+      await pgcClient.query(
+        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+        [JSON.stringify(updated), tableName]
+      );
+    }
+
+    console.info(`schema: constraint "${constraintName}" on "${tableName}" dropped`);
+    return ok({ success: true, tableName, constraintName }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema dropConstraint error:', error.message);
+    return err(500, `dropConstraint failed: ${error.message}`, req.correlationId);
   } finally {
     await dbClient.end();
     if (dbClient !== pgcClient) await pgcClient.end();
