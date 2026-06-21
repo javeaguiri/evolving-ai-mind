@@ -847,6 +847,19 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       .filter(c => !SYSTEM.has(c.name) && STR_TYPES.has((c.type ?? '').split('(')[0]) && !/^vector/i.test(c.type ?? ''))
       .map(c => c.name);
   }
+  // Returns { colName: ['val1', ...] } for CHECK IN constraints on a ref table.
+  function refCheckAllowedValues(tableName) {
+    const row = (schemaResp.rows ?? []).find(r => r.table_name === tableName);
+    const result = {};
+    for (const c of (row?.constraints ?? [])) {
+      if (c.type !== 'check' || !c.expression) continue;
+      const m = c.expression.match(/^(\w+)\s+IN\s+\((.+)\)$/i);
+      if (!m) continue;
+      const vals = m[2].match(/'([^']+)'/g)?.map(v => v.slice(1, -1)) ?? [];
+      if (vals.length > 0) result[m[1]] = vals;
+    }
+    return result;
+  }
 
   const rootColumns    = userColumns(rootTable);
 
@@ -857,10 +870,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
   const rootRefFkCols  = (rootSchemaRow?.foreign_keys ?? [])
     .filter(fk => fk.references?.table && fk.references.table !== rootTable)
     .map(fk => ({
-      column:        fk.column,
-      ref_table:     fk.references.table,
-      lookup_column: getLookupColumn(fk.references.table),
-      create_with:   refTextColumns(fk.references.table),
+      column:         fk.column,
+      ref_table:      fk.references.table,
+      lookup_column:  getLookupColumn(fk.references.table),
+      create_with:    refTextColumns(fk.references.table),
+      allowed_values: refCheckAllowedValues(fk.references.table),
     }));
 
   // table → alias lookup — used to resolve FK references to parent aliases
@@ -901,10 +915,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       } else {
         // FK targets a table not in joins — treat as reference table
         refFkCols.push({
-          column:        fk.column,
-          ref_table:     fk.references,
-          lookup_column: getLookupColumn(fk.references),
-          create_with:   refTextColumns(fk.references),
+          column:         fk.column,
+          ref_table:      fk.references,
+          lookup_column:  getLookupColumn(fk.references),
+          create_with:    refTextColumns(fk.references),
+          allowed_values: refCheckAllowedValues(fk.references),
         });
       }
     }
