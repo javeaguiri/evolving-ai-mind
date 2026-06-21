@@ -672,6 +672,11 @@ async function buildGateText(action, params, traceId) {
             lines.push(`Replace constraint \`${constraintName}\` with: \`CHECK (${expression})\``);
             break;
           }
+          case 'dropConstraint': {
+            const { constraintName } = params;
+            lines.push(`Drop constraint \`${constraintName}\` — irreversible, removes from DB and PGC_Schema.`);
+            break;
+          }
           default:
             lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
         }
@@ -809,7 +814,7 @@ async function executeWriteTool(action, params, traceId) {
       case 'propose_schema_fix': {
         const { operation, tableName, ...rest } = params;
         if (!operation || !tableName) return { error: 'operation and tableName are required' };
-        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint']);
+        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
         if (!allowed.has(operation)) return { error: `Unknown schema operation: ${operation}` };
         const { servPost } = await import('../shared/serv-client.mjs');
         return await servPost(`/api/v1/serv/schema/${operation}`, { tableName, ...rest });
@@ -1060,6 +1065,7 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
     '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
     '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
+    '    dropConstraint:   { operation: "dropConstraint", tableName, constraintName, target? }\n' +
     '  write_memory: { content, memory_type? } — record diagnostic reasoning; call before final respond after any change or notable finding. Scope is auto-derived from your tool history — do not set scope.\n' +
     'Params for trigger tools:\n' +
     '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +

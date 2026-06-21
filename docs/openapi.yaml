@@ -3514,6 +3514,60 @@ paths:
         '500':
           description: ALTER TABLE or PGC_Schema update failed
 
+  /api/v1/serv/schema/dropConstraint:
+    post:
+      summary: Drop a named constraint — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... DROP CONSTRAINT IF EXISTS on the physical table
+        and removes the entry from PGC_Schema.constraints. Supports any constraint
+        type (unique, check, foreign key). Use when a constraint is wrong by design
+        (e.g. a UNIQUE constraint that is too restrictive) or when dropColumn CASCADE
+        is insufficient. Table name must match PGC_TableMap.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, constraintName]
+              properties:
+                tableName:
+                  type: string
+                  example: PGD_RecipeIngredients
+                constraintName:
+                  type: string
+                  example: uq_recipeingredients_recipe_ingredient
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                  default: pgc
+            examples:
+              drop_unique:
+                summary: Drop over-restrictive unique constraint
+                value:
+                  tableName: PGD_RecipeIngredients
+                  constraintName: uq_recipeingredients_recipe_ingredient
+                  target: pgd
+      responses:
+        '200':
+          description: Constraint dropped and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                dropped:
+                  summary: Constraint dropped
+                  value:
+                    success: true
+                    tableName: PGD_RecipeIngredients
+                    constraintName: uq_recipeingredients_recipe_ingredient
+        '400':
+          description: Missing required fields or invalid table name
+        '500':
+          description: ALTER TABLE or PGC_Schema update failed
+
   /api/v1/serv/schema/deleteTable:
     post:
       summary: Drop table + remove from PGC_Schema
