@@ -827,7 +827,8 @@ async function executeServEntitySchema({ step, localState, traceId }) {
 
   // Root table may have FKs to reference tables (e.g. yield_unit_fk → PGD_MeasurementUnits).
   // Collect them so insertRow can resolve string names to integer IDs before the root insert.
-  const rootSchemaRow  = schemaByTable[rootTable];
+  // Must use the full schema row (not schemaByTable which stores only the columns array).
+  const rootSchemaRow  = (schemaResp.rows ?? []).find(r => r.table_name === rootTable);
   const rootRefFkCols  = (rootSchemaRow?.foreign_keys ?? [])
     .filter(fk => fk.references?.table && fk.references.table !== rootTable)
     .map(fk => ({
