@@ -232,6 +232,14 @@ describe('matchWorkflowByKeywords', () => {
     assert.equal(result.record_id, null);
   });
 
+  it('multi-line input — keyword scan limited to first line, body text ignored', () => {
+    // Recipe body contains "find" and "show" — must not trigger get_entity via false match.
+    const multiLine = 'add dish Thai Peanut Sweet\nPotato Broccoli Buddha Bowl\nYou will find this recipe easy.\nShow toppings: avocado.';
+    const result = matchWorkflowByKeywords(multiLine, 'recipes', workflowRows, ['dish', 'dishes']);
+    assert.ok(result, 'expected a match');
+    assert.equal(result.workflow_name, 'add_entity');
+  });
+
   it('returns null when no keyword matches', () => {
     const result = matchWorkflowByKeywords('something unrelated', 'recipes', workflowRows);
     assert.equal(result, null);
