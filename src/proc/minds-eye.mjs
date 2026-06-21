@@ -46,6 +46,7 @@ const ACTION_SCHEMA = {
 const DEFAULT_PREFERENCES = {
   name:                   'Agent',
   model:                  'anthropic/claude-sonnet-4-6',
+  max_output_tokens:      8192,
   turn_limit:             8,
   max_actions_per_session:5,
   tone:                   'concise but friendly',
@@ -364,14 +365,14 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     let decision;
     try {
-      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId);
+      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
     } catch (llmError) {
       if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
         // One correction turn (0.5 cost) — send raw output back and ask for reformat.
         try {
           const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
-          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId);
+          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
           turnCost += 0.5;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
