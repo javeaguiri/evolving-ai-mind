@@ -113,7 +113,9 @@ export function matchDomainAlias(userInput, domainRows) {
  * @returns {{ workflow_name: string, search_term: string|null, record_id: number|null } | null}
  */
 export function matchWorkflowByKeywords(userInput, domain, workflowRows, aliases = []) {
-  const input = userInput.toLowerCase();
+  // Scan only the first line for keyword matching — pasted multi-line body text
+  // (e.g. a recipe with "find" or "show" in its body) must not influence intent routing.
+  const input = userInput.split('\n')[0].slice(0, 200).toLowerCase();
   const domainWorkflows = workflowRows.filter(r => r.domain === domain || r.domain === null);
 
   if (domainWorkflows.length === 0) return null;
