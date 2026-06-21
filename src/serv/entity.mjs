@@ -85,9 +85,11 @@ function buildSelectSQL(tableName, joins = [], aggregations = []) {
   );
 
   const aggCols = (aggregations || []).map(a => {
-    const cols = a.columns?.length
-      ? a.columns.map(c => `'${c}', ${a.alias}.${c}`).join(', ')
-      : `${a.alias}.*`;
+    if (!a.columns?.length) {
+      return `jsonb_agg(DISTINCT to_jsonb(${a.alias}.*))
+              FILTER (WHERE ${a.alias}.id IS NOT NULL) AS "${a.outputKey}"`;
+    }
+    const cols = a.columns.map(c => `'${c}', ${a.alias}.${c}`).join(', ');
     return `jsonb_agg(DISTINCT jsonb_build_object(${cols}))
               FILTER (WHERE ${a.alias}.id IS NOT NULL) AS "${a.outputKey}"`;
   });
