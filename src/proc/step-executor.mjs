@@ -823,7 +823,18 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     return (cols.find(c => PREFERRED.has(c.name)) ?? cols[0])?.name ?? 'name';
   }
 
-  const rootColumns = userColumns(rootTable);
+  const rootColumns    = userColumns(rootTable);
+
+  // Root table may have FKs to reference tables (e.g. yield_unit_fk → PGD_MeasurementUnits).
+  // Collect them so insertRow can resolve string names to integer IDs before the root insert.
+  const rootSchemaRow  = schemaByTable[rootTable];
+  const rootRefFkCols  = (rootSchemaRow?.foreign_keys ?? [])
+    .filter(fk => fk.references?.table && fk.references.table !== rootTable)
+    .map(fk => ({
+      column:        fk.column,
+      ref_table:     fk.references.table,
+      lookup_column: getLookupColumn(fk.references.table),
+    }));
 
   // table → alias lookup — used to resolve FK references to parent aliases
   const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
@@ -909,7 +920,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
   const result = {
     entity_name:  entitySchema.entity_name,
     description:  entitySchema.description,
-    root:         { table: rootTable, columns: rootColumns },
+    root:         {
+      table:   rootTable,
+      columns: rootColumns,
+      ...(rootRefFkCols.length > 0 ? { ref_fk_columns: rootRefFkCols } : {}),
+    },
     children,
   };
 
@@ -950,8 +965,17 @@ async function executeServEntityInsert({ step, localState, traceId }) {
   if (!entitySchema) throw new Error('serv_entity_insert: entitySchema is required in input');
   if (!parsedEntity) throw new Error('serv_entity_insert: parsedEntity is required in input');
 
+  // Resolve reference table FKs on root row (e.g. yield_unit_fk: "cups" → integer ID)
+  const rootRow = { ...(parsedEntity.root ?? {}) };
+  for (const refFk of (entitySchema.root.ref_fk_columns ?? [])) {
+    const raw = rootRow[refFk.column];
+    if (raw != null && typeof raw === 'string') {
+      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+    }
+  }
+
   // Insert root row
-  const rootResult = await insertRow(entitySchema.root.table, parsedEntity.root ?? {});
+  const rootResult = await insertRow(entitySchema.root.table, rootRow);
   if (!rootResult.success) {
     throw new Error(`serv_entity_insert root insert failed for "${entitySchema.root.table}": ${rootResult.error}`);
   }
