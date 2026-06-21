@@ -15,6 +15,10 @@
 // like generate_crud_workflows which can take ~28s.
 const LLM_TIMEOUT_MS = 115_000;
 
+// Perplexity gateway requires max_output_tokens for Anthropic models.
+// Used as fallback when the caller (PGC_Prompt.max_output_tokens or minds-eye prefs) doesn't specify one.
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
 /**
  * Call Perplexity Agent API and return parsed JSON.
  * Strips markdown fences defensively before JSON.parse.
@@ -34,7 +38,7 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     model,
     input:        userMessage,
     instructions,
-    ...(maxOutputTokens ? { max_output_tokens: parseInt(maxOutputTokens, 10) } : {}),
+    max_output_tokens: parseInt(maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 10),
   };
 
   // response_format enforces the schema at the model level — reduces field-name
