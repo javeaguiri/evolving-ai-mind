@@ -269,7 +269,7 @@ async function resolveEmbedding(vectorCol, row, traceId) {
   const parts = arrayTexts.length > 0 ? arrayTexts : scalarTexts;
   const text  = parts.join(' ').replace(/\s+/g, ' ').trim();
 
-  if (!text) throw new Error(`resolveEmbedding: no text to embed for column ${vectorCol.name}`);
+  if (!text) return null;
   return embedText(text, traceId);
 }
 
@@ -356,7 +356,8 @@ async function insertRow(req) {
       const effectiveRow = { ...rawRow };
       for (const vc of embedCols) {
         try {
-          effectiveRow[vc.name] = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+          const vec = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+          if (vec !== null) effectiveRow[vc.name] = vec;
         } catch (embErr) {
           console.error(`table insertRow: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
           return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
@@ -511,7 +512,8 @@ async function updateRows(req) {
         for (const vc of needsEmbed) {
           const merged = { ...currentRow, ...effectiveUpdates };
           try {
-            effectiveUpdates[vc.name] = await resolveEmbedding(vc, merged, req.correlationId);
+            const vec = await resolveEmbedding(vc, merged, req.correlationId);
+            if (vec !== null) effectiveUpdates[vc.name] = vec;
           } catch (embErr) {
             console.error(`table updateRows: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
             return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
