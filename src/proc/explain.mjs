@@ -97,10 +97,11 @@ export async function handle(req) {
     });
   }
 
-  // Reconstruct messages array (role + content only — reasoning excluded)
+  // Reconstruct messages array (role + content only — reasoning excluded).
+  // When alreadyInserted, the user turn is already in existingEntries — don't append again.
   const messages = [
     ...existingEntries.map(e => ({ role: e.role, content: e.content })),
-    { role: 'user', content: prompt.trim() },
+    ...(alreadyInserted ? [] : [{ role: 'user', content: prompt.trim() }]),
   ];
 
   // Call LLM with full context
