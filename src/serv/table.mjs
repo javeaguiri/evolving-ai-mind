@@ -177,7 +177,7 @@ async function getRows(req) {
     // Strip vector columns from result rows — embeddings are large, opaque,
     // and not useful to callers. Direct SQL is the appropriate path for
     // inspection or debugging.
-    const vectorCols = new Set(schemaColumns.filter(c => c.type === 'vector').map(c => c.name));
+    const vectorCols = new Set(schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name));
     const rows = vectorCols.size === 0
       ? result.rows
       : result.rows.map(row => {
