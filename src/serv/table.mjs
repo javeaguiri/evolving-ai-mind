@@ -107,7 +107,7 @@ async function getRows(req) {
       if (!vsCol) {
         return err(400, `vectorSearch column "${vectorSearch.column}" not found in schema`, req.correlationId);
       }
-      if (vsCol.type !== 'vector') {
+      if (!vsCol.type?.startsWith('vector')) {
         return err(400, `vectorSearch column "${vectorSearch.column}" must be type vector`, req.correlationId);
       }
     }
