@@ -174,8 +174,8 @@ async function getRows(req) {
 
     if (target === 'pgd') await dbClient.end();
 
-    // Truncate vector columns — return first 5 chars + '...' so callers can
-    // tell whether the embedding is populated without receiving the full vector.
+    // Truncate vector columns to 5 chars + '...' — enough to confirm populated
+    // vs null without returning the full vector payload.
     const vectorCols = new Set(schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name));
     const rows = vectorCols.size === 0
       ? result.rows
