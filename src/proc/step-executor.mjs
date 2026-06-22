@@ -820,13 +820,20 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     schemaByTable[row.table_name] = row.columns ?? [];
   }
 
-  // Returns non-system, non-FK { name, type } columns for a table
+  // Returns non-system, non-FK { name, type, ?allowed_values } columns for a table.
+  // allowed_values is injected for columns with CHECK IN constraints so the LLM
+  // knows which values are valid without guessing casing or vocabulary.
   const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
   function userColumns(tableName, fkColumnsToExclude = []) {
     const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
+    const allowedValues = refCheckAllowedValues(tableName);
     return (schemaByTable[tableName] ?? [])
       .filter(c => !exclude.has(c.name))
-      .map(c => ({ name: c.name, type: c.type }));
+      .map(c => ({
+        name: c.name,
+        type: c.type,
+        ...(allowedValues[c.name] ? { allowed_values: allowedValues[c.name] } : {}),
+      }));
   }
 
   // For a reference table, pick the best natural key column for name-matching.
