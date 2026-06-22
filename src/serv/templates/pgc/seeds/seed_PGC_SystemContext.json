@@ -1201,5 +1201,15 @@
     ],
     "version": 1,
     "content": "on_select routing rules:\naction and on_select are DIFFERENT things:\n  - action = UI behaviour label (confirm | cancel | request_changes | rate | etc.) — display categorisation only\n  - on_select = workflow routing token — determines where the workflow goes next\n\nValid on_select values:\n  \"next\"         — follow the step's on_success path\n  \"end\"          — go to the end step\n  \"cancel\"       — cancel the workflow\n  \"step:<label>\" — jump to a specific step label in the routing table\n\nNEVER use action names as on_select values (e.g. on_select: \"reveal\" is wrong).\nNEVER invent step key strings — only use routing tokens or step labels from the routing table.\n\nCancel requirement: every options array MUST end with: { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }\n\nreveal: UI display only — does not route and has no on_select. Do NOT add a Show Answer button to options when reveal is used."
+  },
+  {
+    "key": "embedding_config",
+    "section": "rules",
+    "inject_always": false,
+    "inject_for": [
+      "design_table"
+    ],
+    "version": 1,
+    "content": "Embedding columns: always use type vector(2560). The system embedding model is pplx-embed-v1-4b which produces 2560-dimensional vectors. Never use vector(1536) or any other dimension. Using the wrong dimension causes insertRow to fail at the DB constraint level."
   }
 ]

@@ -388,9 +388,8 @@ tests/integration/    Integration tests — require live env vars from .env.test
   `isSonar` guard gates `response_format` to sonar models only; fence extraction
   regex strips leading/trailing prose around fenced JSON
 - `serv-client.mjs` — `servPost()`, `getRows()`, `insertRow()`, `updateRows()`, `deleteRows()` — shared SERV HTTP client
-- `embed-client.mjs` — `embedText(text) → float[1536]` — OpenAI `text-embedding-3-small`;
-  reads API key name from `process.env.OPENAI_API_KEY_PARAM`, retrieves SSM SecureString at call time.
-  **⬜ Session 26 — not yet implemented.**
+- `embed-client.mjs` — `embedText(text) → float[2560]` — Perplexity `pplx-embed-v1-4b` (2560-dim, INT8);
+  reads key from `process.env.EMBEDDING_API_KEY`. Active.
 
 ### 3.5a Inter-module call rules — FINAL
 
@@ -786,6 +785,8 @@ Enable: `CREATE EXTENSION IF NOT EXISTS vector;`
 Embedding model: `pplx-embed-v1-4b` (Perplexity), 2560 dimensions, INT8 quantization
 Cost: $0.03/million tokens — at household scale ~$0.01/month at heavy use
 Used in: `PGC_DomainHelp` (domain resolution), `PGC_Workflow` (workflow routing — Backlog)
+
+> **Changing the embedding dimension requires updates in two places:** `EMBEDDING_DIMENSION` constant in `embed-client.mjs` AND the `embedding_config` row in `PGC_SystemContext` (seed: `seed_PGC_SystemContext.json`, upsert via `node dev_scripts/upsert-system-context.mjs embedding_config`).
 
 **Implemented — Session 26.**
 
