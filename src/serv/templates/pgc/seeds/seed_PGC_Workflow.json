@@ -2064,12 +2064,12 @@
       {
         "step": "3",
         "type": "serv_entity_query",
-        "description": "Search for the entity by name using a LIKE filter.",
+        "description": "Search for the entity by title using a LIKE filter.",
         "input": {
           "entityName": "{{input.entity_name}}",
           "filters": [
             {
-              "column": "name",
+              "column": "title",
               "op": "like",
               "value": "{{input.search}}"
             }
