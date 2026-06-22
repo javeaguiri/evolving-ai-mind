@@ -1042,6 +1042,16 @@ async function executeServEntityInsert({ step, localState, traceId }) {
       continue;
     }
 
+    // Junction table: skip if any FK parent has no rows (nothing to link)
+    if (fk_columns && fk_columns.length > 1) {
+      const missingParent = fk_columns.find(fkDef => fkDef.parent && (insertedByAlias[fkDef.parent] ?? []).length === 0);
+      if (missingParent) {
+        insertedByAlias[alias] = [];
+        insertedCounts[alias]  = 0;
+        continue;
+      }
+    }
+
     // Self-referential: two-pass insert + update
     if (match_by === 'self' && fk_column) {
       const rows = await entityInsertSelfRef({
