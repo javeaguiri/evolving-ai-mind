@@ -172,7 +172,8 @@ export async function callLlmWithMessages(model, messages, traceId) {
 
   const body = {
     model,
-    input:       effectiveInput,
+    input:             effectiveInput,
+    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
     ...(instructions                    ? { instructions }          : {}),
     ...(isSonar && history.length > 0   ? { messages: history }     : {}),
   };
