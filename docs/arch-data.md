@@ -114,7 +114,7 @@ being written — aliases are not assumed from LLM output alone.
 | aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
 | description | text | |
 | commands | jsonb | Array of command definitions with examples |
-| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. Populated automatically by `insertRow` on domain creation — no backfill needed. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. |
+| embedding | vector | ✦ pplx-embed-v1-4b (2560-dim) of `domain + description + aliases`. Populated automatically by `insertRow` on domain creation — no backfill needed. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. PGD embedding columns use `vector(2560)`. **Changing the embedding model dimension requires updates in two places: `EMBEDDING_DIMENSION` in `embed-client.mjs` AND the `embedding_config` PGC_SystemContext row.** |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 

@@ -179,7 +179,9 @@ A SQL view `PGC_WorkflowStats` is also installed on bootstrap — not a physical
 
 ### Semantic Search — pgvector (Active)
 
-`text-embedding-3-small` (OpenAI, 1536 dimensions) is live and powering:
+`pplx-embed-v1-4b` (Perplexity, 2560 dimensions) is live and powering:
+
+> **Changing the embedding model dimension requires updates in two places:** `EMBEDDING_DIMENSION` in `src/shared/embed-client.mjs` AND the `embedding_config` row in `PGC_SystemContext`.
 - **Domain matching** — Novia's `search_domain_help` tool and the intent classifier's Pass 2 both use pgvector cosine similarity on `PGC_DomainHelp.embedding`
 - **`/help` search** — domain lookup by semantic similarity, not just keyword matching
 
