@@ -282,7 +282,7 @@ async function resolveEmbedding(vectorCol, row, traceId) {
  */
 function getEmbedColumns(schemaColumns) {
   return schemaColumns.filter(
-    c => c.type === 'vector' && Array.isArray(c.embed_source) && c.embed_source.length > 0
+    c => c.type?.startsWith('vector') && Array.isArray(c.embed_source) && c.embed_source.length > 0
   );
 }
 
