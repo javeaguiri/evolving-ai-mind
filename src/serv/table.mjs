@@ -174,15 +174,17 @@ async function getRows(req) {
 
     if (target === 'pgd') await dbClient.end();
 
-    // Strip vector columns from result rows — embeddings are large, opaque,
-    // and not useful to callers. Direct SQL is the appropriate path for
-    // inspection or debugging.
+    // Truncate vector columns — return first 5 chars + '...' so callers can
+    // tell whether the embedding is populated without receiving the full vector.
     const vectorCols = new Set(schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name));
     const rows = vectorCols.size === 0
       ? result.rows
       : result.rows.map(row => {
           const clean = { ...row };
-          for (const col of vectorCols) delete clean[col];
+          for (const col of vectorCols) {
+            const v = clean[col];
+            clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
+          }
           return clean;
         });
 
