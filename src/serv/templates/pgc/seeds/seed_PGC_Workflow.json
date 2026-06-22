@@ -2226,7 +2226,7 @@
         "type": "human_gate",
         "gate_type": "review_object",
         "description": "User confirms the reference records to be created before the entity insert.",
-        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to ensure these reference records exist. Does this look right?",
+        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?",
         "context_key": "proposed_ref_records",
         "options": [
           {
