@@ -868,7 +868,7 @@ async function executeServEntitySchema({ step, localState, traceId }) {
   // Must use the full schema row (not schemaByTable which stores only the columns array).
   const rootSchemaRow  = (schemaResp.rows ?? []).find(r => r.table_name === rootTable);
   const rootRefFkCols  = (rootSchemaRow?.foreign_keys ?? [])
-    .filter(fk => fk.references?.table && fk.references.table !== rootTable)
+    .filter(fk => fk.references?.table)
     .map(fk => ({
       column:         fk.column,
       ref_table:      fk.references.table,
