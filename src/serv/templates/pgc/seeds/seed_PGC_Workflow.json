@@ -499,7 +499,7 @@
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "Prompt user to add custom aliases (merged with LLM-generated ones at step 18).",
-        "message_template": "I\u2019ve generated aliases for *{{proposed_scaffold.domain}}*. Would you like to add any of your own? Enter comma-separated names, or leave blank and press Done.",
+        "message_template": "I\u2019ve generated these aliases for *{{proposed_scaffold.domain}}*: {{domain_aliases.aliases}}. Would you like to add any more? Enter comma-separated names, or leave blank and press Done.",
         "output_key": "user_aliases_raw",
         "options": [
           {
