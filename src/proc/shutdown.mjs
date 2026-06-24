@@ -21,8 +21,10 @@ import { ok, err }          from '../shared/lambda-utils.mjs';
 import { enqueueCallback }  from '../shared/sqs-callback.mjs';
 
 export async function handle(req) {
-  const { workflowRunId, callback, traceId } = req.body ?? {};
-  const servUrl = process.env.SERV_API_URL;
+  const { workflowRunId } = req.body ?? {};
+  const callback = req.callback ?? req.body?.callback ?? null;
+  const traceId  = req.traceId  ?? req.correlationId;
+  const servUrl  = process.env.SERV_API_URL;
 
   console.info('shutdown: starting', {
     traceId,
