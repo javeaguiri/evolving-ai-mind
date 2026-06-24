@@ -59,7 +59,7 @@ export async function handle(req) {
   try {
     const resp = await fetch(procUrl, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
       body:    JSON.stringify(payload),
     });
     result = await resp.json();
