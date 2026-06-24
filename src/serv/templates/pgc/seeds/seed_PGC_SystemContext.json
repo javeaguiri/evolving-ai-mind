@@ -1192,6 +1192,18 @@
     }
   },
   {
+    "key": "embedding_config",
+    "section": "schema_design",
+    "inject_always": false,
+    "inject_for": [
+      "create_domain",
+      "design_table",
+      "revise_domain_schema"
+    ],
+    "version": 2,
+    "content": "CRITICAL — embedding column dimensions: you MUST use vector(2560), never vector(1536) or any other size. The system embedding model is pplx-embed-v1-4b, which produces exactly 2560-dimensional vectors. Using the wrong dimension causes every insert to fail with a DB constraint error. This overrides any default or example you may have seen. Always: vector(2560). Never: vector(1536)."
+  },
+  {
     "key": "human_gate_dialog_rules",
     "section": "dialog_design",
     "inject_always": false,
