@@ -1012,8 +1012,8 @@
       "design_table",
       "revise_domain_schema"
     ],
-    "version": 2,
-    "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(1536). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) — derive precision and scale from the most precise literal in the constraint (e.g. ease_factor CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0) uses numeric(4,2) because 1.0 has 1 integer digit and 1 decimal place, giving precision 4 and scale 2); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", \"interval\", \"time\", etc.). For storing multiple values in a single column, use jsonb — array types (text[], integer[], etc.) are not supported."
+    "version": 3,
+    "content": "- Column types must be EXACTLY one of: serial, bigserial, text, varchar, integer, bigint, smallint, boolean, numeric, decimal, real, jsonb, timestamptz, timestamp, date, uuid, vector(2560). NEVER add length or precision specifiers (use \"varchar\" not \"varchar(255)\", \"numeric\" not \"numeric(10,2)\") EXCEPT: for columns with a decimal boundary constraint (CHECK, >=, or <= with decimal literals), use numeric(p,s) — derive precision and scale from the most precise literal in the constraint (e.g. ease_factor CHECK (ease_factor >= 1.0 AND ease_factor <= 5.0) uses numeric(4,2) because 1.0 has 1 integer digit and 1 decimal place, giving precision 4 and scale 2); never use real or float for these columns. NEVER use type aliases (use \"integer\" not \"int\", \"real\" not \"float\" or \"double precision\", \"varchar\" not \"character varying\"). NEVER use types outside this list (no \"char\", \"text[]\", \"enum\", \"interval\", \"time\", etc.). For storing multiple values in a single column, use jsonb — array types (text[], integer[], etc.) are not supported."
   },
   {
     "key": "pgd_naming_conventions",
@@ -1201,15 +1201,5 @@
     ],
     "version": 1,
     "content": "on_select routing rules:\naction and on_select are DIFFERENT things:\n  - action = UI behaviour label (confirm | cancel | request_changes | rate | etc.) — display categorisation only\n  - on_select = workflow routing token — determines where the workflow goes next\n\nValid on_select values:\n  \"next\"         — follow the step's on_success path\n  \"end\"          — go to the end step\n  \"cancel\"       — cancel the workflow\n  \"step:<label>\" — jump to a specific step label in the routing table\n\nNEVER use action names as on_select values (e.g. on_select: \"reveal\" is wrong).\nNEVER invent step key strings — only use routing tokens or step labels from the routing table.\n\nCancel requirement: every options array MUST end with: { \"label\": \"Cancel\", \"action\": \"cancel\", \"on_select\": \"cancel\" }\n\nreveal: UI display only — does not route and has no on_select. Do NOT add a Show Answer button to options when reveal is used."
-  },
-  {
-    "key": "embedding_config",
-    "section": "rules",
-    "inject_always": false,
-    "inject_for": [
-      "design_table"
-    ],
-    "version": 1,
-    "content": "Embedding columns: always use type vector(2560). The system embedding model is pplx-embed-v1-4b which produces 2560-dimensional vectors. Never use vector(1536) or any other dimension. Using the wrong dimension causes insertRow to fail at the DB constraint level."
   }
 ]
