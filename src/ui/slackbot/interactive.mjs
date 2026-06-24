@@ -150,7 +150,7 @@ export async function handle(req) {
             type:             'modal',
             callback_id:      'text_input_gate',
             notify_on_close:  true,
-            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, callback: { provider: 'slack', channel, threadId } }),
+            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } }),
             title:   { type: 'plain_text', text: modal.title ?? 'Input' },
             submit:  { type: 'plain_text', text: 'Submit' },
             close:   { type: 'plain_text', text: 'Cancel' },
@@ -176,18 +176,6 @@ export async function handle(req) {
       }
     } else {
       console.warn('interactive: modal button missing trigger_id — proceeding with resume_gate only', { workflowRunId, action: userResponse, traceId });
-    }
-
-    // Acknowledge the button click — replace gate message to prevent duplicate clicks.
-    try {
-      await slack.chat.update({
-        channel,
-        ts:     threadId,
-        text:   `📝 ${modal.title ?? 'Input'}...${gateContext}`,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `📝 ${modal.title ?? 'Input'}...${gateContext}` } }],
-      });
-    } catch (error) {
-      console.warn('interactive: chat.update failed (non-fatal)', { error: error.message, traceId });
     }
 
     // Do NOT enqueue resume_gate here — the workflow stays suspended at the current gate.
@@ -714,7 +702,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(400, 'Invalid private_metadata', correlationId);
   }
 
-  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, callback } = meta;
+  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_submission missing workflowRunId or callback', { meta, traceId });
     return err(400, 'view_submission private_metadata must contain workflowRunId and callback', correlationId);
@@ -754,6 +742,21 @@ async function handleViewSubmission(payload, correlationId) {
   } catch (error) {
     console.error('interactive: view_submission SQS enqueue failed', { error: error.message, traceId });
     return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  // Replace the gate message with a confirmation to clear stale buttons.
+  const confirmText = `📝 ${modalTitle ?? 'Input'} — submitted.`;
+  if (callback.channel && callback.threadId) {
+    try {
+      await slack.chat.update({
+        channel: callback.channel,
+        ts:      callback.threadId,
+        text:    confirmText,
+        blocks:  [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+      });
+    } catch (updateErr) {
+      console.warn('interactive: view_submission chat.update failed (non-fatal)', { error: updateErr.message, traceId });
+    }
   }
 
   // Returning null body with 200 closes the modal — Slack interprets empty response as success.
