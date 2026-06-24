@@ -202,6 +202,8 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 - **Environment:** All secrets are in AWS SSM Parameter Store. No `.env` files at runtime. Use `.env.test.template` for local test setup.
 - **Human Gate flow:** Step Processor suspends → `HUMAN_GATE` SQS → SlackCallbackListenerFunction renders Block Kit → user clicks → `/interactive` → `resume_gate` SQS → Step Processor resumes.
 - **Seed file updates:** Never write directly to the database to update seeded values. Edit `seed_PGC_Workflow.json` or `seed_PGC_Prompt.json` then run the corresponding `dev_scripts/upsert-*.mjs` script.
+- **New PGC_SystemContext entries:** When adding a row with `inject_for`, every listed `intent_category` must have a matching `{{key}}` token in the corresponding prompt text. `inject_for` alone does nothing — `assembleInstructions` substitutes inline tokens only. Verify the token is present before upsetting.
+- **New PGC_StepType entries:** The step type name must appear in the `known system prompts` list inside `generate_workflow_steps` prompt text, or in `step_type_contracts` if that token is injected into the relevant prompts. A step type not referenced in any prompt is invisible to the LLM during workflow generation.
 - **DB connections:** All `pg` connections use `ssl: { rejectUnauthorized: false }` — never change this. The 13 PGC system tables are bootstrapped and seeded — do not recreate them.
 - **Diagnose before coding:** After reading logs or curl output, present findings and agree on the fault domain and fix before writing any code. Wrong diagnoses produce wrong code.
 - **Commit and push after each meaningful change:** Do not batch unrelated changes across a session. Push to the branch so changes are visible on GitHub for review.
