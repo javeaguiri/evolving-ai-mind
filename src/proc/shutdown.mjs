@@ -35,7 +35,7 @@ export async function handle(req) {
   // Step 1 — fetch active runs from SERV
   // ---------------------------------------------------------------------------
 
-  const filters = [{ column: 'status', op: 'eq', value: 'active' }];
+  const filters = [{ column: 'status', op: 'in', value: ['running', 'awaiting_human_gate'] }];
   if (workflowRunId !== undefined) {
     filters.push({ column: 'id', op: 'eq', value: workflowRunId });
   }
@@ -44,7 +44,7 @@ export async function handle(req) {
   try {
     const resp = await fetch(`${servUrl}/api/v1/serv/table/getRows`, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
       body:    JSON.stringify({ tableName: 'PGC_WorkflowRun', filters }),
     });
     const data = await resp.json();
@@ -76,7 +76,7 @@ export async function handle(req) {
     try {
       const resp = await fetch(`${servUrl}/api/v1/serv/table/updateRows`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
         body:    JSON.stringify({
           tableName: 'PGC_WorkflowRun',
           filters:   [{ column: 'id', op: 'eq', value: run.id }],
