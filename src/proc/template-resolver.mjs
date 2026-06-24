@@ -6,6 +6,8 @@
 // Pure functions — no I/O, no AWS SDK, no side effects.
 // Used by the Step Processor to resolve {{variable}} references
 // in step definitions against the current local_state.
+
+import vm from 'vm';
 //
 // Supports standard JSONPath subset — no $ root prefix needed:
 //   {{input.userInput}}                 — dot-path into local_state
@@ -146,9 +148,7 @@ export function resolveInput(input, localState) {
 function evalExpression(token, localState) {
   if (!/[\s+\-*%]/.test(token)) return undefined;
   try {
-    const keys = Object.keys(localState);
-    const vals = keys.map(k => localState[k]);
-    return new Function(...keys, `'use strict'; return (${token});`)(...vals);
+    return vm.runInNewContext(`(${token})`, Object.assign({}, localState), { timeout: 200 });
   } catch (_) {
     return undefined;
   }
@@ -171,10 +171,7 @@ function evalExpression(token, localState) {
  */
 export function evalItemCondition(condition, item) {
   try {
-    // Restricted to a safe subset — no arbitrary code via Function constructor.
-    // For this use case (simple property comparisons) this is sufficient.
-    // A future iteration can add a proper expression AST parser if needed.
-    return new Function('item', `'use strict'; return Boolean(${condition});`)(item);
+    return Boolean(vm.runInNewContext(`(${condition})`, { item }, { timeout: 200 }));
   } catch (e) {
     console.warn('template-resolver: condition eval failed', {
       condition,
