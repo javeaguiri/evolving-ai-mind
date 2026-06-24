@@ -62,6 +62,26 @@ export async function handle(req) {
   console.info('shutdown: active runs found', { count: activeRuns.length, traceId });
 
   // ---------------------------------------------------------------------------
+  // Step 1b — resolve workflow names from PGC_Workflow (workflow_name is not on the run row)
+  // ---------------------------------------------------------------------------
+
+  const workflowIds = [...new Set(activeRuns.map(r => r.workflow_id).filter(Boolean))];
+  const workflowNameMap = {};
+  if (workflowIds.length > 0) {
+    try {
+      const resp = await fetch(`${servUrl}/api/v1/serv/table/getRows`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.INTERNAL_API_KEY ?? '' },
+        body:    JSON.stringify({ tableName: 'PGC_Workflow', filters: [{ column: 'id', op: 'in', value: workflowIds }], columns: ['id', 'name'] }),
+      });
+      const data = await resp.json();
+      for (const wf of data.rows ?? []) workflowNameMap[wf.id] = wf.name;
+    } catch {
+      // non-fatal — names fall back to workflow_id
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Step 2 — cancel each run via SERV updateRows
   // ---------------------------------------------------------------------------
 
@@ -87,7 +107,7 @@ export async function handle(req) {
       }
       cancelledRuns.push({
         workflowRunId:  run.id,
-        workflowName:   run.workflow_name ?? 'unknown',
+        workflowName:   workflowNameMap[run.workflow_id] ?? `workflow_id:${run.workflow_id ?? '?'}`,
         stoppedAtStep:  run.current_step_index ?? null,
       });
     } catch (error) {
