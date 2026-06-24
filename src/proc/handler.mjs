@@ -182,6 +182,12 @@ async function processSqsBatch(records) {
         await explain(req);
         continue;
       }
+      // SHUTDOWN — cancel active runs; notifies via callback. Enqueued by slackbot/shutdown.mjs.
+      if (message.type === 'SHUTDOWN') {
+        const req = buildReqFromSqs(message);
+        await shutdown(req);
+        continue;
+      }
       // MEMORY_WRITE — fire-and-forget episodic memory write on domain run completion.
       // Enqueued by run-workflow.mjs after qualifying CRUD workflow run completes.
       if (message.type === 'MEMORY_WRITE') {
