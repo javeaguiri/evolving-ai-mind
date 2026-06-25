@@ -11,7 +11,7 @@
 // Called by: PROC endpoint modules when req.source === 'sqs'
 // Never called on the HTTP path — HTTP responses go directly to API Gateway.
 
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { SQSClient, SendMessageCommand, DeleteMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { randomUUID }                    from 'crypto';
 
 const sqs = new SQSClient({});
@@ -69,4 +69,22 @@ export async function enqueueWorkflow(payload) {
     action:  payload.action,
     traceId: payload.traceId,
   });
+}
+
+/**
+ * Immediately delete a batch of received SQS records from WorkflowQueue.
+ * Called at the top of processSqsBatch before any processing so SQS is freed
+ * regardless of how long the Lambda runs or whether it crashes mid-step.
+ * DB state (PGC_WorkflowRun) is the source of truth for recovery.
+ *
+ * @param {object[]} records  Lambda SQS event Records (each has .messageId, .receiptHandle)
+ * @returns {Promise<void>}
+ */
+export async function deleteReceivedBatch(records) {
+  if (!records.length) return;
+  await sqs.send(new DeleteMessageBatchCommand({
+    QueueUrl: process.env.SQS_WORKFLOW_URL,
+    Entries:  records.map((r, i) => ({ Id: String(i), ReceiptHandle: r.receiptHandle })),
+  }));
+  console.info('sqs-callback: batch pre-deleted from queue', { count: records.length });
 }

@@ -1182,7 +1182,7 @@
           ],
           "priority": 3
         },
-        "on_success": "step:24",
+        "on_success": "step:23a",
         "on_else": "cancel"
       },
       {
