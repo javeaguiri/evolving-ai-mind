@@ -61,6 +61,7 @@ async function getRows(req) {
     orderBy,
     limit        = 100,
     vectorSearch = null,
+    columns      = null,
   } = req.body;
 
   if (!tableName) {
@@ -162,8 +163,15 @@ async function getRows(req) {
         ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
         : '';
 
+      let selectList = '*';
+      if (columns?.length) {
+        const invalid = columns.find(c => !validColumns.has(c));
+        if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
+        selectList = columns.map(c => `"${c}"`).join(', ');
+      }
+
       const sql = `
-        SELECT * FROM "${tableName}"
+        SELECT ${selectList} FROM "${tableName}"
         ${whereClause}
         ${orderClause}
         LIMIT ${safeLimit}
