@@ -556,8 +556,6 @@ Resources:
             # One SQS message per workflowRunId is always in flight.
             # processSqsBatch handles concurrent runs across different workflowRunIds.
             BatchSize: 10
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
