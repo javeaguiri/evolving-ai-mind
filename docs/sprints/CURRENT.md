@@ -38,7 +38,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC18 — User alias input in `create_domain`:** Step 17c text_input gate allows user to supply additional aliases (comma-separated). Step 18 merges them with LLM-generated aliases. Blank input proceeds without additional aliases.
 - **AC19 — Novia recovery tools:** After a failed `create_domain` run that leaves orphaned PGD tables, Novia can list physical tables not registered in `PGC_Schema` (`list_physical_tables`) and drop them individually (`drop_table`, danger gate, force=true). No manual DB intervention required.
 - **AC20 — Novia token truncation fix:** When a workflow `llm_call` step fails with `error_type: token_truncation`, Novia can diagnose it via `read_prompt` (returns `error_log`, `max_output_tokens`, `id`) and fix it by doubling `max_output_tokens` via `update_data` — no manual DB intervention required. ✅ DONE (2026-06-20)
-- **AC21 — Watchdog Lambda:** An EventBridge scheduled rule fires every 2 minutes and re-enqueues `execute_top` for any `PGC_WorkflowRun` in `status='running'` whose `updated_at` is older than 3 minutes. No human intervention required when ESM polling stalls or Lambda crashes post-delete-on-receipt.
 
 ---
 
@@ -67,7 +66,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | D0 create_domain alias input | AC18 |
 | H4 Novia recovery tools | AC19 |
 | H5 Novia token truncation fix | AC20 |
-| H6 Watchdog Lambda | AC21 |
 
 ---
 
@@ -210,10 +208,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - `deleteTable` extended with `force: true`: skips 404 when no `PGC_Schema` row exists, assumes `pgd` target, best-effort cleanup of schema/tablemap rows
 - `minds-eye.mjs`: `list_physical_tables` → `READ_TOOLS`; `drop_table` → `GATED_WRITE_TOOLS` (danger gate); scope tracking added
 - `minds_eye_system_prompt` v15→v16: both tools documented with use cases and recovery flow
-
-**H6 — Watchdog Lambda (AC21)**
-- EventBridge rule fires every 2 minutes; re-enqueues `execute_top` for any `PGC_WorkflowRun` in `status='running'` with `updated_at` older than 3 minutes.
-- Fixes Zone C: ESM polling gap after long LLM calls (consistently reproducible after generate_workflow_steps at step 23b → step 24).
 
 **H3 — `openapi.yaml` sync audit** ✅ DONE (2026-06-20)
 - `/novia` and `/proc/minds-eye` already present — confirmed accurate
