@@ -190,20 +190,20 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Condition steps have a stricter contract: on_success/on_else must be bare step keys.
-    // Control tokens (next, end, cancel) and step:N prefixed values are not valid —
-    // a condition must explicitly name its true and false target steps by key.
+    // Condition steps have a stricter contract: on_success/on_else must be bare step keys
+    // or terminal tokens (end, cancel). "next" and "step:N" are ambiguous on condition steps —
+    // the branch target must be named explicitly.
     if (s.type === 'condition') {
       for (const field of ['on_success', 'on_else']) {
         const val = s[field];
         if (val == null) continue;
         const sv = String(val);
-        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
+        if (sv === 'next' || sv.startsWith('step:')) {
           issues.push({
             check:         'condition_routing_invalid',
             step:          stepKey,
             failure_class: 'condition_routing_invalid',
-            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") but got "${sv}". Control tokens (next, end, cancel) and step:N prefixed values are not valid here — specify the target step key directly.`,
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") or a terminal token (end, cancel), but got "${sv}". "next" and "step:N" are ambiguous on condition steps — specify the target step key directly.`,
           });
         }
       }

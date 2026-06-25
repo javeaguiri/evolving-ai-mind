@@ -139,18 +139,18 @@ describe('Level 1 static analysis — condition routing contract', () => {
     assert.equal(issue.failure_class, 'condition_routing_invalid');
   });
 
-  test('detects on_else: "cancel" — control token is invalid in condition step', () => {
+  test('on_else: "cancel" is valid on condition step — not flagged', () => {
     const result = runSimulation({ steps: BROKEN_CONDITION_STEPS });
     const issue = result.static_analysis.issues.find(i => i.step === '4' && i.detail.includes('on_else'));
-    assert.ok(issue, 'Expected issue on step 4 on_else');
-    assert.equal(issue.failure_class, 'condition_routing_invalid');
+    assert.equal(issue, undefined, 'cancel is a terminal token and must not be flagged on condition steps');
   });
 
-  test('finds all four condition routing bugs in create_workflow v4', () => {
+  test('finds "next" routing bugs in condition steps (cancel/end are valid terminals)', () => {
     const result  = runSimulation({ steps: ALL_FOUR_CONDITION_BUGS });
     assert.equal(result.static_analysis.passed, false);
+    // step 4 on_success:next, step 10 on_success:next — cancel/end no longer flagged
     const condIssues = result.static_analysis.issues.filter(i => ['4', '9', '10'].includes(i.step));
-    assert.ok(condIssues.length >= 4, `Expected ≥4 condition issues, got ${condIssues.length}`);
+    assert.ok(condIssues.length >= 2, `Expected ≥2 condition issues, got ${condIssues.length}`);
   });
 
   test('passes after condition routing is fixed to bare step keys', () => {
@@ -687,7 +687,7 @@ describe('detect → correct → validate cycle', () => {
     assert.equal(diag.static_analysis.passed, false);
     const issues = diag.static_analysis.issues;
     // Verify the issues array has the schema the fix_workflow_steps prompt expects
-    assert.ok(issues.length >= 2);
+    assert.ok(issues.length >= 1);
     for (const i of issues) {
       assert.ok(i.step && i.failure_class && i.detail && i.check);
     }
