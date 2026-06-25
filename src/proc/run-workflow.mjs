@@ -1059,11 +1059,13 @@ async function cancelRun({ workflowRunId, traceId }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error'];
+
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
     'PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: workflowRunId }],
-    undefined, 1
+    undefined, 1, undefined, LOAD_RUN_COLUMNS
   );
   if (!resp.success || resp.count === 0) {
     throw new Error(`WorkflowRun ${workflowRunId} not found`);
@@ -1080,8 +1082,6 @@ async function loadRun(workflowRunId, traceId) {
     run.workflow_name = wfResp.rows?.[0]?.name ?? 'unknown';
   }
 
-  run.state            = run.state ?? {};
-  run.state.local_state = run.state.local_state ?? {};
   return run;
 }
 
