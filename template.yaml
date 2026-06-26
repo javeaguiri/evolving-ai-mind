@@ -144,6 +144,7 @@ Resources:
                   - cloudformation:GetTemplate
                   - cloudformation:GetTemplateSummary
                   - cloudformation:ValidateTemplate
+                  - cloudformation:ContinueUpdateRollback
                 Resource: "*"
               # S3 — sam build artifact upload / download
               - Effect: Allow
@@ -179,6 +180,8 @@ Resources:
                   - lambda:DeleteEventSourceMapping
                   - lambda:GetEventSourceMapping
                   - lambda:ListEventSourceMappings
+                  - lambda:PutFunctionRecursionConfig
+                  - lambda:GetFunctionRecursionConfig
                 Resource: "*"
               # API Gateway — SAM creates/updates REST APIs on deploy
               - Effect: Allow
@@ -533,6 +536,7 @@ Resources:
   # ===========================================================================
   ProcFunction:
     Type: AWS::Serverless::Function
+    DependsOn: BastionRole
     Properties:
       FunctionName: evolving-mind-ai-proc
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
@@ -540,6 +544,7 @@ Resources:
       Handler: handler.handler
       MemorySize: 1024                # Override Global 256MB — large local_state at peak steps
       Timeout: 240                    # Override Global 29s — LLM steps can run long
+      RecursiveLoop: Allow            # Workflow engine intentionally chains SQS hops per step
       Environment:
         Variables:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
