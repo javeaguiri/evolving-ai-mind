@@ -144,6 +144,7 @@ export async function handle(req) {
     }
     await enqueueCallback(responseCallback, {
       type:    'HUMAN_NOTIFICATION',
+      format:  'markdown',
       traceId,
       message: replyText,
       queryId: session.query_id,
