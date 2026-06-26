@@ -6,12 +6,13 @@
 //         DELETE_WORKFLOW SQS WorkflowQueue messages (async).
 //
 // Permanently deletes a single named workflow and all its associated artifacts:
-//   1. Fetch PGC_Workflow.id by name — 404 if not found
-//   2. Fetch all PGC_WorkflowRun.id for that workflow_id
-//   3. Delete PGC_WorkflowRunStep rows where run_id IN (run ids)
-//   4. Delete PGC_WorkflowRun rows where workflow_id = id
-//   5. Delete PGC_IntentMap rows where workflow_id = id (FK — exact match)
-//   6. Delete PGC_Workflow row
+//   1. Resolve name: exact snake_case → LIKE → Pass 1 IntentMap → Pass 2 domain/keyword scan
+//   2. Fetch PGC_Workflow.id by resolved name — 404 if not found
+//   3. Fetch all PGC_WorkflowRun.id for that workflow_id
+//   4. Delete PGC_WorkflowRunStep rows where run_id IN (run ids)
+//   5. Delete PGC_WorkflowRun rows where workflow_id = id
+//   6. Delete PGC_IntentMap rows where workflow_id = id (FK — exact match)
+//   7. Delete PGC_Workflow row
 //
 // Not idempotent — returns 404 (HTTP) or error callback (SQS) if name unknown.
 // Transport-agnostic — no AWS SDK, no Slack SDK imports.
@@ -19,6 +20,7 @@
 import { ok, err }         from '../shared/lambda-utils.mjs';
 import { enqueueCallback } from '../shared/sqs-callback.mjs';
 import { getRows, deleteRows, bestEffort } from '../shared/serv-client.mjs';
+import { matchIntentMap, matchDomainAlias, matchWorkflowByKeywords } from './classify-intent-tiers.mjs';
 
 export async function handle(req) {
   const { name } = req.body ?? {};
@@ -37,12 +39,22 @@ export async function handle(req) {
     return err(400, 'name is required', req.correlationId);
   }
 
-  // Normalise to snake_case — workflow names are always snake_case identifiers.
-  // "flashcard quiz" → "flashcard_quiz". Resolves common user input variations.
-  const normalised = name.trim().toLowerCase().replace(/\s+/g, '_');
-
   try {
-    const result = await runDeleteWorkflow({ name: normalised, traceId });
+    const resolved = await resolveWorkflowName(name.trim(), traceId);
+
+    if (!resolved) {
+      if (req.source === 'sqs' && callback) {
+        await enqueueCallback(callback, {
+          type:    'HUMAN_NOTIFICATION',
+          traceId,
+          message: `Workflow matching \`${name.trim()}\` not found — nothing was deleted.`,
+        });
+        return;
+      }
+      return err(404, `Workflow "${name.trim()}" not found`, req.correlationId);
+    }
+
+    const result = await runDeleteWorkflow({ name: resolved, traceId });
 
     if (result.notFound) {
       if (req.source === 'sqs' && callback) {
@@ -72,6 +84,64 @@ export async function handle(req) {
 }
 
 // ---------------------------------------------------------------------------
+// Workflow name resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a user-supplied name or phrase to a canonical PGC_Workflow.name.
+ * Resolution order:
+ *   1. Exact snake_case match
+ *   2. Partial LIKE match
+ *   3. Pass 1 — PGC_IntentMap regex (same as classify-intent)
+ *   4. Pass 2 — domain alias → workflow keyword scan (same as classify-intent)
+ * Returns the canonical name string, or null if nothing matched.
+ */
+async function resolveWorkflowName(rawInput, traceId) {
+  const normalised = rawInput.toLowerCase().replace(/\s+/g, '_');
+
+  const exactResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: normalised }], null, 1);
+  if (exactResp.rows?.length) {
+    console.info('delete-workflow: resolved via exact match', { normalised, traceId });
+    return exactResp.rows[0].name;
+  }
+
+  const likeResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'like', value: `%${normalised}%` }], null, 1);
+  if (likeResp.rows?.length) {
+    console.info('delete-workflow: resolved via partial match', { normalised, resolved: likeResp.rows[0].name, traceId });
+    return likeResp.rows[0].name;
+  }
+
+  const [intentMapResp, domainHelpResp, workflowResp] = await Promise.all([
+    getRows('PGC_IntentMap'),
+    getRows('PGC_DomainHelp'),
+    getRows('PGC_Workflow'),
+  ]);
+  const intentRows   = intentMapResp.rows  ?? [];
+  const domainRows   = domainHelpResp.rows ?? [];
+  const workflowRows = workflowResp.rows   ?? [];
+
+  // Pass 1: PGC_IntentMap regex — catches creation phrases stored by create_workflow step 35b
+  const intentMatch = matchIntentMap(rawInput, intentRows);
+  if (intentMatch?.action_type === 'workflow') {
+    console.info('delete-workflow: resolved via Pass 1 intent map', { intent_category: intentMatch.intent_category, traceId });
+    return intentMatch.intent_category;
+  }
+
+  // Pass 2: domain alias → keyword scan
+  const domainMatch = matchDomainAlias(rawInput, domainRows);
+  if (domainMatch) {
+    const aliases = [domainMatch._matched_alias, ...(domainMatch.aliases ?? [])].filter(Boolean);
+    const kwMatch = matchWorkflowByKeywords(rawInput, domainMatch.domain, workflowRows, aliases);
+    if (kwMatch?.workflow_name) {
+      console.info('delete-workflow: resolved via Pass 2 keyword match', { workflow_name: kwMatch.workflow_name, domain: domainMatch.domain, traceId });
+      return kwMatch.workflow_name;
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Core delete logic
 // ---------------------------------------------------------------------------
 
@@ -90,19 +160,7 @@ async function runDeleteWorkflow({ name, traceId }) {
   }
 
   if (!workflowResp.rows?.length) {
-    // Fallback: partial match — catches minor spelling variations
-    const likeResp = await getRows(
-      'PGC_Workflow',
-      [{ column: 'name', op: 'like', value: `%${name}%` }],
-      null, 1
-    );
-    if (!likeResp.success || !likeResp.rows?.length) {
-      return { notFound: true, error: `Workflow "${name}" not found` };
-    }
-    console.info('delete-workflow: resolved via partial match', {
-      searched: name, resolved: likeResp.rows[0].name, traceId,
-    });
-    return runDeleteWorkflow({ name: likeResp.rows[0].name, traceId });
+    return { notFound: true, error: `Workflow "${name}" not found` };
   }
 
   const workflowId     = workflowResp.rows[0].id;
