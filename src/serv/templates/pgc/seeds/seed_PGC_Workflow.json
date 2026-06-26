@@ -1611,11 +1611,11 @@
       {
         "step": "35b",
         "type": "js_transform",
-        "description": "Build intent_pattern: split user phrases on comma, lowercase/trim each, append workflow name, join with | for Pass 1a regex matching.",
+        "description": "Build intent_pattern: user invocation phrases + alias extracted from original userInput (truncated at first stop word) + workflow name, joined with | for Pass 1a regex matching.",
         "output_key": "intent_pattern",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
+        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2 && parts.indexOf(truncated) === -1) { parts.push(truncated); } } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
       },
       {
         "step": "36",
