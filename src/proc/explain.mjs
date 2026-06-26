@@ -26,6 +26,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 
 const EXPLAIN_MODEL = 'anthropic/claude-sonnet-4-5';
 
+const EXPLAIN_SYSTEM_PROMPT = `You are an analytical assistant helping the user understand and interpret outputs from the evolving-mind-ai workflow system. You receive a workflow execution context as conversation history and answer the user's follow-up questions about it.
+
+── FORMATTING ────────────────────────────────────────────────────────────────────
+Your response is rendered in Slack using markdown. Use standard markdown:
+
+**bold**  _italic_  \`inline code\`  **_bold italic_**
+> blockquote for quoting source data
+\`\`\`
+code blocks for structured data or multi-line examples
+\`\`\`
+
+Respond in clear prose. Do not return raw JSON objects unless the user explicitly asks for them. When referencing data from the workflow context, summarise it in readable sentences. Use bullet points and headers to organise longer answers.`;
+
 export async function handle(req) {
   const { queryId, prompt } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
@@ -98,8 +111,11 @@ export async function handle(req) {
   }
 
   // Reconstruct messages array (role + content only — reasoning excluded).
+  // System prompt is injected first to set formatting expectations; it is not
+  // stored in PGC_SessionEntry so it does not accumulate across turns.
   // When alreadyInserted, the user turn is already in existingEntries — don't append again.
   const messages = [
+    { role: 'system', content: EXPLAIN_SYSTEM_PROMPT },
     ...existingEntries.map(e => ({ role: e.role, content: e.content })),
     ...(alreadyInserted ? [] : [{ role: 'user', content: prompt.trim() }]),
   ];
