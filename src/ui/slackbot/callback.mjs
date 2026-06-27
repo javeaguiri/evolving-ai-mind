@@ -668,19 +668,35 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'reveal': {
         // Inline task_card shown above the gate buttons — no click required.
-        blocks.push({
+        // content is a string → plain text in output; array of strings → bulleted list in details.
+        const revealBlock = {
           type:    'task_card',
           task_id: randomUUID(),
           title:   field.button_label,
           status:  'complete',
-          output: {
+        };
+        if (Array.isArray(field.content)) {
+          revealBlock.details = {
+            type:     'rich_text',
+            elements: [{
+              type:     'rich_text_list',
+              style:    'bullet',
+              elements: field.content.map(item => ({
+                type:     'rich_text_section',
+                elements: [{ type: 'text', text: String(item) }],
+              })),
+            }],
+          };
+        } else {
+          revealBlock.output = {
             type:     'rich_text',
             elements: [{
               type:     'rich_text_section',
               elements: [{ type: 'text', text: field.content ?? '' }],
             }],
-          },
-        });
+          };
+        }
+        blocks.push(revealBlock);
         break;
       }
 

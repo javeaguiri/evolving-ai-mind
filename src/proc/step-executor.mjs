@@ -481,11 +481,13 @@ export function buildDialog(step, localState) {
   }
 
   // reveal — optional on any gate type. Single task_card above the gate buttons.
+  // content is resolved via resolveInput so a pure {{var}} reference that points
+  // to an array passes through as an array (rendered as a bulleted list by callback).
   if (step.reveal) {
     fields.push({
       type:         'reveal',
       button_label: step.reveal.button_label,
-      content:      resolveTemplate(step.reveal.content ?? '', localState),
+      content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
 
@@ -498,7 +500,7 @@ export function buildDialog(step, localState) {
     fields.push({
       type:         'reveal',
       button_label: r.button_label,
-      content:      resolveTemplate(r.content ?? '', localState),
+      content:      resolveInput(r.content ?? '', localState),
     });
   }
 
