@@ -214,10 +214,12 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
-###### `reveal` (optional, all gate types)
+###### `reveal` / `reveals` (optional, all gate types)
 
-Renders an inline `task_card` block above the gate buttons. The definition is always
-visible — no click required. The gate remains suspended; the card is read-only.
+Renders one or more inline `task_card` blocks above the gate buttons. Cards are
+always visible — no click required. The gate remains suspended; cards are read-only.
+
+**`reveal`** — single panel (object):
 
 ```json
 "reveal": {
@@ -226,11 +228,52 @@ visible — no click required. The gate remains suspended; the card is read-only
 }
 ```
 
-`content` is resolved via `resolveTemplate` before the HUMAN_GATE SQS message is
-built. `button_label` becomes the `task_card` title. Both fields are required and
-must be non-empty strings — L1 validation rejects steps where either is missing.
-`callback.mjs` renders the block using `randomUUID()` for `task_id` and
-`status: "complete"` — posted directly in the gate message, not as a thread reply.
+**`reveals`** — data-driven panels (string template, plural):
+
+```json
+"reveals": "{{parent_reveals}}"
+```
+
+`reveals` resolves to an array of `{ button_label, content }` objects at runtime —
+one `task_card` panel per array entry. Use `reveals` when the number of panels is
+driven by data.
+
+**`content` rendering** — resolved via `resolveInput` before the HUMAN_GATE SQS
+message is built:
+
+| Resolved type | Rendered as |
+|---|---|
+| string | `task_card.output` — `rich_text_section` (plain text) |
+| array of strings | `task_card.details` — `rich_text_list` with `style: "bullet"` (one bullet per element) |
+
+`button_label` becomes the `task_card` title. Both fields are required and must be
+non-empty — L1 validation rejects steps where either is missing. `callback.mjs`
+renders each block with `randomUUID()` for `task_id` and `status: "complete"`,
+posted directly in the gate message.
+
+**Example — accordion hierarchy** (parent categories with bulleted child items):
+
+```json
+{
+  "step_type": "human_gate",
+  "gate_type": "choice",
+  "message_template": "Select an item:",
+  "reveals": "{{parent_reveals}}",
+  "options": "{{leaf_options}}",
+  "output_key": "selected_id"
+}
+```
+
+`parent_reveals` in `local_state`:
+```json
+[
+  { "button_label": "Category A", "content": ["Item A1 - 2026-01-15", "Item A2 - 2026-03-10"] },
+  { "button_label": "Category B", "content": ["Item B1 - 2026-04-01"] }
+]
+```
+
+Each panel expands to show its children as a bulleted list. The selectable leaf
+nodes are always in `options` — never inside `reveal` content.
 
 ###### `iterator` on options (choice gate only)
 
