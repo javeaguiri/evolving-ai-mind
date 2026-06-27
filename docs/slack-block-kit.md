@@ -796,10 +796,12 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 | `task_id` | UUID string | Yes | Unique per card; generate with `randomUUID()` |
 | `title` | string | Yes | Heading shown collapsed and expanded |
 | `status` | string | Yes | `"in_progress"` (spinner) or `"complete"` |
-| `details` | rich_text | No | Secondary context shown alongside the title |
-| `output` | rich_text | No | Main body content |
+| `details` | rich_text | No | Body content — supports `rich_text_list` (bullet/ordered lists), `rich_text_section`, links, emoji. Use for structured or list content. |
+| `output` | rich_text | No | Secondary body content — supports `rich_text_section` (plain text and links). Renders below `details` if both are present. Use for plain prose only. |
 
-#### Minimal example — reveal gate
+**Use `details` (not `output`) whenever the content is a list of items.** `output` supports only flat `rich_text_section` elements. `details` supports `rich_text_list` with `style: "bullet"` or `"ordered"`, which is required for tree-leaf presentation (parent title → bulleted children).
+
+#### Example — plain text reveal (current `output` usage)
 
 ```json
 {
@@ -821,39 +823,84 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 }
 ```
 
-#### Full example — with details and link in output
+#### Example — tree-leaf reveal using `details` + `rich_text_list`
+
+Use this pattern for one-level-deep hierarchies (parent node title → bulleted child items).
+`status: "complete"` — data is pre-loaded, no spinner needed.
 
 ```json
 {
   "type": "task_card",
-  "task_id": "bb9cb0c7-bf08-4eed-9e44-3ee71ef021a6",
-  "title": "Demonstrating Task Card Block Features...",
-  "status": "in_progress",
+  "task_id": "985d975c-3bee-449c-b27b-977a1b5e06e6",
+  "title": "Spanish Vocabulary",
+  "status": "complete",
+  "details": {
+    "type": "rich_text",
+    "elements": [
+      {
+        "type": "rich_text_list",
+        "style": "bullet",
+        "indent": 0,
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [{ "type": "text", "text": "Basic Phrases" }]
+          },
+          {
+            "type": "rich_text_section",
+            "elements": [{ "type": "text", "text": "Food & Drink" }]
+          },
+          {
+            "type": "rich_text_section",
+            "elements": [{ "type": "text", "text": "Numbers & Time" }]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`rich_text_list` elements: each `rich_text_section` is one bullet. Elements within a section
+can mix `text`, `link`, and `emoji` inline — the full rich_text inline element set applies.
+
+#### Example — mixed intro text + bullet list in `details`
+
+```json
+{
+  "type": "task_card",
+  "task_id": "985d975c-3bee-449c-b27b-977a1b5e06e6",
+  "title": "Parent Node",
+  "status": "complete",
   "details": {
     "type": "rich_text",
     "elements": [
       {
         "type": "rich_text_section",
-        "elements": [
-          { "type": "text", "text": "Fetching from " },
-          {
-            "type": "link",
-            "url": "https://api.slack.com/partners/thinking-steps",
-            "text": "This Thinking Steps"
-          }
-        ]
-      }
-    ]
-  },
-  "output": {
-    "type": "rich_text",
-    "elements": [
+        "elements": [{ "type": "text", "text": "Select a child item:\n" }]
+      },
       {
-        "type": "rich_text_section",
+        "type": "rich_text_list",
+        "style": "bullet",
+        "indent": 0,
         "elements": [
           {
-            "type": "text",
-            "text": "This task card shows how timeline mode interleaves text and tool calls in streaming content, making it ideal for short, naturally flowing tasks, unlike plan mode which groups tasks under a shared goal."
+            "type": "rich_text_section",
+            "elements": [{ "type": "text", "text": "Child Item 1" }]
+          },
+          {
+            "type": "rich_text_section",
+            "elements": [
+              { "type": "text", "text": "Child Item 2 — " },
+              { "type": "link", "url": "https://example.com/", "text": "with a link", "style": { "bold": true } }
+            ]
+          },
+          {
+            "type": "rich_text_section",
+            "elements": [
+              { "type": "text", "text": "Child Item 3 " },
+              { "type": "emoji", "name": "white_check_mark" }
+            ]
           }
         ]
       }
@@ -863,9 +910,10 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 ```
 
 **Notes:**
-- `output` uses `rich_text` format, not `mrkdwn`. Links use a `link` element with `url` + `text`.
-- `details` is optional; omit when there is no secondary context.
+- Both `details` and `output` use `rich_text` format — not `mrkdwn`.
+- `details` is the correct field for any list content. `output` is plain prose only.
 - Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
+- `rich_text_list` supports `style: "bullet"` or `style: "ordered"` and optional `indent` (0-based nesting depth).
 
 ---
 ## Overflow menu (hamburger expand icon)
@@ -942,9 +990,27 @@ an `actions` block containing Submit/Cancel buttons. The `state.values` in the r
 Use explicit `block_id` values so the key is predictable.
 
 ### reveal gate rendering
-Use a `task_card` block posted via `chat.postMessage` in the thread. Set `status:
-"complete"`, `title` from `button_label`, and `output` as a `rich_text` section with the
-resolved content string. No `trigger_id` needed — do not use `views.open` for reveal.
+
+`callback.mjs` renders every `reveal` field as a `task_card` block. Current implementation
+uses the `output` section (plain text only). The correct field depends on content type:
+
+| Content type | `task_card` field | Supports |
+|---|---|---|
+| Plain prose / single value | `output` | `rich_text_section` — flat text and links |
+| List of items / tree children | `details` | `rich_text_list` — bullet/ordered lists, inline rich elements |
+
+**Current gap:** `callback.mjs` always writes to `output` regardless of content shape. The
+`reveals` (plural) pattern for one-level-deep hierarchies requires `details` + `rich_text_list`
+so each parent panel shows its children as a bullet list. `callback.mjs` needs to be updated
+to detect list content and route to `details` instead of `output`.
+
+**Required `callback.mjs` change:** when the resolved `reveal.content` is an array of strings,
+build `details.rich_text_list` (one `rich_text_section` per item). When it is a plain string,
+keep the current `output.rich_text_section` path. This extends the harness to accept both
+forms naturally — no workflow-level pre-formatting required.
+
+Set `status: "complete"`, `title` from `button_label`. Post via `chat.postMessage` — no
+`trigger_id` needed.
 
 ### trigger_id window
 `trigger_id` from a button click expires after 3 seconds. If opening a modal in response
