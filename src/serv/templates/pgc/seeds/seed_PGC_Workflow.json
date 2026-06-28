@@ -2213,7 +2213,7 @@
         "step": "0d",
         "type": "js_transform",
         "description": "Write resolved_entity_name from direct resolution or LLM selection.",
-        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return {resolved_entity_name:direct}; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return {resolved_entity_name:sel||(local_state.input&&local_state.input.entity_name)||null}; })()",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
         "output_key": "resolved_entity_name",
         "on_success": "1",
         "on_else": "cancel"
