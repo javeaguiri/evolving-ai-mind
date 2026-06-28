@@ -80,7 +80,7 @@
   },
   {
     "step_type": "js_transform",
-    "description": "Runs a pure synchronous JS IIFE expression via acorn AST gate + vm.runInNewContext(200ms timeout). Two sandbox bindings: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation.",
+    "description": "Runs a pure synchronous JS IIFE expression via acorn AST gate + vm.runInNewContext(200ms timeout). Two sandbox bindings: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation. IMPORTANT: PostgreSQL numeric, decimal, and money columns are returned as strings by the DB driver \u2014 always wrap in parseFloat() or Number() before arithmetic (e.g. parseFloat(local_state.row.price) * qty). Skipping this turns + into string concatenation and silently produces wrong values.",
     "input_contract": [
       {
         "type": "string",
