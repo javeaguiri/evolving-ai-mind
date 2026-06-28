@@ -580,7 +580,7 @@ async function executeServSchema({ step, localState, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
-// serv_insert — inserts a row into a PGC/PGD table
+// serv_insert — inserts a single row or an array of rows into a PGC/PGD table
 // ---------------------------------------------------------------------------
 
 async function executeServInsert({ step, localState, traceId }) {
@@ -589,6 +589,16 @@ async function executeServInsert({ step, localState, traceId }) {
 
   if (!tableName) throw new Error('serv_insert step missing input.tableName');
   if (!row)       throw new Error('serv_insert step missing input.row');
+
+  if (Array.isArray(row)) {
+    console.info('step-executor: serv_insert bulk', { tableName, count: row.length, traceId });
+    const resp = await insertRows(tableName, row);
+    if (!resp.success) throw new Error(`serv_insert bulk failed for "${tableName}": ${resp.error}`);
+    return {
+      outputValue: resp.rows ?? { tableName, inserted: row.length },
+      nextAction:  resolveNextAction(step.on_success, null),
+    };
+  }
 
   // check_exists_by: column name to use for a find-first check before inserting.
   // If a row already exists with that column value, return it without inserting.

@@ -254,7 +254,7 @@
   },
   {
     "step_type": "serv_insert",
-    "description": "Inserts a single row into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Returns the inserted row including generated id.",
+    "description": "Inserts one row or a batch of rows into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Single row: returns the inserted row including generated id. Array: calls addRows and returns all inserted rows.",
     "input_contract": [
       {
         "type": "string",
@@ -263,10 +263,10 @@
         "description": "Table name \u2014 must be registered in PGC_TableMap"
       },
       {
-        "type": "object",
+        "type": "object|array",
         "field": "input.row",
         "required": true,
-        "description": "Row object \u2014 system columns (id, created_at, updated_at) are populated automatically. Supports {{template}} \u2014 a template resolving to a full object is passed as the row directly."
+        "description": "Row object or array of row objects. System columns (id, created_at, updated_at) are populated automatically. When an array is supplied the step calls addRows in a single request \u2014 no iterator needed. Supports {{template}} \u2014 a template resolving to an object or array is passed directly."
       },
       {
         "type": "string",
