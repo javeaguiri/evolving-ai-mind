@@ -122,7 +122,7 @@ export async function handle(req) {
   }
 
   const { workflowRunId, action: userResponse, responseData } = buttonValue;
-  if (!workflowRunId || !userResponse) {
+  if (!workflowRunId || userResponse === undefined || userResponse === null) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
   }
