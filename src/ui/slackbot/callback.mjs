@@ -733,6 +733,7 @@ function dialogToBlocks(dialog, workflowRunId) {
           value:     JSON.stringify({
             workflowRunId,
             action: btn.action,
+            label:  btn.label,
             ...(btn.modal ? { modal: btn.modal } : {}),
           }),
         }));

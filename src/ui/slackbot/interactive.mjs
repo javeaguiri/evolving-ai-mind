@@ -121,7 +121,7 @@ export async function handle(req) {
     return handlePeekReveal(buttonValue, payload, req.correlationId);
   }
 
-  const { workflowRunId, action: userResponse, responseData } = buttonValue;
+  const { workflowRunId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
   if (!workflowRunId || userResponse === undefined || userResponse === null) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
@@ -243,7 +243,7 @@ export async function handle(req) {
     ? '🗑️ Removing — updating...'
     : userResponse === 'cancel'
     ? `❌ Cancelled.${gateContext}`
-    : `✅ ${userResponse}.${gateContext}`;
+    : `✅ ${buttonLabel ?? userResponse}.${gateContext}`;
 
   // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up.
   // Do this before returning so the workflow resumes even if the response body
