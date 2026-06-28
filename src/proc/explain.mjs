@@ -121,7 +121,22 @@ export async function handle(req) {
   ];
 
   // Call LLM with full context
-  const responseText = await callLlmWithMessages(EXPLAIN_MODEL, messages, traceId);
+  let responseText;
+  try {
+    responseText = await callLlmWithMessages(EXPLAIN_MODEL, messages, traceId);
+  } catch (llmErr) {
+    console.error('proc/explain: LLM call failed', { traceId, error: llmErr.message });
+    if (responseCallback) {
+      await enqueueCallback(responseCallback, {
+        type:    'HUMAN_NOTIFICATION',
+        format:  'markdown',
+        traceId,
+        message: `*/explain* could not complete — LLM error: ${llmErr.message}`,
+      });
+    }
+    if (req.source === 'http') return err(502, llmErr.message, req.correlationId);
+    return;
+  }
 
   // INSERT assistant response
   await insertRow('PGC_SessionEntry', {
