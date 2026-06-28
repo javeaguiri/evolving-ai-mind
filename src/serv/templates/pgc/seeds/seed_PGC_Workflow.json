@@ -2173,7 +2173,8 @@
         "description": "Load all entity schemas registered for this domain.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }]
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
         },
         "output_key": "domain_schemas",
         "on_success": "1a",
