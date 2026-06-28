@@ -2184,7 +2184,7 @@
         "step": "1a",
         "type": "js_transform",
         "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
-        "expression": "(function(){ var rows=(local_state.domain_schemas&&local_state.domain_schemas.rows)?local_state.domain_schemas.rows:[]; if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
         "output_key": "entity_resolution",
         "on_success": "1b",
         "on_else": "cancel"
