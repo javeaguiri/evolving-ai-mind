@@ -22,8 +22,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC2 — Embedding on insert:** ✅ DONE (2026-06-20)
 - **AC3 — Track P live:** ✅ DONE (2026-06-26) — `create_workflow` includes `design_workflow_prompts` step; SM-2 convert case validated (quiz_flashcards D2). UC-P5 create case deferred with W5 to Sprint 7.
 - **AC4 — Recipe domain recreated:** ✅ DONE (2026-06-22)
-- **AC5 — Pantry domain created:** UC-P1 (add), UC-P2 (list), UC-P3 (update) pass from Slack.
-- **AC6 — UC-P4 (receipt → pantry):** Grocery receipt OCR text → translated item mapping → confirmation gate → pantry rows updated/inserted.
 - **AC8 — Expenses domain created:** UC-E1 (add), UC-E2 (list) pass from Slack.
 - **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
 - **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
@@ -51,9 +49,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | D0 create_domain alias input | AC18 | ✅ |
 | D1 Recreate Recipe domain | AC4 | ✅ |
 | D2 Delete + recreate quiz_flashcards | AC3, AC14 | ✅ |
-| D3 Create Pantry domain | AC5 | ⬜ |
 | D4 Create Expenses domain | AC8 | ⬜ |
-| W1 UC-P4 receipt → pantry | AC6 | ⬜ |
 | W3 UC-E3 expense receipt | AC9 | ⬜ |
 | W4 UC-E4 budget report | AC10 | ⬜ |
 | E1 Embedding on insert | AC2 | ✅ |
@@ -73,6 +69,8 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Checkpoint/revert for Novia writes — Sprint 7 or later
 - AC6 `design_table` decimal-boundary validation — run as a side-test when convenient, not a blocker
 - Log hygiene, README bootstrap, test environment — Sprint 7
+- **D3 / AC5 (Pantry domain)** — removed; depends on D4 (Expenses) for cross-domain schema coherence; scoped to Sprint 7
+- **W1 / AC6 (UC-P4 receipt→pantry)** — removed; requires D3; scoped to Sprint 7
 - **W2 / AC7 (UC-P4 extended, cross-domain write)** — removed; 5 gaps in `create_workflow` documented in backlog, all scoped to Sprint 7
 - **W5 / AC11 (UC-P5 subtract ingredients)** — removed; reads Recipes + writes Pantry, same cross-domain gap as W2; scoped to Sprint 7
 - **H6 / AC21 (Watchdog Lambda)** — removed; obviated by `RecursiveLoop: Allow` fix (session 16)
@@ -139,10 +137,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Run `create_workflow` for quiz — Track P SM-2 convert test vehicle
 - Validate quiz runs end-to-end
 
-**D3 — Create Pantry/Inventory domain**
-- Watch for: reference table classification (units, categories as standalone lookup tables)
-- Validate UC-P1, UC-P2, UC-P3 from Slack
-
 **D4 — Create Expenses/Budget domain**
 - Expected gap: `create_domain` does not distinguish reference tables (categories, account types) from transactional tables
 - Document the gap; if it blocks UC-E1/E2, scope the `create_domain` reference table fix
@@ -150,11 +144,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 ---
 
 ### Track W — Workflow creation and UC validation
-
-**W1 — UC-P4: grocery receipt → pantry update**
-- Input: Apple Photos OCR text pasted into `/m`
-- `llm_call` translates cryptic item names to pantry names, reads current pantry via `serv_entity_query`
-- Confirmation gate → update/insert pantry rows
 
 **W3 — UC-E3: expense receipt → expense record**
 - Receipt OCR → `llm_call` extracts merchant, total, date, line items
