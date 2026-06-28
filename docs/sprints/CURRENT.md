@@ -20,14 +20,13 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 - **AC1 — Seed audit clean:** ✅ DONE (2026-06-20)
 - **AC2 — Embedding on insert:** ✅ DONE (2026-06-20)
-- **AC3 — Track P live:** `create_workflow` includes a `design_workflow_prompts` step. Domain-specific `llm_call` steps are classified (reuse/create/convert) and new `PGC_Prompt` rows registered with `domain` set. SM-2 convert case and UC-P5 unit conversion create case both validated.
+- **AC3 — Track P live:** ✅ DONE (2026-06-26) — `create_workflow` includes `design_workflow_prompts` step; SM-2 convert case validated (quiz_flashcards D2). UC-P5 create case deferred with W5 to Sprint 7.
 - **AC4 — Recipe domain recreated:** ✅ DONE (2026-06-22)
 - **AC5 — Pantry domain created:** UC-P1 (add), UC-P2 (list), UC-P3 (update) pass from Slack.
 - **AC6 — UC-P4 (receipt → pantry):** Grocery receipt OCR text → translated item mapping → confirmation gate → pantry rows updated/inserted.
 - **AC8 — Expenses domain created:** UC-E1 (add), UC-E2 (list) pass from Slack.
 - **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
 - **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
-- **AC11 — UC-P5 (subtract ingredients):** Recipe ingredients deducted from pantry using `llm_call` unit conversion. Confirmation gate before writes. Track P "create" case: unit conversion prompt registered as `PGC_Prompt` with `domain='pantry'`.
 - **AC12 — PGC_Prompt.domain column live:** ✅ DONE (2026-06-20)
 - **AC13 — Prompt cleanup in delete flows:** ✅ DONE (2026-06-20)
 - **AC14 — `quiz_flashcards` workflow recreated:** ✅ DONE (2026-06-26)
@@ -57,7 +56,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | W1 UC-P4 receipt → pantry | AC6 | ⬜ |
 | W3 UC-E3 expense receipt | AC9 | ⬜ |
 | W4 UC-E4 budget report | AC10 | ⬜ |
-| W5 UC-P5 subtract ingredients | AC3, AC11 | ⬜ |
 | E1 Embedding on insert | AC2 | ✅ |
 | H1 chk_triggered_by fix | AC15 | ✅ |
 | H2 R4 unit test | AC16 | ✅ |
@@ -76,6 +74,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - AC6 `design_table` decimal-boundary validation — run as a side-test when convenient, not a blocker
 - Log hygiene, README bootstrap, test environment — Sprint 7
 - **W2 / AC7 (UC-P4 extended, cross-domain write)** — removed; 5 gaps in `create_workflow` documented in backlog, all scoped to Sprint 7
+- **W5 / AC11 (UC-P5 subtract ingredients)** — removed; reads Recipes + writes Pantry, same cross-domain gap as W2; scoped to Sprint 7
 - **H6 / AC21 (Watchdog Lambda)** — removed; obviated by `RecursiveLoop: Allow` fix (session 16)
 
 ---
@@ -166,12 +165,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Workflow: `serv_getRows` on the view → `serv_getRows` on `PGD_Budget` → `llm_call` to format the comparison as readable Slack output (LLM for *formatting*, not *math*)
 - No `llm_call` aggregation — view handles all arithmetic at the DB level
 - `createView` SERV endpoint added to backlog for future domains
-
-**W5 — UC-P5: subtract recipe ingredients from pantry**
-- Reads recipe ingredients + current pantry state
-- `llm_call` step handles unit conversion (tablespoons → oz, etc.)
-- Confirmation gate before any pantry writes
-- Track P "create" test: unit conversion prompt registered as `PGC_Prompt` with `domain='pantry'`
 
 ---
 
