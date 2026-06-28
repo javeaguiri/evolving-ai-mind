@@ -538,7 +538,7 @@ export function buildDialog(step, localState) {
     // special_buttons appended after options — appear in actions block only,
     // never in description_list or other content fields.
     buttons: [...expandedOptions, ...resolvedSpecialButtons].map(o => ({
-      action: isChoice ? o.value : o.action,
+      action: isChoice ? (o.value ?? o.action) : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
       ...(o.modal ? { modal: o.modal } : {}),
