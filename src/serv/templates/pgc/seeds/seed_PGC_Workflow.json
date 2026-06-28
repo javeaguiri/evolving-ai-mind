@@ -2165,7 +2165,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 4,
+    "version": 5,
     "steps": [
       {
         "step": "1",
@@ -2233,15 +2233,74 @@
       {
         "step": "2",
         "type": "llm_call",
-        "description": "Parse the user natural language description into a structured entity object.",
+        "description": "Parse the user natural language description into a structured entity object or array of rows.",
         "input": {
           "prompt": "parse_entity_input",
           "userInput": "{{input.userInput}}",
           "entity_schema": "{{full_entity_schema}}"
         },
         "output_key": "parsed_entity",
-        "on_success": "2a",
+        "on_success": "2g",
         "on_else": "cancel"
+      },
+      {
+        "step": "2g",
+        "type": "condition",
+        "description": "Branch on bulk (array) vs single entity parse output.",
+        "expression": "Array.isArray(local_state.parsed_entity)",
+        "on_success": "2h",
+        "on_else": "2a"
+      },
+      {
+        "step": "2h",
+        "type": "js_transform",
+        "description": "Build bulk preview — count, entity name, and first 3 rows as sample.",
+        "expression": "(function(){ var rows=local_state.parsed_entity; var schema=local_state.full_entity_schema; return {count:rows.length,entity_name:(schema&&schema.entity_name)||local_state.resolved_entity_name||'',root_table:(schema&&schema.root&&schema.root.table)||'',sample:rows.slice(0,3)}; })()",
+        "output_key": "bulk_preview",
+        "on_success": "2i",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2i",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User confirms bulk insert before any DB write.",
+        "message_template": "I parsed {{bulk_preview.count}} {{bulk_preview.entity_name}} records. Here's a sample of the first 3. Confirm to insert all {{bulk_preview.count}} rows.",
+        "context_key": "bulk_preview",
+        "options": [
+          {
+            "label": "Insert all",
+            "action": "confirm",
+            "on_select": "2j"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "2j",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "2j",
+        "type": "serv_insert",
+        "description": "Bulk insert all parsed rows in a single addRows call.",
+        "input": {
+          "tableName": "{{bulk_preview.root_table}}",
+          "row": "{{parsed_entity}}"
+        },
+        "output_key": "bulk_insert_result",
+        "on_success": "2k",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2k",
+        "type": "notify",
+        "description": "Confirm bulk insert complete.",
+        "message_template": "Saved {{bulk_preview.count}} {{bulk_preview.entity_name}} records.",
+        "on_success": "6"
       },
       {
         "step": "2a",
