@@ -18,54 +18,52 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ## Acceptance Criteria
 
-- **AC1 — Seed audit clean:** All user-specific names removed from `seed_PGC_SystemContext.json` and `seed_PGC_Prompt.json` before any domain creation runs.
-- **AC2 — Embedding on insert:** New domains are immediately discoverable by Novia and Pass 2 intent matching without a manual `backfill-embeddings.mjs` run.
+- **AC1 — Seed audit clean:** ✅ DONE (2026-06-20)
+- **AC2 — Embedding on insert:** ✅ DONE (2026-06-20)
 - **AC3 — Track P live:** `create_workflow` includes a `design_workflow_prompts` step. Domain-specific `llm_call` steps are classified (reuse/create/convert) and new `PGC_Prompt` rows registered with `domain` set. SM-2 convert case and UC-P5 unit conversion create case both validated.
-- **AC4 — Recipe domain recreated:** `create_domain` run produces a clean schema with no SRS assumptions or type errors. `create_workflow` regenerates `add_recipe`, `list_recipe`, `get_recipe` workflows. UC-R1, UC-R2, UC-R3 pass from Slack.
+- **AC4 — Recipe domain recreated:** ✅ DONE (2026-06-22)
 - **AC5 — Pantry domain created:** UC-P1 (add), UC-P2 (list), UC-P3 (update) pass from Slack.
 - **AC6 — UC-P4 (receipt → pantry):** Grocery receipt OCR text → translated item mapping → confirmation gate → pantry rows updated/inserted.
-- **AC7 — UC-P4 extended (receipt → pantry + expenses):** Same receipt also creates an expense record. First cross-domain write workflow. If cross-domain `create_workflow` gap blocks it, the gap is documented and scoped as a fix.
 - **AC8 — Expenses domain created:** UC-E1 (add), UC-E2 (list) pass from Slack.
 - **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
 - **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
 - **AC11 — UC-P5 (subtract ingredients):** Recipe ingredients deducted from pantry using `llm_call` unit conversion. Confirmation gate before writes. Track P "create" case: unit conversion prompt registered as `PGC_Prompt` with `domain='pantry'`.
-- **AC12 — PGC_Prompt.domain column live:** Column exists in DB and seed. `sm2_calculate` (id=79) tagged `domain='flashcards'`. P3 can read domain during `design_workflow_prompts`.
-- **AC13 — Prompt cleanup in delete flows:** `delete_workflow` deletes `PGC_Prompt` rows where `domain = workflow.domain`. `delete_domain` deletes `PGC_Prompt` rows where `domain = input.domain`. No orphaned domain prompts after a delete run.
-- **AC14 — `quiz_flashcards` workflow recreated:** Existing workflow deleted and regenerated via `create_workflow`. SM-2 convert case fires: `sm2_calculate` llm_call rewritten as `js_transform`. Quiz runs end-to-end from Slack.
-- **AC15 — `chk_triggered_by` constraint updated:** `PGC_WorkflowRun.triggered_by` accepts `minds_eye` and `intent_classify` without constraint violation. No new Novia or classify-intent run rejected by DB.
-- **AC16 — R4 unit test passes:** `tests/unit/` contains assertion that MINDS_EYE SQS payload uses `sessionId` key (not `existingSessionId`) when continuing an existing session.
-- **AC17 — `openapi.yaml` in sync:** All active routes in `handler.mjs` (slackbot + proc) have corresponding spec entries. Stale ping variants removed. `/novia` and `/proc/minds-eye` present and accurate.
-- **AC18 — User alias input in `create_domain`:** Step 17c text_input gate allows user to supply additional aliases (comma-separated). Step 18 merges them with LLM-generated aliases. Blank input proceeds without additional aliases.
-- **AC19 — Novia recovery tools:** After a failed `create_domain` run that leaves orphaned PGD tables, Novia can list physical tables not registered in `PGC_Schema` (`list_physical_tables`) and drop them individually (`drop_table`, danger gate, force=true). No manual DB intervention required.
-- **AC20 — Novia token truncation fix:** When a workflow `llm_call` step fails with `error_type: token_truncation`, Novia can diagnose it via `read_prompt` (returns `error_log`, `max_output_tokens`, `id`) and fix it by doubling `max_output_tokens` via `update_data` — no manual DB intervention required. ✅ DONE (2026-06-20)
+- **AC12 — PGC_Prompt.domain column live:** ✅ DONE (2026-06-20)
+- **AC13 — Prompt cleanup in delete flows:** ✅ DONE (2026-06-20)
+- **AC14 — `quiz_flashcards` workflow recreated:** ✅ DONE (2026-06-26)
+- **AC15 — `chk_triggered_by` constraint updated:** ✅ DONE (2026-06-20)
+- **AC16 — R4 unit test passes:** ✅ DONE (2026-06-20)
+- **AC17 — `openapi.yaml` in sync:** ✅ DONE (2026-06-20)
+- **AC18 — User alias input in `create_domain`:** ✅ DONE (2026-06-20)
+- **AC19 — Novia recovery tools:** ✅ DONE (2026-06-20)
+- **AC20 — Novia token truncation fix:** ✅ DONE (2026-06-20)
 
 ---
 
 ## Track → AC Map
 
-| Track item | AC(s) |
-|---|---|
-| P0 Seed audit | AC1 |
-| P1 PGC_Prompt.domain column | AC12 |
-| P2 generate_workflow_steps prompt | AC3 |
-| P3 design_workflow_prompts step | AC3 |
-| P4 Prompt cleanup in delete flows | AC13 |
-| D1 Recreate Recipe domain | AC4 |
-| D2 Delete + recreate quiz_flashcards | AC3, AC14 |
-| D3 Create Pantry domain | AC5 |
-| D4 Create Expenses domain | AC8 |
-| W1 UC-P4 receipt → pantry | AC6 |
-| W2 UC-P4 extended cross-domain | AC7 |
-| W3 UC-E3 expense receipt | AC9 |
-| W4 UC-E4 budget report | AC10 |
-| W5 UC-P5 subtract ingredients | AC3, AC11 |
-| E1 Embedding on insert | AC2 |
-| H1 chk_triggered_by fix | AC15 |
-| H2 R4 unit test | AC16 |
-| H3 openapi.yaml sync | AC17 |
-| D0 create_domain alias input | AC18 |
-| H4 Novia recovery tools | AC19 |
-| H5 Novia token truncation fix | AC20 |
+| Track item | AC(s) | Status |
+|---|---|---|
+| P0 Seed audit | AC1 | ✅ |
+| P1 PGC_Prompt.domain column | AC12 | ✅ |
+| P2 generate_workflow_steps prompt | AC3 | ✅ |
+| P3 design_workflow_prompts step | AC3 | ✅ |
+| P4 Prompt cleanup in delete flows | AC13 | ✅ |
+| D0 create_domain alias input | AC18 | ✅ |
+| D1 Recreate Recipe domain | AC4 | ✅ |
+| D2 Delete + recreate quiz_flashcards | AC3, AC14 | ✅ |
+| D3 Create Pantry domain | AC5 | ⬜ |
+| D4 Create Expenses domain | AC8 | ⬜ |
+| W1 UC-P4 receipt → pantry | AC6 | ⬜ |
+| W3 UC-E3 expense receipt | AC9 | ⬜ |
+| W4 UC-E4 budget report | AC10 | ⬜ |
+| W5 UC-P5 subtract ingredients | AC3, AC11 | ⬜ |
+| E1 Embedding on insert | AC2 | ✅ |
+| H1 chk_triggered_by fix | AC15 | ✅ |
+| H2 R4 unit test | AC16 | ✅ |
+| H3 openapi.yaml sync | AC17 | ✅ |
+| H4 Novia recovery tools | AC19 | ✅ |
+| H5 Novia token truncation fix | AC20 | ✅ |
 
 ---
 
@@ -77,7 +75,8 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Checkpoint/revert for Novia writes — Sprint 7 or later
 - AC6 `design_table` decimal-boundary validation — run as a side-test when convenient, not a blocker
 - Log hygiene, README bootstrap, test environment — Sprint 7
-- **W2 (UC-P4 extended, cross-domain write)** — blocked by 5 gaps in `create_workflow`; all gaps documented in backlog and scoped to Sprint 7
+- **W2 / AC7 (UC-P4 extended, cross-domain write)** — removed; 5 gaps in `create_workflow` documented in backlog, all scoped to Sprint 7
+- **H6 / AC21 (Watchdog Lambda)** — removed; obviated by `RecursiveLoop: Allow` fix (session 16)
 
 ---
 
@@ -157,9 +156,6 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Input: Apple Photos OCR text pasted into `/m`
 - `llm_call` translates cryptic item names to pantry names, reads current pantry via `serv_entity_query`
 - Confirmation gate → update/insert pantry rows
-
-**W2 — UC-P4 extended: receipt → pantry + expenses (cross-domain write)** ⛔ OUT OF SCOPE
-- Blocked by five identified gaps in `create_workflow` (schema load, input contract, LLM prompts, domain registration, delete cleanup). All gaps documented in `docs/backlog.md` — "Cross-domain workflows" item. Full fix scoped to Sprint 7.
 
 **W3 — UC-E3: expense receipt → expense record**
 - Receipt OCR → `llm_call` extracts merchant, total, date, line items
