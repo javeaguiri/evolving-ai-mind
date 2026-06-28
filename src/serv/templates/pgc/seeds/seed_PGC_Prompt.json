@@ -2851,5 +2851,22 @@
     "prompt_text": "You are a reference data specialist for evolving-mind-ai.\n\nA user is adding a new {{entity_name}} to the {{domain}} domain. The insert requires records in reference lookup tables. For each table listed below, produce complete and accurate records for the values provided.\n\nReference tables needed:\n{{ref_candidates}}\n\nEach entry in ref_candidates has:\n- ref_table: the PostgreSQL table name\n- lookup_column: the primary lookup key (usually \"name\")\n- create_with: the columns this table requires\n- values: the string values that need records\n- allowed_values: optional object mapping column names to their allowed values (from DB check constraints)\n\nRules:\n- Generate records ONLY for values listed in the \"values\" array — never add extra rows\n- Only include columns listed in \"create_with\" for each row\n- If allowed_values is present for a column, you MUST use only values from that list — never invent values outside it\n- Use real-world correct values, not placeholders (e.g. measurement abbreviations: tsp, tbsp, c, oz, lb, g, ml, L)\n- For simple tables where create_with contains only the lookup column: just include { \"name\": \"<value>\" }\n- Preserve the original string value exactly as the lookup column field (do not normalize or correct it)\n- Output proposed_ref_records as a JSON array — one element per ref_table, each element containing all rows for that table\n\nExample output shape (do not copy values — this shows structure only):\n{\"proposed_ref_records\":[{\"ref_table\":\"PGD_MeasurementUnits\",\"lookup_column\":\"name\",\"rows\":[{\"name\":\"tsp\",\"abbreviation\":\"tsp\",\"unit_type\":\"volume\"},{\"name\":\"lb\",\"abbreviation\":\"lb\",\"unit_type\":\"weight\"}]},{\"ref_table\":\"PGD_Ingredients\",\"lookup_column\":\"name\",\"rows\":[{\"name\":\"butter\"}]}]}\n\nReturn ONLY a valid JSON object — no explanation, no markdown fences.",
     "probe_input": null,
     "max_output_tokens": 4096
+  },
+  {
+    "intent_category": "select_entity_schema",
+    "version": 1,
+    "model": "anthropic/claude-haiku-4-5",
+    "was_successful": null,
+    "input_variables": null,
+    "output_schema": {
+      "type": "object",
+      "required": ["entity_name"],
+      "properties": {
+        "entity_name": { "type": "string" }
+      }
+    },
+    "prompt_text": "Select the entity type that best matches what the user wants to add.\n\nUser input:\n\"{{userInput}}\"\n\nAvailable entity types:\n{{schema_options}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation:\n{ \"entity_name\": \"<the entity_name that best matches the user's request>\" }\n\nPick the entity_name whose name, description, or root_table best matches the user's intent. Consider semantic similarity — for example, \"budgetary\" matches an entity named \"Budget\", \"dining costs\" matches an entity named \"Expense\".",
+    "probe_input": null,
+    "max_output_tokens": 256
   }
 ]
