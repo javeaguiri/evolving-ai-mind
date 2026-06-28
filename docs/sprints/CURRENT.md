@@ -77,6 +77,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - Checkpoint/revert for Novia writes — Sprint 7 or later
 - AC6 `design_table` decimal-boundary validation — run as a side-test when convenient, not a blocker
 - Log hygiene, README bootstrap, test environment — Sprint 7
+- **W2 (UC-P4 extended, cross-domain write)** — blocked by 5 gaps in `create_workflow`; all gaps documented in backlog and scoped to Sprint 7
 
 ---
 
@@ -157,9 +158,8 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - `llm_call` translates cryptic item names to pantry names, reads current pantry via `serv_entity_query`
 - Confirmation gate → update/insert pantry rows
 
-**W2 — UC-P4 extended: receipt → pantry + expenses (cross-domain write)**
-- Same receipt also creates an expense record in Expenses domain
-- First cross-domain write workflow — if `create_workflow` schema injection gap blocks it, document and scope fix
+**W2 — UC-P4 extended: receipt → pantry + expenses (cross-domain write)** ⛔ OUT OF SCOPE
+- Blocked by five identified gaps in `create_workflow` (schema load, input contract, LLM prompts, domain registration, delete cleanup). All gaps documented in `docs/backlog.md` — "Cross-domain workflows" item. Full fix scoped to Sprint 7.
 
 **W3 — UC-E3: expense receipt → expense record**
 - Receipt OCR → `llm_call` extracts merchant, total, date, line items
