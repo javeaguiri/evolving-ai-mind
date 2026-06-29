@@ -849,9 +849,11 @@ DDL executor and PGC metadata registry.
 |---|---|---|
 | `/api/v1/serv/schema/createTable` | POST | Execute DDL + register in PGC_Schema + PGC_TableMap |
 | `/api/v1/serv/schema/listTables` | POST | List entries from PGC_Schema, optional target filter |
+| `/api/v1/serv/schema/listPhysicalTables` | POST | Query `information_schema.tables` for physical PGD tables; cross-references PGC_Schema to flag unregistered tables (`registered: bool`) |
 | `/api/v1/serv/schema/getTable` | POST | Get one entry by tableName |
 | `/api/v1/serv/schema/updateTable` | POST | Update metadata in PGC_Schema (NOT ALTER TABLE) |
 | `/api/v1/serv/schema/deleteTable` | POST | DROP TABLE + remove from PGC_Schema + PGC_TableMap |
+| `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
 
 Security gate on `createTable`:
 - Column types validated against whitelist (serial, text, integer, jsonb, timestamptz, etc.)
@@ -1042,7 +1044,7 @@ curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: a
 ```bash
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "column": { "name": "domain", "type": "text", "nullable": true } }'
 ```
-Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update metadata without running DDL.
+Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable }` — not flat fields.
 
 #### SERV-Schema — listTables
 
@@ -1050,6 +1052,20 @@ Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to u
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listTables" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "target": "pgd" }'
 ```
 `target` accepts `"pgc"` or `"pgd"`. Omit to list all registered tables.
+
+#### SERV-Schema — listPhysicalTables
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listPhysicalTables" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{}'
+```
+Returns all physical tables in `information_schema.tables` (PGD schema) with `registered: true|false` indicating whether each has a PGC_Schema row. Used by Novia for domain recovery.
+
+#### SERV-Schema — dropConstraint
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/dropConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Budgets", "constraintName": "chk_budgets_amount" }'
+```
+Drops a named constraint (any type: CHECK, UNIQUE, FK) via `ALTER TABLE … DROP CONSTRAINT` and removes it from `PGC_Schema.constraints`. Wired into Novia `propose_schema_fix`.
 
 ---
 

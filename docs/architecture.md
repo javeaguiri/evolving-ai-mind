@@ -3,10 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.5
-Status: Active development — Sprint 5 closed; Sprint 6 upcoming
-Last updated: 2026-06-18 (Sprint 5 close — Novia Phase 1 complete; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live; domain propagation audit W3 complete)
-Previously: 3.4 — 2026-06-13 — Component Quick Reference added; Section 1.5 index; architecture.md/CLAUDE.md documentation restructure
+Version: 3.6
+Status: Active development — Sprint 6 closed; Sprint 7 upcoming
+Last updated: 2026-06-29 (Sprint 6 close — Track P complete; Expenses/Recipe domains; entity resolution chain on add/get/list_entity; reveal/reveals contract; SHUTDOWN SQS type; RecursiveLoop: Allow; ProcFunction MemorySize 1024; listPhysicalTables + dropConstraint endpoints; vm.runInNewContext timeouts; embed_source auto-inference in schema.mjs)
+Previously: 3.5 — 2026-06-18 — Sprint 5 close; Novia Phase 1; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live
 
 ---
 
@@ -44,14 +44,14 @@ For authoritative detail follow the section references in each row.
 | `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
 | `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
-| `src/proc/simulation-engine.mjs` | PROC | L1/L2 static analysis + path simulation — pure function, no I/O. See Section 6.5.6 | Changes affect the pre-write workflow validation gate used by create_workflow, fix_workflow, and upsert-workflow.mjs |
-| `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state` | Changes affect template substitution in ALL steps, messages, and conditions |
-| `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows`, `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
-| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
+| `src/proc/simulation-engine.mjs` | PROC | L1/L2 static analysis + path simulation — pure function, no I/O. Runs js_transform smoke tests in `vm.runInNewContext` (500ms timeout). See Section 6.5.6 | Changes affect the pre-write workflow validation gate used by create_workflow, fix_workflow, and upsert-workflow.mjs |
+| `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
+| `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
+| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
 | `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm`, `callLlmWithCorrection` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
 | `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
-| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration. See Section 5.1 | Changes affect table creation and schema registration |
+| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; `dropConstraint`; auto-infers `embed_source` for `X_embedding` vector columns. See Section 5.1 | Changes affect table creation and schema registration |
 
 ### Data — PGC Table Groups
 
@@ -228,6 +228,7 @@ entry messages, which carry no run ID and are consumed once.
 | `MEMORY_WRITE` | — | 1 — fire-and-forget | run-workflow.mjs (on qualifying domain workflow completion) | proc/memory-writer.mjs |
 | `MINDS_EYE` | — | 1 — fire-and-forget | SlackbotFunction (minds-eye.mjs `/novia`), interactive.mjs (Continue/Follow-up modal) | proc/minds-eye.mjs |
 | `MINDS_EYE_RESUME` | — | 1 — fire-and-forget | interactive.mjs (gate approval or turn-limit Continue) | proc/minds-eye.mjs |
+| `SHUTDOWN` | — | 1 — fire-and-forget | SlackbotFunction (`/shutdown`) | proc/shutdown.mjs — cancels all running/awaiting runs; notifies via HUMAN_NOTIFICATION |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
@@ -239,6 +240,9 @@ entry messages, which carry no run ID and are consumed once.
   a single run. Category 1 messages have no run ID and are unaffected by this rule.
 - `ReportBatchItemFailures` — only failed records return to queue. Successful records
   in the same batch are not reprocessed.
+- `VisibilityTimeout: 60s` — messages are deleted at the start of the Lambda handler (`deleteReceivedBatch`) before any step processing. The visibility timeout only needs to cover the window between SQS delivery and delete completion (~1–2s warm, ~30s cold start). 60s gives comfortable headroom.
+- `RecursiveLoop: Allow` — the workflow engine intentionally chains SQS hops: each `execute_top` step enqueues the next. AWS Lambda's 16-hop recursive loop detection fires on deep workflows. `RecursiveLoop: Allow` disables the detection for ProcFunction; the circuit breaker is the workflow's own step count and the stack guard in `run-workflow.mjs`.
+- `DependsOn: BastionRole` on ProcFunction — prevents parallel CloudFormation update of ProcFunction and BastionRole, which caused `UPDATE_ROLLBACK_FAILED` during IAM propagation races.
 - Standard queue (not FIFO) — ordering within a workflow run is enforced by the
   execution stack in `PGC_WorkflowRun`, not by the queue. Category 1 messages are
   stateless and order-independent by nature.
@@ -336,6 +340,7 @@ src/
     llm-harness.mjs    LLM call assembly + memory injection
     review-output.mjs  Ajv + semantic + routing validation of all LLM output
     minds-eye.mjs      Novia agentic loop — MINDS_EYE + MINDS_EYE_RESUME SQS handler
+    shutdown.mjs       /shutdown — SHUTDOWN SQS handler; ack-and-notify pattern; cancels all active runs
     chat.mjs           /chat companion — CHAT_MESSAGE SQS handler
     explain.mjs        /explain diagnostic — EXPLAIN_QUERY SQS handler
   serv/               Service tier — pg client only. No LLM, no SQS.

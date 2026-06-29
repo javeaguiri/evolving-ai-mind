@@ -3214,6 +3214,30 @@ paths:
                   - { id: 1, table_name: PGC_Schema, target: pgc }
                   - { id: 2, table_name: PGC_TableMap, target: pgc }
 
+  /api/v1/serv/schema/listPhysicalTables:
+    post:
+      summary: List physical PGD tables from information_schema
+      description: Queries information_schema.tables for all physical tables in the PGD schema and cross-references PGC_Schema to flag unregistered tables. Used by Novia for domain recovery.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+            example: {}
+      responses:
+        '200':
+          description: Physical table list with registration status
+          content:
+            application/json:
+              example:
+                success: true
+                tables:
+                  - { table_name: PGD_Recipes, registered: true }
+                  - { table_name: PGD_Orphan, registered: false }
+
   /api/v1/serv/schema/getTable:
     post:
       summary: Get one table definition from PGC_Schema
