@@ -29,6 +29,18 @@ import { getClient } from './init-brain.mjs';
 // System columns never written by callers
 const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
 
+// pgvector columns come back as raw strings (no pg type parser registered).
+// Strip them from results — embeddings are large and not useful to callers.
+function stripVectors(row) {
+  const out = { ...row };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v === 'string' && v.startsWith('[') && /^[-\d.,eE ]+/.test(v.slice(1, 20))) {
+      delete out[k];
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Route dispatcher
 // ---------------------------------------------------------------------------
@@ -85,9 +97,11 @@ function buildSelectSQL(tableName, joins = [], aggregations = []) {
   );
 
   const aggCols = (aggregations || []).map(a => {
-    const cols = a.columns?.length
-      ? a.columns.map(c => `'${c}', ${a.alias}.${c}`).join(', ')
-      : `${a.alias}.*`;
+    if (!a.columns?.length) {
+      return `jsonb_agg(DISTINCT to_jsonb(${a.alias}.*))
+              FILTER (WHERE ${a.alias}.id IS NOT NULL) AS "${a.outputKey}"`;
+    }
+    const cols = a.columns.map(c => `'${c}', ${a.alias}.${c}`).join(', ');
     return `jsonb_agg(DISTINCT jsonb_build_object(${cols}))
               FILTER (WHERE ${a.alias}.id IS NOT NULL) AS "${a.outputKey}"`;
   });
@@ -170,7 +184,7 @@ async function getEntity(req) {
       return ok({
         success:       true,
         entityName,
-        entity:        result.rows[0],
+        entity:        stripVectors(result.rows[0]),
         correlationId: req.correlationId,
       }, req.correlationId);
 
@@ -260,7 +274,7 @@ async function listEntities(req) {
         success:       true,
         entityName,
         count:         result.rows.length,
-        entities:      result.rows,
+        entities:      result.rows.map(stripVectors),
         correlationId: req.correlationId,
       }, req.correlationId);
 

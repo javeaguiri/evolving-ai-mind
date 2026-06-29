@@ -68,7 +68,7 @@ Sprint 4 examples: `real` vs `numeric(4,2)` for ease_factor → Contract bug fro
 ## Development Process — Sprint Cycles
 
 ### Session start
-Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md`. It contains the active sprint goal, branch, acceptance criteria, and test scenarios.
+Read `docs/sprints/CURRENT.md` (if it exists) alongside `docs/architecture.md` and `docs/arch-data.md` §5.5 (curl cookbook). `CURRENT.md` contains the active sprint goal, branch, acceptance criteria, and test scenarios. `arch-data.md` §5.5 contains the canonical curl commands for all SERV routes — read it before making any API calls, never guess route names.
 
 ### Sprint lifecycle
 
@@ -202,6 +202,8 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 - **Environment:** All secrets are in AWS SSM Parameter Store. No `.env` files at runtime. Use `.env.test.template` for local test setup.
 - **Human Gate flow:** Step Processor suspends → `HUMAN_GATE` SQS → SlackCallbackListenerFunction renders Block Kit → user clicks → `/interactive` → `resume_gate` SQS → Step Processor resumes.
 - **Seed file updates:** Never write directly to the database to update seeded values. Edit `seed_PGC_Workflow.json` or `seed_PGC_Prompt.json` then run the corresponding `dev_scripts/upsert-*.mjs` script.
+- **New PGC_SystemContext entries:** When adding a row with `inject_for`, every listed `intent_category` must have a matching `{{key}}` token in the corresponding prompt text. `inject_for` alone does nothing — `assembleInstructions` substitutes inline tokens only. Verify the token is present before upsetting.
+- **New PGC_StepType entries:** The step type name must appear in the `known system prompts` list inside `generate_workflow_steps` prompt text, or in `step_type_contracts` if that token is injected into the relevant prompts. A step type not referenced in any prompt is invisible to the LLM during workflow generation.
 - **DB connections:** All `pg` connections use `ssl: { rejectUnauthorized: false }` — never change this. The 13 PGC system tables are bootstrapped and seeded — do not recreate them.
 - **Diagnose before coding:** After reading logs or curl output, present findings and agree on the fault domain and fix before writing any code. Wrong diagnoses produce wrong code.
 - **Commit and push after each meaningful change:** Do not batch unrelated changes across a session. Push to the branch so changes are visible on GitHub for review.
@@ -215,25 +217,26 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-**Sprint 5 closed 2026-06-18 (branch `sprint/05-novia-phase1`, merged to main).** Novia Phase 1 complete: `/novia` command, minds-eye.mjs agentic loop, read + gated write tools, turn + action limit gates, factual + diagnostic memory writes, domain propagation audit (W3), modal cancel fix. See `docs/sprints/sprint-05.md` for retro and full outcome notes.
+**Sprint 6 closed 2026-06-29 (branch `sprint/06-pantry-expenses-trackp`).** Track P complete (PGC_Prompt.domain, design_workflow_prompts, generate_workflow_steps prompt, delete flow cleanup). Expenses domain live (PGD_Expenses, PGD_Budgets, PGD_SpendingCategories, PGD_RecurringExpenses). Recipe domain recreated. quiz_flashcards and study_flashcards workflows recreated. Entity resolution chain added to add/get/list_entity for multi-entity domains. SHUTDOWN SQS ack-and-notify. RecursiveLoop: Allow + ProcFunction MemorySize 1024. listPhysicalTables + dropConstraint SERV endpoints. embed_source auto-inference in schema.mjs. UC-E1, UC-E2, UC-E3 validated from Slack.
 
-**Sprint 6 not yet scoped.** Next session: run retro → scope Sprint 6 → create new `docs/sprints/CURRENT.md`.
+**Sprint 7 not yet scoped.** Next session: run retro → scope Sprint 7 → create new `docs/sprints/CURRENT.md`.
 
-### Open Work (carry-forward to Sprint 6)
+### Open Work (carry-forward to Sprint 7)
 
-1. Track P — `design_workflow_prompts`: X2 (`PGC_Prompt.domain` column), update `generate_workflow_steps` prompt, add `design_workflow_prompts` step to `create_workflow`, prompt cleanup in `delete_workflow`/`delete_domain`. Requires recreating flashcard/quiz artifacts.
-2. AC6 — `design_table` Contract fix validation: `create_domain` run with a decimal-boundary column to confirm `numeric(p,s)` generated (not `real`). Prompt already updated (W2); validation deferred.
-3. Track L — Lambda loop CloudWatch alarm. No recursive loop events since Sprint 4 fix; deferred.
-4. `create_domain` — reference table entity separation. See backlog High Priority.
-5. `PGC_DomainHelp` embedding on insert (backlog High Priority).
-6. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
+1. Session ID per workflow run — `PGC_WorkflowRun.session_id` FK + `PGC_SessionEntry` rows for all LLM calls. Prerequisite for `/explain` step-selection and Novia run-scoped diagnostics.
+2. `/explain <run-id>` step-selection gate — Slack button list of LLM steps; user picks one; spawns explain thread scoped to that step.
+3. `generate_workflow_steps` Instruction fix — domain-specific `llm_call` steps must always emit a unique `prompt_draft`; never reuse a system prompt (domain: null).
+4. `design_workflow_prompts` Instruction fix — system or cross-domain prompt candidates must always be classified "create", never "reuse".
+5. PGC_SystemContext procedure library for Novia (`novia_diagnostic_protocol`) — on-demand diagnostic steps without bloating the always-injected system prompt.
+6. UC-E4 budget report — `PGD_MonthlyExpensesByCategory` DB view + reporting workflow; blocked on data.
+7. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
+8. `create_domain` — reference table entity separation. See backlog High Priority.
 
 ### Deferred
 
 - Richer episodic memory content (distil session outcomes vs generic one-liners)
 - `PGC_Memory` semantic deduplication / TTL cleanup
 - Pass 2 keyword scan excludes `domain: null` workflows (unnecessary Tier 2 LLM calls)
-- History threading (Track H) — Sprint 6+
 - `design-domain.mjs` Phase 4 — HUMAN_GATE refactor
 
 > Full tech debt register: `docs/backlog.md`

@@ -110,6 +110,13 @@ Resources:
                   - logs:StartLiveTail
                   - logs:GetLogRecord
                 Resource: "*"
+              # CloudWatch Metrics — diagnostics (throttles, errors, duration)
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                Resource: "*"
               # SSM — read parameters (dev scripts read API keys at runtime)
               - Effect: Allow
                 Action:
@@ -137,6 +144,7 @@ Resources:
                   - cloudformation:GetTemplate
                   - cloudformation:GetTemplateSummary
                   - cloudformation:ValidateTemplate
+                  - cloudformation:ContinueUpdateRollback
                 Resource: "*"
               # S3 — sam build artifact upload / download
               - Effect: Allow
@@ -172,6 +180,8 @@ Resources:
                   - lambda:DeleteEventSourceMapping
                   - lambda:GetEventSourceMapping
                   - lambda:ListEventSourceMappings
+                  - lambda:PutFunctionRecursionConfig
+                  - lambda:GetFunctionRecursionConfig
                 Resource: "*"
               # API Gateway — SAM creates/updates REST APIs on deploy
               - Effect: Allow
@@ -253,13 +263,12 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: SYSSQSWorkflow
-      # Must exceed ProcFunction Timeout (240s) — prevents SQS redelivery while a
-      # long-running step (LLM call + correction loop can reach ~105s) is in flight.
-      # 90s caused duplicate step execution when correction loop exceeded the timeout
-      # (run 384: 55s LLM + 48s correction = 103s). Set to 600s (2.5× Lambda timeout)
-      # to give comfortable headroom. Trade-off: a hard-killed Lambda waits up to 600s
-      # before SQS retries, but application-level catch handles all normal failures.
-      VisibilityTimeout: 600
+      # With delete-on-receipt, messages are deleted at the start of the Lambda
+      # handler — before any step processing. Visibility timeout only covers the
+      # window between ESM receiving the message and deleteReceivedBatch completing
+      # (~1-2s warm, ~30s cold start). 60s gives comfortable headroom for cold starts
+      # without holding stuck messages for 10 minutes.
+      VisibilityTimeout: 60
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
         maxReceiveCount: 3
@@ -527,12 +536,15 @@ Resources:
   # ===========================================================================
   ProcFunction:
     Type: AWS::Serverless::Function
+    DependsOn: BastionRole
     Properties:
       FunctionName: evolving-mind-ai-proc
       Description: 'PROC layer — workflow orchestration, LLM routing, SQS coordination'
       Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
+      MemorySize: 1024                # Override Global 256MB — large local_state at peak steps
       Timeout: 240                    # Override Global 29s — LLM steps can run long
+      RecursiveLoop: Allow            # Workflow engine intentionally chains SQS hops per step
       Environment:
         Variables:
           LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
@@ -556,8 +568,6 @@ Resources:
             # One SQS message per workflowRunId is always in flight.
             # processSqsBatch handles concurrent runs across different workflowRunIds.
             BatchSize: 10
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
     Metadata:
       BuildMethod: esbuild
       BuildProperties:

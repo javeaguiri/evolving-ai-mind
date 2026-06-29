@@ -82,13 +82,14 @@ export async function bestEffort(label, ctx, fn) {
  *
  * @param {object} [vectorSearch]  { column, queryText, threshold?, limit? }
  */
-export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch) {
+export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns) {
   return servPost('/api/v1/serv/table/getRows', {
     tableName,
     ...(filters.length  && { filters }),
     ...(orderBy         && { orderBy }),
     ...(limit           && { limit }),
     ...(vectorSearch    && { vectorSearch }),
+    ...(columns?.length && { columns }),
   });
 }
 

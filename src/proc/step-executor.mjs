@@ -481,11 +481,13 @@ export function buildDialog(step, localState) {
   }
 
   // reveal — optional on any gate type. Single task_card above the gate buttons.
+  // content is resolved via resolveInput so a pure {{var}} reference that points
+  // to an array passes through as an array (rendered as a bulleted list by callback).
   if (step.reveal) {
     fields.push({
       type:         'reveal',
       button_label: step.reveal.button_label,
-      content:      resolveTemplate(step.reveal.content ?? '', localState),
+      content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
 
@@ -498,7 +500,7 @@ export function buildDialog(step, localState) {
     fields.push({
       type:         'reveal',
       button_label: r.button_label,
-      content:      resolveTemplate(r.content ?? '', localState),
+      content:      resolveInput(r.content ?? '', localState),
     });
   }
 
@@ -536,7 +538,7 @@ export function buildDialog(step, localState) {
     // special_buttons appended after options — appear in actions block only,
     // never in description_list or other content fields.
     buttons: [...expandedOptions, ...resolvedSpecialButtons].map(o => ({
-      action: isChoice ? o.value : o.action,
+      action: isChoice ? (o.value ?? o.action) : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
       ...(o.modal ? { modal: o.modal } : {}),
@@ -578,15 +580,50 @@ async function executeServSchema({ step, localState, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
-// serv_insert — inserts a row into a PGC/PGD table
+// serv_insert — inserts a single row or an array of rows into a PGC/PGD table
 // ---------------------------------------------------------------------------
 
 async function executeServInsert({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input, localState);
-  const { tableName, row } = resolvedInput;
+  const { tableName, row, check_exists_by } = resolvedInput;
 
   if (!tableName) throw new Error('serv_insert step missing input.tableName');
   if (!row)       throw new Error('serv_insert step missing input.row');
+
+  if (Array.isArray(row)) {
+    const refFkCols = resolvedInput.ref_fk_columns ?? [];
+    if (refFkCols.length > 0) {
+      for (const r of row) {
+        for (const refFk of refFkCols) {
+          const raw = r[refFk.column];
+          if (raw != null && typeof raw === 'string') {
+            r[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+          }
+        }
+      }
+    }
+    console.info('step-executor: serv_insert bulk', { tableName, count: row.length, traceId });
+    const resp = await insertRows(tableName, row);
+    if (!resp.success) throw new Error(`serv_insert bulk failed for "${tableName}": ${resp.error}`);
+    return {
+      outputValue: resp.rows ?? { tableName, inserted: row.length },
+      nextAction:  resolveNextAction(step.on_success, null),
+    };
+  }
+
+  // check_exists_by: column name to use for a find-first check before inserting.
+  // If a row already exists with that column value, return it without inserting.
+  // Used by the ref-data seeding iterator to skip values that are already in the table.
+  if (check_exists_by && row[check_exists_by] !== undefined) {
+    const existing = await getRows(tableName, [{ column: check_exists_by, op: 'eq', value: row[check_exists_by] }], undefined, 1);
+    if (existing.success && (existing.count ?? 0) > 0) {
+      console.info('step-executor: serv_insert check_exists_by — row exists, skipping', { tableName, check_exists_by, traceId });
+      return {
+        outputValue: existing.rows[0],
+        nextAction:  resolveNextAction(step.on_success, null),
+      };
+    }
+  }
 
   if (tableName === 'PGC_Workflow' && Array.isArray(row?.steps)) {
     const l1 = runLevel1StaticAnalysis(row.steps);
@@ -788,14 +825,14 @@ async function executeServEntitySchema({ step, localState, traceId }) {
   const joins         = Array.isArray(entitySchema.joins)        ? entitySchema.joins        : [];
   const aggregations  = Array.isArray(entitySchema.aggregations) ? entitySchema.aggregations : [];
 
-  // Load live column definitions for all tables in one query
-  const allTables = [rootTable, ...joins.map(j => j.table)].filter(Boolean);
-  const schemaResp = await getRows(
-    'PGC_Schema',
-    [{ column: 'table_name', op: 'in', value: allTables }],
-    undefined,
-    allTables.length + 1
-  );
+  // Load live column definitions for all domain tables in one query.
+  // Using domain filter ensures reference tables (no outgoing FKs, not in joins) are
+  // included so their lookup columns can be resolved during child FK processing.
+  const domain        = entitySchema.domain ?? null;
+  const schemaFilter  = domain
+    ? [{ column: 'domain', op: 'eq', value: domain }]
+    : [{ column: 'table_name', op: 'in', value: [rootTable, ...joins.map(j => j.table)].filter(Boolean) }];
+  const schemaResp = await getRows('PGC_Schema', schemaFilter, undefined, 50);
   if (!schemaResp.success) {
     throw new Error(`serv_entity_schema: PGC_Schema query failed: ${schemaResp.error}`);
   }
@@ -806,16 +843,69 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     schemaByTable[row.table_name] = row.columns ?? [];
   }
 
-  // Returns non-system, non-FK { name, type } columns for a table
+  // Returns non-system, non-FK { name, type, ?allowed_values } columns for a table.
+  // allowed_values is injected for columns with CHECK IN constraints so the LLM
+  // knows which values are valid without guessing casing or vocabulary.
   const SYSTEM = new Set(['id', 'created_at', 'updated_at']);
   function userColumns(tableName, fkColumnsToExclude = []) {
     const exclude = new Set([...SYSTEM, ...fkColumnsToExclude]);
+    const allowedValues = refCheckAllowedValues(tableName);
     return (schemaByTable[tableName] ?? [])
       .filter(c => !exclude.has(c.name))
-      .map(c => ({ name: c.name, type: c.type }));
+      .map(c => ({
+        name: c.name,
+        type: c.type,
+        ...(allowedValues[c.name] ? { allowed_values: allowedValues[c.name] } : {}),
+      }));
   }
 
-  const rootColumns = userColumns(rootTable);
+  // For a reference table, pick the best natural key column for name-matching.
+  // Prefers columns named name/label/code/title, then falls back to first non-system column.
+  function getLookupColumn(tableName) {
+    const PREFERRED = new Set(['name', 'label', 'code', 'title']);
+    const cols = (schemaByTable[tableName] ?? []).filter(c => !SYSTEM.has(c.name));
+    return (cols.find(c => PREFERRED.has(c.name)) ?? cols[0])?.name ?? 'name';
+  }
+
+  // Returns names of all non-system text columns for a ref table.
+  // Used to build a minimal create payload when auto-creating a ref row — tables
+  // with required columns beyond the lookup key (e.g. unit_type, abbreviation on
+  // PGD_MeasurementUnits) will have all text columns filled with the name value.
+  const STR_TYPES = new Set(['varchar', 'text', 'char']);
+  function refTextColumns(tableName) {
+    return (schemaByTable[tableName] ?? [])
+      .filter(c => !SYSTEM.has(c.name) && STR_TYPES.has((c.type ?? '').split('(')[0]) && !/^vector/i.test(c.type ?? ''))
+      .map(c => c.name);
+  }
+  // Returns { colName: ['val1', ...] } for CHECK IN constraints on a ref table.
+  function refCheckAllowedValues(tableName) {
+    const row = (schemaResp.rows ?? []).find(r => r.table_name === tableName);
+    const result = {};
+    for (const c of (row?.constraints ?? [])) {
+      if (c.type !== 'check' || !c.expression) continue;
+      const m = c.expression.match(/^(\w+)\s+IN\s+\((.+)\)$/i);
+      if (!m) continue;
+      const vals = m[2].match(/'([^']+)'/g)?.map(v => v.slice(1, -1)) ?? [];
+      if (vals.length > 0) result[m[1]] = vals;
+    }
+    return result;
+  }
+
+  const rootColumns    = userColumns(rootTable);
+
+  // Root table may have FKs to reference tables (e.g. yield_unit_fk → PGD_MeasurementUnits).
+  // Collect them so insertRow can resolve string names to integer IDs before the root insert.
+  // Must use the full schema row (not schemaByTable which stores only the columns array).
+  const rootSchemaRow  = (schemaResp.rows ?? []).find(r => r.table_name === rootTable);
+  const rootRefFkCols  = (rootSchemaRow?.foreign_keys ?? [])
+    .filter(fk => fk.references?.table)
+    .map(fk => ({
+      column:         fk.column,
+      ref_table:      fk.references.table,
+      lookup_column:  getLookupColumn(fk.references.table),
+      create_with:    refTextColumns(fk.references.table),
+      allowed_values: refCheckAllowedValues(fk.references.table),
+    }));
 
   // table → alias lookup — used to resolve FK references to parent aliases
   const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
@@ -838,21 +928,35 @@ async function executeServEntitySchema({ step, localState, traceId }) {
     //   references root table → parent = null  (direct child of root)
     //   references self table → parent = 'self'  (self-referential)
     //   references another join table → parent = alias of that table
-    const fkColumns = fkDefs.map(fk => {
+    //   references a table not in joins → reference table (resolved by name at insert time)
+    const refFkCols = [];
+    const regularFkColumns = [];
+    for (const fk of fkDefs) {
       let parent;
       if (!fk.references || fk.references === rootTable) {
         parent = null;
+        regularFkColumns.push({ column: fk.column, parent });
       } else if (fk.references === join.table) {
         parent = 'self';
+        regularFkColumns.push({ column: fk.column, parent });
+      } else if (tableToAlias[fk.references] != null) {
+        parent = tableToAlias[fk.references];
+        regularFkColumns.push({ column: fk.column, parent });
       } else {
-        parent = tableToAlias[fk.references] ?? null;
+        // FK targets a table not in joins — treat as reference table
+        refFkCols.push({
+          column:         fk.column,
+          ref_table:      fk.references,
+          lookup_column:  getLookupColumn(fk.references),
+          create_with:    refTextColumns(fk.references),
+          allowed_values: refCheckAllowedValues(fk.references),
+        });
       }
-      return { column: fk.column, parent };
-    });
+    }
 
     // Primary FK: prefer the one pointing to root, otherwise the first one
-    const primaryFk = fkColumns.find(f => f.parent === null) ?? fkColumns[0] ?? null;
-    const isSelfRef = fkColumns.some(f => f.parent === 'self');
+    const primaryFk = regularFkColumns.find(f => f.parent === null) ?? regularFkColumns[0] ?? null;
+    const isSelfRef = regularFkColumns.some(f => f.parent === 'self');
     const matchBy   = isSelfRef ? 'self' : 'index';
 
     // For self-referential: use aggregation match_key if provided, else first non-system column
@@ -867,13 +971,17 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       }
     }
 
-    const allFkCols = fkDefs.map(f => f.column);
+    // Only exclude programmatically injected FK columns from the LLM's column list.
+    // Ref FK columns must remain visible so the LLM can supply string name values
+    // (e.g. ingredient_fk: "garlic") that are resolved to IDs before insert.
+    const allFkCols = regularFkColumns.map(f => f.column);
 
     return {
       table:                join.table,
       alias:                join.alias,
       fk_column:            primaryFk?.column ?? null,
-      ...(fkColumns.length > 1 ? { fk_columns: fkColumns } : {}),
+      ...(regularFkColumns.length > 1 ? { fk_columns: regularFkColumns } : {}),
+      ...(refFkCols.length > 0        ? { ref_fk_columns: refFkCols }    : {}),
       parent:               isSelfRef ? 'self' : (primaryFk?.parent ?? null),
       match_by:             matchBy,
       ...(matchKey ? { match_key: matchKey } : {}),
@@ -885,7 +993,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
   const result = {
     entity_name:  entitySchema.entity_name,
     description:  entitySchema.description,
-    root:         { table: rootTable, columns: rootColumns },
+    root:         {
+      table:   rootTable,
+      columns: rootColumns,
+      ...(rootRefFkCols.length > 0 ? { ref_fk_columns: rootRefFkCols } : {}),
+    },
     children,
   };
 
@@ -926,8 +1038,17 @@ async function executeServEntityInsert({ step, localState, traceId }) {
   if (!entitySchema) throw new Error('serv_entity_insert: entitySchema is required in input');
   if (!parsedEntity) throw new Error('serv_entity_insert: parsedEntity is required in input');
 
+  // Resolve reference table FKs on root row (e.g. yield_unit_fk: "cups" → integer ID)
+  const rootRow = { ...(parsedEntity.root ?? {}) };
+  for (const refFk of (entitySchema.root.ref_fk_columns ?? [])) {
+    const raw = rootRow[refFk.column];
+    if (raw != null && typeof raw === 'string') {
+      rootRow[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+    }
+  }
+
   // Insert root row
-  const rootResult = await insertRow(entitySchema.root.table, parsedEntity.root ?? {});
+  const rootResult = await insertRow(entitySchema.root.table, rootRow);
   if (!rootResult.success) {
     throw new Error(`serv_entity_insert root insert failed for "${entitySchema.root.table}": ${rootResult.error}`);
   }
@@ -949,6 +1070,16 @@ async function executeServEntityInsert({ step, localState, traceId }) {
       insertedByAlias[alias] = [];
       insertedCounts[alias]  = 0;
       continue;
+    }
+
+    // Junction table: skip if any FK parent has no rows (nothing to link)
+    if (fk_columns && fk_columns.length > 1) {
+      const missingParent = fk_columns.find(fkDef => fkDef.parent && (insertedByAlias[fkDef.parent] ?? []).length === 0);
+      if (missingParent) {
+        insertedByAlias[alias] = [];
+        insertedCounts[alias]  = 0;
+        continue;
+      }
     }
 
     // Self-referential: two-pass insert + update
@@ -988,6 +1119,19 @@ async function executeServEntityInsert({ step, localState, traceId }) {
       return row;
     });
 
+    // Resolve reference table FKs: string name values → integer IDs (find-or-create)
+    const refFkColumns = child.ref_fk_columns ?? [];
+    if (refFkColumns.length > 0) {
+      for (const row of preparedRows) {
+        for (const refFk of refFkColumns) {
+          const raw = row[refFk.column];
+          if (raw != null && typeof raw === 'string') {
+            row[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+          }
+        }
+      }
+    }
+
     const result = await insertRows(table, preparedRows);
     if (!result.success) {
       throw new Error(`serv_entity_insert failed for "${table}": ${result.error}`);
@@ -1011,6 +1155,21 @@ async function executeServEntityInsert({ step, localState, traceId }) {
       inserted_counts: insertedCounts,
     },
   };
+}
+
+/**
+ * Resolve a reference table FK: find an existing row by lookup_column = nameValue,
+ * or insert a new row if none exists. Returns the integer PK.
+ * Handles lookup tables (PGD_Ingredients, PGD_MeasurementUnits, etc.) whose string
+ * values are supplied by the LLM and must be mapped to DB IDs before child insert.
+ */
+async function resolveRefTableId(refTable, lookupColumn, nameValue, traceId) {
+  const existing = await getRows(refTable, [{ column: lookupColumn, op: 'eq', value: nameValue }], undefined, 1);
+  if (existing.success && (existing.count ?? 0) > 0) return existing.rows[0].id;
+  throw new Error(
+    `serv_entity_insert: ref value "${nameValue}" not found in ${refTable}.${lookupColumn} — ` +
+    `confirm reference records before inserting the entity`
+  );
 }
 
 /**

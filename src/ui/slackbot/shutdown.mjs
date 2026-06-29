@@ -7,13 +7,18 @@
 // Accepts: /shutdown            — cancel all active workflow runs
 //          /shutdown <runId>    — cancel a specific run by PGC_WorkflowRun.id
 //
-// Flow: synchronous — no SQS hop.
-//   SlackbotFunction → POST /proc/shutdown (HTTP fetch) → inline Slack response
+// Flow: ack-and-notify.
+//   SlackbotFunction → enqueue SHUTDOWN to WorkflowQueue → return ephemeral ack
+//   ProcFunction (SQS) → shutdown logic → enqueueCallback HUMAN_NOTIFICATION
 //
 // Response is ephemeral — only visible to the operator who ran /shutdown.
 // This is intentional: shutdown is an operator action, not a team notification.
 
-import { err } from '../../shared/lambda-utils.mjs';
+import { err }                             from '../../shared/lambda-utils.mjs';
+import { SQSClient, SendMessageCommand }   from '@aws-sdk/client-sqs';
+import { randomUUID }                      from 'crypto';
+
+const sqs = new SQSClient({});
 
 export async function handle(req) {
   if (req.method !== 'POST') {
@@ -21,7 +26,7 @@ export async function handle(req) {
   }
 
   const text      = (req.body?.text || '').trim();
-  const traceId   = req.correlationId;
+  const traceId   = req.correlationId || randomUUID();
   const channel   = req.body?.channel_id || 'unknown';
   const threadId  = req.body?.thread_ts  || undefined;
 
@@ -43,88 +48,44 @@ export async function handle(req) {
     workflowRunId = parsed;
   }
 
-  // --- Call PROC /shutdown synchronously ---
-  const procUrl  = `${process.env.PROC_API_URL}/api/v1/proc/shutdown`;
-  const payload  = {
-    traceId,
-    callback: {
-      provider: 'slack',
-      channel,
-      ...(threadId && { threadId }),
-    },
-    ...(workflowRunId !== undefined && { workflowRunId }),
-  };
-
-  let result;
+  // --- Enqueue SHUTDOWN to WorkflowQueue — PROC handles it and notifies via callback ---
   try {
-    const resp = await fetch(procUrl, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-    });
-    result = await resp.json();
-
-    if (!resp.ok) {
-      console.error('shutdown: PROC call failed', { status: resp.status, result, traceId });
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          response_type: 'ephemeral',
-          text: `❌ Shutdown failed — PROC returned ${resp.status}. Check logs (traceId: ${traceId})`,
-        }),
-      };
-    }
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:     'SHUTDOWN',
+        traceId,
+        callback: {
+          provider: 'slack',
+          channel,
+          ...(threadId && { threadId }),
+        },
+        ...(workflowRunId !== undefined && { workflowRunId }),
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
   } catch (error) {
-    console.error('shutdown: PROC fetch error', { error: error.message, traceId });
+    console.error('shutdown: SQS enqueue failed', { error: error.message, traceId });
     return {
       statusCode: 200,
       body: JSON.stringify({
         response_type: 'ephemeral',
-        text: `❌ Shutdown failed — could not reach PROC. Check logs (traceId: ${traceId})`,
+        text: `❌ Shutdown failed — could not enqueue request. Check logs (traceId: ${traceId})`,
       }),
     };
   }
 
-  // --- Format inline Slack response ---
-  const text_out = formatShutdownMessage(result, workflowRunId);
-  console.info('shutdown: complete', { traceId, cancelledCount: result.cancelledCount });
+  console.info('shutdown: enqueued', { traceId, workflowRunId: workflowRunId ?? '(all active)' });
+
+  const ackText = workflowRunId !== undefined
+    ? `🔄 Shutdown requested for run ${workflowRunId} — I'll post the result here.`
+    : '🔄 Shutdown requested for all active runs — I\'ll post the result here.';
 
   return {
     statusCode: 200,
     body: JSON.stringify({
       response_type: 'ephemeral',
-      text:          text_out,
+      text:          ackText,
     }),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Format ShutdownResult as a human-readable Slack message
-// ---------------------------------------------------------------------------
-
-function formatShutdownMessage(result, workflowRunId) {
-  const { cancelledCount, cancelled = [] } = result;
-
-  // Specific run requested but not found / already inactive
-  if (workflowRunId !== undefined && cancelledCount === 0) {
-    return `✅ Run ${workflowRunId} is not active (already completed, cancelled, or not found)`;
-  }
-
-  // No active runs at all
-  if (cancelledCount === 0) {
-    return '✅ No active workflows to cancel';
-  }
-
-  // One or more runs cancelled
-  if (workflowRunId !== undefined && cancelled.length === 1) {
-    const r = cancelled[0];
-    const step = r.stoppedAtStep != null ? `, was at step ${r.stoppedAtStep}` : '';
-    return `🛑 Run ${r.workflowRunId} cancelled (${r.workflowName}${step})`;
-  }
-
-  // Cancel-all — list each run
-  const list = cancelled
-    .map(r => `${r.workflowName} (run ${r.workflowRunId})`)
-    .join(', ');
-  return `🛑 Shutdown complete — ${cancelledCount} run(s) cancelled: ${list}`;
 }

@@ -121,8 +121,8 @@ export async function handle(req) {
     return handlePeekReveal(buttonValue, payload, req.correlationId);
   }
 
-  const { workflowRunId, action: userResponse, responseData } = buttonValue;
-  if (!workflowRunId || !userResponse) {
+  const { workflowRunId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
+  if (!workflowRunId || userResponse === undefined || userResponse === null) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
     return err(400, 'Button value must contain workflowRunId and action', req.correlationId);
   }
@@ -150,7 +150,7 @@ export async function handle(req) {
             type:             'modal',
             callback_id:      'text_input_gate',
             notify_on_close:  true,
-            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, callback: { provider: 'slack', channel, threadId } }),
+            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } }),
             title:   { type: 'plain_text', text: modal.title ?? 'Input' },
             submit:  { type: 'plain_text', text: 'Submit' },
             close:   { type: 'plain_text', text: 'Cancel' },
@@ -176,18 +176,6 @@ export async function handle(req) {
       }
     } else {
       console.warn('interactive: modal button missing trigger_id — proceeding with resume_gate only', { workflowRunId, action: userResponse, traceId });
-    }
-
-    // Acknowledge the button click — replace gate message to prevent duplicate clicks.
-    try {
-      await slack.chat.update({
-        channel,
-        ts:     threadId,
-        text:   `📝 ${modal.title ?? 'Input'}...${gateContext}`,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `📝 ${modal.title ?? 'Input'}...${gateContext}` } }],
-      });
-    } catch (error) {
-      console.warn('interactive: chat.update failed (non-fatal)', { error: error.message, traceId });
     }
 
     // Do NOT enqueue resume_gate here — the workflow stays suspended at the current gate.
@@ -255,7 +243,7 @@ export async function handle(req) {
     ? '🗑️ Removing — updating...'
     : userResponse === 'cancel'
     ? `❌ Cancelled.${gateContext}`
-    : `✅ ${userResponse}.${gateContext}`;
+    : `✅ ${buttonLabel ?? userResponse}.${gateContext}`;
 
   // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up.
   // Do this before returning so the workflow resumes even if the response body
@@ -714,7 +702,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(400, 'Invalid private_metadata', correlationId);
   }
 
-  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, callback } = meta;
+  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_submission missing workflowRunId or callback', { meta, traceId });
     return err(400, 'view_submission private_metadata must contain workflowRunId and callback', correlationId);
@@ -754,6 +742,21 @@ async function handleViewSubmission(payload, correlationId) {
   } catch (error) {
     console.error('interactive: view_submission SQS enqueue failed', { error: error.message, traceId });
     return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  // Replace the gate message with a confirmation to clear stale buttons.
+  const confirmText = `📝 ${modalTitle ?? 'Input'} — submitted.`;
+  if (callback.channel && callback.threadId) {
+    try {
+      await slack.chat.update({
+        channel: callback.channel,
+        ts:      callback.threadId,
+        text:    confirmText,
+        blocks:  [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+      });
+    } catch (updateErr) {
+      console.warn('interactive: view_submission chat.update failed (non-fatal)', { error: updateErr.message, traceId });
+    }
   }
 
   // Returning null body with 200 closes the modal — Slack interprets empty response as success.
@@ -942,53 +945,14 @@ async function handlePeekReveal(buttonValue, payload, correlationId) {
 }
 
 // ---------------------------------------------------------------------------
-// view_closed — modal dismissed without submitting
+// view_closed — modal dismissed without submitting (Cancel or × button).
 // Fires only when notify_on_close: true is set on the view.
-// Sends the original action that opened the modal (from private_metadata) so that
-// resumeGate can route via on_modal_close when the option declares it — e.g. an
-// edit_list "Add a table" option loops back to the gate rather than cancelling.
-// Falls back to 'cancel' for modals opened by gates without on_modal_close.
+// The workflow remains suspended at the same gate — no resume_gate enqueued.
+// The gate message stays active in Slack; user can click another button.
 // ---------------------------------------------------------------------------
 
 async function handleViewClosed(payload, correlationId) {
   const traceId = correlationId || randomUUID();
-
-  let meta;
-  try {
-    meta = JSON.parse(payload.view?.private_metadata ?? '{}');
-  } catch {
-    console.warn('interactive: view_closed private_metadata parse failed', { traceId });
-    return { statusCode: 200, body: '' };
-  }
-
-  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, callback } = meta;
-  if (!workflowRunId || !callback) {
-    console.warn('interactive: view_closed missing workflowRunId or callback', { meta, traceId });
-    return { statusCode: 200, body: '' };
-  }
-
-  console.info('interactive: view_closed — enqueuing resume_gate', {
-    workflowRunId,
-    userResponse: modalUserResponse ?? 'cancel',
-    traceId: metaTraceId ?? traceId,
-  });
-
-  try {
-    await sqs.send(new SendMessageCommand({
-      QueueUrl:    process.env.SQS_WORKFLOW_URL,
-      MessageBody: JSON.stringify({
-        type:          'WORKFLOW_STEP',
-        action:        'resume_gate',
-        workflowRunId,
-        userResponse:  modalUserResponse ?? 'cancel',
-        callback,
-        traceId:       metaTraceId ?? traceId,
-        enqueuedAt:    new Date().toISOString(),
-      }),
-    }));
-  } catch (error) {
-    console.error('interactive: view_closed SQS enqueue failed', { error: error.message, traceId });
-  }
-
+  console.info('interactive: view_closed — modal dismissed, workflow gate remains active', { traceId });
   return { statusCode: 200, body: '' };
 }

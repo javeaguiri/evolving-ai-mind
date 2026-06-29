@@ -13,10 +13,11 @@
 //   POST   /serv/schema/modifyColumn     — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
 //   POST   /serv/schema/dropColumn       — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
 //   POST   /serv/schema/modifyConstraint — DROP + ADD CONSTRAINT + PGC_Schema sync
-//   POST   /serv/schema/listTables       — list all entries in PGC_Schema
-//   POST   /serv/schema/getTable         — get one entry by table_name
-//   POST   /serv/schema/updateTable      — update description/definition in PGC_Schema
-//   POST   /serv/schema/deleteTable      — drop table + remove from PGC_Schema
+//   POST   /serv/schema/listTables          — list all entries in PGC_Schema
+//   POST   /serv/schema/listPhysicalTables  — list physical tables from DB catalog (registered/orphaned)
+//   POST   /serv/schema/getTable            — get one entry by table_name
+//   POST   /serv/schema/updateTable         — update description/definition in PGC_Schema
+//   POST   /serv/schema/deleteTable         — drop table + remove from PGC_Schema (force:true skips PGC_Schema check)
 //
 // Security gate: all table names and column types are validated before any
 // SQL is executed. Raw SQL in payloads is rejected.
@@ -60,10 +61,12 @@ export async function handle(req) {
     case 'addColumn':    return addColumn(req);
     case 'modifyColumn': return modifyColumn(req);
     case 'dropColumn':   return dropColumn(req);
-    case 'listTables':   return listTables(req);
+    case 'listTables':          return listTables(req);
+    case 'listPhysicalTables':  return listPhysicalTables(req);
     case 'getTable':    return getTable(req);
     case 'updateTable':      return updateTable(req);
     case 'modifyConstraint': return modifyConstraint(req);
+    case 'dropConstraint':   return dropConstraint(req);
     case 'deleteTable':      return deleteTable(req);
     default:
       return err(404, `SERV-Schema route "${req.subRoute}" not found`, req.correlationId);
@@ -115,6 +118,17 @@ async function createTable(req) {
     }
     console.info(`schema: DDL executed for ${tableName} on ${target.toUpperCase()}`);
 
+    // Auto-infer embed_source for vector columns named X_embedding where column X exists.
+    const allColNames = new Set(columns.map(c => c.name));
+    const registeredColumns = columns.map(c => {
+      if (c.type?.startsWith('vector') && typeof c.name === 'string' &&
+          c.name.endsWith('_embedding') && !Array.isArray(c.embed_source)) {
+        const src = c.name.slice(0, -'_embedding'.length);
+        if (allColNames.has(src)) return { ...c, embed_source: [src] };
+      }
+      return c;
+    });
+
     // --- Register in PGC_Schema ---
     const insert = await pgcClient.query(
       `INSERT INTO "PGC_Schema"
@@ -123,7 +137,7 @@ async function createTable(req) {
        RETURNING id, created_at`,
       [
         tableName, target, domain, description,
-        JSON.stringify(columns),
+        JSON.stringify(registeredColumns),
         JSON.stringify(foreignKeys),
         JSON.stringify(constraints),
         JSON.stringify(triggers),
@@ -221,10 +235,13 @@ async function addColumn(req) {
     }
 
     // Register in PGC_Schema.columns
-    // Preserve safe metadata fields from the column definition (e.g. embed_source for vector columns).
+    // Preserve explicit embed_source; infer it for X_embedding vector columns when omitted.
     const newCol = { name: colName, type: colType, nullable };
     if (Array.isArray(column.embed_source) && column.embed_source.length > 0) {
       newCol.embed_source = column.embed_source;
+    } else if (colType?.startsWith('vector') && colName.endsWith('_embedding')) {
+      const src = colName.slice(0, -'_embedding'.length);
+      if (colsArray.some(c => c.name === src)) newCol.embed_source = [src];
     }
     await client.query(
       `UPDATE "PGC_Schema"
@@ -435,6 +452,58 @@ async function listTables(req) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /serv/schema/listPhysicalTables
+// ---------------------------------------------------------------------------
+
+async function listPhysicalTables(req) {
+  const { prefix = 'PGD_' } = req.body ?? {};
+
+  const pgdClient = getClient(process.env.PGD_DATABASE_URL);
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+
+  try {
+    await pgdClient.connect();
+    await pgcClient.connect();
+
+    const physicalResult = await pgdClient.query(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name LIKE $1
+       ORDER BY table_name`,
+      [`${prefix}%`]
+    );
+
+    const tableNames = physicalResult.rows.map(r => r.table_name);
+    let registeredSet = new Set();
+    if (tableNames.length > 0) {
+      const regResult = await pgcClient.query(
+        `SELECT table_name FROM "PGC_Schema" WHERE table_name = ANY($1::text[])`,
+        [tableNames]
+      );
+      registeredSet = new Set(regResult.rows.map(r => r.table_name));
+    }
+
+    const tables = tableNames.map(name => ({
+      table_name:  name,
+      registered:  registeredSet.has(name),
+    }));
+
+    return ok({
+      success: true,
+      count:   tables.length,
+      tables,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema listPhysicalTables error:', error.message);
+    return err(500, `listPhysicalTables failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgdClient.end();
+    await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/getTable
 // ---------------------------------------------------------------------------
 
@@ -534,6 +603,60 @@ async function modifyConstraint(req) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /serv/schema/dropConstraint
+// Drops a named constraint from the physical table and removes it from
+// PGC_Schema.constraints. Supports any constraint type (unique, check, fk).
+// ---------------------------------------------------------------------------
+
+async function dropConstraint(req) {
+  const { tableName, constraintName, target = 'pgc' } = req.body;
+
+  if (!tableName || !constraintName) {
+    return err(400, 'tableName and constraintName are required', req.correlationId);
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
+  const pgcUrl = process.env.PGC_DATABASE_URL;
+
+  const dbClient  = getClient(dbUrl);
+  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+
+  try {
+    await dbClient.connect();
+    if (dbClient !== pgcClient) await pgcClient.connect();
+
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
+    );
+
+    const schemaRow = await pgcClient.query(
+      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (schemaRow.rows.length > 0) {
+      const existing = schemaRow.rows[0].constraints ?? [];
+      const updated  = existing.filter(c => c.name !== constraintName);
+      await pgcClient.query(
+        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+        [JSON.stringify(updated), tableName]
+      );
+    }
+
+    console.info(`schema: constraint "${constraintName}" on "${tableName}" dropped`);
+    return ok({ success: true, tableName, constraintName }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema dropConstraint error:', error.message);
+    return err(500, `dropConstraint failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/updateTable
 // ---------------------------------------------------------------------------
 
@@ -601,7 +724,7 @@ async function updateTable(req) {
 // ---------------------------------------------------------------------------
 
 async function deleteTable(req) {
-  const { tableName } = req.body;
+  const { tableName, force = false } = req.body;
 
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
@@ -622,17 +745,22 @@ async function deleteTable(req) {
   try {
     await pgcClient.connect();
 
-    // Look up target so we know which DB to drop from
+    // Look up PGC_Schema row to determine target DB and enable cleanup.
+    // force=true allows dropping tables that are not yet registered (e.g. orphaned
+    // from a failed create_domain run that never wrote the PGC_Schema row).
     const lookup = await pgcClient.query(
       `SELECT id, target FROM "PGC_Schema" WHERE table_name = $1`,
       [tableName]
     );
-    if (lookup.rows.length === 0) {
+
+    if (lookup.rows.length === 0 && !force) {
       return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
     }
 
-    const { id, target } = lookup.rows[0];
-    const dropClient     = target === 'pgd'
+    const schemaRow  = lookup.rows[0] ?? null;
+    const target     = schemaRow?.target ?? 'pgd';
+    const schemaId   = schemaRow?.id     ?? null;
+    const dropClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
       : pgcClient;
 
@@ -640,19 +768,20 @@ async function deleteTable(req) {
 
     // Drop the physical table
     await dropClient.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
-    console.info(`schema: dropped table ${tableName} from ${target.toUpperCase()}`);
+    console.info(`schema: dropped table ${tableName} from ${target.toUpperCase()}${force && !schemaRow ? ' (force — no PGC_Schema row)' : ''}`);
 
-    // Remove from PGC_TableMap first (FK constraint)
-    await pgcClient.query(`DELETE FROM "PGC_TableMap" WHERE schema_id = $1`, [id]);
-
-    // Remove from PGC_Schema
-    await pgcClient.query(`DELETE FROM "PGC_Schema" WHERE id = $1`, [id]);
-    console.info(`schema: PGC_Schema + PGC_TableMap rows removed for ${tableName}`);
+    // Best-effort cleanup of PGC_Schema + PGC_TableMap (may not exist when force=true)
+    if (schemaId) {
+      await pgcClient.query(`DELETE FROM "PGC_TableMap" WHERE schema_id = $1`, [schemaId]);
+      await pgcClient.query(`DELETE FROM "PGC_Schema" WHERE id = $1`, [schemaId]);
+      console.info(`schema: PGC_Schema + PGC_TableMap rows removed for ${tableName}`);
+    }
 
     return ok({
       success:   true,
       tableName,
       dropped:   true,
+      forced:    force && !schemaRow,
       correlationId: req.correlationId,
     }, req.correlationId);
 

@@ -19,6 +19,8 @@
 // req.source ('http' | 'sqs') determines response path only.
 
 import { parseEvent, err, ok, buildReqFromSqs } from '../shared/lambda-utils.mjs';
+import { enqueueCallback, deleteReceivedBatch } from '../shared/sqs-callback.mjs';
+import { getRows }                              from '../shared/serv-client.mjs';
 import { handle as pingLlm }            from './ping-llm.mjs';
 import { handle as pingCore }           from './ping-core.mjs';
 import { handle as createDomain }       from './create-domain.mjs';
@@ -66,18 +68,20 @@ async function processHttpRequest(event) {
 
 /**
  * Process a batch of SQS WorkflowQueue records.
- * Each record is normalised to the same req shape as the HTTP path,
- * then dispatched to the same endpoint modules.
- * Ping message types (PING_SQS, PING_E2E) are handled inline here —
- * they are not transport-agnostic routes and read routing from message.callback.
- * ReportBatchItemFailures — only failed records return to the queue.
+ * Messages are deleted from SQS immediately on receipt — before any processing.
+ * DB state (PGC_WorkflowRun) is the source of truth; Lambda crashes are recovered
+ * via Novia or manual restart, not SQS retry. If pre-delete fails, the error
+ * propagates and ESM retries the batch normally (fallback to old behaviour).
+ * On per-record processing failure, a HUMAN_NOTIFICATION is sent to the
+ * originating Slack channel so the user knows the run is stalled.
  */
 async function processSqsBatch(records) {
-  const failures = [];
+  await deleteReceivedBatch(records);
 
   for (const record of records) {
+    let message;
     try {
-      const message = JSON.parse(record.body);
+      message = JSON.parse(record.body);
       console.info('proc: SQS message received', { messageId: record.messageId, type: message.type, action: message.action, workflowRunId: message.workflowRunId, traceId: message.traceId });
 
       // Ping types are handled inline — they use the generic callback object
@@ -182,6 +186,12 @@ async function processSqsBatch(records) {
         await explain(req);
         continue;
       }
+      // SHUTDOWN — cancel active runs; notifies via callback. Enqueued by slackbot/shutdown.mjs.
+      if (message.type === 'SHUTDOWN') {
+        const req = buildReqFromSqs(message);
+        await shutdown(req);
+        continue;
+      }
       // MEMORY_WRITE — fire-and-forget episodic memory write on domain run completion.
       // Enqueued by run-workflow.mjs after qualifying CRUD workflow run completes.
       if (message.type === 'MEMORY_WRITE') {
@@ -207,14 +217,32 @@ async function processSqsBatch(records) {
 
     } catch (error) {
       console.error('proc: SQS record failed', {
-        messageId: record.messageId,
-        error:     error.message,
+        messageId:     record.messageId,
+        type:          message?.type,
+        workflowRunId: message?.workflowRunId,
+        error:         error.message,
       });
-      failures.push({ itemIdentifier: record.messageId });
+      if (message?.workflowRunId) {
+        try {
+          const rows = await getRows('PGC_WorkflowRun',
+            [{ column: 'id', op: 'eq', value: message.workflowRunId }],
+          );
+          const run = rows?.[0];
+          if (run?.callback) {
+            await enqueueCallback(run.callback, {
+              type:    'HUMAN_NOTIFICATION',
+              traceId: message.traceId,
+              message: `Run ${run.id} (${run.workflow_name}) failed with an unexpected error and is now stalled. Use Novia to diagnose or re-enqueue the run manually.\n\nError: ${error.message}`,
+            });
+          }
+        } catch (notifyErr) {
+          console.error('proc: failed to send failure notification', { notifyErr: notifyErr.message });
+        }
+      }
     }
   }
 
-  return { batchItemFailures: failures };
+  return { batchItemFailures: [] };
 }
 
 // ---------------------------------------------------------------------------
