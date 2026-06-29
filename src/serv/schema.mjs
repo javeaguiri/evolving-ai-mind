@@ -118,6 +118,17 @@ async function createTable(req) {
     }
     console.info(`schema: DDL executed for ${tableName} on ${target.toUpperCase()}`);
 
+    // Auto-infer embed_source for vector columns named X_embedding where column X exists.
+    const allColNames = new Set(columns.map(c => c.name));
+    const registeredColumns = columns.map(c => {
+      if (c.type?.startsWith('vector') && typeof c.name === 'string' &&
+          c.name.endsWith('_embedding') && !Array.isArray(c.embed_source)) {
+        const src = c.name.slice(0, -'_embedding'.length);
+        if (allColNames.has(src)) return { ...c, embed_source: [src] };
+      }
+      return c;
+    });
+
     // --- Register in PGC_Schema ---
     const insert = await pgcClient.query(
       `INSERT INTO "PGC_Schema"
@@ -126,7 +137,7 @@ async function createTable(req) {
        RETURNING id, created_at`,
       [
         tableName, target, domain, description,
-        JSON.stringify(columns),
+        JSON.stringify(registeredColumns),
         JSON.stringify(foreignKeys),
         JSON.stringify(constraints),
         JSON.stringify(triggers),
@@ -224,10 +235,13 @@ async function addColumn(req) {
     }
 
     // Register in PGC_Schema.columns
-    // Preserve safe metadata fields from the column definition (e.g. embed_source for vector columns).
+    // Preserve explicit embed_source; infer it for X_embedding vector columns when omitted.
     const newCol = { name: colName, type: colType, nullable };
     if (Array.isArray(column.embed_source) && column.embed_source.length > 0) {
       newCol.embed_source = column.embed_source;
+    } else if (colType?.startsWith('vector') && colName.endsWith('_embedding')) {
+      const src = colName.slice(0, -'_embedding'.length);
+      if (colsArray.some(c => c.name === src)) newCol.embed_source = [src];
     }
     await client.query(
       `UPDATE "PGC_Schema"

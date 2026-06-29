@@ -22,7 +22,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC2 — Embedding on insert:** ✅ DONE (2026-06-20)
 - **AC3 — Track P live:** ✅ DONE (2026-06-26) — `create_workflow` includes `design_workflow_prompts` step; SM-2 convert case validated (quiz_flashcards D2). UC-P5 create case deferred with W5 to Sprint 7.
 - **AC4 — Recipe domain recreated:** ✅ DONE (2026-06-22)
-- **AC8 — Expenses domain created:** UC-E1 (add), UC-E2 (list) pass from Slack.
+- **AC8 — Expenses domain created:** ✅ DONE (2026-06-29) — UC-E1 (pharmacy receipt → single expense record) and UC-E2 (list expenses, correct entity resolution) pass from Slack.
 - **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
 - **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
 - **AC12 — PGC_Prompt.domain column live:** ✅ DONE (2026-06-20)
