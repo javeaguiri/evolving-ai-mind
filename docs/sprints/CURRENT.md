@@ -210,6 +210,20 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 
 ---
 
+## Sprint 7 Pre-scope
+
+Items identified during Sprint 6 that are blocking budget/expense end-to-end testing via Novia. Carry-forward to Sprint 7 scope.
+
+| Item | Why it's blocking |
+|---|---|
+| Session ID per workflow run — PGC_SessionEntry for all LLM calls | Novia cannot read run-scoped LLM call history (session_id: null on all regular runs); `/explain` step-selection requires it |
+| `/explain <run-id>` step-selection gate | Novia diagnosed run 590 correctly but the propose_workflow_fix gate was cancelled; a step-selection UI lets users route Novia to the exact failing step without manual intervention |
+| `generate_workflow_steps` Instruction fix — no system prompt reuse | Run 590 (`modify_budget`) reused `parse_entity_input` (system prompt); AJV output_schema rejected the correct LLM output; new domain workflows must always emit a unique `prompt_draft` |
+| `design_workflow_prompts` Instruction fix — always "create" for system/cross-domain prompts | Companion fix to item above; `design_workflow_prompts` must classify system prompt candidates as "create", not "reuse" |
+| PGC_SystemContext procedure library for Novia (`novia_diagnostic_protocol`) | Novia's diagnostic capability is bounded by what's in the always-injected system prompt; on-demand procedure lookup removes that ceiling without bloating the prompt |
+
+---
+
 ## Session Notes
 
 **2026-06-18 (session 1):** Sprint 6 scoped. Retro written to sprint-05.md. Goal: Pantry + Expenses domains, Track P complete, MVP hardening. Sprint 7 intent: release-readiness (usability, log hygiene, README, test environment). Branch: `sprint/06-pantry-expenses-trackp`.
