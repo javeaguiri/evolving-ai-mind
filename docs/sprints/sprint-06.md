@@ -1,6 +1,31 @@
 # Sprint 6 — Pantry, Expenses, Track P, MVP Hardening
 
-**Sprint 5 closed 2026-06-18. See `docs/sprints/sprint-05.md` for retro.**
+**Sprint 6 closed 2026-06-29. Merged to main. Deployed.**
+
+## Outcome
+
+All Track P items complete. Expenses domain live and validated end-to-end from Slack. Recipe and flashcard domains recreated with hardened prompts. 16 of 18 ACs done; 2 scoped out (AC5/Pantry depends on cross-domain capability; AC10/budget report blocked on data — both Sprint 7).
+
+## Retro
+
+**What required multiple correction cycles:**
+- `add_entity` entity resolution: first attempt used "0"-prefixed step keys — permanently skipped because `run-workflow.mjs` hardcodes `current_step: '1'` on root frame init. Fixed by renaming to 1→1d.
+- `parse_entity_input` output schema: went through v8–v13 to handle spatial receipt layout, European number format, header-column disambiguation, and flat-array bulk output. Core issue was LLM producing standard output (array for bulk) that the harness's `oneOf` schema didn't yet accept.
+- `generate_workflow_steps` reveal contract: two-gate rule was too prescriptive and flagged valid patterns; replaced with nuanced one/two-gate guidance tied to cognitive state boundaries.
+- Zone C (step-24 drop): root cause was AWS Lambda 16-hop recursive loop detection. Three manual re-enqueues before `RecursiveLoop: Allow` fix. Should have diagnosed infra before blaming code.
+
+**What broke post-simulation:**
+- `interactive.mjs` modal cancel was advancing the workflow — `chat.update` was firing on button click instead of on submit. Gate stayed suspended visually but was actually resumed.
+- `/shutdown` missing `x-api-key` on both Slackbot→PROC and PROC→SERV calls — discovered only when attempting a live shutdown.
+
+**What aged from backlog:**
+- Watchdog Lambda (Zone C recovery) — still open; `RecursiveLoop: Allow` fixed the immediate symptom but Zone C can still occur for other reasons.
+- `PGC_WorkflowRunStep` audit log write — never investigated; idempotency relies on it.
+
+**Prompt improvements to carry forward:**
+- `generate_workflow_steps`: no system prompt reuse for domain-specific steps (run 590 root cause).
+- `design_workflow_prompts`: always "create" for system or cross-domain candidates.
+- `design_workflow_process`: user_design_notes priority is unconditional; single-gate reveal is default.
 
 **Branch:** `sprint/06-pantry-expenses-trackp`
 
