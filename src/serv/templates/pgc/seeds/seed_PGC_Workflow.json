@@ -2040,8 +2040,60 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 1,
+    "version": 2,
     "steps": [
+      {
+        "step": "0",
+        "type": "serv_query",
+        "description": "Load all entity schemas registered for this domain.",
+        "input": {
+          "tableName": "PGC_EntitySchema",
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
+        },
+        "output_key": "domain_schemas",
+        "on_success": "0a",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0a",
+        "type": "js_transform",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "output_key": "entity_resolution",
+        "on_success": "0b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0b",
+        "type": "condition",
+        "description": "Skip LLM selection if entity name already resolved.",
+        "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
+        "on_success": "0d",
+        "on_else": "0c"
+      },
+      {
+        "step": "0c",
+        "type": "llm_call",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
+        "input": {
+          "prompt": "select_entity_schema",
+          "userInput": "{{input.userInput}}",
+          "schema_options": "{{entity_resolution.schema_options}}"
+        },
+        "output_key": "entity_selection",
+        "on_success": "0d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0d",
+        "type": "js_transform",
+        "description": "Write resolved entity name from direct resolution or LLM selection.",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
+        "output_key": "resolved_entity_name",
+        "on_success": "1",
+        "on_else": "cancel"
+      },
       {
         "step": "1",
         "type": "condition",
@@ -2055,7 +2107,7 @@
         "type": "serv_entity_get",
         "description": "Fetch entity by exact id.",
         "input": {
-          "entityName": "{{input.entity_name}}",
+          "entityName": "{{resolved_entity_name}}",
           "id": "{{input.id}}"
         },
         "output_key": "results",
@@ -2067,7 +2119,7 @@
         "type": "serv_entity_query",
         "description": "Search for the entity by title using a LIKE filter.",
         "input": {
-          "entityName": "{{input.entity_name}}",
+          "entityName": "{{resolved_entity_name}}",
           "filters": [
             {
               "column": "title",
@@ -2116,14 +2168,66 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 1,
+    "version": 2,
     "steps": [
+      {
+        "step": "0",
+        "type": "serv_query",
+        "description": "Load all entity schemas registered for this domain.",
+        "input": {
+          "tableName": "PGC_EntitySchema",
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
+        },
+        "output_key": "domain_schemas",
+        "on_success": "0a",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0a",
+        "type": "js_transform",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "output_key": "entity_resolution",
+        "on_success": "0b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0b",
+        "type": "condition",
+        "description": "Skip LLM selection if entity name already resolved.",
+        "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
+        "on_success": "0d",
+        "on_else": "0c"
+      },
+      {
+        "step": "0c",
+        "type": "llm_call",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
+        "input": {
+          "prompt": "select_entity_schema",
+          "userInput": "{{input.userInput}}",
+          "schema_options": "{{entity_resolution.schema_options}}"
+        },
+        "output_key": "entity_selection",
+        "on_success": "0d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "0d",
+        "type": "js_transform",
+        "description": "Write resolved entity name from direct resolution or LLM selection.",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
+        "output_key": "resolved_entity_name",
+        "on_success": "1",
+        "on_else": "cancel"
+      },
       {
         "step": "1",
         "type": "serv_entity_query",
         "description": "List all entities.",
         "input": {
-          "entityName": "{{input.entity_name}}",
+          "entityName": "{{resolved_entity_name}}",
           "limit": 50
         },
         "output_key": "results",
