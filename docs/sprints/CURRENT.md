@@ -23,8 +23,8 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **AC3 — Track P live:** ✅ DONE (2026-06-26) — `create_workflow` includes `design_workflow_prompts` step; SM-2 convert case validated (quiz_flashcards D2). UC-P5 create case deferred with W5 to Sprint 7.
 - **AC4 — Recipe domain recreated:** ✅ DONE (2026-06-22)
 - **AC8 — Expenses domain created:** ✅ DONE (2026-06-29) — UC-E1 (pharmacy receipt → single expense record) and UC-E2 (list expenses, correct entity resolution) pass from Slack.
-- **AC9 — UC-E3 (expense receipt):** Receipt OCR → expense record with line items inserted.
-- **AC10 — UC-E4 (budget report):** Monthly spend vs budget by category posted to Slack. `llm_call` over rows is acceptable for MVP; `serv_aggregate` step type goes to backlog if not built.
+- **AC9 — UC-E3 (expense receipt):** ✅ DONE (2026-06-29) — Pharmacy receipt OCR → parsed expense with category (PGD_SpendingCategories). ExpenseItems child table not built; categories cover the budgeting purpose. W3 validated.
+- **AC10 — UC-E4 (budget report):** Scoped out — blocked on real expense + budget data; deferred to Sprint 7.
 - **AC12 — PGC_Prompt.domain column live:** ✅ DONE (2026-06-20)
 - **AC13 — Prompt cleanup in delete flows:** ✅ DONE (2026-06-20)
 - **AC14 — `quiz_flashcards` workflow recreated:** ✅ DONE (2026-06-26)
@@ -50,8 +50,8 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 | D1 Recreate Recipe domain | AC4 | ✅ |
 | D2 Delete + recreate quiz_flashcards | AC3, AC14 | ✅ |
 | D4 Create Expenses domain | AC8 | ⬜ |
-| W3 UC-E3 expense receipt | AC9 | ⬜ |
-| W4 UC-E4 budget report | AC10 | ⬜ |
+| W3 UC-E3 expense receipt | AC9 | ✅ |
+| W4 UC-E4 budget report | AC10 | — scoped out |
 | E1 Embedding on insert | AC2 | ✅ |
 | H1 chk_triggered_by fix | AC15 | ✅ |
 | H2 R4 unit test | AC16 | ✅ |
@@ -74,6 +74,7 @@ Expand to Pantry/Inventory and Expenses/Budget domains. Validate UC-P4, UC-P4+E,
 - **W2 / AC7 (UC-P4 extended, cross-domain write)** — removed; 5 gaps in `create_workflow` documented in backlog, all scoped to Sprint 7
 - **W5 / AC11 (UC-P5 subtract ingredients)** — removed; reads Recipes + writes Pantry, same cross-domain gap as W2; scoped to Sprint 7
 - **H6 / AC21 (Watchdog Lambda)** — removed; obviated by `RecursiveLoop: Allow` fix (session 16)
+- **W4 / AC10 (UC-E4 budget report)** — blocked; no budget or expense data to report against; scoped to Sprint 7
 
 ---
 
@@ -221,6 +222,7 @@ Items identified during Sprint 6 that are blocking budget/expense end-to-end tes
 | `generate_workflow_steps` Instruction fix — no system prompt reuse | Run 590 (`modify_budget`) reused `parse_entity_input` (system prompt); AJV output_schema rejected the correct LLM output; new domain workflows must always emit a unique `prompt_draft` |
 | `design_workflow_prompts` Instruction fix — always "create" for system/cross-domain prompts | Companion fix to item above; `design_workflow_prompts` must classify system prompt candidates as "create", not "reuse" |
 | PGC_SystemContext procedure library for Novia (`novia_diagnostic_protocol`) | Novia's diagnostic capability is bounded by what's in the always-injected system prompt; on-demand procedure lookup removes that ceiling without bloating the prompt |
+| UC-E4 budget report (W4) | Blocked on real expense + budget data; requires `PGD_MonthlyExpensesByCategory` DB view + reporting workflow; DB view approach scoped in CURRENT.md W4 track |
 
 ---
 

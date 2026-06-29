@@ -1013,9 +1013,9 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `create_workflow` | 63 | 9 | Design, simulate, and register a new domain workflow |
 | `fix_workflow` | 21 | 1 | Repair a broken registered workflow |
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
-| `add_entity` | 12 | 2 | Insert a new domain entity from natural language input |
-| `get_entity` | 6 | 0 | Fetch a single entity by id or name |
-| `list_entity` | 4 | 0 | List all entities in a domain |
+| `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
+| `get_entity` | 11 | 1 | Fetch a single entity by id or name |
+| `list_entity` | 9 | 1 | List all entities in a domain |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1171,27 +1171,46 @@ Triggered via `DIAGNOSE_PROMPT_SCHEMA` SQS when an `llm_call` step returns `Agen
 
 #### `add_entity`
 
-Generic workflow bound to any domain at runtime via `PGC_EntitySchema`. Invoked by intent classification when user says "add [domain entity]".
+Generic workflow bound to any domain at runtime via `PGC_EntitySchema`. Invoked by intent classification when user says "add [domain entity]". All three entity query workflows (`add_entity`, `get_entity`, `list_entity`) share the same entity resolution preamble (steps 1–1d/1e) that identifies which `PGC_EntitySchema` to use when a domain has more than one registered entity type.
 
-- `1` `serv_entity_schema` — load full entity schema with parent-child hierarchy and column metadata (including `allowed_values` from CHECK IN constraints)
-- `2` `llm_call` [`parse_entity_input`] — parse user natural language description into structured entity object matching the schema; uses domain semantic memories (400-token budget) to know which columns to omit at creation
-- `2a` `js_transform` — collect all ref FK string values from `parsed_entity`, grouped by ref table
-- `2b` `condition` — skip reference enrichment if no ref FK values found
-- `2c` `llm_call` [`enrich_ref_records`] — produce complete, accurate records for each ref table value (correct abbreviations, unit types, canonical names)
+**Entity resolution preamble (steps 1–1e):**
+- `1` `serv_query` — load all entity schemas registered for this domain from `PGC_EntitySchema`
+- `1a` `js_transform` — resolve entity name directly if exactly one schema exists; build options list if multiple
+- `1b` `condition` — single schema (already resolved) → `1d`; multiple schemas → `1c` (LLM selection)
+- `1c` `llm_call` [`select_entity_schema`] — Haiku: pick the correct entity schema from user input semantics (e.g. "budgetary" → "Budget")
+- `1d` `js_transform` — write `resolved_entity_name` to local state
+- `1e` `serv_entity_schema` — load full entity schema with parent-child hierarchy and column metadata (including `allowed_values` from CHECK IN constraints)
+
+**Parse and route:**
+- `2` `llm_call` [`parse_entity_input`] — parse user natural language into a structured entity object (single record) or flat array (bulk); uses domain semantic memories (400-token budget)
+- `2g` `condition` — `Array.isArray(parsed_entity)` → bulk path (`2h`); else → single-record ref FK path (`2a`)
+
+**Bulk insert path (2h–2k):**
+- `2h` `js_transform` — build preview: count, entity name, first 3 rows as sample
+- `2i` `human_gate` (review_object) — user confirms before bulk write
+- `2j` `serv_insert` — insert all rows in one call; `ref_fk_columns` field triggers FK string→id resolution per row
+- `2k` `notify` → `6` `end`
+
+**Single-record ref FK enrichment path (2a–2f):**
+- `2a` `js_transform` — collect ref FK string values from `parsed_entity`, grouped by ref table
+- `2b` `condition` — no ref FK values → `3` (skip enrichment); else → `2c`
+- `2c` `llm_call` [`enrich_ref_records`] — produce complete, accurate records for each ref table value (correct abbreviations, canonical names, unit types)
 - `2d` `human_gate` (review_object) — user confirms reference records to add or re-use before entity insert
 - `2e` `js_transform` — flatten `proposed_ref_records` to row-per-item array for iterator
 - `2f` `iterator` — insert each confirmed reference record; skip rows that already exist (`check_exists_by` exact match)
+
+**Single-record insert:**
 - `3` `human_gate` (review_object) — user reviews parsed entity before any DB write
 - `4` `serv_entity_insert` — insert root row and all child rows in topological FK order with FK threading
-- `5` `notify` + `6` `end`
+- `5` `notify` → `6` `end`
 
 ##### Data structures handled by `add_entity`
 
 | Pattern | Entities | Parsed structure after step 2 | Workflow path |
 |---|---|---|---|
-| **Single NL record** | One root row; optional ref FK resolved to an existing parent | `{ root: { front: "¿Dónde está…?", back: "Where is…?", deck_id: "Spanish Vocabulary" } }` | 1 → 2 → 2a–2f (ref FK enrichment: deck name → id; find-or-create Deck row) → 3 (review) → 4 (insert Card) |
-| **OCR / receipt-style** | One root row extracted from spatial or scraped content; ref FK to a category or lookup table | `{ root: { date: "2026-06-28", title: "Mercadona", amount: 45.30, currency: "EUR", category_id: "Groceries / Food", payment_method: "card" } }` | 1 → 2 (receipt rules: spatial layout, currency cleanup, summary-line skip) → 2a–2f (ref FK: category name → SpendingCategories id) → 3 → 4 |
-| **Structured bulk — same entity** | Multiple root rows of a single entity type from a paste or CSV; all rows share the same schema | `[ { year: 2026, month: 6, category_id: "Dining Out", planned_amount: 120, type: "discretionary" }, { …, category_id: "Subscriptions", planned_amount: 50 } ]` | 1 → 2 (returns flat array) → 2g (Array.isArray branch) → 2h preview gate → 2i confirm → 2j `serv_insert` array → 2k notify. **Note:** ref FK columns (category_id) are NOT resolved in this path — categories must pre-exist or G2 fix applied. |
+| **Single NL record** | One root row; optional ref FK resolved to an existing parent | `{ root: { front: "¿Dónde está…?", back: "Where is…?", deck_id: "Spanish Vocabulary" } }` | 1–1e → 2 → 2a–2f (ref FK enrichment: deck name → id; find-or-create Deck row) → 3 (review) → 4 (insert Card) |
+| **OCR / receipt-style** | One root row extracted from spatial or scraped content; ref FK to a category or lookup table | `{ root: { date: "2026-06-28", title: "PROTOPIC 1MG/G", amount: 46.74, currency: "EUR", category_id: "Pharmacy" } }` | 1–1e → 2 (receipt rules: spatial layout, European number format, summary-line skip, translation) → 2a–2f (ref FK: category name → SpendingCategories id) → 3 → 4 |
+| **Structured bulk — same entity** | Multiple root rows of a single entity type from a paste or CSV; all rows share the same schema | `[ { year: 2026, month: 6, category_id: "Dining Out", planned_amount: 120, type: "discretionary" }, { …, category_id: "Subscriptions", planned_amount: 50 } ]` | 1–1e → 2 (returns flat array) → 2g (Array.isArray branch) → 2h preview → 2i confirm → 2j `serv_insert` with `ref_fk_columns` (resolves category string → id per row) → 2k notify. |
 | **Cross-entity bulk** | Two or more entity schemas from one paste (e.g. budget planner: SpendingCategories rows + Budgets rows derived from section headers) | N/A — `parse_entity_input` returns mixed output that cannot be routed to a single EntitySchema | **Use a custom workflow.** `add_entity` is bound to one EntitySchema per run. Cross-entity bulk requires a sequenced workflow: parse full input → insert missing ref rows → resolve FKs → bulk-insert transactional rows. |
 
 ##### When to use a custom workflow instead
@@ -1209,19 +1228,23 @@ Use a custom workflow when any of the following apply:
 
 #### `get_entity`
 
-- `1` `condition` — route to id lookup when `input.id` is set; otherwise name search
-- `2` `serv_entity_get` — fetch entity by exact id (root + child aggregations)
-- `3` `serv_entity_query` — search by LIKE filter on name column
-- `4` `js_transform` — format matched entity (root columns + child arrays) into Slack mrkdwn
-- `5` `notify` + `6` `end`
+Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
+
+- `2` `condition` — `input.id` set → `3` (id lookup); else → `4` (name search)
+- `3` `serv_entity_get` — fetch entity by exact id (root + child aggregations) → `step:5`
+- `4` `serv_entity_query` — search by LIKE filter on `title` column
+- `5` `js_transform` — format matched entity (root columns + child arrays) into Slack mrkdwn; vector columns stripped
+- `6` `notify` → `7` `end`
 
 ---
 
 #### `list_entity`
 
-- `1` `serv_entity_query` — list all entities; root columns only
-- `2` `js_transform` — format list results; child arrays suppressed
-- `3` `notify` + `4` `end`
+Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
+
+- `2` `serv_entity_query` — list all entities with domain-scoped default filters; root columns only
+- `3` `js_transform` — format list results; child arrays and vector columns suppressed
+- `4` `notify` → `5` `end`
 
 ---
 

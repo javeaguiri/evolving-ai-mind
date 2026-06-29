@@ -1,9 +1,9 @@
 # evolving-mind-ai — Javear Use Cases
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-Version: 1.0
-Status: MVP definition — Session 18
-Last updated: 2026-04-06
+Version: 1.1
+Status: Active — Sprint 6 closed
+Last updated: 2026-06-29
 
 ---
 
@@ -66,6 +66,52 @@ pairs is a pending fix (tech debt).
 **Behaviour:** Confirmation gate → deletes the root recipe row. Child rows
 deleted via ON DELETE CASCADE.
 **Status:** ✅ Working (delete_entity workflow)
+
+### Recipes Domain — Table Schemas
+
+Created via `create_domain` in Sprint 6 (recreated with hardened prompts). Domain slug: `recipes`.
+
+**`PGD_Ingredients`** — Shared ingredient lookup table (canonical names, deduplicated).
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| name | varchar NOT NULL | |
+| name_embedding | vector(2560) | auto-embedded from `name` |
+
+**`PGD_Recipes`** — Root recipe record.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| title | varchar NOT NULL | primary label column |
+| title_embedding | vector(2560) | auto-embedded from `title` |
+| description | text | |
+| description_embedding | vector(2560) | auto-embedded from `description` |
+| servings | integer | |
+| prep_time_minutes | integer | |
+| cook_time_minutes | integer | |
+| category | varchar | e.g. "Italian", "Vegetarian" |
+| difficulty_level | varchar | |
+| source_url | text | |
+| personal_notes | text | |
+
+**`PGD_RecipeIngredients`** — Junction: recipe ↔ ingredient with quantity.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| recipe_id | integer FK → PGD_Recipes ON DELETE CASCADE | |
+| ingredient_id | integer FK → PGD_Ingredients | |
+| quantity | numeric | |
+| unit | varchar | |
+| preparation_note | varchar | e.g. "diced", "room temperature" |
+
+**`PGD_RecipeSteps`** — Ordered cooking instructions.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| recipe_id | integer FK → PGD_Recipes ON DELETE CASCADE | |
+| step_number | integer NOT NULL | ordering |
+| instruction_text | text NOT NULL | |
+| duration_minutes | integer | |
 
 ---
 
@@ -161,39 +207,96 @@ each suggestion.
 ### UC-E1 Add an expense manually
 **Input:** `/m add expense Whole Foods groceries amount=87.50 category=groceries`
 **Behaviour:** Inserts an expense record with merchant, category, amount, date,
-and optional notes. LLM parses natural language.
-**Status:** ✅ Working once expenses domain is created (add_entity workflow)
+and optional notes. LLM parses natural language; ref FK to `PGD_SpendingCategories`
+resolved by name.
+**Status:** ✅ Working (add_entity workflow, validated from Slack)
 
 ### UC-E2 List expenses for the current month
 **Input:** `/m list expenses`
 **Behaviour:** Returns all expense records for the current calendar month,
 formatted with merchant, category, and amount.
-**Status:** ✅ Working (list_entity workflow with date filter seeded into the
-entity schema's default filters)
+**Status:** ✅ Working (list_entity workflow; entity resolution chain selects `Expense`
+schema when multiple entity types exist in the domain)
 
 ### UC-E3 Parse a receipt and add expense
 **Input:** `/m expense [pasted Apple Photos OCR text]`
-**Behaviour:** Receipt OCR text is parsed by an `llm_call` step to extract
-merchant name, total amount, date, and line items. User reviews in a
-confirmation gate. A single expense record is inserted with the total; line
-items are stored as child rows in `PGD_ExpenseItems` for detailed budget
-analysis.
-**Requires:** `create_workflow` to generate the expense receipt parsing
-workflow. Shares the receipt translation pattern with UC-P4.
-**Status:** ⬜ Requires `create_workflow` test and delivery
+**Behaviour:** Receipt OCR text pasted via `/m add expense`. `parse_entity_input`
+applies spatial layout rules (separate item and price blocks, European number
+format, summary-line stripping), extracts merchant name, total, date, and
+category. Category ref FK resolved to `PGD_SpendingCategories` by name. User
+reviews in a confirmation gate before insert into `PGD_Expenses`. No child
+line-item table — `PGD_SpendingCategories` provides the budget classification layer.
+**Status:** ✅ Working (add_entity workflow, pharmacy receipt validated from Slack)
 
 ### UC-E4 Run a budget report for the current month
 **Input:** `/m budget report`
 **Behaviour:** Reads all expenses for the current month, groups by category,
-compares totals to budget limits (stored in a `PGD_Budget` table), and posts
-a formatted report showing spend vs budget per category with a total.
-**Requires:** A reporting workflow with an aggregation step. The `llm_call`
-approach (feed all rows to LLM for summarisation) is viable at household
-scale but requires the `js_transform` generic sandbox for reliable arithmetic.
-The correct structural fix is a `serv_aggregate` step type that executes
-SQL GROUP BY at the DB level.
-**Status:** ⬜ Requires `create_workflow` and either `llm_call` reporting or
-`serv_aggregate` step type
+compares totals to budget limits in `PGD_Budgets`, and posts a formatted
+report showing spend vs budget per category with a total.
+**Requires:** `PGD_MonthlyExpensesByCategory` DB view (GROUP BY category_id,
+SUM(amount) WHERE current month) registered in PGC_Schema + PGC_TableMap;
+reporting workflow via `create_workflow`. LLM used for formatting only — all
+arithmetic at DB level via the view.
+**Status:** ⬜ Blocked on data — Sprint 7
+
+---
+
+### Expenses Domain — Table Schemas
+
+Created via `create_domain` in Sprint 6. Domain slug: `budgets_expenses`.
+
+**`PGD_SpendingCategories`** — Reference table; lookup for budget and expense categories.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| name | varchar NOT NULL | e.g. "Pharmacy", "Groceries", "Utilities" |
+| description | text | |
+| deleted_at | timestamptz | soft delete |
+
+**`PGD_Expenses`** — Individual expense transactions.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| date | date NOT NULL | transaction date |
+| title | varchar NOT NULL | merchant/description |
+| title_embedding | vector(2560) | auto-embedded from `title` |
+| amount | numeric NOT NULL | positive for spend |
+| currency | varchar DEFAULT 'USD' | |
+| category_id | integer FK → PGD_SpendingCategories | |
+| payment_method | varchar | |
+| description | text | |
+| description_embedding | vector(2560) | auto-embedded from `description` |
+| deleted_at | timestamptz | soft delete |
+
+**`PGD_Budgets`** — Monthly budget allocations by category.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| year | integer NOT NULL | CHECK 2000–2100 |
+| month | integer NOT NULL | CHECK 1–12 |
+| category_id | integer FK → PGD_SpendingCategories | |
+| planned_amount | numeric NOT NULL | |
+| currency | varchar DEFAULT 'USD' | |
+| type | varchar NOT NULL | CHECK IN ('income','discretionary','non_discretionary','savings') |
+| notes | text | |
+| notes_embedding | vector(2560) | auto-embedded from `notes` |
+| deleted_at | timestamptz | soft delete |
+
+**`PGD_RecurringExpenses`** — Templates for recurring expenses.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| title | varchar NOT NULL | |
+| title_embedding | vector(2560) | auto-embedded from `title` |
+| amount | numeric NOT NULL | |
+| currency | varchar DEFAULT 'USD' | |
+| category_id | integer FK → PGD_SpendingCategories | |
+| payment_method | varchar | |
+| frequency | varchar NOT NULL | e.g. "monthly", "annual" |
+| next_due_date | date NOT NULL | |
+| description | text | |
+| description_embedding | vector(2560) | auto-embedded from `description` |
+| deleted_at | timestamptz | soft delete |
 
 ---
 
@@ -298,6 +401,79 @@ rate, and prioritises those in the next quiz session.
 **Requires:** Analytics on quiz history + a `create_workflow`-generated
 adaptive selection step.
 **Status:** ⬜ Backlog — see Deferred section
+
+---
+
+## Domain 7 — Flashcards / Spaced Repetition
+
+*Complexity: Medium. Core CRUD and quiz workflow working. SM-2 algorithm runs in `js_transform`.*
+
+Used as the primary `create_workflow` test vehicle throughout Sprint 6. Domain slug: `flashcards`.
+
+### UC-FL1 Add a flashcard
+**Input:** `/m add flashcard front="What is the capital of France?" back="Paris" deck="Geography"`
+**Behaviour:** LLM parses input; deck resolved by name (find-or-create); card inserted into
+`PGD_Cards` with SM-2 initial values (`easiness_factor=2.5`, `interval=1`).
+**Status:** ✅ Working (add_entity workflow)
+
+### UC-FL2 Quiz flashcards (SM-2 spaced repetition)
+**Input:** `/m quiz me on Spanish vocabulary`
+**Behaviour:** `quiz_flashcards` workflow — presents due cards one at a time via Slack choice gates
+(0=complete blackout → 5=perfect recall). SM-2 algorithm runs as `js_transform` to compute new
+`easiness_factor` and `interval`. ReviewLog row inserted per card. Session ends with score summary.
+**Status:** ✅ Working (quiz_flashcards workflow, SM-2 validated)
+
+### UC-FL3 Study (browse) flashcards
+**Input:** `/m study Spanish vocabulary`
+**Behaviour:** `study_flashcards` workflow — presents cards one at a time for review without
+grading. Useful for initial learning before spaced repetition begins.
+**Status:** ✅ Working (study_flashcards workflow)
+
+### Flashcard Domain — Table Schemas
+
+**`PGD_Decks`** — Deck of flashcards; supports hierarchical parent/child decks.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| title | text NOT NULL | primary label column |
+| title_embedding | vector(2560) | auto-embedded from `title` |
+| description | text | |
+| parent_id | integer FK → PGD_Decks (self-referential) | nullable; NULL = root deck |
+| card_count | integer | denormalized count |
+| learned_count | integer | cards with `interval > 0` |
+| due_count | integer | cards where `next_review_date <= NOW()` |
+| last_review_date | timestamptz | |
+
+**`PGD_Cards`** — Individual flashcard with SM-2 SRS metadata.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| deck_id | integer FK → PGD_Decks ON DELETE CASCADE | |
+| front | text NOT NULL | question side |
+| front_embedding | vector(2560) | auto-embedded from `front` |
+| back | text NOT NULL | answer side |
+| back_embedding | vector(2560) | auto-embedded from `back` |
+| front_image_path | text | |
+| back_image_path | text | |
+| front_audio_path | text | |
+| back_audio_path | text | |
+| interval | integer DEFAULT 1 | days until next review (SM-2) |
+| easiness_factor | numeric(4,2) DEFAULT 2.5 | SM-2 EF; floor 1.3 |
+| next_review_date | timestamptz | nullable; NULL = never reviewed |
+| tags | text | comma-separated |
+| category | text | |
+| source | text | |
+
+**`PGD_ReviewLog`** — Per-card review history; one row per quiz session per card.
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| card_id | integer FK → PGD_Cards ON DELETE CASCADE | |
+| review_date | timestamptz NOT NULL | |
+| grade | integer NOT NULL | 0–5 (SM-2 scale) |
+| time_spent_seconds | integer | |
+| interval_before | integer | EF and interval before this review |
+| easiness_factor_before | numeric(4,2) | |
 
 ---
 
