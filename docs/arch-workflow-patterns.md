@@ -1185,6 +1185,26 @@ Generic workflow bound to any domain at runtime via `PGC_EntitySchema`. Invoked 
 - `4` `serv_entity_insert` — insert root row and all child rows in topological FK order with FK threading
 - `5` `notify` + `6` `end`
 
+##### Data structures handled by `add_entity`
+
+| Pattern | Entities | Parsed structure after step 2 | Workflow path |
+|---|---|---|---|
+| **Single NL record** | One root row; optional ref FK resolved to an existing parent | `{ root: { front: "¿Dónde está…?", back: "Where is…?", deck_id: "Spanish Vocabulary" } }` | 1 → 2 → 2a–2f (ref FK enrichment: deck name → id; find-or-create Deck row) → 3 (review) → 4 (insert Card) |
+| **OCR / receipt-style** | One root row extracted from spatial or scraped content; ref FK to a category or lookup table | `{ root: { date: "2026-06-28", title: "Mercadona", amount: 45.30, currency: "EUR", category_id: "Groceries / Food", payment_method: "card" } }` | 1 → 2 (receipt rules: spatial layout, currency cleanup, summary-line skip) → 2a–2f (ref FK: category name → SpendingCategories id) → 3 → 4 |
+| **Structured bulk — same entity** | Multiple root rows of a single entity type from a paste or CSV; all rows share the same schema | `[ { year: 2026, month: 6, category_id: "Dining Out", planned_amount: 120, type: "discretionary" }, { …, category_id: "Subscriptions", planned_amount: 50 } ]` | 1 → 2 (returns flat array) → 2g (Array.isArray branch) → 2h preview gate → 2i confirm → 2j `serv_insert` array → 2k notify. **Note:** ref FK columns (category_id) are NOT resolved in this path — categories must pre-exist or G2 fix applied. |
+| **Cross-entity bulk** | Two or more entity schemas from one paste (e.g. budget planner: SpendingCategories rows + Budgets rows derived from section headers) | N/A — `parse_entity_input` returns mixed output that cannot be routed to a single EntitySchema | **Use a custom workflow.** `add_entity` is bound to one EntitySchema per run. Cross-entity bulk requires a sequenced workflow: parse full input → insert missing ref rows → resolve FKs → bulk-insert transactional rows. |
+
+##### When to use a custom workflow instead
+
+Use `add_entity` when: user input maps to **one entity schema**, regardless of how many rows or how complex the parsing (NL, receipt text, pasted CSV).
+
+Use a custom workflow when any of the following apply:
+
+- **Multiple entity schemas** must be populated in sequence from one user input (budget planner → categories then budget rows)
+- **Business-level validation** beyond field constraints is required (e.g. "month already has a budget — overwrite or append?")
+- **Derived inputs** drive the insert (e.g. "carry forward all non-discretionary rows from last month to next month")
+- **Post-insert side effects** must fire in the same workflow run (recompute aggregate view, trigger a downstream notification workflow)
+
 ---
 
 #### `get_entity`
