@@ -405,7 +405,7 @@ describe('help step 4 — resolveHelpContent expression', () => {
 // get_entity / list_entity expressions
 // ---------------------------------------------------------------------------
 
-describe('get_entity step 4 — formatRecordList expression (with children)', () => {
+describe('get_entity step 5 — formatRecordList expression (with children)', () => {
   const RESULTS = [
     {
       id:           1,
@@ -418,7 +418,7 @@ describe('get_entity step 4 — formatRecordList expression (with children)', ()
   ];
 
   it('formats root columns and includes child arrays', () => {
-    const step = getStep('get_entity', '4');
+    const step = getStep('get_entity', '5');
     const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
     assert.ok(typeof result === 'string');
     assert.ok(result.includes('front_text=hola'));
@@ -427,13 +427,13 @@ describe('get_entity step 4 — formatRecordList expression (with children)', ()
   });
 
   it('returns "No records found." for empty array', () => {
-    const step = getStep('get_entity', '4');
+    const step = getStep('get_entity', '5');
     const result = runSandboxedExpression(step.expression, [], {}, 'test');
     assert.equal(result, 'No records found.');
   });
 });
 
-describe('list_entity step 2 — formatRecordList expression (root only)', () => {
+describe('list_entity step 3 — formatRecordList expression (root only)', () => {
   const RESULTS = [
     { id: 1, front_text: 'hola', back_text: 'hello', created_at: '2026', updated_at: '2026',
       review_logs: [{ result: 'pass' }] },
@@ -442,14 +442,14 @@ describe('list_entity step 2 — formatRecordList expression (root only)', () =>
   ];
 
   it('formats root columns and suppresses child arrays', () => {
-    const step = getStep('list_entity', '2');
+    const step = getStep('list_entity', '3');
     const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
     assert.ok(result.includes('front_text=hola'));
     assert.ok(!result.includes('review_logs'), 'child arrays must be suppressed');
   });
 
   it('includes record count in output', () => {
-    const step = getStep('list_entity', '2');
+    const step = getStep('list_entity', '3');
     const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
     assert.ok(result.includes('Found 2 record(s)'));
   });
