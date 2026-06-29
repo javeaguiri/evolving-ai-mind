@@ -1372,6 +1372,81 @@ paths:
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
+  /api/v1/ui/slack/help:
+    post:
+      summary: /help slash command — lists available domains and commands
+      description: >
+        Handles the /help Slack slash command. ACKs immediately and enqueues a
+        PROC call that renders a confirmation gate via the interactive loop.
+        Today posts a basic gate; future versions query PGC_DomainHelp to
+        return dynamic help buttons reflecting what this instance has built.
+
+        Flow: Slack POST → SlackbotFunction (Slack sig verified) → ACK → SQS → ProcFunction → callback gate
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [user_id, channel_id]
+              properties:
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: ACK posted to Slack; help content arrives as a threaded reply
+          content:
+            application/json:
+              example: {}
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+
+  /api/v1/ui/slack/explain:
+    post:
+      summary: /explain slash command — continues a diagnostic conversation
+      description: >
+        Handles the /explain Slack slash command. Takes a query_id (UUID) and optional
+        prompt, loads the existing PGC_Session entries for that query, and enqueues
+        EXPLAIN_QUERY to ProcFunction for an async LLM follow-up.
+
+        Usage: /explain <query_id> <optional follow-up question>
+
+        Flow: Slack POST → SlackbotFunction → ACK → SQS EXPLAIN_QUERY → ProcFunction → reply
+      tags: [UI-Slack]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [text, user_id, channel_id]
+              properties:
+                text:
+                  type: string
+                  description: "<query_id> <optional prompt>"
+                  example: "550e8400-e29b-41d4-a716-446655440000 why did step 14 fail?"
+                user_id:
+                  type: string
+                  example: U012AB3CD
+                channel_id:
+                  type: string
+                  example: C0AEJ87JSKF
+      responses:
+        '200':
+          description: ACK posted to Slack; explanation arrives as a threaded reply
+          content:
+            application/json:
+              example: {}
+        '400':
+          description: text is empty or query_id is not a valid UUID v4
+        '500':
+          description: Slack ACK post failed or SQS enqueue failed
+
   # ── PROC ───────────────────────────────────────────────────────────────────
 
   /api/v1/proc/ping-db:
@@ -2889,6 +2964,123 @@ paths:
         '500':
           description: Agentic loop error
 
+  /api/v1/proc/troubleshoot-workflow:
+    post:
+      summary: Analyse a workflow run for structural or logic issues
+      description: >
+        Dev tool — left-brain analysis of a workflow or run. Triggered manually via
+        curl or `/m troubleshoot workflow <name>`. Also enqueued as TROUBLESHOOT_WORKFLOW
+        by classify-intent when a troubleshooting intent is recognised.
+
+        Reads PGC_WorkflowRun + PGC_WorkflowRunStep history and the current PGC_Workflow
+        definition, then produces a structured diagnosis. When autoFix=true, enqueues
+        FIX_WORKFLOW_STEPS on finding issues.
+      tags: [proc-dev]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowName]
+              properties:
+                workflowName:
+                  type: string
+                  description: The workflow name to troubleshoot
+                autoFix:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Diagnosis complete — result posted as Slack reply (SQS path) or returned in body (HTTP)
+        '400':
+          description: workflowName is required
+        '500':
+          description: Analysis failed
+
+  /api/v1/proc/fix-workflow:
+    post:
+      summary: Apply auto-fix to a diagnosed workflow
+      description: >
+        Dev tool — enqueued by troubleshoot-workflow.mjs when autoFix=true and issues
+        are found. Applies corrective patches to PGC_Workflow steps based on the
+        diagnosis payload. Also triggerable manually via curl.
+      tags: [proc-dev]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowName, issues]
+              properties:
+                workflowName:
+                  type: string
+                issues:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Fix applied — updated workflow saved to PGC_Workflow
+        '400':
+          description: workflowName or issues missing
+        '500':
+          description: Fix failed
+
+  /api/v1/proc/diagnose-prompt-schema:
+    post:
+      summary: Diagnose LLM output against expected JSON Schema
+      description: >
+        Dev tool — validates a stored LLM output (from PGC_WorkflowRunStep) against
+        the output_schema declared on the relevant llm_call step. Returns field-level
+        diffs and a repair suggestion. Enqueued as DIAGNOSE_PROMPT_SCHEMA by the
+        step processor when output validation fails.
+      tags: [proc-dev]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowRunId, stepKey]
+              properties:
+                workflowRunId:
+                  type: integer
+                stepKey:
+                  type: string
+      responses:
+        '200':
+          description: Diagnosis result with field diffs and repair suggestion
+        '400':
+          description: workflowRunId or stepKey missing
+        '500':
+          description: Diagnosis failed
+
+  /api/v1/proc/monitor-prompt-quality:
+    post:
+      summary: Right-brain prompt quality monitor — fire-and-forget
+      description: >
+        Right-brain quality monitoring step. Samples recent LLM outputs and scores
+        them against prompt intent. Runs asynchronously — results are written to
+        PGC_Memory (type=episodic, tags=[prompt_quality]) and do not block the caller.
+        Enqueued as MONITOR_PROMPT_QUALITY on a schedule or triggered manually via curl.
+      tags: [proc-dev]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                promptName:
+                  type: string
+                  description: Limit monitoring to a single prompt (optional — all prompts if omitted)
+      responses:
+        '200':
+          description: Monitor run enqueued or completed — result in PGC_Memory
+        '500':
+          description: Monitor failed
+
   # ── SERV ───────────────────────────────────────────────────────────────────
 
   /api/v1/serv/ping-db:
@@ -3021,6 +3213,30 @@ paths:
                 tables:
                   - { id: 1, table_name: PGC_Schema, target: pgc }
                   - { id: 2, table_name: PGC_TableMap, target: pgc }
+
+  /api/v1/serv/schema/listPhysicalTables:
+    post:
+      summary: List physical PGD tables from information_schema
+      description: Queries information_schema.tables for all physical tables in the PGD schema and cross-references PGC_Schema to flag unregistered tables. Used by Novia for domain recovery.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+            example: {}
+      responses:
+        '200':
+          description: Physical table list with registration status
+          content:
+            application/json:
+              example:
+                success: true
+                tables:
+                  - { table_name: PGD_Recipes, registered: true }
+                  - { table_name: PGD_Orphan, registered: false }
 
   /api/v1/serv/schema/getTable:
     post:
@@ -3319,6 +3535,60 @@ paths:
           description: Invalid tableName or column name
         '404':
           description: Table not found in PGC_Schema
+        '500':
+          description: ALTER TABLE or PGC_Schema update failed
+
+  /api/v1/serv/schema/dropConstraint:
+    post:
+      summary: Drop a named constraint — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... DROP CONSTRAINT IF EXISTS on the physical table
+        and removes the entry from PGC_Schema.constraints. Supports any constraint
+        type (unique, check, foreign key). Use when a constraint is wrong by design
+        (e.g. a UNIQUE constraint that is too restrictive) or when dropColumn CASCADE
+        is insufficient. Table name must match PGC_TableMap.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, constraintName]
+              properties:
+                tableName:
+                  type: string
+                  example: PGD_RecipeIngredients
+                constraintName:
+                  type: string
+                  example: uq_recipeingredients_recipe_ingredient
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                  default: pgc
+            examples:
+              drop_unique:
+                summary: Drop over-restrictive unique constraint
+                value:
+                  tableName: PGD_RecipeIngredients
+                  constraintName: uq_recipeingredients_recipe_ingredient
+                  target: pgd
+      responses:
+        '200':
+          description: Constraint dropped and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                dropped:
+                  summary: Constraint dropped
+                  value:
+                    success: true
+                    tableName: PGD_RecipeIngredients
+                    constraintName: uq_recipeingredients_recipe_ingredient
+        '400':
+          description: Missing required fields or invalid table name
         '500':
           description: ALTER TABLE or PGC_Schema update failed
 

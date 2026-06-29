@@ -243,11 +243,18 @@ async function postHumanNotification(message) {
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
-  const blocks = format === 'markdown'
-    ? markdownToBlocks(text, contextText)
-    : textToBlocks(text, contextText);
+
+  // Build content blocks without suffix so chunking can manage them independently.
+  const contentBlocks = format === 'markdown'
+    ? markdownToBlocks(text)
+    : textToBlocks(text);
+
+  // Suffix: context block + optional actions block — always on the last chunk only.
+  const suffixBlocks = [
+    { type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] },
+  ];
   if (format === 'markdown' && sessionId) {
-    blocks.push({
+    suffixBlocks.push({
       type:     'actions',
       elements: [{
         type:      'button',
@@ -257,7 +264,7 @@ async function postHumanNotification(message) {
       }],
     });
   } else if (queryId) {
-    blocks.push({
+    suffixBlocks.push({
       type:     'actions',
       elements: [{
         type:      'button',
@@ -267,11 +274,24 @@ async function postHumanNotification(message) {
       }],
     });
   }
-  await routeCallback(callback, text.slice(0, 150), blocks);
+
+  const SLACK_BLOCK_LIMIT = 50;
+  const chunkSize = SLACK_BLOCK_LIMIT - suffixBlocks.length;
+
+  if (contentBlocks.length <= chunkSize) {
+    await routeCallback(callback, text.slice(0, 150), [...contentBlocks, ...suffixBlocks]);
+  } else {
+    for (let i = 0; i < contentBlocks.length; i += chunkSize) {
+      const chunk = contentBlocks.slice(i, i + chunkSize);
+      const isLast = i + chunkSize >= contentBlocks.length;
+      await routeCallback(callback, text.slice(0, 150), isLast ? [...chunk, ...suffixBlocks] : chunk);
+    }
+  }
+
   console.info('callback: HUMAN_NOTIFICATION posted', {
     channel:    callback.channel,
     traceId,
-    blockCount: blocks.length,
+    blockCount: contentBlocks.length + suffixBlocks.length,
   });
 }
 
@@ -668,19 +688,35 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'reveal': {
         // Inline task_card shown above the gate buttons — no click required.
-        blocks.push({
+        // content is a string → plain text in output; array of strings → bulleted list in details.
+        const revealBlock = {
           type:    'task_card',
           task_id: randomUUID(),
           title:   field.button_label,
           status:  'complete',
-          output: {
+        };
+        if (Array.isArray(field.content)) {
+          revealBlock.details = {
+            type:     'rich_text',
+            elements: [{
+              type:     'rich_text_list',
+              style:    'bullet',
+              elements: field.content.map(item => ({
+                type:     'rich_text_section',
+                elements: [{ type: 'text', text: String(item) }],
+              })),
+            }],
+          };
+        } else {
+          revealBlock.output = {
             type:     'rich_text',
             elements: [{
               type:     'rich_text_section',
               elements: [{ type: 'text', text: field.content ?? '' }],
             }],
-          },
-        });
+          };
+        }
+        blocks.push(revealBlock);
         break;
       }
 
@@ -697,6 +733,7 @@ function dialogToBlocks(dialog, workflowRunId) {
           value:     JSON.stringify({
             workflowRunId,
             action: btn.action,
+            label:  btn.label,
             ...(btn.modal ? { modal: btn.modal } : {}),
           }),
         }));

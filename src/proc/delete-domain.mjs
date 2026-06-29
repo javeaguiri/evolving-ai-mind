@@ -55,7 +55,7 @@ export async function handle(req) {
     if (callback) {
       const message = result.warning
         ? `Domain \`${domain}\` not found — nothing was deleted.`
-        : `Domain \`${domain}\` deleted.\n• Tables dropped: ${result.deletedTables.length > 0 ? result.deletedTables.join(', ') : 'none'}\n• Workflows removed: ${result.deletedWorkflowCount}\n• Intent patterns removed: ${result.deletedIntentCount}`;
+        : `Domain \`${domain}\` deleted.\n• Tables dropped: ${result.deletedTables.length > 0 ? result.deletedTables.join(', ') : 'none'}\n• Workflows removed: ${result.deletedWorkflowCount}\n• Intent patterns removed: ${result.deletedIntentCount}\n• Domain prompts removed: ${result.deletedPromptCount}\n• Domain help removed: ${result.deletedDomainHelpCount}`;
       await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     }
 
@@ -217,11 +217,19 @@ async function runDeleteDomain({ domain, traceId }) {
   deletedIntentCount = intentResp?.deletedCount ?? 0;
   if (intentResp) console.info('delete-domain: PGC_IntentMap rows removed', { domain, deletedIntentCount, traceId });
 
+  // --- Step 5a: Remove PGC_Prompt rows for this domain ---
+  let deletedPromptCount = 0;
+  const promptResp = await bestEffort('delete-domain: PGC_Prompt delete failed', { domain, traceId },
+    () => deleteRows('PGC_Prompt', [{ column: 'domain', op: 'eq', value: domain }]));
+  deletedPromptCount = promptResp?.deletedCount ?? 0;
+  if (promptResp) console.info('delete-domain: PGC_Prompt rows removed', { domain, deletedPromptCount, traceId });
+
   // --- Step 6: Remove PGC_DomainHelp row ---
   // PGC_TableMap.allow_delete must be true for PGC_DomainHelp (set in seed).
   const domainHelpResp = await bestEffort('delete-domain: PGC_DomainHelp delete failed', { domain, traceId },
     () => deleteRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }]));
-  const domainHelpRemoved = (domainHelpResp?.deletedCount ?? 0) > 0;
+  const deletedDomainHelpCount = domainHelpResp?.deletedCount ?? 0;
+  const domainHelpRemoved = deletedDomainHelpCount > 0;
   if (domainHelpResp) console.info('delete-domain: PGC_DomainHelp row', { domain, removed: domainHelpRemoved, traceId });
 
   // --- Build result ---
@@ -231,6 +239,7 @@ async function runDeleteDomain({ domain, traceId }) {
     && deletedRunCount === 0
     && deletedWorkflowCount === 0
     && deletedIntentCount === 0
+    && deletedPromptCount === 0
     && !domainHelpRemoved;
 
   const result = {
@@ -240,9 +249,11 @@ async function runDeleteDomain({ domain, traceId }) {
     deletedEntityCount,    // PGC_EntitySchema rows removed
     deletedRunStepCount,   // PGC_WorkflowRunStep rows removed
     deletedRunCount,       // PGC_WorkflowRun rows removed
-    deletedWorkflowCount,  // PGC_Workflow rows removed
-    deletedIntentCount,    // PGC_IntentMap rows removed
-    domainHelpRemoved,     // PGC_DomainHelp row removed
+    deletedWorkflowCount,      // PGC_Workflow rows removed
+    deletedIntentCount,        // PGC_IntentMap rows removed
+    deletedPromptCount,        // PGC_Prompt rows removed
+    deletedDomainHelpCount,    // PGC_DomainHelp rows removed
+    domainHelpRemoved,         // PGC_DomainHelp row removed (boolean, used for nothingFound)
   };
 
   if (nothingFound) {
@@ -252,7 +263,7 @@ async function runDeleteDomain({ domain, traceId }) {
     console.info('delete-domain: complete', {
       domain, deletedTables, deletedEntityCount,
       deletedRunStepCount, deletedRunCount,
-      deletedWorkflowCount, deletedIntentCount, domainHelpRemoved,
+      deletedWorkflowCount, deletedIntentCount, deletedPromptCount, deletedDomainHelpCount,
       traceId,
     });
   }

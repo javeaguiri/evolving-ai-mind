@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 13,
+    "version": 18,
     "steps": [
       {
         "step": "1",
@@ -48,7 +48,7 @@
         "description": "If domain already exists: show exists gate. Else: proceed to right brain research.",
         "expression": "{{existing_domain_check.length}}",
         "on_success": "4",
-        "on_else": "5"
+        "on_else": "3a"
       },
       {
         "step": "4",
@@ -60,7 +60,7 @@
           {
             "label": "Recreate",
             "action": "confirm",
-            "on_select": "5"
+            "on_select": "3a"
           },
           {
             "label": "Cancel",
@@ -73,12 +73,71 @@
         "on_cancel": "cancel"
       },
       {
+        "step": "3a",
+        "type": "human_gate",
+        "gate_type": "choice",
+        "description": "Ask how the domain will be used — shapes research depth and schema complexity.",
+        "message_template": "How will the *{{candidate_domain}}* domain be used?",
+        "options": [
+          {
+            "value": "professional",
+            "label": "Professionally",
+            "description": "Expert or commercial use — full normalization, enterprise patterns",
+            "on_select": "3d"
+          },
+          {
+            "value": "domestic",
+            "label": "For domestic use",
+            "description": "Home or personal use — practical and minimal complexity",
+            "on_select": "3d"
+          },
+          {
+            "value": "hobby",
+            "label": "As a hobby",
+            "description": "Enthusiast use — depth where it matters, simple elsewhere",
+            "on_select": "3d"
+          }
+        ],
+        "special_buttons": [
+          {
+            "value": "cross_domain",
+            "label": "With other domains",
+            "on_select": "3d",
+            "modal": {
+              "title": "Cross-domain context",
+              "input_label": "How will this domain connect with other domains?",
+              "placeholder": "e.g. I have an inventory domain and want recipes to reference ingredients by name",
+              "multiline": true
+            }
+          },
+          {
+            "value": "cancel",
+            "label": "Cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "output_key": "use_case_selection",
+        "on_success": "next",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "3d",
+        "type": "js_transform",
+        "description": "Build use_case_context string from use case selection and optional cross-domain description.",
+        "expression": "(function(){ var sel=local_state.use_case_selection; var uc=typeof sel===\"string\"?sel:(sel&&sel.value||sel); var txt=sel&&typeof sel===\"object\"?(sel.text||sel.modal_text||sel.input||\"\"):\"\"; var labels={professional:\"Professional use\",domestic:\"Domestic / personal use\",hobby:\"Hobby / enthusiast use\",cross_domain:\"Used alongside other domains\"}; var label=labels[uc]||uc||\"General use\"; return txt?label+\": \"+txt:label; })()",
+        "output_key": "use_case_context",
+        "on_success": "next",
+        "on_else": "cancel"
+      },
+      {
         "step": "5",
         "type": "llm_call",
         "description": "RIGHT BRAIN: Research domain data-modelling best practices and surface structural preference questions before schema design.",
         "input": {
           "prompt": "research_domain_schema",
-          "user_input": "{{input.userInput}}"
+          "user_input": "{{input.userInput}}",
+          "use_case_context": "{{use_case_context}}"
         },
         "output_key": "domain_research",
         "on_success": "next",
@@ -127,7 +186,7 @@
         "description": "Skip preference gates if research found no structural decisions to ask.",
         "expression": "{{preference_gates.length}}",
         "on_success": "9",
-        "on_else": "10"
+        "on_else": "9a"
       },
       {
         "step": "9",
@@ -150,8 +209,17 @@
         },
         "execution_mode": "sequential",
         "output_key": "user_preferences",
-        "on_complete": "10",
+        "on_complete": "9a",
         "on_else": "cancel"
+      },
+      {
+        "step": "9a",
+        "type": "js_transform",
+        "description": "Enrich user_preferences answers with question text and option description from preference_gates so the design LLM has full context for each preference decision.",
+        "output_key": "user_preferences",
+        "on_success": "next",
+        "on_else": "next",
+        "expression": "(function(){var answers=local_state.user_preferences||[];var gates=local_state.preference_gates||[];if(!answers.length)return answers;var gateMap={};gates.forEach(function(g){gateMap[g.id]=g;});return answers.map(function(ans){var gate=gateMap[ans.id];if(!gate)return ans;var opt=(gate.options||[]).filter(function(o){return o.value===ans.value;})[0];return{id:ans.id,question:gate.question,value:ans.value,description:opt?opt.description:''};});})()"
       },
       {
         "step": "10",
@@ -379,10 +447,19 @@
         "on_else": "next"
       },
       {
+        "step": "16d",
+        "type": "js_transform",
+        "description": "Topologically sort tables by FK dependency so parent tables are created before child tables.",
+        "output_key": "sorted_tables",
+        "on_success": "next",
+        "on_else": "next",
+        "expression": "(function(){var tables=local_state.proposed_scaffold&&local_state.proposed_scaffold.tables||[];if(tables.length<=1)return tables;var nameSet={};tables.forEach(function(t){nameSet[t.tableName]=true;});var deps={};var inDegree={};var tableMap={};tables.forEach(function(t){deps[t.tableName]=[];inDegree[t.tableName]=0;tableMap[t.tableName]=t;});tables.forEach(function(t){(t.foreignKeys||[]).forEach(function(fk){var ref=fk.references&&fk.references.table;if(ref&&nameSet[ref]&&ref!==t.tableName){deps[ref].push(t.tableName);inDegree[t.tableName]++;}});});var queue=[];tables.forEach(function(t){if(inDegree[t.tableName]===0)queue.push(t.tableName);});var result=[];while(queue.length>0){var name=queue.shift();result.push(tableMap[name]);(deps[name]||[]).forEach(function(dep){inDegree[dep]--;if(inDegree[dep]===0)queue.push(dep);});}return result.length===tables.length?result:tables;})()"
+      },
+      {
         "step": "17",
         "type": "iterator",
         "description": "Create each confirmed PGD table via SERV-Schema createTable.",
-        "items_key": "proposed_scaffold.tables",
+        "items_key": "sorted_tables",
         "item_step": {
           "type": "serv_schema",
           "input": "{{item}}",
@@ -418,6 +495,29 @@
         "on_else": "next"
       },
       {
+        "step": "17c",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Prompt user to add custom aliases (merged with LLM-generated ones at step 18).",
+        "message_template": "I’ve generated these aliases for *{{proposed_scaffold.domain}}*: {{domain_aliases.aliases}}. Would you like to add any more? Enter comma-separated names, or leave blank and press Done.",
+        "output_key": "user_aliases_raw",
+        "options": [
+          {
+            "label": "Done",
+            "action": "submit",
+            "on_select": "next"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "next",
+        "on_else": "next",
+        "on_cancel": "cancel"
+      },
+      {
         "step": "18",
         "type": "js_transform",
         "description": "Derive domain registration data from confirmed scaffold, merging LLM-generated aliases.",
@@ -425,7 +525,7 @@
         "output_key": "generated",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const llmAliases = (local_state.domain_aliases && Array.isArray(local_state.domain_aliases.aliases)) ? local_state.domain_aliases.aliases : []; const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' ')].concat(llmAliases))); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: (function() { var SYS2 = new Set(['id','created_at','updated_at','embedding']); var SKIP_TYPES = new Set(['timestamptz','boolean','real[]']); var rt = tables.find(function(t){ var extFKs=(t.foreignKeys||[]).filter(function(fk){return !(fk.references&&fk.references.table===t.tableName);}); return extFKs.length===0; })||tables[0]; var ct = tables.filter(function(t){ return t.tableName!==rt.tableName; }); var rtAlias = rt.tableName.replace('PGD_','').toLowerCase(); var rtSingular = (rtAlias.endsWith('s')&&rtAlias.length>2)?rtAlias.slice(0,-1):rtAlias; var rtFKCols = new Set((rt.foreignKeys||[]).map(function(f){return f.column;})); var rtLabelCol = (rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name)&&c.nullable!==true;})||(rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name);}); var rtLabel = rtLabelCol?rtLabelCol.name:'name'; var cmds = [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record using natural language' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ]; if(ct.length>0){ var fc=ct[0]; var fcFKCols=new Set((fc.foreignKeys||[]).map(function(f){return f.column;})); var contentCols=(fc.columns||[]).filter(function(c){return !SYS2.has(c.name)&&!fcFKCols.has(c.name)&&!SKIP_TYPES.has(c.type)&&!c.name.includes('embedding');}).slice(0,3).map(function(c){return c.name;}); var fcAlias=fc.tableName.replace('PGD_','').toLowerCase(); var fcSingular=(fcAlias.endsWith('s')&&fcAlias.length>2)?fcAlias.slice(0,-1):fcAlias; var hdr=contentCols.join(', '); if(contentCols.length>0){ cmds.push({ syntax: '/m add '+domain+' '+rtSingular+' '+rtLabel+'=<value>\\n'+hdr+'\\n<'+contentCols.join('>, <')+'>, ...', description: 'Bulk add: '+rtSingular+' on the first line ('+rtLabel+'=value). Use a newline to separate it from the '+fcSingular+' rows. An optional header row ('+hdr+') is supported — paste a spreadsheet or CSV and the LLM will map the columns.' }); } } return cmds; })() }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const rootTable = tables.find(function(t) { var extFKs=(t.foreignKeys||[]).filter(function(fk){return !(fk.references&&fk.references.table===t.tableName);}); return extFKs.length===0; }) || tables[0]; const childTables = tables.filter(function(t) { return t.tableName !== rootTable.tableName; }); const joins = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const fk = t.foreignKeys && t.foreignKeys[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); const aggregations = childTables.map(function(t) { const alias = t.tableName.replace('PGD_', '').toLowerCase(); const cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); const entitySchemas = [{ entity_name: entityName, description: entityName + ' entity for the ' + domain + ' domain', root_table: rootTable.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }]; return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
+        "expression": "(() => { const domain = items.domain; const tables = items.tables; function toEntityName(d) { const words = d.split('_'); const titled = words.map(w => w.charAt(0).toUpperCase() + w.slice(1)); const last = titled[titled.length - 1]; if (last.endsWith('s') && last.length > 2) titled[titled.length - 1] = last.slice(0, -1); return titled.join(''); } const entityName = toEntityName(domain); const words = domain.split('_'); const llmAliases = (local_state.domain_aliases && Array.isArray(local_state.domain_aliases.aliases)) ? local_state.domain_aliases.aliases : []; const userAliasesRaw = local_state.user_aliases_raw ?? ''; const userAliases = userAliasesRaw ? userAliasesRaw.split(',').map(function(a){return a.trim();}).filter(Boolean) : []; const aliases = Array.from(new Set([domain, domain.replace(/_/g, ' ')].concat(llmAliases).concat(userAliases))); const domainHelp = { domain, aliases, description: 'Manage your ' + domain.replace(/_/g, ' ') + ' data', commands: (function() { var SYS2 = new Set(['id','created_at','updated_at','embedding']); var SKIP_TYPES = new Set(['timestamptz','boolean','real[]']); var rt = (function(){ var rc={};tables.forEach(function(t){rc[t.tableName]=0;});tables.forEach(function(t){(t.foreignKeys||[]).forEach(function(fk){var ref=fk.references&&fk.references.table;if(ref&&rc[ref]!==undefined)rc[ref]++;});});return tables.reduce(function(b,t){return !b||(rc[t.tableName]>rc[b.tableName])?t:b;},null)||tables[0]; })(); var ct = tables.filter(function(t){ return t.tableName!==rt.tableName && (t.foreignKeys||[]).some(function(fk){return fk.references&&fk.references.table===rt.tableName;}); }); var rtAlias = rt.tableName.replace('PGD_','').toLowerCase(); var rtSingular = (rtAlias.endsWith('s')&&rtAlias.length>2)?rtAlias.slice(0,-1):rtAlias; var rtFKCols = new Set((rt.foreignKeys||[]).map(function(f){return f.column;})); var rtLabelCol = (rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name)&&c.nullable!==true;})||(rt.columns||[]).find(function(c){return !SYS2.has(c.name)&&!rtFKCols.has(c.name);}); var rtLabel = rtLabelCol?rtLabelCol.name:'name'; var cmds = [ { syntax: '/m list ' + domain, description: 'List all records' }, { syntax: '/m get ' + domain + ' <name or id>', description: 'Find a specific record' }, { syntax: '/m add ' + domain + ' <description>', description: 'Add a new record using natural language' }, { syntax: '/m update ' + domain + ' id=<n> <field>=<value>', description: 'Update a record' }, { syntax: '/m delete ' + domain + ' id=<n>', description: 'Delete a record' } ]; if(ct.length>0){ var fc=ct[0]; var fcFKCols=new Set((fc.foreignKeys||[]).map(function(f){return f.column;})); var contentCols=(fc.columns||[]).filter(function(c){return !SYS2.has(c.name)&&!fcFKCols.has(c.name)&&!SKIP_TYPES.has(c.type)&&!c.name.includes('embedding');}).slice(0,3).map(function(c){return c.name;}); var fcAlias=fc.tableName.replace('PGD_','').toLowerCase(); var fcSingular=(fcAlias.endsWith('s')&&fcAlias.length>2)?fcAlias.slice(0,-1):fcAlias; var hdr=contentCols.join(', '); if(contentCols.length>0){ cmds.push({ syntax: '/m add '+domain+' '+rtSingular+' '+rtLabel+'=<value>\\n'+hdr+'\\n<'+contentCols.join('>, <')+'>, ...', description: 'Bulk add: '+rtSingular+' on the first line ('+rtLabel+'=value). Use a newline to separate it from the '+fcSingular+' rows. An optional header row ('+hdr+') is supported — paste a spreadsheet or CSV and the LLM will map the columns.' }); } } return cmds; })() }; const intentMapRows = [ { pattern: 'add.' + domain + '|add ' + domain + '|add my ' + domain, intent_category: 'add_entity', action_type: 'workflow' }, { pattern: 'list.' + domain + '|list ' + domain + '|list my ' + domain, intent_category: 'list_entity', action_type: 'workflow' }, { pattern: 'get.' + domain + '|get ' + domain + '|find ' + domain, intent_category: 'get_entity', action_type: 'workflow' }, { pattern: 'update.' + domain + '|update ' + domain + '|edit ' + domain, intent_category: 'update_entity', action_type: 'workflow' }, { pattern: 'delete.' + domain + '|delete ' + domain + '|remove ' + domain, intent_category: 'delete_entity', action_type: 'workflow' } ]; const domainTableNames = new Set(tables.map(function(t) { return t.tableName; })); const fkChildNames = new Set(); tables.forEach(function(t) { (t.foreignKeys || []).forEach(function(fk) { var ref = fk.references && fk.references.table; if (ref && domainTableNames.has(ref) && ref !== t.tableName && fk.onDelete === 'CASCADE') fkChildNames.add(t.tableName); }); }); const rootTables = tables.filter(function(t) { return !fkChildNames.has(t.tableName); }); const entitySchemas = rootTables.map(function(rt) { var slug = rt.tableName.replace('PGD_', '').toLowerCase(); var entName = toEntityName(slug); var children = tables.filter(function(t) { return (t.foreignKeys || []).some(function(fk) { return fk.references && fk.references.table === rt.tableName; }); }); var joins = children.map(function(t) { var alias = t.tableName.replace('PGD_', '').toLowerCase(); var fk = (t.foreignKeys || []).find(function(f) { return f.references && f.references.table === rt.tableName; }) || (t.foreignKeys || [])[0]; return { type: 'LEFT', table: t.tableName, alias: alias, on: fk ? alias + '.' + fk.column + ' = r.id' : null }; }); var aggregations = children.map(function(t) { var alias = t.tableName.replace('PGD_', '').toLowerCase(); var cols = (t.columns || []).filter(function(c) { return c.name !== 'id' && c.name !== 'created_at' && c.name !== 'updated_at'; }).map(function(c) { return c.name; }); return { alias: alias, columns: cols, outputKey: alias }; }); return { entity_name: entName, description: entName + ' entity for the ' + domain + ' domain', root_table: rt.tableName, domain: domain, joins: joins, aggregations: aggregations, filters: [], upsert_key: [] }; }); return { domainHelp: domainHelp, intentMapRows: intentMapRows, entitySchemas: entitySchemas }; })()"
       },
       {
         "step": "19",
@@ -641,7 +741,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 25,
+    "version": 27,
     "steps": [
       {
         "step": "1",
@@ -798,8 +898,17 @@
         },
         "output_key": "user_preferences",
         "execution_mode": "sequential",
-        "on_complete": "9",
+        "on_complete": "8a",
         "on_else": "cancel"
+      },
+      {
+        "step": "8a",
+        "type": "js_transform",
+        "description": "Enrich user_preferences with question text and option description from preference_gates.",
+        "input_key": "user_preferences",
+        "output_key": "user_preferences",
+        "on_success": "9",
+        "expression": "(function(){var answers=local_state.user_preferences||[];var gates=local_state.preference_gates||[];if(!answers.length)return answers;var gateMap={};gates.forEach(function(g){gateMap[g.id]=g;});return answers.map(function(ans){var gate=gateMap[ans.id];if(!gate)return ans;var opt=(gate.options||[]).filter(function(o){return o.value===ans.value;})[0];return{id:ans.id,question:gate.question,value:ans.value,description:opt?opt.description:''};});})()"
       },
       {
         "step": "9",
@@ -1073,8 +1182,104 @@
           ],
           "priority": 3
         },
-        "on_success": "step:24",
+        "on_success": "step:23a",
         "on_else": "cancel"
+      },
+      {
+        "step": "23a",
+        "type": "js_transform",
+        "description": "Count draft steps that carry a prompt_draft field — determines whether design_workflow_prompts is needed.",
+        "input_key": "draft_workflow",
+        "output_key": "domain_prompt_count",
+        "expression": "(function(){ return (items.steps || []).filter(function(s){ return s.prompt_draft; }).length; })()",
+        "on_success": "next",
+        "on_else": "next"
+      },
+      {
+        "step": "23b",
+        "type": "condition",
+        "description": "Skip design_workflow_prompts entirely if no domain-specific llm_call steps exist in the draft.",
+        "expression": "{{domain_prompt_count}}",
+        "on_success": "23c",
+        "on_else": "24"
+      },
+      {
+        "step": "23c",
+        "type": "serv_query",
+        "description": "Load existing PGC_Prompt entries so design_workflow_prompts can identify reuse candidates.",
+        "input": {
+          "tableName": "PGC_Prompt"
+        },
+        "output_key": "existing_prompt_categories",
+        "on_success": "next",
+        "on_else": "next"
+      },
+      {
+        "step": "23d",
+        "type": "llm_call",
+        "description": "Classify each domain-specific llm_call step as reuse, create, or convert; draft new prompt texts where needed.",
+        "input": {
+          "prompt": "design_workflow_prompts",
+          "draft_steps": "{{draft_workflow.steps}}",
+          "existing_categories": "{{existing_prompt_categories}}",
+          "workflow_domain": "{{input.domain}}"
+        },
+        "output_key": "capability_decisions",
+        "on_success": "next",
+        "on_else": "23h"
+      },
+      {
+        "step": "23e",
+        "type": "js_transform",
+        "description": "Extract create decisions that require a new PGC_Prompt row.",
+        "input_key": "capability_decisions",
+        "output_key": "create_decisions",
+        "expression": "(function(){ return (items.decisions || []).filter(function(d){ return d.action === 'create'; }); })()",
+        "on_success": "next",
+        "on_else": "23h"
+      },
+      {
+        "step": "23f",
+        "type": "condition",
+        "description": "Skip prompt insertion iterator if no create decisions were returned.",
+        "expression": "{{create_decisions.length}}",
+        "on_success": "23g",
+        "on_else": "23h"
+      },
+      {
+        "step": "23g",
+        "type": "iterator",
+        "description": "Insert each new domain-specific prompt into PGC_Prompt with model alias stored verbatim.",
+        "items_key": "create_decisions",
+        "item_step": {
+          "type": "serv_insert",
+          "description": "Register new domain-specific prompt row.",
+          "input": {
+            "tableName": "PGC_Prompt",
+            "row": {
+              "intent_category": "{{item.prompt_category}}",
+              "prompt_text": "{{item.prompt_text}}",
+              "model": "{{item.prompt_model}}",
+              "domain": "{{input.domain}}",
+              "output_schema": "{{item.output_schema}}",
+              "version": 1
+            }
+          }
+        },
+        "output_key": "inserted_prompts",
+        "execution_mode": "sequential",
+        "on_complete": "23h",
+        "on_else": "23h"
+      },
+      {
+        "step": "23h",
+        "type": "js_transform",
+        "description": "Apply capability decisions to draft_workflow.steps: strip draft fields from reuse/create steps; rewrite convert steps as js_transform.",
+        "input_key": "draft_workflow",
+        "output_key": "draft_workflow",
+        "expression": "(function(){ var wf = items; var decisions = (local_state.capability_decisions || {}).decisions || []; var dMap = {}; decisions.forEach(function(d){ dMap[d.step_key] = d; }); var draftFields = ['prompt_draft','prompt_category','prompt_model','output_schema']; var updated = wf.steps.map(function(s){ var d = dMap[s.step]; if (!d) return s; if (d.action === 'convert') { return { step: s.step, type: 'js_transform', description: s.description, expression: d.js_expression, output_key: s.output_key, on_success: s.on_success, on_else: s.on_else }; } var clean = {}; Object.keys(s).forEach(function(k){ if (draftFields.indexOf(k) === -1) clean[k] = s[k]; }); return clean; }); return { name: wf.name, description: wf.description, intent_keywords: wf.intent_keywords, steps: updated }; })()",
+        "on_success": "next",
+        "on_else": "next"
       },
       {
         "step": "24",
@@ -1406,11 +1611,11 @@
       {
         "step": "35b",
         "type": "js_transform",
-        "description": "Build intent_pattern: split user phrases on comma, lowercase/trim each, append workflow name, join with | for Pass 1a regex matching.",
+        "description": "Build intent_pattern: user invocation phrases + alias extracted from original userInput (truncated at first stop word) + workflow name, joined with | for Pass 1a regex matching.",
         "output_key": "intent_pattern",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
+        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2 && parts.indexOf(truncated) === -1) { parts.push(truncated); } } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
       },
       {
         "step": "36",
@@ -1421,7 +1626,8 @@
           "row": {
             "pattern": "{{intent_pattern}}",
             "intent_category": "{{draft_workflow.name}}",
-            "action_type": "workflow"
+            "action_type": "workflow",
+            "workflow_id": "{{registered_workflow.id}}"
           }
         },
         "output_key": "registered_intent_row",
@@ -1834,37 +2040,89 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 1,
+    "version": 3,
     "steps": [
       {
         "step": "1",
-        "type": "condition",
-        "description": "Route to id lookup when input.id is set, otherwise fall through to name search.",
-        "expression": "{{input.id}}",
-        "on_success": "2",
-        "on_else": "3"
-      },
-      {
-        "step": "2",
-        "type": "serv_entity_get",
-        "description": "Fetch entity by exact id.",
+        "type": "serv_query",
+        "description": "Load all entity schemas registered for this domain.",
         "input": {
-          "entityName": "{{input.entity_name}}",
-          "id": "{{input.id}}"
+          "tableName": "PGC_EntitySchema",
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
         },
-        "output_key": "results",
-        "on_success": "step:4",
+        "output_key": "domain_schemas",
+        "on_success": "1a",
         "on_else": "cancel"
       },
       {
-        "step": "3",
-        "type": "serv_entity_query",
-        "description": "Search for the entity by name using a LIKE filter.",
+        "step": "1a",
+        "type": "js_transform",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "output_key": "entity_resolution",
+        "on_success": "1b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1b",
+        "type": "condition",
+        "description": "Skip LLM selection if entity name already resolved.",
+        "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
+        "on_success": "1d",
+        "on_else": "1c"
+      },
+      {
+        "step": "1c",
+        "type": "llm_call",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
         "input": {
-          "entityName": "{{input.entity_name}}",
+          "prompt": "select_entity_schema",
+          "userInput": "{{input.userInput}}",
+          "schema_options": "{{entity_resolution.schema_options}}"
+        },
+        "output_key": "entity_selection",
+        "on_success": "1d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1d",
+        "type": "js_transform",
+        "description": "Write resolved entity name from direct resolution or LLM selection.",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
+        "output_key": "resolved_entity_name",
+        "on_success": "2",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2",
+        "type": "condition",
+        "description": "Route to id lookup when input.id is set, otherwise fall through to name search.",
+        "expression": "{{input.id}}",
+        "on_success": "3",
+        "on_else": "4"
+      },
+      {
+        "step": "3",
+        "type": "serv_entity_get",
+        "description": "Fetch entity by exact id.",
+        "input": {
+          "entityName": "{{resolved_entity_name}}",
+          "id": "{{input.id}}"
+        },
+        "output_key": "results",
+        "on_success": "step:5",
+        "on_else": "cancel"
+      },
+      {
+        "step": "4",
+        "type": "serv_entity_query",
+        "description": "Search for the entity by title using a LIKE filter.",
+        "input": {
+          "entityName": "{{resolved_entity_name}}",
           "filters": [
             {
-              "column": "name",
+              "column": "title",
               "op": "like",
               "value": "{{input.search}}"
             }
@@ -1876,7 +2134,7 @@
         "on_else": "cancel"
       },
       {
-        "step": "4",
+        "step": "5",
         "type": "js_transform",
         "description": "Format matched entity with root columns and child arrays into Slack mrkdwn.",
         "input_key": "results",
@@ -1886,13 +2144,13 @@
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  var rootLine = '• ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    ◦ ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '—'); });    acc.push('    ◦ ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
-        "step": "5",
+        "step": "6",
         "type": "notify",
         "message_template": "{{results_display}}",
         "on_success": "end"
       },
       {
-        "step": "6",
+        "step": "7",
         "type": "end"
       }
     ]
@@ -1910,14 +2168,66 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 1,
+    "version": 3,
     "steps": [
       {
         "step": "1",
+        "type": "serv_query",
+        "description": "Load all entity schemas registered for this domain.",
+        "input": {
+          "tableName": "PGC_EntitySchema",
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
+        },
+        "output_key": "domain_schemas",
+        "on_success": "1a",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1a",
+        "type": "js_transform",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "output_key": "entity_resolution",
+        "on_success": "1b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1b",
+        "type": "condition",
+        "description": "Skip LLM selection if entity name already resolved.",
+        "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
+        "on_success": "1d",
+        "on_else": "1c"
+      },
+      {
+        "step": "1c",
+        "type": "llm_call",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
+        "input": {
+          "prompt": "select_entity_schema",
+          "userInput": "{{input.userInput}}",
+          "schema_options": "{{entity_resolution.schema_options}}"
+        },
+        "output_key": "entity_selection",
+        "on_success": "1d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1d",
+        "type": "js_transform",
+        "description": "Write resolved entity name from direct resolution or LLM selection.",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
+        "output_key": "resolved_entity_name",
+        "on_success": "2",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2",
         "type": "serv_entity_query",
         "description": "List all entities.",
         "input": {
-          "entityName": "{{input.entity_name}}",
+          "entityName": "{{resolved_entity_name}}",
           "limit": 50
         },
         "output_key": "results",
@@ -1925,7 +2235,7 @@
         "on_else": "cancel"
       },
       {
-        "step": "2",
+        "step": "3",
         "type": "js_transform",
         "description": "Format list results — root columns only, child arrays suppressed.",
         "input_key": "results",
@@ -1936,13 +2246,13 @@
         "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  return '• ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
       },
       {
-        "step": "3",
+        "step": "4",
         "type": "notify",
         "message_template": "{{results_display}}",
         "on_success": "end"
       },
       {
-        "step": "4",
+        "step": "5",
         "type": "end"
       }
     ]
@@ -1959,14 +2269,66 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 2,
+    "version": 5,
     "steps": [
       {
         "step": "1",
+        "type": "serv_query",
+        "description": "Load all entity schemas registered for this domain.",
+        "input": {
+          "tableName": "PGC_EntitySchema",
+          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "limit": 50
+        },
+        "output_key": "domain_schemas",
+        "on_success": "1a",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1a",
+        "type": "js_transform",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
+        "output_key": "entity_resolution",
+        "on_success": "1b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1b",
+        "type": "condition",
+        "description": "Skip LLM selection if entity name already resolved.",
+        "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
+        "on_success": "1d",
+        "on_else": "1c"
+      },
+      {
+        "step": "1c",
+        "type": "llm_call",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
+        "input": {
+          "prompt": "select_entity_schema",
+          "userInput": "{{input.userInput}}",
+          "schema_options": "{{entity_resolution.schema_options}}"
+        },
+        "output_key": "entity_selection",
+        "on_success": "1d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1d",
+        "type": "js_transform",
+        "description": "Write resolved_entity_name from direct resolution or LLM selection.",
+        "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
+        "output_key": "resolved_entity_name",
+        "on_success": "1e",
+        "on_else": "cancel"
+      },
+      {
+        "step": "1e",
         "type": "serv_entity_schema",
         "description": "Load full entity schema with parent-child hierarchy info.",
         "input": {
-          "entityName": "{{input.entity_name}}"
+          "entityName": "{{resolved_entity_name}}"
         },
         "output_key": "full_entity_schema",
         "on_success": "next",
@@ -1975,15 +2337,160 @@
       {
         "step": "2",
         "type": "llm_call",
-        "description": "Parse the user natural language description into a structured entity object.",
+        "description": "Parse the user natural language description into a structured entity object or array of rows.",
         "input": {
           "prompt": "parse_entity_input",
           "userInput": "{{input.userInput}}",
           "entity_schema": "{{full_entity_schema}}"
         },
         "output_key": "parsed_entity",
-        "on_success": "next",
+        "on_success": "2g",
         "on_else": "cancel"
+      },
+      {
+        "step": "2g",
+        "type": "condition",
+        "description": "Branch on bulk (array) vs single entity parse output.",
+        "expression": "Array.isArray(local_state.parsed_entity)",
+        "on_success": "2h",
+        "on_else": "2a"
+      },
+      {
+        "step": "2h",
+        "type": "js_transform",
+        "description": "Build bulk preview — count, entity name, and first 3 rows as sample.",
+        "expression": "(function(){ var rows=local_state.parsed_entity; var schema=local_state.full_entity_schema; return {count:rows.length,entity_name:(schema&&schema.entity_name)||local_state.resolved_entity_name||'',root_table:(schema&&schema.root&&schema.root.table)||'',sample:rows.slice(0,3)}; })()",
+        "output_key": "bulk_preview",
+        "on_success": "2i",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2i",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User confirms bulk insert before any DB write.",
+        "message_template": "I parsed {{bulk_preview.count}} {{bulk_preview.entity_name}} records. Here's a sample of the first 3. Confirm to insert all {{bulk_preview.count}} rows.",
+        "context_key": "bulk_preview",
+        "options": [
+          {
+            "label": "Insert all",
+            "action": "confirm",
+            "on_select": "2j"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "2j",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "2j",
+        "type": "serv_insert",
+        "description": "Bulk insert all parsed rows in a single addRows call.",
+        "input": {
+          "tableName": "{{bulk_preview.root_table}}",
+          "row": "{{parsed_entity}}",
+          "ref_fk_columns": "{{full_entity_schema.root.ref_fk_columns}}"
+        },
+        "output_key": "bulk_insert_result",
+        "on_success": "2k",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2k",
+        "type": "notify",
+        "description": "Confirm bulk insert complete.",
+        "message_template": "Saved {{bulk_preview.count}} {{bulk_preview.entity_name}} records.",
+        "on_success": "6"
+      },
+      {
+        "step": "2a",
+        "type": "js_transform",
+        "description": "Collect all ref FK string values from parsed_entity, grouped by ref table, so the LLM can produce complete records for each.",
+        "expression": "(function(){ var schema=local_state.full_entity_schema; var parsed=local_state.parsed_entity; if(!schema||!parsed) return {ref_candidates:[],entity_name:'',domain:''}; var byTable={}; function add(refFks,rows){ (refFks||[]).forEach(function(rf){ if(!byTable[rf.ref_table]) byTable[rf.ref_table]={ref_table:rf.ref_table,lookup_column:rf.lookup_column,create_with:rf.create_with||[rf.lookup_column],allowed_values:rf.allowed_values||{},values:{}}; (Array.isArray(rows)?rows:[rows]).forEach(function(r){ if(r){ var v=r[rf.column]; if(v!==null&&v!==undefined&&typeof v==='string') byTable[rf.ref_table].values[v]=1; } }); }); } add((schema.root||{}).ref_fk_columns||[],[parsed.root||{}]); (schema.children||[]).forEach(function(c){ add(c.ref_fk_columns||[],((parsed.children||{})[c.output_key])||[]); }); var candidates=Object.values(byTable).map(function(e){ var av=e.allowed_values; return {ref_table:e.ref_table,lookup_column:e.lookup_column,create_with:e.create_with,values:Object.keys(e.values),allowed_values:(av&&Object.keys(av).length>0?av:undefined)}; }).filter(function(c){ return c.values.length>0; }); return {ref_candidates:candidates,entity_name:schema.entity_name,domain:local_state.domain||''}; })()",
+        "output_key": "ref_data_ctx",
+        "on_success": "2b",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2b",
+        "type": "condition",
+        "description": "Skip reference data enrichment if no ref FK values were found in the parsed entity.",
+        "expression": "local_state.ref_data_ctx && local_state.ref_data_ctx.ref_candidates && local_state.ref_data_ctx.ref_candidates.length > 0",
+        "on_success": "2c",
+        "on_else": "3"
+      },
+      {
+        "step": "2c",
+        "type": "llm_call",
+        "description": "LLM produces complete, accurate records for each ref table value — proper abbreviations, unit types, etc.",
+        "input": {
+          "prompt": "enrich_ref_records",
+          "domain": "{{ref_data_ctx.domain}}",
+          "entity_name": "{{ref_data_ctx.entity_name}}",
+          "ref_candidates": "{{ref_data_ctx.ref_candidates}}"
+        },
+        "output_key": "proposed_ref_records",
+        "on_success": "2d",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2d",
+        "type": "human_gate",
+        "gate_type": "review_object",
+        "description": "User confirms the reference records to be created before the entity insert.",
+        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?",
+        "context_key": "proposed_ref_records",
+        "options": [
+          {
+            "label": "Looks good",
+            "action": "confirm",
+            "on_select": "2e"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "2e",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "2e",
+        "type": "js_transform",
+        "description": "Flatten proposed_ref_records to a row-per-item array for the insert iterator.",
+        "expression": "(function(){ var result=[]; var recs=local_state.proposed_ref_records; var arr=Array.isArray(recs)?recs:(recs&&recs.proposed_ref_records?recs.proposed_ref_records:[]); arr.forEach(function(entry){ (entry.rows||[]).forEach(function(row){ result.push({ref_table:entry.ref_table,lookup_column:entry.lookup_column,row:row}); }); }); return result; })()",
+        "output_key": "ref_rows_to_insert",
+        "on_success": "2f",
+        "on_else": "cancel"
+      },
+      {
+        "step": "2f",
+        "type": "iterator",
+        "description": "Insert each confirmed reference record, skipping rows that already exist.",
+        "items_key": "ref_rows_to_insert",
+        "execution_mode": "sequential",
+        "output_key": "ref_insert_results",
+        "on_else": "cancel",
+        "item_step": {
+          "type": "serv_insert",
+          "description": "Insert ref row if it does not already exist (check_exists_by skips duplicates).",
+          "input": {
+            "tableName": "{{item.ref_table}}",
+            "row": "{{item.row}}",
+            "check_exists_by": "{{item.lookup_column}}"
+          },
+          "output_key": "inserted_ref_row",
+          "on_success": "next",
+          "on_else": "next"
+        },
+        "on_complete": "3"
       },
       {
         "step": "3",

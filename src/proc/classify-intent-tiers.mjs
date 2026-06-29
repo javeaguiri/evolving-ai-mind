@@ -77,12 +77,15 @@ export function matchIntentMap(userInput, intentRows) {
  * @returns {object|null}        First matching domain row, or null
  */
 export function matchDomainAlias(userInput, domainRows) {
-  const input = userInput.toLowerCase();
+  // Scan only the first line — the command prefix (verb + domain) is always there.
+  // Body text (recipe descriptions, notes, etc.) can contain common words like
+  // "system" that would match unrelated domain aliases if the full input were scanned.
+  const input = userInput.split('\n')[0].slice(0, 200).toLowerCase();
   for (const row of domainRows) {
-    if (input.includes(row.domain.toLowerCase())) return row;
+    if (input.includes(row.domain.toLowerCase())) return { ...row, _matched_alias: row.domain };
     const aliases = Array.isArray(row.aliases) ? row.aliases : [];
     for (const alias of aliases) {
-      if (input.includes(alias.toLowerCase())) return row;
+      if (input.includes(alias.toLowerCase())) return { ...row, _matched_alias: alias };
     }
   }
   return null;
@@ -109,8 +112,10 @@ export function matchDomainAlias(userInput, domainRows) {
  * @param {object[]} workflowRows  All pre-loaded PGC_Workflow rows
  * @returns {{ workflow_name: string, search_term: string|null, record_id: number|null } | null}
  */
-export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
-  const input = userInput.toLowerCase();
+export function matchWorkflowByKeywords(userInput, domain, workflowRows, aliases = []) {
+  // Scan only the first line for keyword matching — pasted multi-line body text
+  // (e.g. a recipe with "find" or "show" in its body) must not influence intent routing.
+  const input = userInput.split('\n')[0].slice(0, 200).toLowerCase();
   const domainWorkflows = workflowRows.filter(r => r.domain === domain || r.domain === null);
 
   if (domainWorkflows.length === 0) return null;
@@ -146,7 +151,7 @@ export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
 
   // Disambiguation: prefer get_<domain> or get_entity when search/id tokens present
   const getMatch = matches.find(m => m.wf.name === `get_${domain}` || m.wf.name === 'get_entity');
-  const { search_term, record_id } = extractSearchTerm(userInput, domain);
+  const { search_term, record_id } = extractSearchTerm(userInput, [domain, ...aliases]);
 
   if (getMatch && (search_term || record_id !== null)) {
     return { workflow_name: getMatch.wf.name, search_term, record_id };
@@ -173,61 +178,72 @@ export function matchWorkflowByKeywords(userInput, domain, workflowRows) {
 // ---------------------------------------------------------------------------
 
 /**
- * Extract the search term or record id from a retrieval-intent user input
- * by stripping the leading verb tokens, optional quantifiers, and domain name.
+ * Extract the search term or record id from a retrieval-intent user input.
  *
- * Returns an object with exactly one of search_term or record_id set:
- *   { search_term: "sweet potato chili", record_id: null }
- *   { search_term: null, record_id: 1 }
- *   { search_term: null, record_id: null }   — nothing remained after strip
- *
- * When the stripped remainder is solely an id=N token, record_id is set and
- * search_term is null — the caller posts an instructive error rather than
- * running a LIKE query with "id=1" as the name filter.
+ * Strategy:
+ *   1. Strip the leading verb + optional quantifiers ("get my", "show all", etc.)
+ *   2. Strip the matched domain alias from the front of the remainder — using the
+ *      actual alias strings rather than the canonical domain name, so "dish", "dishes",
+ *      "food recipes", etc. are all handled correctly.
+ *   3. Scan for id=N / id:N (spaces around separator ok) → record_id.
+ *   4. Parse explicit field=value pairs (name="…", title=…) → search_term.
+ *   5. Treat the entire remainder as an implicit name search.
  *
  * Examples:
+ *   aliases = ['recipes','recipe','dish','dishes','meal']
  *   "get my recipes sweet potato chili" → { search_term: "sweet potato chili", record_id: null }
- *   "show recipes pasta carbonara"      → { search_term: "pasta carbonara",     record_id: null }
- *   "get recipes id=1"                  → { search_term: null,                  record_id: 1    }
- *   "show all my recipes"               → { search_term: null,                  record_id: null }
+ *   "get dish id=1"                     → { search_term: null, record_id: 1 }
+ *   "get dish id = 1"                   → { search_term: null, record_id: 1 }
+ *   "get dish SWEET POTATO CHILI"       → { search_term: "SWEET POTATO CHILI", record_id: null }
+ *   "get recipe name=\"SWEET POTATO\""  → { search_term: "SWEET POTATO", record_id: null }
+ *   "show all my recipes"               → { search_term: null, record_id: null }
  *
- * @param {string} userInput  Raw user input
- * @param {string} domain     Resolved domain name, e.g. "recipes"
+ * @param {string}   userInput  Raw user input
+ * @param {string[]} aliases    All candidate strings for the domain (domain name + aliases array)
  * @returns {{ search_term: string|null, record_id: number|null }}
  */
-export function extractSearchTerm(userInput, domain) {
-  const domainPattern = domain.replace(/_/g, '[_\\s]+');
-  const stripped = userInput
-    .replace(
-      new RegExp(
-        `^\\s*(?:get|show|find|fetch|display|look\\s+up|search(?:\\s+for)?)\\s+` +
-        `(?:all\\s+)?(?:my\\s+)?(?:${domainPattern})[s]?\\s*`,
-        'i'
-      ),
-      ''
-    )
-    .trim();
+export function extractSearchTerm(userInput, aliases) {
+  const VERBS = `(?:get|show|find|fetch|display|look\\s+up|search(?:\\s+for)?)`;
+  const QUANT = `(?:all\\s+)?(?:my\\s+)?`;
 
-  if (stripped.length === 0) {
-    return { search_term: null, record_id: null };
+  // Work on first line only — the command is always single-line.
+  const firstLine = userInput.split('\n')[0];
+
+  // Step 1: strip leading verb + optional quantifiers.
+  const afterVerb = firstLine.replace(new RegExp(`^\\s*${VERBS}\\s+${QUANT}`, 'i'), '').trim();
+
+  // Step 2: strip the matched alias from the front. Sort longest-first so a
+  // multi-word alias like "food recipes" beats a shorter prefix like "food".
+  // Underscores in alias strings match either underscore or whitespace in the input
+  // (e.g. alias "stock_portfolio" matches "stock portfolio").
+  let remainder = afterVerb;
+  const sortedAliases = [...new Set(aliases)].sort((a, b) => b.length - a.length);
+  for (const alias of sortedAliases) {
+    const esc = alias.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&').replace(/_/g, '[_\\s]+');
+    const stripped = remainder.replace(new RegExp(`^${esc}\\s*`, 'i'), '');
+    if (stripped !== remainder) {
+      remainder = stripped.trim();
+      break;
+    }
   }
 
-  // Remainder is solely an id token — return as record_id, not search_term.
-  // Accepted formats: id=42  id:42  id 42
-  const idOnly = stripped.match(/^id\s*[=:]\s*(\d+)$/i)
-               ?? stripped.match(/^id\s+(\d+)$/i);
-  if (idOnly) {
-    return { search_term: null, record_id: parseInt(idOnly[1], 10) };
+  if (!remainder) return { search_term: null, record_id: null };
+
+  // Step 3: id=N or id:N anywhere in the remainder (spaces around separator ok).
+  const idToken = remainder.match(/\bid\s*[=:]\s*(\d+)\b/i);
+  if (idToken) return { search_term: null, record_id: parseInt(idToken[1], 10) };
+
+  // Step 4: explicit field=value pairs — parseFieldValues excludes 'id' (system col).
+  const parsed = parseFieldValues(remainder);
+  const parsedKeys = Object.keys(parsed);
+  if (parsedKeys.length > 0) {
+    // Prefer 'name' field; fall back to first parsed field value.
+    const val = parsed.name ?? parsed[parsedKeys[0]];
+    return { search_term: val ?? null, record_id: null };
   }
 
-  // Strip a leading field=value prefix (e.g. "name=French Ratatouille" → "French Ratatouille").
-  // Users sometimes type field=value syntax from habit when performing a name search.
-  // Only strip the first word if it is a bare identifier followed by = and no digits-only value
-  // (which would be an id= pattern already caught above).
-  const fieldPrefix = stripped.match(/^\w+\s*=\s*(.+)$/);
-  const searchTerm  = fieldPrefix ? fieldPrefix[1].trim() : stripped;
-
-  return { search_term: searchTerm, record_id: null };
+  // Step 5: plain text — treat entire remainder as implicit name search.
+  return { search_term: remainder, record_id: null };
 }
 
 // ---------------------------------------------------------------------------

@@ -206,7 +206,7 @@ async function classify(userInput, sessionId, traceId) {
 
       const isRetrieval = /^(get|search)_/.test(intentMatch.intent_category);
       const { search_term, record_id } = isRetrieval && domain
-        ? extractSearchTerm(userInput, domain)
+        ? extractSearchTerm(userInput, [domain, ...(matched?.aliases || [])])
         : { search_term: null, record_id: null };
 
       return wrap({
@@ -235,7 +235,7 @@ async function classify(userInput, sessionId, traceId) {
   if (domainMatch) {
     console.info('classify-intent: Pass 2 domain resolved', { domain: domainMatch.domain, traceId });
 
-    const kwMatch = matchWorkflowByKeywords(userInput, domainMatch.domain, workflowRows);
+    const kwMatch = matchWorkflowByKeywords(userInput, domainMatch.domain, workflowRows, [domainMatch._matched_alias, ...(domainMatch.aliases || [])].filter(Boolean));
     if (kwMatch) {
       console.info('classify-intent: Pass 2 keyword match', {
         workflow_name: kwMatch.workflow_name,
@@ -495,7 +495,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
     const runResp = await insertRow('PGC_WorkflowRun', {
       workflow_id:  workflowId,
       trace_id:     traceId,
-      triggered_by: 'slack',
+      triggered_by: 'intent_classify',
       status:       'pending',
       input:        workflowInput,
       stack:        [],

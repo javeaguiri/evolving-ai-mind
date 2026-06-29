@@ -10,6 +10,8 @@
 //   runSimulation          — full Level 1 + Level 2 validation
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
+import vm from 'vm';
+
 // Known valid routing token pattern — "next", "end", "cancel",
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
 const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
@@ -188,20 +190,20 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Condition steps have a stricter contract: on_success/on_else must be bare step keys.
-    // Control tokens (next, end, cancel) and step:N prefixed values are not valid —
-    // a condition must explicitly name its true and false target steps by key.
+    // Condition steps have a stricter contract: on_success/on_else must be bare step keys
+    // or terminal tokens (end, cancel). "next" and "step:N" are ambiguous on condition steps —
+    // the branch target must be named explicitly.
     if (s.type === 'condition') {
       for (const field of ['on_success', 'on_else']) {
         const val = s[field];
         if (val == null) continue;
         const sv = String(val);
-        if (CONTROL_TOKENS.has(sv) || sv.startsWith('step:')) {
+        if (sv === 'next' || sv.startsWith('step:')) {
           issues.push({
             check:         'condition_routing_invalid',
             step:          stepKey,
             failure_class: 'condition_routing_invalid',
-            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") but got "${sv}". Control tokens (next, end, cancel) and step:N prefixed values are not valid here — specify the target step key directly.`,
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") or a terminal token (end, cancel), but got "${sv}". "next" and "step:N" are ambiguous on condition steps — specify the target step key directly.`,
           });
         }
       }
@@ -1044,17 +1046,25 @@ function runJsTransformSmokeTest(steps, traceId) {
           : undefined;
 
         try {
-          // eslint-disable-next-line no-new-func
-          const fn = new Function('local_state', 'items', `"use strict";\nreturn (${expr})`);
-          result = fn(mockState, itemsVal);
+          const sandbox = { local_state: mockState, items: itemsVal };
+          result = vm.runInNewContext(`(${expr})`, sandbox, { timeout: 500 });
         } catch (err) {
-          if (err instanceof SyntaxError) {
+          if (err.name === 'SyntaxError') {
             threwSyntax = true;
             issues.push({
               check:         'js_transform_syntax_error',
               step:          key,
               failure_class: 'js_transform_syntax_error',
               detail:        `js_transform step "${key}" expression has a syntax error: ${err.message}`,
+            });
+          } else if (err.message?.includes('Script execution timed out')) {
+            threwRuntime = true;
+            issues.push({
+              check:         'js_transform_runtime_error',
+              step:          key,
+              failure_class: 'js_transform_runtime_error',
+              severity:      'warning',
+              detail:        `js_transform step "${key}" expression timed out after 500ms — possible infinite loop.`,
             });
           } else {
             threwRuntime = true;

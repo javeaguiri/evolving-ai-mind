@@ -132,11 +132,13 @@ describe('matchDomainAlias', () => {
   it('matches the domain name itself as an implicit alias', () => {
     const row = matchDomainAlias('show all my recipes', domainHelpRows);
     assert.equal(row.domain, 'recipes');
+    assert.equal(row._matched_alias, 'recipes');
   });
 
-  it('matches an entry from the aliases array', () => {
+  it('matches an entry from the aliases array and returns _matched_alias', () => {
     const row = matchDomainAlias('show all my cooking ideas', domainHelpRows);
     assert.equal(row.domain, 'recipes');
+    assert.equal(row._matched_alias, 'cooking');
   });
 
   it('matches substring — alias does not need to be a whole word', () => {
@@ -230,6 +232,14 @@ describe('matchWorkflowByKeywords', () => {
     assert.equal(result.record_id, null);
   });
 
+  it('multi-line input — keyword scan limited to first line, body text ignored', () => {
+    // Recipe body contains "find" and "show" — must not trigger get_entity via false match.
+    const multiLine = 'add dish Thai Peanut Sweet\nPotato Broccoli Buddha Bowl\nYou will find this recipe easy.\nShow toppings: avocado.';
+    const result = matchWorkflowByKeywords(multiLine, 'recipes', workflowRows, ['dish', 'dishes']);
+    assert.ok(result, 'expected a match');
+    assert.equal(result.workflow_name, 'add_entity');
+  });
+
   it('returns null when no keyword matches', () => {
     const result = matchWorkflowByKeywords('something unrelated', 'recipes', workflowRows);
     assert.equal(result, null);
@@ -268,60 +278,92 @@ describe('matchWorkflowByKeywords', () => {
 // ---------------------------------------------------------------------------
 
 describe('extractSearchTerm', () => {
-  it('extracts search term after stripping verb and domain', () => {
-    const { search_term, record_id } = extractSearchTerm('get my recipes sweet potato chili', 'recipes');
+  // Convenience: aliases array typical for a recipes domain.
+  const recipesAliases = ['recipes', 'recipe', 'dish', 'dishes', 'meal', 'meals'];
+
+  it('extracts search term after stripping verb and domain name', () => {
+    const { search_term, record_id } = extractSearchTerm('get my recipes sweet potato chili', recipesAliases);
     assert.equal(search_term, 'sweet potato chili');
     assert.equal(record_id, null);
   });
 
+  it('strips alias "dish" (not the canonical domain name) before parsing remainder', () => {
+    const { search_term, record_id } = extractSearchTerm('get dish SWEET POTATO CHILI', recipesAliases);
+    assert.equal(search_term, 'SWEET POTATO CHILI');
+    assert.equal(record_id, null);
+  });
+
+  it('returns record_id when remainder contains id=N after alias strip', () => {
+    const { search_term, record_id } = extractSearchTerm('get dish id=1', recipesAliases);
+    assert.equal(search_term, null);
+    assert.equal(record_id, 1);
+  });
+
+  it('handles spaces around = in id token: dish id = 1', () => {
+    const { search_term, record_id } = extractSearchTerm('get dish id = 1', recipesAliases);
+    assert.equal(search_term, null);
+    assert.equal(record_id, 1);
+  });
+
+  it('parses name= field value: recipe name="SWEET POTATO CHILI"', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipe name="SWEET POTATO CHILI"', recipesAliases);
+    assert.equal(search_term, 'SWEET POTATO CHILI');
+    assert.equal(record_id, null);
+  });
+
+  it('parses single-quoted name field: recipe name=\'SWEET POTATO CHILI\'', () => {
+    const { search_term, record_id } = extractSearchTerm("get recipe name='SWEET POTATO CHILI'", recipesAliases);
+    assert.equal(search_term, 'SWEET POTATO CHILI');
+    assert.equal(record_id, null);
+  });
+
   it('extracts search term with "show" verb', () => {
-    const { search_term } = extractSearchTerm('show recipes pasta carbonara', 'recipes');
+    const { search_term } = extractSearchTerm('show recipes pasta carbonara', recipesAliases);
     assert.equal(search_term, 'pasta carbonara');
   });
 
   it('extracts search term with "find" verb', () => {
-    const { search_term } = extractSearchTerm('find my recipes sweet potato', 'recipes');
+    const { search_term } = extractSearchTerm('find my recipes sweet potato', recipesAliases);
     assert.equal(search_term, 'sweet potato');
   });
 
-  it('returns record_id when remainder is solely id=N', () => {
-    const { search_term, record_id } = extractSearchTerm('get recipes id=1', 'recipes');
+  it('returns record_id when remainder is solely id=N (canonical domain)', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes id=1', recipesAliases);
     assert.equal(search_term, null);
     assert.equal(record_id, 1);
   });
 
   it('returns record_id for id:N format', () => {
-    const { search_term, record_id } = extractSearchTerm('get recipes id:42', 'recipes');
+    const { search_term, record_id } = extractSearchTerm('get recipes id:42', recipesAliases);
     assert.equal(search_term, null);
     assert.equal(record_id, 42);
   });
 
   it('returns null/null when no extra tokens after verb+domain', () => {
-    const { search_term, record_id } = extractSearchTerm('show all my recipes', 'recipes');
+    const { search_term, record_id } = extractSearchTerm('show all my recipes', recipesAliases);
     assert.equal(search_term, null);
     assert.equal(record_id, null);
   });
 
-  it('returns null/null when input is just the verb with no extra tokens', () => {
-    // "get recipes" strips to empty string → no search term, no id.
-    const { search_term, record_id } = extractSearchTerm('get recipes', 'recipes');
+  it('returns null/null when input is just verb+domain with no remainder', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes', recipesAliases);
     assert.equal(search_term, null);
     assert.equal(record_id, null);
   });
 
   it('handles underscore domain with space in input', () => {
-    const { search_term } = extractSearchTerm('get my stock portfolio AAPL', 'stock_portfolio');
+    const { search_term } = extractSearchTerm('get my stock portfolio AAPL', ['stock_portfolio', 'portfolio']);
     assert.equal(search_term, 'AAPL');
   });
 
-  it('strips leading field= prefix from search term', () => {
-    const { search_term, record_id } = extractSearchTerm('get recipes name=French Ratatouille', 'recipes');
+  it('parses unquoted name= field from remainder', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes name=French Ratatouille', recipesAliases);
     assert.equal(search_term, 'French Ratatouille');
     assert.equal(record_id, null);
   });
 
-  it('does not strip id= prefix — handled as record_id', () => {
-    const { search_term, record_id } = extractSearchTerm('get recipes id=7', 'recipes');
+  it('id= is handled as record_id not search_term', () => {
+    const { search_term, record_id } = extractSearchTerm('get recipes id=7', recipesAliases);
     assert.equal(search_term, null);
     assert.equal(record_id, 7);
   });

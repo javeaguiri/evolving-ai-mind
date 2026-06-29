@@ -294,9 +294,14 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;
         const queryId   = sessionResp.row.query_id;
+        const effectiveUserMsg = userInput || JSON.stringify(resolvedInput);
         let seq = 1;
         await insertRow('PGC_SessionEntry', {
           session_id: sessionId, sequence_number: seq++, role: 'system', content: instructions,
+        });
+        await insertRow('PGC_SessionEntry', {
+          session_id: sessionId, sequence_number: seq++, role: 'user',
+          content: typeof effectiveUserMsg === 'string' ? effectiveUserMsg : JSON.stringify(effectiveUserMsg),
         });
         await insertRow('PGC_SessionEntry', {
           session_id: sessionId, sequence_number: seq++, role: 'assistant',

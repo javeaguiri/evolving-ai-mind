@@ -134,8 +134,15 @@ Step 17b llm_call generate_domain_aliases (Perplexity sonar)
            Generates natural-language aliases for the domain (singular/plural, synonyms)
            save_to_memory: SEMANTIC — aliases, vocabulary tags
 
+Step 17c human_gate text_input — user may add custom aliases
+           Optional. User types comma-separated names (e.g. "groceries, food, shopping")
+           or leaves blank and presses Done. Output key: user_aliases_raw.
+           Cancel → cancelled.
+
 Step 18  js_transform → generated = { domainHelp, intentMapRows: [5], entitySchemas: [1+] }
-           Derives domain registration from confirmed scaffold + LLM aliases.
+           Derives domain registration from confirmed scaffold + LLM aliases + user aliases.
+           user_aliases_raw (if set) is split on commas, trimmed, and merged into the
+           aliases Set alongside the LLM-generated ones.
            Also computes entity name (TitleCase singular), join/aggregation structure,
            and 5 IntentMap patterns (add/list/get/update/delete).
 

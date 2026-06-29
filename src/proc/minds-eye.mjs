@@ -46,6 +46,7 @@ const ACTION_SCHEMA = {
 const DEFAULT_PREFERENCES = {
   name:                   'Agent',
   model:                  'anthropic/claude-sonnet-4-6',
+  max_output_tokens:      8192,
   turn_limit:             8,
   max_actions_per_session:5,
   tone:                   'concise but friendly',
@@ -57,7 +58,7 @@ const DEFAULT_PREFERENCES = {
 const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
-  'search_domain_help', 'list_tables',
+  'search_domain_help', 'list_tables', 'list_physical_tables',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
@@ -67,7 +68,7 @@ const INLINE_WRITE_TOOLS = new Set([
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
-  'propose_workflow_fix', 'propose_schema_fix', 'delete_data',
+  'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -364,14 +365,14 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     let decision;
     try {
-      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId);
+      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
     } catch (llmError) {
       if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
         // One correction turn (0.5 cost) — send raw output back and ask for reformat.
         try {
           const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
-          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId);
+          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
           turnCost += 0.5;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
@@ -553,6 +554,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
 function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
+  if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
@@ -670,6 +672,11 @@ async function buildGateText(action, params, traceId) {
             lines.push(`Replace constraint \`${constraintName}\` with: \`CHECK (${expression})\``);
             break;
           }
+          case 'dropConstraint': {
+            const { constraintName } = params;
+            lines.push(`Drop constraint \`${constraintName}\` — irreversible, removes from DB and PGC_Schema.`);
+            break;
+          }
           default:
             lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
         }
@@ -685,6 +692,22 @@ async function buildGateText(action, params, traceId) {
         } catch { /* best-effort */ }
         const filterDesc = filters.map(f => `${f.column} ${f.op} ${JSON.stringify(f.value)}`).join(' AND ');
         return `**Proposed deletion:** \`${tableName}\`\nFilter: \`${filterDesc || '(all rows)'}\`\n\nThis will permanently delete **${count}** row(s).`;
+      }
+
+      case 'drop_table': {
+        const { tableName } = params;
+        if (!tableName) return '**Drop table** — missing tableName';
+        let registered = false;
+        try {
+          const { servPost } = await import('../shared/serv-client.mjs');
+          const resp = await servPost('/api/v1/serv/schema/listPhysicalTables', { prefix: tableName });
+          const match = (resp.tables ?? []).find(t => t.table_name === tableName);
+          registered = match?.registered ?? false;
+        } catch { /* best-effort */ }
+        const regNote = registered
+          ? 'This table is registered in PGC_Schema — the registration row will also be removed.'
+          : 'This table is **not registered** in PGC_Schema (orphaned) — physical table only will be dropped.';
+        return `**Drop table: \`${tableName}\`** (force=true, CASCADE)\n\n${regNote}\n\nThis is irreversible.`;
       }
 
       default:
@@ -791,10 +814,17 @@ async function executeWriteTool(action, params, traceId) {
       case 'propose_schema_fix': {
         const { operation, tableName, ...rest } = params;
         if (!operation || !tableName) return { error: 'operation and tableName are required' };
-        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint']);
+        const allowed = new Set(['addColumn', 'modifyColumn', 'dropColumn', 'modifyConstraint', 'dropConstraint']);
         if (!allowed.has(operation)) return { error: `Unknown schema operation: ${operation}` };
         const { servPost } = await import('../shared/serv-client.mjs');
         return await servPost(`/api/v1/serv/schema/${operation}`, { tableName, ...rest });
+      }
+
+      case 'drop_table': {
+        const { tableName } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost('/api/v1/serv/schema/deleteTable', { tableName, force: true });
       }
 
       default:
@@ -832,7 +862,7 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
         const runResp = await insertRow('PGC_WorkflowRun', {
           workflow_id:  wf.id,
           trace_id:     traceId,
-          triggered_by: 'system',
+          triggered_by: 'minds_eye',
           status:       'pending',
           input:        input,
           stack:        [],
@@ -876,6 +906,7 @@ function deriveScope(workingHistory) {
     if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
     if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
   }
   return scope;
 }
@@ -1014,23 +1045,27 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
   parts.push(
     'Based on the context and conversation above, decide your next action.\n' +
     'Respond with exactly one JSON object. Use ONLY these action values:\n' +
-    '- Read (no gate): search_domain_help, list_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
+    '- Read (no gate): search_domain_help, list_tables, list_physical_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
     '- Write without gate (executes immediately): update_data, insert_data\n' +
-    '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data\n' +
+    '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data, drop_table\n' +
     '- Memory (no gate, no action limit): write_memory\n' +
     '- Trigger (dispatches to step-executor engine): run_workflow\n' +
     '- respond (final answer to user)\n' +
+    'Params for read tools:\n' +
+    '  list_physical_tables: { prefix? } — lists tables physically present in the PGD database (default prefix "PGD_"); each row includes registered:bool to show whether it appears in PGC_Schema. Use to discover orphaned tables after a failed create_domain run.\n' +
     'Params for write tools:\n' +
     '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
     '  insert_data: { tableName, row: {field: value} }                          -- single row\n' +
     '  insert_data: { tableName, rows: [{field: value}, ...] }                 -- batch (any size, counts as one action)\n' +
     '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
+    '  drop_table: { tableName } — physically drops a PGD table (force=true, CASCADE); also removes PGC_Schema row if present. Use after list_physical_tables to clean up orphaned tables from a failed create_domain run. Gated — requires approval.\n' +
     '  propose_workflow_fix: { workflowName, steps: [...] } — corrects workflow steps; posts a diff gate for human approval before writing.\n' +
     '  propose_schema_fix: { operation, tableName, ...opParams } — applies a schema change; posts description for human approval before executing.\n' +
     '    addColumn:        { operation: "addColumn", tableName, column: { name, type, nullable? } }\n' +
     '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
     '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
     '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
+    '    dropConstraint:   { operation: "dropConstraint", tableName, constraintName, target? }\n' +
     '  write_memory: { content, memory_type? } — record diagnostic reasoning; call before final respond after any change or notable finding. Scope is auto-derived from your tool history — do not set scope.\n' +
     'Params for trigger tools:\n' +
     '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
@@ -1098,7 +1133,7 @@ async function executeReadTool(action, params, traceId) {
         );
         const p = resp.rows?.[0];
         if (!p) return { error: `Prompt "${intentCategory}" not found` };
-        return { intent_category: p.intent_category, version: p.version, domain: p.domain, prompt_text: p.prompt_text, output_schema: p.output_schema };
+        return { id: p.id, intent_category: p.intent_category, version: p.version, domain: p.domain, prompt_text: p.prompt_text, output_schema: p.output_schema, max_output_tokens: p.max_output_tokens ?? null, error_log: p.error_log ?? null };
       }
 
       case 'simulate_workflow': {
@@ -1144,6 +1179,13 @@ async function executeReadTool(action, params, traceId) {
             columns: (r.columns ?? []).map(c => c.name),
           })),
         };
+      }
+
+      case 'list_physical_tables': {
+        const { prefix = 'PGD_' } = params;
+        const { servPost } = await import('../shared/serv-client.mjs');
+        const resp = await servPost('/api/v1/serv/schema/listPhysicalTables', { prefix });
+        return { count: resp.count, tables: resp.tables ?? [] };
       }
 
       default:

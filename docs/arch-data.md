@@ -114,7 +114,7 @@ being written — aliases are not assumed from LLM output alone.
 | aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
 | description | text | |
 | commands | jsonb | Array of command definitions with examples |
-| embedding | vector(1536) | ✦ OpenAI text-embedding-3-small of `domain + description + aliases`. NULL until backfill script runs. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. ⬜ Column added via addColumn endpoint in Session 26 |
+| embedding | vector | ✦ pplx-embed-v1-4b (2560-dim) of `domain + description + aliases`. Populated automatically by `insertRow` on domain creation — no backfill needed. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. PGD embedding columns use `vector(2560)`. **Changing the embedding model dimension requires updates in two places: `EMBEDDING_DIMENSION` in `embed-client.mjs` AND the `embedding_config` PGC_SystemContext row.** |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
@@ -208,6 +208,7 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 | output_schema | jsonb | Expected JSON shape of the LLM response. Used to validate output and guard downstream steps |
 | output_sample | jsonb | Representative successful output stored on first clean run. Used for regression checking when prompt is evolved |
 | probe_input | jsonb | ✦ Minimal substitution map for integration testing — mirrors the `input_variables` contract. Used by `llm-prompt-schema.test.mjs` to substitute template vars before firing the live LLM call |
+| domain | text nullable | Domain this prompt belongs to (e.g. `flashcards`, `pantry`). NULL for system-level prompts shared across all domains. Set by `design_workflow_prompts` (P3). Deleted by `delete_domain` / `delete_workflow` via `deleteRows WHERE domain = ?` |
 | model | text | Which LLM was used |
 | max_output_tokens | integer | ✦ Per-prompt output token ceiling forwarded to `callLlm`. NULL = use LLM default |
 | memory_config | jsonb | ✦ Controls memory retrieval for this prompt. `{ memory_budget_tokens, memory_types, scope_additions }`. NULL = no memory injection. `memory_budget_tokens: 0` disables memory. See §4.3.4 |
@@ -848,9 +849,11 @@ DDL executor and PGC metadata registry.
 |---|---|---|
 | `/api/v1/serv/schema/createTable` | POST | Execute DDL + register in PGC_Schema + PGC_TableMap |
 | `/api/v1/serv/schema/listTables` | POST | List entries from PGC_Schema, optional target filter |
+| `/api/v1/serv/schema/listPhysicalTables` | POST | Query `information_schema.tables` for physical PGD tables; cross-references PGC_Schema to flag unregistered tables (`registered: bool`) |
 | `/api/v1/serv/schema/getTable` | POST | Get one entry by tableName |
 | `/api/v1/serv/schema/updateTable` | POST | Update metadata in PGC_Schema (NOT ALTER TABLE) |
 | `/api/v1/serv/schema/deleteTable` | POST | DROP TABLE + remove from PGC_Schema + PGC_TableMap |
+| `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
 
 Security gate on `createTable`:
 - Column types validated against whitelist (serial, text, integer, jsonb, timestamptz, etc.)
@@ -1041,7 +1044,7 @@ curl -s -X POST "$SERV_API_URL/api/v1/serv/entity/getEntity" -H "Content-Type: a
 ```bash
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addColumn" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_Prompt", "column": { "name": "domain", "type": "text", "nullable": true } }'
 ```
-Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update metadata without running DDL.
+Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to update PGC_Schema metadata without running DDL (e.g. to backfill `embed_source` on an existing vector column). The `column` field is a **nested object** `{ name, type, nullable }` — not flat fields.
 
 #### SERV-Schema — listTables
 
@@ -1049,6 +1052,20 @@ Runs `ALTER TABLE` + updates `PGC_Schema.columns`. Use `"schemaOnly": true` to u
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listTables" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "target": "pgd" }'
 ```
 `target` accepts `"pgc"` or `"pgd"`. Omit to list all registered tables.
+
+#### SERV-Schema — listPhysicalTables
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listPhysicalTables" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{}'
+```
+Returns all physical tables in `information_schema.tables` (PGD schema) with `registered: true|false` indicating whether each has a PGC_Schema row. Used by Novia for domain recovery.
+
+#### SERV-Schema — dropConstraint
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/dropConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Budgets", "constraintName": "chk_budgets_amount" }'
+```
+Drops a named constraint (any type: CHECK, UNIQUE, FK) via `ALTER TABLE … DROP CONSTRAINT` and removes it from `PGC_Schema.constraints`. Wired into Novia `propose_schema_fix`.
 
 ---
 

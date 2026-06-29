@@ -61,6 +61,7 @@ async function getRows(req) {
     orderBy,
     limit        = 100,
     vectorSearch = null,
+    columns      = null,
   } = req.body;
 
   if (!tableName) {
@@ -107,7 +108,7 @@ async function getRows(req) {
       if (!vsCol) {
         return err(400, `vectorSearch column "${vectorSearch.column}" not found in schema`, req.correlationId);
       }
-      if (vsCol.type !== 'vector') {
+      if (!vsCol.type?.startsWith('vector')) {
         return err(400, `vectorSearch column "${vectorSearch.column}" must be type vector`, req.correlationId);
       }
     }
@@ -162,8 +163,15 @@ async function getRows(req) {
         ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
         : '';
 
+      let selectList = '*';
+      if (columns?.length) {
+        const invalid = columns.find(c => !validColumns.has(c));
+        if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
+        selectList = columns.map(c => `"${c}"`).join(', ');
+      }
+
       const sql = `
-        SELECT * FROM "${tableName}"
+        SELECT ${selectList} FROM "${tableName}"
         ${whereClause}
         ${orderClause}
         LIMIT ${safeLimit}
@@ -174,15 +182,17 @@ async function getRows(req) {
 
     if (target === 'pgd') await dbClient.end();
 
-    // Strip vector columns from result rows — embeddings are large, opaque,
-    // and not useful to callers. Direct SQL is the appropriate path for
-    // inspection or debugging.
-    const vectorCols = new Set(schemaColumns.filter(c => c.type === 'vector').map(c => c.name));
+    // Truncate vector columns to 5 chars + '...' — enough to confirm populated
+    // vs null without returning the full vector payload.
+    const vectorCols = new Set(schemaColumns.filter(c => c.type?.startsWith('vector')).map(c => c.name));
     const rows = vectorCols.size === 0
       ? result.rows
       : result.rows.map(row => {
           const clean = { ...row };
-          for (const col of vectorCols) delete clean[col];
+          for (const col of vectorCols) {
+            const v = clean[col];
+            clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
+          }
           return clean;
         });
 
@@ -269,7 +279,7 @@ async function resolveEmbedding(vectorCol, row, traceId) {
   const parts = arrayTexts.length > 0 ? arrayTexts : scalarTexts;
   const text  = parts.join(' ').replace(/\s+/g, ' ').trim();
 
-  if (!text) throw new Error(`resolveEmbedding: no text to embed for column ${vectorCol.name}`);
+  if (!text) return null;
   return embedText(text, traceId);
 }
 
@@ -282,7 +292,7 @@ async function resolveEmbedding(vectorCol, row, traceId) {
  */
 function getEmbedColumns(schemaColumns) {
   return schemaColumns.filter(
-    c => c.type === 'vector' && Array.isArray(c.embed_source) && c.embed_source.length > 0
+    c => c.type?.startsWith('vector') && Array.isArray(c.embed_source) && c.embed_source.length > 0
   );
 }
 
@@ -356,7 +366,8 @@ async function insertRow(req) {
       const effectiveRow = { ...rawRow };
       for (const vc of embedCols) {
         try {
-          effectiveRow[vc.name] = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+          const vec = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+          if (vec !== null) effectiveRow[vc.name] = vec;
         } catch (embErr) {
           console.error(`table insertRow: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
           return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
@@ -511,7 +522,8 @@ async function updateRows(req) {
         for (const vc of needsEmbed) {
           const merged = { ...currentRow, ...effectiveUpdates };
           try {
-            effectiveUpdates[vc.name] = await resolveEmbedding(vc, merged, req.correlationId);
+            const vec = await resolveEmbedding(vc, merged, req.correlationId);
+            if (vec !== null) effectiveUpdates[vc.name] = vec;
           } catch (embErr) {
             console.error(`table updateRows: embedding failed for ${vc.name}`, { tableName, error: embErr.message });
             return err(500, `Embedding failed for column "${vc.name}": ${embErr.message}`, req.correlationId);
