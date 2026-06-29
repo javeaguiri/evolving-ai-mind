@@ -42,7 +42,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC3 — `/explain` step-selection gate:** Failed runs with multiple LLM steps show a Slack button list of steps; user picks one; explain thread scoped to that step.
 - **AC4 — Novia diagnostic protocol live:** `novia_diagnostic_protocol` `PGC_SystemContext` row upserted; `minds_eye_system_prompt` updated with one-liner; Novia retrieves procedures on demand.
 - **AC5 — UI Polish complete:** All five sub-items (markdown blocks, format_entity_display, notify template audit, button/content separation, modal cancel audit) validated from Slack.
-- **AC6 — UC-E4 budget report:** `PGD_MonthlyExpensesByCategory` DB view created and registered; reporting workflow live and validated from Slack.
+- **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
 - **AC7 — Additional functionality gaps:** TBD — items to be added from gap review.
 
 ---
@@ -57,12 +57,18 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ⬜ |
+| C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
+| C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ⬜ |
 | D1 `markdown` block type in `dialogToBlocks()` | AC5 | ⬜ |
 | D2 `format_entity_display` pretty-print formatter | AC5 | ⬜ |
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
 | D4 Button/content separation + preservation audit | AC5 | ⬜ |
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
-| E1 `PGD_MonthlyExpensesByCategory` DB view + reporting workflow | AC6 | ⬜ |
+| E1 `/serv/schema/createView` endpoint | AC6 | ⬜ |
+| E2 `/serv/schema/dropView` endpoint | AC6 | ⬜ |
+| E3 `/proc/addView` endpoint | AC6 | ⬜ |
+| E4 `create_view` core workflow | AC6 | ⬜ |
+| E5 UC-E4 budget report | AC6 | ⬜ |
 
 ---
 
@@ -89,10 +95,13 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - Naming convention: `<workflow_name>_<step_purpose>`.
 - Edit `seed_PGC_Prompt.json` (`generate_workflow_steps`), run `upsert-prompt.mjs`.
 
-**A2 — `design_workflow_prompts` — always "create" for system/cross-domain**
-- Add rule: if a candidate match is a system prompt (`domain: null`) or belongs to a different domain, classification must be `"create"` — never `"reuse"`.
-- Add uniqueness check against existing `intent_categories` before naming.
-- Edit `seed_PGC_Prompt.json` (`design_workflow_prompts`), run `upsert-prompt.mjs`.
+**A2 — `design_workflow_prompts` — fix reuse rule, example, and uniqueness guard**
+Three defects in the prompt (line 2743 of `seed_PGC_Prompt.json`):
+1. **`reuse` rule has no domain check** — currently matches on name alone; add: "Only classify as `reuse` when the matching entry's `domain` equals `workflow_domain`. A prompt from a different domain must be classified as `create` with a unique domain-prefixed name."
+2. **Example teaches cross-domain reuse** — `probe_input` has `workflow_domain: "pantry"` but shows `sm2_calculate` (domain: `"flashcards"`) classified as `"action": "reuse"`. Change to `"action": "create"` with a domain-prefixed `prompt_category`.
+3. **No uniqueness guard on new prompt names** — add to the `create` rule: "Before choosing a `prompt_category`, verify it does not already exist in `existing_categories`. If it does, prefix with the domain (e.g. `pantry_sm2_calculate`)."
+- Also: filter `domain: null` rows out of step 23c `serv_query` in `seed_PGC_Workflow.json` (`create_workflow`) so system prompts never appear as reuse candidates — this is the primary fix; the prompt rule is belt-and-suspenders.
+- Run `upsert-prompt.mjs` + `upsert-workflow.mjs create_workflow`.
 
 ---
 
@@ -113,11 +122,35 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 
 ---
 
-### Track C — Novia Diagnostic Protocol
+### Track C — Novia Diagnostic Protocol & View Tooling
 
 **C1 — `novia_diagnostic_protocol` PGC_SystemContext row**
-- Add `novia_diagnostic_protocol` row to `seed_PGC_SystemContext.json` with detailed on-demand diagnostic steps: read `error_log`, query `PGC_WorkflowRun`, inspect LLM call history, propose fix path.
-- Add one-liner to `minds_eye_system_prompt`: "For detailed diagnostic and modification procedures, query PGC_SystemContext by key before proceeding."
+Procedures to include (on-demand, not always-injected):
+1. **Failed run triage** — `query_table PGC_WorkflowRun` → read `stack` for failing step + error; branch to relevant procedure.
+2. **LLM validation failure** — `read_prompt intent_category` → inspect `output_schema` + `error_log`; classify AJV error (wrong field / wrong type / wrong shape); identify fault domain; propose prompt or schema fix.
+3. **Token truncation** — `read_prompt` → check `error_log.error_type: token_truncation`; double `max_output_tokens` via `update_data`; instruct user to re-run.
+4. **`js_transform` timeout** — read `js_transform_timeout_ms` from `PGC_SystemContext`; increase value via `update_data`; instruct user to re-run. *(Requires C1a code change — see below.)*
+5. **Routing dead end** — `read_workflow` → trace routing graph from failing step; identify dead `on_success`/`on_else` targets; propose `fix_workflow_steps`.
+6. **Intent not routing / domain not found** — `query_table PGC_IntentMap` + `query_table PGC_DomainHelp`; verify pattern + aliases; propose `update_data`.
+7. **Schema / FK constraint failure** — `query_table PGC_Schema` + `query_table PGC_EntitySchema`; DDL fix → `propose_schema_fix` (gated); entity schema fix → `update_data`.
+8. **View diagnostics** — view returns wrong data → read view SQL from `PGC_Schema`, trace to underlying table columns; view not found → check `PGC_Schema` (type: view) + `PGC_TableMap` registration; use `create_view` to (re)register; view out of sync → `drop_view` + `create_view`.
+9. **Fix authority boundary** — fix directly (no gate): token truncation, IntentMap pattern, `js_transform_timeout_ms`, entity schema. Propose + confirm: prompt text, workflow steps, DDL, views. Escalate (code change required): Execution fault domain.
+
+Implementation:
+- Add `novia_diagnostic_protocol` row to `seed_PGC_SystemContext.json`.
+- Add one-liner to `minds_eye_system_prompt`: "For detailed diagnostic and modification procedures, query PGC_SystemContext by key='novia_diagnostic_protocol' before proceeding."
+- Run `upsert-system-context.mjs`.
+
+**C1a — `js_transform_timeout_ms` configurable via `PGC_SystemContext`**
+- Add `js_transform_timeout_ms` row to `seed_PGC_SystemContext.json` (default: `{ "simulation": 500, "runtime": 200 }`).
+- Update `simulation-engine.mjs` and `template-resolver.mjs` to read the value from `PGC_SystemContext` at call time (with hardcoded fallback).
+- Run `upsert-system-context.mjs`.
+
+**C2 — Novia view tooling (`minds-eye.mjs`)**
+- Add `create_view` to `GATED_WRITE_TOOLS`: accepts `{ viewName, selectSql }`; calls `/api/v1/serv/schema/createView`; confirms with user before executing.
+- Add `drop_view` to `GATED_WRITE_TOOLS`: accepts `{ viewName }`; calls drop endpoint; danger gate (same pattern as `drop_table`).
+- `query_table` already works on registered views (they appear in `PGC_TableMap`) — no change needed.
+- Update `minds_eye_system_prompt` to document both tools with when-to-use guidance.
 - Run `upsert-system-context.mjs`.
 
 ---
@@ -151,13 +184,34 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 
 ---
 
-### Track E — Budget Report
+### Track E — View Infrastructure & Budget Report
 
-**E1 — UC-E4 budget report**
-- Create `PGD_MonthlyExpensesByCategory` DB view manually (`GROUP BY category_id, SUM(amount) WHERE date_trunc('month', date) = date_trunc('month', NOW())`).
-- Register in `PGC_Schema` + `PGC_TableMap` (`allow_read: true`).
-- Use `create_workflow` to generate the reporting workflow: `serv_getRows` on view → `serv_getRows` on `PGD_Budgets` → `llm_call` to format comparison as readable Slack output.
-- LLM for formatting only — no arithmetic.
+**E1 — `/serv/schema/createView` endpoint**
+- Add `createView` case to `schema.mjs` alongside `createTable`.
+- Accepts `{ viewName, selectSql, target }`: runs `CREATE OR REPLACE VIEW "${viewName}" AS ${selectSql}`, registers in `PGC_Schema` (target: pgd, type: view) and `PGC_TableMap` (allow_read: true).
+- Existing `serv_getRows` can query registered views with no step type changes.
+- Add endpoint to `openapi.yaml`.
+
+**E2 — `/serv/schema/dropView` endpoint**
+- Accepts `{ viewName }`: runs `DROP VIEW IF EXISTS "${viewName}"`, removes rows from `PGC_Schema` and `PGC_TableMap`.
+- Used by the `create_view` workflow iteration loop when the user rejects the current design and requests changes.
+- Also used by Novia `drop_view` tool (C2).
+- Add endpoint to `openapi.yaml`.
+
+**E3 — `/proc/addView` endpoint**
+- New `proc/add-view.mjs` handler: accepts `{ viewName, selectSql, description }`, calls SERV `createView`, returns registration confirmation.
+- First-class callable endpoint — invocable directly from Slack/Novia AND as a workflow step in the `create_view` workflow.
+- Wire into `proc/handler.mjs`.
+- Add endpoint to `openapi.yaml`.
+
+**E4 — `create_view` core workflow**
+- New system workflow following the `create_domain` pattern: user-guided LLM design → create → test with live data → iterate → confirm.
+- Steps: (1) load domain schema from `PGC_Schema`; (2) LLM (left-brain, smart) designs `SELECT` / `GROUP BY` / aggregations + view name; (3) human gate — review proposed SQL; (4) call `/proc/addView` to create the view; (5) `serv_getRows` on the new view — sample rows from live data; (6) human gate — show sample results, approve or request changes; (7) if changes → `dropView` + loop back to step 2 with feedback; (8) if approved → notify.
+- Registered as a seed workflow in `seed_PGC_Workflow.json`.
+
+**E5 — UC-E4 budget report**
+- Run `create_view` workflow to create `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount), current month).
+- Use `create_workflow` to generate the reporting workflow: `serv_getRows` on view → `serv_getRows` on `PGD_Budgets` → `llm_call` to format comparison as readable Slack output. LLM for formatting only — no arithmetic.
 - Validate end-to-end from Slack once expenses + budgets have sufficient real data.
 
 ---
