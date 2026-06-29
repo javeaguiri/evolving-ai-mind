@@ -418,7 +418,12 @@
                 { "type": "object", "additionalProperties": true },
                 { "type": "string" }
               ]
-            }
+            },
+            "ref_fk_columns": {
+              "description": "Optional. Array of ref FK descriptors from serv_entity_schema. When present and row is an array, each FK column with a string value is resolved to an integer ID before insert.",
+              "type": "string"
+            },
+            "check_exists_by": { "type": "string" }
           }
         },
         "output_key":  { "type": "string", "description": "Optional. Receives the inserted row if provided." },
