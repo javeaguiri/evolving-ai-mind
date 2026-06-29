@@ -2289,7 +2289,8 @@
         "description": "Bulk insert all parsed rows in a single addRows call.",
         "input": {
           "tableName": "{{bulk_preview.root_table}}",
-          "row": "{{parsed_entity}}"
+          "row": "{{parsed_entity}}",
+          "ref_fk_columns": "{{full_entity_schema.root.ref_fk_columns}}"
         },
         "output_key": "bulk_insert_result",
         "on_success": "2k",

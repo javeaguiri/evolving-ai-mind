@@ -591,6 +591,17 @@ async function executeServInsert({ step, localState, traceId }) {
   if (!row)       throw new Error('serv_insert step missing input.row');
 
   if (Array.isArray(row)) {
+    const refFkCols = resolvedInput.ref_fk_columns ?? [];
+    if (refFkCols.length > 0) {
+      for (const r of row) {
+        for (const refFk of refFkCols) {
+          const raw = r[refFk.column];
+          if (raw != null && typeof raw === 'string') {
+            r[refFk.column] = await resolveRefTableId(refFk.ref_table, refFk.lookup_column, raw, traceId);
+          }
+        }
+      }
+    }
     console.info('step-executor: serv_insert bulk', { tableName, count: row.length, traceId });
     const resp = await insertRows(tableName, row);
     if (!resp.success) throw new Error(`serv_insert bulk failed for "${tableName}": ${resp.error}`);
