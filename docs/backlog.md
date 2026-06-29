@@ -77,6 +77,8 @@ Items are unresolved unless otherwise noted. ✅ items were resolved mid-session
 | `design_workflow_prompts` Instruction fix — always "create" for system or cross-domain prompt reuse | Add rule: if a candidate match is a system prompt (domain: null) or belongs to a different domain, classification must be "create" — never "reuse". Add uniqueness check against existing `intent_categories` before naming. Prevents AJV `output_schema` conflicts and ensures each domain workflow step has an independently tunable and deletable prompt. Fault domain: Instruction. **Sprint 7.** |
 | PGC_SystemContext procedure library for Novia | Add `novia_diagnostic_protocol` row to `PGC_SystemContext` with detailed on-demand diagnostic steps (read `error_log`, query `PGC_WorkflowRun`, inspect LLM call history, propose fix path). Add one-liner to `minds_eye_system_prompt`: "For detailed diagnostic and modification procedures, query PGC_SystemContext by key before proceeding." Procedure definitions evolve as data with no code change or redeploy. Keeps the always-injected system prompt lean. **Sprint 7.** |
 
+| `run-workflow.mjs` hardcoded `current_step: '1'` on root frame init | Line 148 initialises the root frame with `current_step: '1'` regardless of which step key is first in the workflow's `steps` array. Any workflow that starts with a step keyed `"0"` or anything other than `"1"` silently skips those steps. Fix: replace the hardcoded `'1'` with `steps[0]?.step ?? '1'` — requires moving the `loadSteps` call before the stack-init block (currently loaded after). Low blast-radius change; all existing workflows start at `"1"` by convention so behaviour is unchanged for them. |
+
 ### Medium Priority
 
 | Item | Notes |
