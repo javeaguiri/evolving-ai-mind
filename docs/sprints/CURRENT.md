@@ -51,8 +51,8 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 
 | Track item | AC(s) | Status |
 |---|---|---|
-| A1 `generate_workflow_steps` instruction fix | AC1 | ⬜ |
-| A2 `design_workflow_prompts` instruction fix | AC1 | ⬜ |
+| A1 `generate_workflow_steps` instruction fix | AC1 | ✅ DONE |
+| A2 `design_workflow_prompts` instruction fix | AC1 | ✅ DONE |
 | B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ⬜ |
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |

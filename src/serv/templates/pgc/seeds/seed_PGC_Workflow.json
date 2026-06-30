@@ -1206,9 +1206,10 @@
       {
         "step": "23c",
         "type": "serv_query",
-        "description": "Load existing PGC_Prompt entries so design_workflow_prompts can identify reuse candidates.",
+        "description": "Load domain-specific PGC_Prompt entries (domain not null) as reuse candidates — excludes system prompts.",
         "input": {
-          "tableName": "PGC_Prompt"
+          "tableName": "PGC_Prompt",
+          "filters": [{ "column": "domain", "op": "not_null" }]
         },
         "output_key": "existing_prompt_categories",
         "on_success": "next",
@@ -1577,15 +1578,24 @@
           }
         },
         "output_key": "registered_workflow",
-        "on_success": "step:35a",
+        "on_success": "step:35k",
         "on_else": "cancel"
+      },
+      {
+        "step": "35k",
+        "type": "js_transform",
+        "description": "Format intent_keywords as a comma-joined display string for the invocation phrases prompt.",
+        "output_key": "intent_keywords_display",
+        "expression": "(function(){ var kw = (local_state.draft_workflow || {}).intent_keywords || []; return Array.isArray(kw) ? kw.join(', ') : String(kw || ''); })()",
+        "on_success": "step:35a",
+        "on_else": "step:35a"
       },
       {
         "step": "35a",
         "type": "human_gate",
         "gate_type": "text_input",
         "description": "Ask the user for the phrases they will use to invoke this workflow from Slack.",
-        "message_template": "How will you invoke *{{draft_workflow.name}}* from Slack? Enter one or more phrases separated by commas (e.g. `quiz me, start a quiz, test my flashcards`).\n\nSkip to use the workflow name as the only match pattern.",
+        "message_template": "How will you invoke *{{draft_workflow.name}}* from Slack?\n\nSuggested phrases: `{{intent_keywords_display}}`\n\nEnter your own phrases (comma-separated) to override, or *Skip* to accept the suggestions. The workflow name is always included as a match pattern.",
         "output_key": "invocation_phrases",
         "options": [
           {
@@ -1615,7 +1625,7 @@
         "output_key": "intent_pattern",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2 && parts.indexOf(truncated) === -1) { parts.push(truncated); } } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
+        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var keywords = (local_state.draft_workflow || {}).intent_keywords || []; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } else if (Array.isArray(keywords) && keywords.length > 0) { parts = keywords.map(function(k) { return String(k).trim().toLowerCase(); }).filter(function(k) { return k.length > 0; }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2 && parts.indexOf(truncated) === -1) { parts.push(truncated); } } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
       },
       {
         "step": "36",
