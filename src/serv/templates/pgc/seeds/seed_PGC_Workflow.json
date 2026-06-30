@@ -777,7 +777,7 @@
           {
             "value": "write",
             "label": "B",
-            "description": "Add or import new records into the domain",
+            "description": "Add, modify, or change data in the domain",
             "on_select": "step:3"
           },
           {
