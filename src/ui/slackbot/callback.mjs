@@ -707,12 +707,12 @@ function dialogToBlocks(dialog, workflowRunId) {
               })),
             }],
           };
-        } else {
+        } else if (field.content) {
           revealBlock.output = {
             type:     'rich_text',
             elements: [{
               type:     'rich_text_section',
-              elements: [{ type: 'text', text: field.content ?? '' }],
+              elements: [{ type: 'text', text: field.content }],
             }],
           };
         }

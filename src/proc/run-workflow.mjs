@@ -795,7 +795,7 @@ async function executeIteratorInline({ run, frame, traceId }) {
     } catch (itemError) {
       await recordStepAudit(
         run.id, frame.frame_id, frame.current_index,
-        itemStep.type, 'failed', { tableName: item.tableName }, null,
+        itemStep?.type ?? 'unknown', 'failed', { tableName: item.tableName }, null,
         itemError.message, Date.now() - stepStart
       );
       const msg = `Iterator step "${frame.parent_step}" failed at index ${frame.current_index} (${item.tableName}): ${itemError.message}. Run id: ${run.id}`;
@@ -958,7 +958,7 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
   } catch (itemError) {
     await recordStepAudit(
       run.id, frame.frame_id, frame.current_index,
-      itemStep.type, 'failed', { tableName: item.tableName }, null,
+      itemStep?.type ?? 'unknown', 'failed', { tableName: item.tableName }, null,
       itemError.message, Date.now() - stepStart
     );
     // Mark the run failed and notify the user before rethrowing.

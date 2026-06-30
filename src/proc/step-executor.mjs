@@ -496,7 +496,11 @@ export function buildDialog(step, localState) {
   const revealsArray = typeof step.reveals === 'string'
     ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])
     : (Array.isArray(step.reveals) ? step.reveals : []);
-  for (const r of revealsArray) {
+  const stringRevealItems = revealsArray.filter(r => typeof r === 'string');
+  if (stringRevealItems.length > 0) {
+    fields.push({ type: 'reveal', button_label: 'Details', content: stringRevealItems });
+  }
+  for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     fields.push({
       type:         'reveal',
       button_label: r.button_label,
