@@ -43,7 +43,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC4 — Novia diagnostic protocol live:** `novia_diagnostic_protocol` `PGC_SystemContext` row upserted; `minds_eye_system_prompt` updated with one-liner; Novia retrieves procedures on demand.
 - **AC5 — UI Polish complete:** All five sub-items (markdown blocks, format_entity_display, notify template audit, button/content separation, modal cancel audit) validated from Slack.
 - **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
-- **AC7 — Additional functionality gaps:** TBD — items to be added from gap review.
+- **AC7 — IntentMap one row per phrase:** migration splits existing combined patterns; `create_workflow` steps 35b/36 write individual rows; `matchIntentMap` unchanged.
 
 ---
 
@@ -53,6 +53,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 |---|---|---|
 | A1 `generate_workflow_steps` instruction fix | AC1 | ✅ DONE |
 | A2 `design_workflow_prompts` instruction fix | AC1 | ✅ DONE |
+| A3 `create_workflow` step 35a — show LLM-suggested phrases; step 35b skip fallback | AC1 | ✅ DONE |
 | B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ⬜ |
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
@@ -69,6 +70,19 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E3 `/proc/addView` endpoint | AC6 | ⬜ |
 | E4 `create_view` core workflow | AC6 | ⬜ |
 | E5 UC-E4 budget report | AC6 | ⬜ |
+| F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
+
+---
+
+### Track F — IntentMap Structural Refactor
+
+**F1 — `PGC_IntentMap` — one row per phrase**
+- Current model concatenates all invocation phrases into one pipe-delimited regex per workflow. Phrases are opaque and non-updatable.
+- Fix: one row per phrase — `{pattern, intent_category, action_type, workflow_id, source}` where `source` ∈ `user | auto | name`.
+- Migration: split existing combined patterns into individual rows.
+- Update `create_workflow` steps 35b/36: build one-row-per-phrase inserts instead of a joined string.
+- `matchIntentMap` in `classify-intent.mjs` already iterates rows and tests each pattern — no change needed there.
+- `PGC_Workflow.intent_keywords` folds into this model as `source: auto` rows, eliminating the two-store split.
 
 ---
 
