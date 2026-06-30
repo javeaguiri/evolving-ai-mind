@@ -129,10 +129,13 @@ async function resolveWorkflowName(rawInput, traceId) {
   }
 
   // Pass 2: domain alias → keyword scan
+  // Only scan domain-specific workflows — system workflows (domain: null) are seeded
+  // infrastructure and must never be deleted via fuzzy matching.
   const domainMatch = matchDomainAlias(rawInput, domainRows);
   if (domainMatch) {
     const aliases = [domainMatch._matched_alias, ...(domainMatch.aliases ?? [])].filter(Boolean);
-    const kwMatch = matchWorkflowByKeywords(rawInput, domainMatch.domain, workflowRows, aliases);
+    const domainOnlyRows = workflowRows.filter(r => r.domain !== null);
+    const kwMatch = matchWorkflowByKeywords(rawInput, domainMatch.domain, domainOnlyRows, aliases);
     if (kwMatch?.workflow_name) {
       console.info('delete-workflow: resolved via Pass 2 keyword match', { workflow_name: kwMatch.workflow_name, domain: domainMatch.domain, traceId });
       return kwMatch.workflow_name;
