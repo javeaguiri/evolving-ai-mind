@@ -209,7 +209,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Check items_key for iterator steps
+    // Check items_key and item_step for iterator steps
     if (s.type === 'iterator') {
       const baseKey = (s.items_key ?? '').split('.')[0];
       if (baseKey && !outputKeysSoFar.has(baseKey)) {
@@ -218,6 +218,14 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           step:          stepKey,
           failure_class: 'iterator_source_not_array',
           detail:        `Iterator step "${stepKey}" items_key "${s.items_key}" — base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
+        });
+      }
+      if (!s.item_step || typeof s.item_step !== 'object') {
+        issues.push({
+          check:         'iterator_missing_item_step',
+          step:          stepKey,
+          failure_class: 'iterator_missing_item_step',
+          detail:        `Iterator step "${stepKey}" is missing item_step — the nested step definition to execute per item. Check for "body" or "step_type" fields which are invalid; use "item_step" with "type" instead.`,
         });
       }
     }

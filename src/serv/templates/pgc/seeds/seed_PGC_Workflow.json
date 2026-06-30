@@ -1160,7 +1160,7 @@
         "step": "22a",
         "type": "js_transform",
         "description": "Build step generation context — initialises retry keys on first pass, picks up current values on retry.",
-        "expression": "(function(){return{user_workflow_feedback:local_state.user_workflow_feedback||null,static_analysis_result:local_state.static_analysis_result||null,previous_draft_steps:(local_state.draft_workflow&&Array.isArray(local_state.draft_workflow.steps))?local_state.draft_workflow.steps:[],simulation_error_summary:local_state.simulation_error_summary||null};})()",
+        "expression": "(function(){return{user_workflow_feedback:local_state.user_workflow_feedback||null,static_analysis_result:local_state.static_analysis_result||null,previous_draft_steps:(local_state.draft_workflow&&Array.isArray(local_state.draft_workflow.steps))?local_state.draft_workflow.steps:[],simulation_error_summary:local_state.simulation_error_summary||null,previous_prompt_designs:local_state.capability_decisions||null};})()",
         "output_key": "step_gen_context",
         "on_success": "next",
         "on_else": "cancel"
@@ -1173,6 +1173,7 @@
           "prompt": "generate_workflow_steps",
           "process_design": "{{process_spec.process_design}}",
           "state_map": "{{process_spec.state_map}}",
+          "design_notes": "{{process_spec.design_notes}}",
           "dialog_designs": "{{dialog_spec.dialog_designs}}",
           "domain_schema": "{{domain_schema}}",
           "routing_skeleton": "{{routing_skeleton}}",
@@ -1219,7 +1220,12 @@
         "description": "Load domain-specific PGC_Prompt entries (domain not null) as reuse candidates — excludes system prompts.",
         "input": {
           "tableName": "PGC_Prompt",
-          "filters": [{ "column": "domain", "op": "not_null" }]
+          "filters": [
+            {
+              "column": "domain",
+              "op": "not_null"
+            }
+          ]
         },
         "output_key": "existing_prompt_categories",
         "on_success": "next",
@@ -1233,7 +1239,9 @@
           "prompt": "design_workflow_prompts",
           "draft_steps": "{{draft_workflow.steps}}",
           "existing_categories": "{{existing_prompt_categories}}",
-          "workflow_domain": "{{input.domain}}"
+          "workflow_domain": "{{input.domain}}",
+          "previous_prompt_designs": "{{step_gen_context.previous_prompt_designs}}",
+          "simulation_error_summary": "{{step_gen_context.simulation_error_summary}}"
         },
         "output_key": "capability_decisions",
         "on_success": "next",
@@ -1544,7 +1552,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Show simulation results and ask user to confirm registration.",
-        "message_template": "Simulation passed {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
+        "message_template": "The simulation validated {{simulation_result.paths_passed}} of {{simulation_result.paths_run}} paths. Ready to register {{draft_workflow.name}}?",
         "options": [
           {
             "label": "Register",
@@ -2068,7 +2076,13 @@
         "description": "Load all entity schemas registered for this domain.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ],
           "limit": 50
         },
         "output_key": "domain_schemas",
@@ -2196,7 +2210,13 @@
         "description": "Load all entity schemas registered for this domain.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ],
           "limit": 50
         },
         "output_key": "domain_schemas",
@@ -2297,7 +2317,13 @@
         "description": "Load all entity schemas registered for this domain.",
         "input": {
           "tableName": "PGC_EntitySchema",
-          "filters": [{ "column": "domain", "op": "eq", "value": "{{input.domain}}" }],
+          "filters": [
+            {
+              "column": "domain",
+              "op": "eq",
+              "value": "{{input.domain}}"
+            }
+          ],
           "limit": 50
         },
         "output_key": "domain_schemas",
