@@ -190,20 +190,20 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Condition steps have a stricter contract: on_success/on_else must be bare step keys
-    // or terminal tokens (end, cancel). "next" and "step:N" are ambiguous on condition steps —
-    // the branch target must be named explicitly.
+    // Condition steps must name the branch target explicitly — "next" is ambiguous
+    // because it means "whichever step follows in array order", which differs per branch.
+    // "step:N" is accepted and normalised the same as a bare key by resolveSimNextKey.
     if (s.type === 'condition') {
       for (const field of ['on_success', 'on_else']) {
         const val = s[field];
         if (val == null) continue;
         const sv = String(val);
-        if (sv === 'next' || sv.startsWith('step:')) {
+        if (sv === 'next') {
           issues.push({
             check:         'condition_routing_invalid',
             step:          stepKey,
             failure_class: 'condition_routing_invalid',
-            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") or a terminal token (end, cancel), but got "${sv}". "next" and "step:N" are ambiguous on condition steps — specify the target step key directly.`,
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5"), "step:N", or a terminal token (end, cancel), but got "next". "next" is ambiguous on condition steps — specify the target step key directly.`,
           });
         }
       }
