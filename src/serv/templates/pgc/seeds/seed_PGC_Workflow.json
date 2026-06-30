@@ -1041,7 +1041,7 @@
         "description": "Filter gap_analysis.prompts_needed to those requiring seeding (exists=false with prompt_text).",
         "input_key": "gap_analysis",
         "output_key": "missing_prompts",
-        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.model || p.prompt_model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
+        "expression": "(function() { var needed = (items.prompts_needed || []).filter(function(p) { return p.exists === false && p.prompt_text; }); return needed.map(function(p) { return { intent_category: p.intent_category, prompt_text: p.prompt_text, model: p.prompt_model || 'anthropic/claude-sonnet-4-5', version: 1, output_schema: p.output_shape || {}, input_variables: (p.inputs || []).map(function(i) { return { name: i, required: true, description: i }; }) }; }); })()",
         "on_success": "next",
         "on_else": "cancel"
       },
