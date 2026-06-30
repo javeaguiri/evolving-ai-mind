@@ -772,32 +772,32 @@
             "value": "read",
             "label": "A",
             "description": "Read, query, or display existing records",
-            "on_select": "step:3"
+            "on_select": "step:2a"
           },
           {
             "value": "write",
             "label": "B",
             "description": "Add, modify, or change data in the domain",
-            "on_select": "step:3"
+            "on_select": "step:2a"
           },
           {
             "value": "enrich",
             "label": "C",
             "description": "Transform or update existing records",
-            "on_select": "step:3"
+            "on_select": "step:2a"
           },
           {
             "value": "analyze",
             "label": "D",
             "description": "Aggregate, report, or summarize data",
-            "on_select": "step:3"
+            "on_select": "step:2a"
           }
         ],
         "special_buttons": [
           {
             "value": "other",
             "label": "Other",
-            "on_select": "step:3",
+            "on_select": "step:2a",
             "modal": {
               "title": "Describe your workflow",
               "input_label": "What should this workflow do?",
@@ -812,9 +812,18 @@
           }
         ],
         "output_key": "workflow_mode",
-        "on_success": "next",
+        "on_success": "step:2a",
         "on_else": "cancel",
         "on_cancel": "cancel"
+      },
+      {
+        "step": "2a",
+        "type": "js_transform",
+        "description": "Map selected workflow_mode value to its user-facing description for the research LLM.",
+        "output_key": "workflow_mode_label",
+        "expression": "(function(){ var labels = { read: 'Read, query, or display existing records', write: 'Add, modify, or change data in the domain', enrich: 'Transform or update existing records', analyze: 'Aggregate, report, or summarize data', other: 'Other (as described by the user)' }; return labels[local_state.workflow_mode] || local_state.workflow_mode; })()",
+        "on_success": "step:3",
+        "on_else": "step:3"
       },
       {
         "step": "3",
@@ -825,7 +834,8 @@
           "domain": "{{input.domain}}",
           "workflow_description": "{{input.userInput}}",
           "domain_schema": "{{domain_schema}}",
-          "workflow_mode": "{{workflow_mode}}"
+          "workflow_mode": "{{workflow_mode}}",
+          "workflow_mode_label": "{{workflow_mode_label}}"
         },
         "output_key": "right_brain_research",
         "on_success": "next",
