@@ -220,7 +220,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           detail:        `Iterator step "${stepKey}" items_key "${s.items_key}" — base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
         });
       }
-      if (!s.item_step || typeof s.item_step !== 'object') {
+      if (!skeleton && (!s.item_step || typeof s.item_step !== 'object')) {
         issues.push({
           check:         'iterator_missing_item_step',
           step:          stepKey,
