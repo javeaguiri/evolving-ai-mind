@@ -1261,7 +1261,7 @@
               "intent_category": "{{item.prompt_category}}",
               "prompt_text": "{{item.prompt_text}}",
               "model": "{{item.prompt_model}}",
-              "domain": "{{input.domain}}",
+              "workflow_name": "{{draft_workflow.name}}",
               "output_schema": "{{item.output_schema}}",
               "version": 1
             }
