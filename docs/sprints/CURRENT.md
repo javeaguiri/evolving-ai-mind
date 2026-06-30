@@ -57,7 +57,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ⬜ |
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
-| C1 `novia_diagnostic_protocol` system context | AC4 | ⬜ |
+| C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
 | C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ⬜ |
 | D1 `markdown` block type in `dialogToBlocks()` | AC5 | ⬜ |
