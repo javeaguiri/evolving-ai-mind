@@ -22,19 +22,6 @@ import { enqueueCallback } from '../shared/sqs-callback.mjs';
 import { getRows, deleteRows, bestEffort } from '../shared/serv-client.mjs';
 import { matchIntentMap, matchDomainAlias, matchWorkflowByKeywords } from './classify-intent-tiers.mjs';
 
-// Prompts shared across all workflows — never deleted when a single workflow is removed.
-const SYSTEM_PROMPT_NAMES = new Set([
-  'create_domain', 'design_table', 'classify_intent_tier2', 'generate_crud_workflows',
-  'classify_workflow_intent', 'generate_workflow_mocks', 'generate_workflow_paths',
-  'parse_entity_input', 'research_workflow_domain', 'analyze_and_design_workflow',
-  'fix_workflow_steps', 'analyze_workflow_gaps', 'design_workflow_process',
-  'design_workflow_dialogs', 'generate_workflow_steps', 'fix_workflow_routing',
-  'research_domain_schema', 'revise_domain_schema', 'generate_domain_aliases',
-  'sm2_calculate', 'grade_flashcard_answer', 'generate_flashcard_distractors',
-  'generate_flashcard_quiz', 'generate_flashcards', 'evaluate_flashcard_answer',
-  'generate_flashcard_quiz_spec', 'select_entity_schema', 'enrich_ref_records',
-  'design_workflow_prompts', 'diagnose_prompt_schema',
-]);
 
 export async function handle(req) {
   const { name } = req.body ?? {};
@@ -230,39 +217,13 @@ async function runDeleteWorkflow({ name, traceId }) {
     console.info('delete-workflow: PGC_IntentMap rows removed', { name, deletedIntentCount, traceId });
   }
 
-  // --- Step 5a: Delete PGC_Prompt rows tagged with this workflow's domain ---
-  // Covers prompts correctly inserted with domain set by create_workflow step 23g.
-  // System workflows (domain: null) share prompts and are excluded.
-  let deletedPromptCount = 0;
-  if (workflowDomain) {
-    const promptResp = await bestEffort('delete-workflow: PGC_Prompt domain delete failed', { name, workflowDomain, traceId },
-      () => deleteRows('PGC_Prompt', [{ column: 'domain', op: 'eq', value: workflowDomain }]));
-    deletedPromptCount += promptResp?.deletedCount ?? 0;
-    if (promptResp) console.info('delete-workflow: PGC_Prompt domain rows removed', { name, workflowDomain, count: deletedPromptCount, traceId });
-  }
-
-  // --- Step 5b: Delete orphaned domain-null prompts referenced in this workflow's steps ---
-  // Catches domain-specific prompts that were inserted with domain: null (historical edge case
-  // when create_workflow step 23g ran before the domain field was added to the insert).
-  const workflowSteps = workflowResp.rows[0].steps ?? [];
-  const stepPromptRefs = [
-    ...new Set(
-      workflowSteps
-        .filter(s => s.type === 'llm_call' && typeof s.input?.prompt === 'string')
-        .map(s => s.input.prompt)
-        .filter(p => !SYSTEM_PROMPT_NAMES.has(p))
-    ),
-  ];
-  if (stepPromptRefs.length > 0) {
-    const orphanResp = await bestEffort('delete-workflow: PGC_Prompt orphan delete failed', { name, stepPromptRefs, traceId },
-      () => deleteRows('PGC_Prompt', [
-        { column: 'intent_category', op: 'in',     value: stepPromptRefs },
-        { column: 'domain',          op: 'is_null'                       },
-      ]));
-    const orphanCount = orphanResp?.deletedCount ?? 0;
-    deletedPromptCount += orphanCount;
-    if (orphanResp && orphanCount > 0) console.info('delete-workflow: PGC_Prompt orphan rows removed', { name, orphanCount, stepPromptRefs, traceId });
-  }
+  // --- Step 5a: Delete PGC_Prompt rows owned by this workflow ---
+  // create_workflow step 23g writes workflow_name on every domain-specific prompt it creates.
+  // Deleting by workflow_name is exact — no cross-workflow collateral, no orphan scan needed.
+  const promptResp = await bestEffort('delete-workflow: PGC_Prompt delete failed', { name, traceId },
+    () => deleteRows('PGC_Prompt', [{ column: 'workflow_name', op: 'eq', value: name }]));
+  const deletedPromptCount = promptResp?.deletedCount ?? 0;
+  if (promptResp && deletedPromptCount > 0) console.info('delete-workflow: PGC_Prompt rows removed', { name, deletedPromptCount, traceId });
 
   // --- Step 6: Delete PGC_Workflow row ---
   const wfDeleteResp = await deleteRows(

@@ -80,18 +80,18 @@
 
     "filterItem": {
       "type": "object",
-      "description": "Single WHERE clause condition for serv_query, serv_update, serv_delete. 'value' supports {{template}} substitution against local_state.",
-      "required": ["column", "op", "value"],
+      "description": "Single WHERE clause condition for serv_query, serv_update, serv_delete. 'value' supports {{template}} substitution against local_state. Omit 'value' for null-check ops (is_null, not_null).",
+      "required": ["column", "op"],
       "additionalProperties": false,
       "properties": {
         "column": { "type": "string" },
         "op": {
           "type": "string",
-          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in"],
-          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array)"
+          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in", "is_null", "not_null"],
+          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array), is_null/not_null=null check (no value needed)"
         },
         "value": {
-          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'.",
+          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'. Omit for is_null/not_null.",
           "oneOf": [
             { "type": "string" },
             { "type": "array", "items": { "type": "string" }, "minItems": 1 }
