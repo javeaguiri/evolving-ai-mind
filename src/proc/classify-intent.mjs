@@ -424,7 +424,8 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
       });
       return;
     }
-    const workflowId = wfResp.rows[0].id;
+    const workflowId     = wfResp.rows[0].id;
+    const workflowDomain = result.domain ?? wfResp.rows[0].domain ?? null;
 
     // Build workflow input.
     // entity_name derived by convention from domain — "recipes" → "Recipe",
@@ -484,7 +485,7 @@ async function handoff(result, callback, traceId, userInput, entitySchemaRows, d
 
     const workflowInput = {
       userInput,
-      domain:          result.domain ?? null,
+      domain:          workflowDomain,
       ...(domainEntity                                                        ? { entity_name: domainEntity }      : {}),
       ...(result.search_term                                                  ? { search: result.search_term }     : {}),
       ...(result.record_id !== null && result.record_id !== undefined         ? { id: result.record_id }           : {}),
