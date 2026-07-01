@@ -58,11 +58,11 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
 | C3 `PGC_Prompt` write access for Novia + SOP step | AC4 | ⬜ |
-| A4 Standard global params (`userInput`, `domain`) in prompts + classify-intent domain fallback | AC1 | ⬜ |
-| A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ⬜ |
-| A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ⬜ |
-| A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ⬜ |
-| G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ⬜ |
+| A4 Standard global params (`userInput`, `domain`) in prompts + classify-intent domain fallback | AC1 | ✅ DONE |
+| A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ✅ DONE |
+| A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ✅ DONE |
+| A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ✅ DONE |
+| G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ✅ DONE |
 | G2 `research_workflow_domain` surfaces raw input format (section headers, collapsed tables) | AC1 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
@@ -296,6 +296,8 @@ Implementation:
 ## Session Notes
 
 **2026-06-29 (session 1):** Sprint 7 scoped. Dead code removal (/chat, design-domain.mjs) moved to Sprint 8 along with test env, README, and log hygiene. Track A fleshed out: A1 (generate_workflow_steps no-reuse rule) + A2 (design_workflow_prompts — three defects identified: no domain check on reuse rule, example teaches cross-domain reuse, no uniqueness guard; primary fix is filtering domain:null from step 23c query). Track C expanded: C1 with 9 diagnostic procedures including view diagnostics, C1a (js_transform_timeout_ms configurable via PGC_SystemContext), C2 (Novia create_view/drop_view tools). Track E rescoped: E1 createView + E2 dropView SERV endpoints, E3 /proc/addView (callable standalone or from workflow step), E4 create_view core workflow (LLM design → create → serv_getRows live test → approve or drop+iterate), E5 UC-E4 budget report. UI Polish track (D1–D5) added. Functionality gap list TBD — additional items to be added to tracks as gaps are identified.
+
+**2026-07-01 (session 4):** Completed A4–A7 + G1. Applied softened A7 pivot table rule to generate_workflow_steps v43 (neutral state→city→person example, hedged language). Added pivot table rules to design_workflow_process v18 (short flag in design_notes) and design_workflow_prompts v6 (full rule + generic example + expenses domain translation showing type/category_name/planned_amount mapping). Diagnosed run 621 (import_budget_data wf 348): parsing step produced 17 records — 13 correct, 4 spurious (section labels "DISCRETIONARY EXPENSES"/"NON-DISCRETIONARY EXPENSES" and column headers "Category"/"Monthly Amount" leaked as category_names with amt=0). Root fault: Generation (section labels explicitly excluded in prompt, LLM disobeyed) + minor Instruction ("Monthly Amount" not listed in header exclusion examples in design_workflow_prompts v6). Deferred fix: design_workflow_prompts v7 to add "Monthly Amount" + stronger "do not emit" wording; also needs parse_budget_input (id 107) Novia correction. Next session: implement Track B (B1 session_id column, B2 SessionEntry for all llm_call steps) — prerequisite for /explain step-selection gate and asking the LLM why it ignored prompt rules.
 
 **2026-07-01 (session 3):** Diagnosed runs 613–617. Root causes: (1) generate_workflow_steps v40 — 6 of 10 SystemContext tokens were dead (inject_for declared but {{token}} missing from prompt text); wired step_type_contracts, step_usage_patterns, workflow_constraints. (2) workflow_routing_rules v2 — condition routing contradiction removed; both bare keys and step:N now accepted. (3) generate_workflow_steps v41 — output_schema serv_insert.row type constraint removed; template strings and arrays now accepted. (4) bulk_import_budgets run 617 — section headers treated as categories + invalid type values in budgets_parse_spreadsheet_input prompt_draft (Generation fault; Novia fixed workflow to v3; prompt fix deferred to C3). Added C3 (PGC_Prompt write access + Novia SOP step for prompt fixes) and priority note on B1+B2 as prerequisite for Novia run-scoped diagnostics.
 
