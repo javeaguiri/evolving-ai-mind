@@ -6,6 +6,10 @@
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
 // Flow:
+//   0. If runId given instead of queryId, resolve it against PGC_Session.run_id —
+//      0 sessions -> notify not found; 1 session -> continue with its query_id;
+//      >1 sessions -> post an EXPLAIN_STEP_SELECT button list and stop (no LLM call
+//      until the user picks a step).
 //   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
@@ -40,17 +44,61 @@ code blocks for structured data or multi-line examples
 Respond in clear prose. Do not return raw JSON objects unless the user explicitly asks for them. When referencing data from the workflow context, summarise it in readable sentences. Use bullet points and headers to organise longer answers.`;
 
 export async function handle(req) {
-  const { queryId, prompt } = req.body ?? {};
+  const { queryId: queryIdInput, runId, prompt } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
   const threadTs = callback?.threadId ?? null;
 
-  if (!UUID_RE.test(queryId?.trim() ?? '')) {
-    if (req.source === 'http') return err(400, 'queryId is required and must be a UUID', req.correlationId);
-    return;
-  }
   if (!prompt?.trim()) {
     if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
+    return;
+  }
+
+  let queryId = queryIdInput;
+
+  // A run_id may have zero, one, or several llm_call diagnostic sessions.
+  if (!queryId && runId) {
+    const runSessionsResp = await getRows('PGC_Session',
+      [{ column: 'run_id', op: 'eq', value: runId }],
+      { column: 'id', direction: 'asc' }
+    );
+    const runSessions = runSessionsResp.rows ?? [];
+
+    if (runSessions.length === 0) {
+      const msg = `No diagnostic sessions found for run ${runId}.`;
+      if (req.source === 'http') return err(404, msg, req.correlationId);
+      if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
+      return;
+    }
+
+    if (runSessions.length === 1) {
+      queryId = runSessions[0].query_id;
+    } else {
+      console.info('proc/explain: multiple llm_call steps for run — presenting step picker', {
+        runId, traceId, count: runSessions.length,
+      });
+      if (callback) {
+        await enqueueCallback(callback, {
+          type:   'EXPLAIN_STEP_SELECT',
+          traceId,
+          runId,
+          prompt: prompt.trim(),
+          steps:  runSessions.map(s => ({
+            queryId:        s.query_id,
+            stepId:         s.step_id,
+            intentCategory: s.intent_category,
+          })),
+        });
+      }
+      if (req.source === 'http') {
+        return ok({ success: true, stepSelectionRequired: true, steps: runSessions.length }, req.correlationId);
+      }
+      return;
+    }
+  }
+
+  if (!UUID_RE.test(queryId?.trim() ?? '')) {
+    if (req.source === 'http') return err(400, 'queryId is required and must be a UUID (or provide a valid runId)', req.correlationId);
     return;
   }
 

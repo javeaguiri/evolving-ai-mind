@@ -54,9 +54,9 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | A1 `generate_workflow_steps` instruction fix | AC1 | ✅ DONE |
 | A2 `design_workflow_prompts` instruction fix | AC1 | ✅ DONE |
 | A3 `create_workflow` step 35a — show LLM-suggested phrases; step 35b skip fallback | AC1 | ✅ DONE |
-| B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ⬜ |
-| B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
-| B3 `/explain` step-selection gate | AC3 | ⬜ |
+| B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ✅ N/A — column already exists (Sprint 4), unused; not needed (see Track B notes) |
+| B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ✅ DONE |
+| B3 `/explain` step-selection gate | AC3 | ✅ DONE |
 | C3 `PGC_Prompt` write access for Novia + SOP step | AC4 | ⬜ |
 | A4 Standard global params (`userInput`, `domain`) in prompts + classify-intent domain fallback | AC1 | ✅ DONE |
 | A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ✅ DONE |
@@ -162,20 +162,22 @@ Three defects in the prompt (line 2743 of `seed_PGC_Prompt.json`):
 
 ### Track B — Session & Explain Infrastructure
 
-> **Priority note:** B1+B2 are a prerequisite for Novia's full diagnostic SOP (C1/C3). Without session entries for user-triggered workflow runs, Novia can only read the prompt template — not the assembled prompt or LLM response. Prioritise B1+B2 before C3.
+> **Priority note:** B2+B3 are a prerequisite for Novia's full diagnostic SOP (C1/C3). Without session entries for every workflow run, Novia can only read the prompt template — not the assembled prompt or LLM response. Prioritise B2+B3 before C3.
 
-**B1 — `PGC_WorkflowRun.session_id` FK column**
-- Migration: `POST /api/v1/serv/schema/addColumn` → `PGC_WorkflowRun.session_id integer nullable FK → PGC_Session.id`.
-- Update `PGC_Schema` seed to register column.
+**B1 — `PGC_WorkflowRun.session_id` FK column — not needed**
+- Re-diagnosed 2026-07-01: this column already exists (added Sprint 4) but is unused in code — no writer anywhere. It also points the wrong direction for what Track B needs: `PGC_Session.run_id` (already indexed) is the lookup Novia and `/explain` actually use, not `PGC_WorkflowRun.session_id`. No migration performed; column left as-is (harmless, unread).
 
-**B2 — PGC_SessionEntry writes for all `llm_call` steps**
-- `run-workflow.mjs`: assign/generate a `session_id` for every `PGC_WorkflowRun` at start.
-- Write `PGC_SessionEntry` rows for every `llm_call` step regardless of `triggered_by`.
+**B2 — PGC_SessionEntry writes for all `llm_call` steps — DONE**
+- The session-write mechanism already existed in `llm-harness.mjs`, gated by a `PGC_SystemContext.diagnostics_config.enabled_workflows` allowlist (only `create_workflow`/`create_domain`/`add_entity`) — this is exactly why Novia couldn't inspect the run 621 `parse_budget_input` step.
+- Fix: removed the allowlist gate entirely — every `llm_call` step in every workflow now writes a `PGC_Session` + `PGC_SessionEntry` rows unconditionally (`llm-harness.mjs`). Removed the now-dead `diagnostics_config` entry from `seed_PGC_SystemContext.json` (DB row left orphaned — `PGC_SystemContext.allow_delete` is `false`, and it's unread by any code now).
+- Also removed the standalone `LLM_DIAGNOSTIC` per-step Slack notification (`run-workflow.mjs`, `callback.mjs` `postLlmDiagnostic`) and the `diagnosticPayload` plumbing in `llm-harness.mjs` that fed it — with the gate removed it would have spammed one channel message per LLM call in every workflow run. `run_id` is already shown in every `HUMAN_NOTIFICATION`/`WORKFLOW_ERROR` footer, and B3 (`/explain <run_id>`) now supersedes the need to proactively surface `query_id` per step.
 
-**B3 — `/explain` step-selection gate**
-- When `/explain` is invoked on a failed run with multiple LLM steps, present a Slack button list of the run's `llm_call` steps (step key + `intent_category` label).
-- User picks one; spawns explain thread scoped to that step only.
-- Existing single-step behaviour preserved when the run has exactly one LLM step.
+**B3 — `/explain <run_id|query_id>` step-selection gate — DONE**
+- `ui/slackbot/explain.mjs`: first token may now be a `run_id` (integer, `PGC_WorkflowRun.id`) or a `query_id` (UUID) — both enqueue `EXPLAIN_QUERY`, distinguished by an added `runId`/`queryId` field.
+- `proc/explain.mjs`: when `runId` is given, queries `PGC_Session` by `run_id`. 0 sessions → not-found notification. 1 session → resolves to that session's `query_id` and continues the existing flow unchanged. >1 sessions → enqueues a new `EXPLAIN_STEP_SELECT` callback instead of calling the LLM.
+- `ui/slackbot/callback.mjs`: new `EXPLAIN_STEP_SELECT` case + `postExplainStepSelect()` — posts one button per step (step key + `intent_category`), threaded under the `/explain` ACK placeholder.
+- `ui/slackbot/interactive.mjs`: new `explain_step_select` button handler — disables the button list, then enqueues `EXPLAIN_QUERY` with the resolved `query_id` and the original prompt (no modal needed — the question was already typed in `/explain <run_id> <prompt>`).
+- `docs/openapi.yaml` and `docs/architecture.md` (message-type table) updated.
 
 ---
 
@@ -294,6 +296,8 @@ Implementation:
 ---
 
 ## Session Notes
+
+**2026-07-01 (session 5):** Track B implemented (B2, B3; B1 found unnecessary). Diagnosed that B2's mechanism already existed in `llm-harness.mjs` but was gated to a 3-workflow allowlist — removed the gate (universal diagnostics, per user decision) and the now-redundant `LLM_DIAGNOSTIC` per-step Slack notification it would have spammed. Built B3: `/explain <run_id>` resolves to a step-selection button list (`EXPLAIN_STEP_SELECT`) when a run has multiple `llm_call` steps, single-session runs pass through unchanged. All 366 unit tests pass. Next: C3 Novia SOP prompt-fix procedure now unblocked (B2/B3 prerequisite satisfied) — or continue with C1/C2 view tooling.
 
 **2026-06-29 (session 1):** Sprint 7 scoped. Dead code removal (/chat, design-domain.mjs) moved to Sprint 8 along with test env, README, and log hygiene. Track A fleshed out: A1 (generate_workflow_steps no-reuse rule) + A2 (design_workflow_prompts — three defects identified: no domain check on reuse rule, example teaches cross-domain reuse, no uniqueness guard; primary fix is filtering domain:null from step 23c query). Track C expanded: C1 with 9 diagnostic procedures including view diagnostics, C1a (js_transform_timeout_ms configurable via PGC_SystemContext), C2 (Novia create_view/drop_view tools). Track E rescoped: E1 createView + E2 dropView SERV endpoints, E3 /proc/addView (callable standalone or from workflow step), E4 create_view core workflow (LLM design → create → serv_getRows live test → approve or drop+iterate), E5 UC-E4 budget report. UI Polish track (D1–D5) added. Functionality gap list TBD — additional items to be added to tracks as gaps are identified.
 

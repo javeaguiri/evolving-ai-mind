@@ -7,11 +7,13 @@
 // No HTTP trigger — fires only when a message lands on SYSSQSCallbackResults.
 //
 // Message type taxonomy:
-//   HUMAN_GATE         — suspends workflow, renders interactive dialog via dialogToBlocks()
-//   HUMAN_NOTIFICATION — informational text message, rendered via textToBlocks()
-//   WORKFLOW_ERROR     — workflow failure summary (error summarisation applied in EXP tier)
-//   PING_SQS_RESULT    — dev/system ping with hop timing context
-//   PING_E2E_RESULT    — dev/system ping with round-trip timing context
+//   HUMAN_GATE          — suspends workflow, renders interactive dialog via dialogToBlocks()
+//   HUMAN_NOTIFICATION  — informational text message, rendered via textToBlocks()
+//   WORKFLOW_ERROR      — workflow failure summary (error summarisation applied in EXP tier)
+//   EXPLAIN_STEP_SELECT — /explain <run_id> matched multiple llm_call steps; posts a
+//                         button per step so the user can pick which one to ask about
+//   PING_SQS_RESULT     — dev/system ping with hop timing context
+//   PING_E2E_RESULT     — dev/system ping with round-trip timing context
 //
 // Adding a new UI provider:
 //   1. Add a case to routeCallback() below.
@@ -99,8 +101,8 @@ async function processRecord(record) {
         await postWorkflowError(message);
         break;
 
-      case 'LLM_DIAGNOSTIC':
-        await postLlmDiagnostic(message);
+      case 'EXPLAIN_STEP_SELECT':
+        await postExplainStepSelect(message);
         break;
 
       default:
@@ -323,6 +325,32 @@ async function postWorkflowError(message) {
 }
 
 // ---------------------------------------------------------------------------
+// EXPLAIN_STEP_SELECT — /explain <run_id> matched multiple llm_call steps.
+// Posts one button per step, threaded under the /explain ACK placeholder, so
+// the user can pick which step's session to continue the conversation with.
+// ---------------------------------------------------------------------------
+
+async function postExplainStepSelect(message) {
+  const { callback, runId, prompt, steps, traceId } = message;
+  const displayText = `🔍 *Run ${runId} has ${steps.length} LLM steps.* Pick one to ask about:\n> _${prompt}_`;
+  const blocks = [
+    { type: 'section', text: { type: 'mrkdwn', text: displayText } },
+    ...steps.map(s => ({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `*Step ${s.stepId}* — \`${s.intentCategory}\`` },
+      accessory: {
+        type:      'button',
+        text:      { type: 'plain_text', text: 'Explain this step' },
+        action_id: 'explain_step_select',
+        value:     JSON.stringify({ action: 'explain_step_select', queryId: s.queryId, prompt }),
+      },
+    })),
+  ];
+  await routeCallback(callback, displayText.slice(0, 150), blocks);
+  console.info('callback: EXPLAIN_STEP_SELECT posted', { channel: callback?.channel, runId, count: steps.length, traceId });
+}
+
+// ---------------------------------------------------------------------------
 // HUMAN_GATE — renders a human_gate dialog as Slack Block Kit.
 // Translates the UI-neutral dialog (from Step Processor or design-domain.mjs)
 // to Block Kit blocks via dialogToBlocks(). gate_type is used as a layout hint
@@ -522,26 +550,6 @@ async function postHumanGate(message) {
 // @param {number} workflowRunId    Encoded into button values
 // @returns {Array}                 Slack Block Kit blocks array
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// LLM_DIAGNOSTIC — posts a channel-level (no thread) diagnostic notification.
-// Tells the user an llm_call step ran and supplies the query_id for /explain.
-// Must NOT use routeCallback (which threads under callback.threadId) — diagnostics
-// are always posted to the channel root so they're visible and easy to find.
-// ---------------------------------------------------------------------------
-
-async function postLlmDiagnostic(message) {
-  const { callback, queryId, intentCategory, step, workflowRunId, traceId } = message;
-  if (!callback?.channel) {
-    console.warn('callback: LLM_DIAGNOSTIC — no channel, skipping', { traceId });
-    return;
-  }
-  const text = `🔍 *LLM step recorded* (\`${intentCategory}\`, step ${step})\n` +
-    `Use /explain ${queryId} <your question> to ask about this output.\n` +
-    `_runId: ${workflowRunId} | queryId: ${queryId} | traceId: ${traceId}_`;
-  await slack.chat.postMessage({ channel: callback.channel, text });
-  console.info('callback: LLM_DIAGNOSTIC posted', { channel: callback.channel, queryId, traceId });
-}
 
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];
