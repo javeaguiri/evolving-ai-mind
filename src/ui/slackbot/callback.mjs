@@ -325,14 +325,15 @@ async function postWorkflowError(message) {
 }
 
 // ---------------------------------------------------------------------------
-// EXPLAIN_STEP_SELECT — /explain <run_id> matched multiple llm_call steps.
-// Posts one button per step, threaded under the /explain ACK placeholder, so
-// the user can pick which step's session to continue the conversation with.
+// EXPLAIN_STEP_SELECT — /explain <run_id> resolved to one or more llm_call
+// steps. Posts one button per step, threaded under the /explain ACK placeholder.
+// Buttons carry only queryId — no question yet. Picking a step opens a modal
+// to collect the question (interactive.mjs), keeping the two decisions separate.
 // ---------------------------------------------------------------------------
 
 async function postExplainStepSelect(message) {
-  const { callback, runId, prompt, steps, traceId } = message;
-  const displayText = `🔍 *Run ${runId} has ${steps.length} LLM steps.* Pick one to ask about:\n> _${prompt}_`;
+  const { callback, runId, steps, traceId } = message;
+  const displayText = `🔍 *Run ${runId} — ${steps.length} LLM step${steps.length === 1 ? '' : 's'}.* Pick one to explain:`;
   const blocks = [
     { type: 'section', text: { type: 'mrkdwn', text: displayText } },
     ...steps.map(s => ({
@@ -342,7 +343,7 @@ async function postExplainStepSelect(message) {
         type:      'button',
         text:      { type: 'plain_text', text: 'Explain this step' },
         action_id: 'explain_step_select',
-        value:     JSON.stringify({ action: 'explain_step_select', queryId: s.queryId, prompt }),
+        value:     JSON.stringify({ action: 'explain_step_select', queryId: s.queryId }),
       },
     })),
   ];

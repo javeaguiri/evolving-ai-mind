@@ -1410,17 +1410,15 @@ paths:
     post:
       summary: /explain slash command — continues a diagnostic conversation
       description: >
-        Handles the /explain Slack slash command. Takes either a query_id (UUID,
-        anchored to one llm_call step) or a run_id (PGC_WorkflowRun.id, may span
-        several llm_call steps) plus a prompt, and enqueues EXPLAIN_QUERY to
-        ProcFunction for an async LLM follow-up.
-
-        Usage: /explain <query_id|run_id> <prompt>
-
-        When a run_id resolves to more than one llm_call diagnostic session,
-        ProcFunction posts an EXPLAIN_STEP_SELECT button list instead of calling
-        the LLM immediately — the user picks a step, which routes back through
-        EXPLAIN_QUERY with the resolved query_id.
+        Handles the /explain Slack slash command. Two forms:
+        `/explain <query_id> <prompt>` — direct and unambiguous, anchored to one
+        llm_call step, enqueues EXPLAIN_QUERY straight to ProcFunction for an async
+        LLM follow-up.
+        `/explain <run_id>` — no prompt; ProcFunction always resolves run_id to an
+        EXPLAIN_STEP_SELECT button list (one button per llm_call step in that run,
+        even when there's only one). Picking a step opens a Slack modal to collect
+        the question; submission enqueues EXPLAIN_QUERY with the resolved query_id,
+        resuming the same path as the direct form.
 
         Flow: Slack POST → SlackbotFunction → ACK → SQS EXPLAIN_QUERY → ProcFunction → reply
       tags: [UI-Slack]
@@ -1434,7 +1432,7 @@ paths:
               properties:
                 text:
                   type: string
-                  description: "<query_id|run_id> <prompt>"
+                  description: "<query_id> <prompt>  —  or  —  <run_id>"
                   example: "550e8400-e29b-41d4-a716-446655440000 why did step 14 fail?"
                 user_id:
                   type: string
@@ -2810,14 +2808,17 @@ paths:
 
   /api/v1/proc/explain:
     post:
-      summary: Continue a diagnostic conversation anchored to a specific llm_call step or run
+      summary: Continue a diagnostic conversation anchored to a specific llm_call step, or resolve a run to its steps
       description: >
         HTTP test path for the EXPLAIN_QUERY SQS message type.
-        Accepts either queryId (anchored to one llm_call diagnostic session) or runId
-        (PGC_WorkflowRun.id). When runId resolves to more than one PGC_Session row,
-        an EXPLAIN_STEP_SELECT callback is enqueued with a button per step instead of
-        calling the LLM — the response reports stepSelectionRequired: true.
-        Otherwise: looks up the PGC_Session by query_id, appends the user turn as a
+        Accepts either queryId (anchored to one llm_call diagnostic session, requires
+        prompt) or runId (PGC_WorkflowRun.id, never carries a prompt). runId always
+        resolves to an EXPLAIN_STEP_SELECT callback — one button per llm_call step in
+        that run, even when there's only one — since the question is only ever
+        collected via a Slack modal after a specific step is chosen (see
+        interactive.mjs handleExplainStepSelectButton). The response reports
+        stepSelectionRequired: true in this case; no LLM call is made.
+        For the queryId form: looks up the PGC_Session, appends the user turn as a
         PGC_SessionEntry, reconstructs the full messages array, and calls the LLM
         (anthropic/claude-sonnet-4-5). On first invocation (seq=3), the LLM reasoning
         from the original step (seq=2) is surfaced in the reply if present. Subsequent
@@ -2832,18 +2833,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [prompt]
               properties:
                 queryId:
                   type: string
                   format: uuid
-                  description: PGC_Session.query_id — mutually exclusive with runId
+                  description: PGC_Session.query_id — mutually exclusive with runId; requires prompt
                 runId:
                   type: integer
-                  description: PGC_WorkflowRun.id — resolved to one or more PGC_Session rows via run_id
+                  description: PGC_WorkflowRun.id — mutually exclusive with queryId; prompt is ignored/omitted
                 prompt:
                   type: string
-                  description: User question about the LLM output
+                  description: User question about the LLM output — required with queryId, not used with runId
             examples:
               explain_output:
                 summary: Ask about a specific LLM step output
@@ -2851,10 +2851,9 @@ paths:
                   queryId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
                   prompt: "Why did you choose those column names for the recipes table?"
               explain_run:
-                summary: Ask about a run — may trigger step selection
+                summary: Resolve a run to its llm_call steps — triggers step selection
                 value:
                   runId: 621
-                  prompt: "Why did the parsing step emit those extra rows?"
       responses:
         '200':
           description: LLM explanation response, or step-selection acknowledgement

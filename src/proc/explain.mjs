@@ -6,10 +6,11 @@
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
 // Flow:
-//   0. If runId given instead of queryId, resolve it against PGC_Session.run_id —
-//      0 sessions -> notify not found; 1 session -> continue with its query_id;
-//      >1 sessions -> post an EXPLAIN_STEP_SELECT button list and stop (no LLM call
-//      until the user picks a step).
+//   0. If runId given instead of queryId (run_id form never carries a prompt),
+//      resolve it against PGC_Session.run_id — 0 sessions -> notify not found;
+//      otherwise always post an EXPLAIN_STEP_SELECT button list (one button per
+//      llm_call step, even when there's only one) and stop. The question is only
+//      ever collected via modal after a specific step is chosen — see interactive.mjs.
 //   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
@@ -49,14 +50,11 @@ export async function handle(req) {
   const traceId  = req.traceId  ?? req.correlationId;
   const threadTs = callback?.threadId ?? null;
 
-  if (!prompt?.trim()) {
-    if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
-    return;
-  }
-
   let queryId = queryIdInput;
 
-  // A run_id may have zero, one, or several llm_call diagnostic sessions.
+  // run_id form: never carries a prompt — always resolve to a step-selection button
+  // list (even for a single session) so the question is only ever collected after a
+  // specific llm_call step has been chosen.
   if (!queryId && runId) {
     const runSessionsResp = await getRows('PGC_Session',
       [{ column: 'run_id', op: 'eq', value: runId }],
@@ -71,30 +69,32 @@ export async function handle(req) {
       return;
     }
 
-    if (runSessions.length === 1) {
-      queryId = runSessions[0].query_id;
-    } else {
-      console.info('proc/explain: multiple llm_call steps for run — presenting step picker', {
-        runId, traceId, count: runSessions.length,
+    console.info('proc/explain: presenting step picker for run', {
+      runId, traceId, count: runSessions.length,
+    });
+    if (callback) {
+      await enqueueCallback(callback, {
+        type:  'EXPLAIN_STEP_SELECT',
+        traceId,
+        runId,
+        steps: runSessions.map(s => ({
+          queryId:        s.query_id,
+          stepId:         s.step_id,
+          intentCategory: s.intent_category,
+        })),
       });
-      if (callback) {
-        await enqueueCallback(callback, {
-          type:   'EXPLAIN_STEP_SELECT',
-          traceId,
-          runId,
-          prompt: prompt.trim(),
-          steps:  runSessions.map(s => ({
-            queryId:        s.query_id,
-            stepId:         s.step_id,
-            intentCategory: s.intent_category,
-          })),
-        });
-      }
-      if (req.source === 'http') {
-        return ok({ success: true, stepSelectionRequired: true, steps: runSessions.length }, req.correlationId);
-      }
-      return;
     }
+    if (req.source === 'http') {
+      return ok({ success: true, stepSelectionRequired: true, steps: runSessions.length }, req.correlationId);
+    }
+    return;
+  }
+
+  // query_id form (direct, or resumed after the step-picker modal is submitted)
+  // always requires a prompt.
+  if (!prompt?.trim()) {
+    if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
+    return;
   }
 
   if (!UUID_RE.test(queryId?.trim() ?? '')) {
