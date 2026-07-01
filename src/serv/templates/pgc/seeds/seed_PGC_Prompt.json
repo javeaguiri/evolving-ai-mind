@@ -1922,7 +1922,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 40,
+    "version": 41,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -2107,8 +2107,7 @@
                           "type": "string"
                         },
                         "row": {
-                          "type": "object",
-                          "description": "Use \"row\" (singular, object) — not \"rows\", not \"data\"."
+                          "description": "Single object, array of objects, or {{template}} reference — not \"rows\", not \"data\"."
                         }
                       }
                     }
