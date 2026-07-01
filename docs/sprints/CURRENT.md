@@ -170,12 +170,11 @@ Implementation:
 - Update `minds_eye_system_prompt` to document both tools with when-to-use guidance.
 - Run `upsert-system-context.mjs`.
 
-**C3 — `PGC_Prompt` write access for Novia + SOP step**
-- C1 (novia_diagnostic_protocol) lists "propose + confirm: prompt text" as a fix authority, but `update_data` silently fails on `PGC_Prompt` because it is not registered in `PGC_TableMap` as writable.
-- Fix 1: register `PGC_Prompt` in `PGC_TableMap` with `allow_write: true` (gated — Novia proposes, user confirms, same pattern as other PGC write operations).
-- Fix 2: add procedure 10 to `novia_diagnostic_protocol`: "To fix a prompt instruction gap — (a) query `PGC_SessionEntry` for the assembled prompt content (requires B2 live); (b) identify the missing or wrong instruction; (c) read the current `prompt_text` via `read_prompt`; (d) propose the corrected text via `update_data PGC_Prompt` (gated — user must confirm before write)."
-- Run `upsert-system-context.mjs` after updating `seed_PGC_SystemContext.json`.
-- **Depends on B1+B2** for full effectiveness (step (a) above requires session entries to exist).
+**C3 — Novia SOP: prompt fix procedure**
+- `PGC_Prompt` already has `allow_update: true` in `PGC_TableMap` — `update_data` works on it today. Novia's advisory claiming it was not registered was incorrect; the gap is knowledge, not access.
+- Add procedure 10 to `novia_diagnostic_protocol` in `seed_PGC_SystemContext.json`: "To fix a prompt instruction gap — (a) query `PGC_SessionEntry` for the assembled prompt and LLM response for the failing step (requires B2 live — skip (a) until then); (b) identify the missing or wrong instruction; (c) read the current `prompt_text` via `read_prompt`; (d) apply the corrected `prompt_text` via `update_data` on `PGC_Prompt` filtered by `intent_category` — this is a direct write, no gate."
+- Run `upsert-system-context.mjs`.
+- **Depends on B1+B2** for step (a) — until session entries exist for user-triggered runs, Novia works from output shape alone.
 
 ---
 
