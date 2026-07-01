@@ -4,14 +4,13 @@
 // src/ui/slackbot/explain.mjs
 // Handles POST /api/v1/ui/slack/explain
 //
-// Accepts either:
-//   /explain <query_id> <prompt>   — direct, unambiguous, asks the LLM immediately
-//   /explain <run_id>              — no prompt; ProcFunction posts a step-selection
-//                                     button list (one PGC_Session per llm_call step
-//                                     in that run). Picking a step opens a modal to
-//                                     collect the question, then resumes the same
-//                                     EXPLAIN_QUERY path as the direct form.
-// ACKs immediately; enqueues EXPLAIN_QUERY to ProcFunction for async processing.
+// Accepts: /explain <run_id>
+// run_id (PGC_WorkflowRun.id) is always resolved to a step-selection button list
+// (one per llm_call step in that run, even when there's only one) — a query_id
+// is never typed by the user. Picking a step opens a modal to collect the
+// question, then enqueues EXPLAIN_QUERY with the resolved query_id internally.
+// ACKs immediately; enqueues EXPLAIN_QUERY (runId only) to ProcFunction for async
+// step resolution.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
@@ -30,8 +29,7 @@ function slackErr(message) {
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// query_id must be a valid UUID v4; run_id is a plain PGC_WorkflowRun.id integer
-const UUID_RE   = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// run_id is a plain PGC_WorkflowRun.id integer
 const RUN_ID_RE = /^\d+$/;
 
 export async function handle(req) {
@@ -44,31 +42,17 @@ export async function handle(req) {
   const slackChannel = req.body?.channel_id || 'unknown';
   const traceId      = req.correlationId;
 
-  // Parse: first token is query_id or run_id, remainder (query_id form only) is the prompt
-  const spaceIdx  = text.indexOf(' ');
-  const firstToken = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
-  const prompt     = spaceIdx === -1 ? '' : text.slice(spaceIdx + 1).trim();
-
-  const isRunId   = RUN_ID_RE.test(firstToken);
-  const isQueryId = UUID_RE.test(firstToken);
-
-  if (!isRunId && !isQueryId) {
-    return slackErr('Usage: /explain <query_id> <your question>  —  or  —  /explain <run_id>');
-  }
-  // query_id form is unambiguous (one llm_call step) so the question must come inline.
-  // run_id form may span several llm_call steps — the question is collected via modal
-  // after the user picks a step, so no prompt is parsed or required here.
-  if (isQueryId && !prompt) {
-    return slackErr('Usage: /explain <query_id> <your question>');
+  if (!RUN_ID_RE.test(text)) {
+    return slackErr('Usage: /explain <run_id>');
   }
 
-  console.info('slackbot/explain: received', { traceId, firstToken, isRunId, slackUser, slackChannel });
+  console.info('slackbot/explain: received', { traceId, runId: text, slackUser, slackChannel });
 
   let ackTs;
   try {
     const ack = await slack.chat.postMessage({
       channel: slackChannel,
-      text:    isRunId ? `🔍 Looking up LLM steps for run ${firstToken}...` : `❓ ${prompt}`,
+      text:    `🔍 Looking up LLM steps for run ${text}...`,
     });
     ackTs = ack.ts;
   } catch (error) {
@@ -82,7 +66,7 @@ export async function handle(req) {
       MessageBody: JSON.stringify({
         type:      'EXPLAIN_QUERY',
         traceId,
-        ...(isRunId ? { runId: Number(firstToken) } : { queryId: firstToken, prompt }),
+        runId:     Number(text),
         slackUser,
         callback: {
           provider: 'slack',

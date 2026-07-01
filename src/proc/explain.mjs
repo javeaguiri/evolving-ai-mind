@@ -5,12 +5,17 @@
 // Handles POST /api/v1/proc/explain (HTTP test path) and
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
+// The /explain slash command only ever sends { runId } — a user never types or
+// sees a query_id. The queryId + prompt path below is internal plumbing, reached
+// only from interactive.mjs (step-select modal submission, or the "Ask follow-up"
+// button on an existing explain reply), never directly from the slash command.
+//
 // Flow:
-//   0. If runId given instead of queryId (run_id form never carries a prompt),
-//      resolve it against PGC_Session.run_id — 0 sessions -> notify not found;
-//      otherwise always post an EXPLAIN_STEP_SELECT button list (one button per
-//      llm_call step, even when there's only one) and stop. The question is only
-//      ever collected via modal after a specific step is chosen — see interactive.mjs.
+//   0. If runId given (slash command path — never carries a prompt), resolve it
+//      against PGC_Session.run_id — 0 sessions -> notify not found; otherwise
+//      always post an EXPLAIN_STEP_SELECT button list (one button per llm_call
+//      step, even when there's only one) and stop. The question is only ever
+//      collected via modal after a specific step is chosen — see interactive.mjs.
 //   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
 //   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)

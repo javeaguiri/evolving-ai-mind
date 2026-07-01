@@ -1408,17 +1408,18 @@ paths:
 
   /api/v1/ui/slack/explain:
     post:
-      summary: /explain slash command — continues a diagnostic conversation
+      summary: /explain slash command — resolves a run to its llm_call steps
       description: >
-        Handles the /explain Slack slash command. Two forms:
-        `/explain <query_id> <prompt>` — direct and unambiguous, anchored to one
-        llm_call step, enqueues EXPLAIN_QUERY straight to ProcFunction for an async
-        LLM follow-up.
-        `/explain <run_id>` — no prompt; ProcFunction always resolves run_id to an
-        EXPLAIN_STEP_SELECT button list (one button per llm_call step in that run,
-        even when there's only one). Picking a step opens a Slack modal to collect
-        the question; submission enqueues EXPLAIN_QUERY with the resolved query_id,
-        resuming the same path as the direct form.
+        Handles the /explain Slack slash command. Takes only a run_id
+        (PGC_WorkflowRun.id) — a user never types or sees a query_id. ACKs
+        immediately and enqueues EXPLAIN_QUERY (runId only) to ProcFunction, which
+        always resolves run_id to an EXPLAIN_STEP_SELECT button list (one button
+        per llm_call step in that run, even when there's only one). Picking a
+        step opens a Slack modal to collect the question; submission enqueues
+        EXPLAIN_QUERY internally with the resolved query_id + prompt (see
+        interactive.mjs handleExplainStepSelectButton / handleExplainViewSubmission),
+        which is also how the "Ask follow-up" button on any explain reply continues
+        the conversation — neither path is user-typed.
 
         Flow: Slack POST → SlackbotFunction → ACK → SQS EXPLAIN_QUERY → ProcFunction → reply
       tags: [UI-Slack]
@@ -1432,8 +1433,8 @@ paths:
               properties:
                 text:
                   type: string
-                  description: "<query_id> <prompt>  —  or  —  <run_id>"
-                  example: "550e8400-e29b-41d4-a716-446655440000 why did step 14 fail?"
+                  description: "<run_id>"
+                  example: "623"
                 user_id:
                   type: string
                   example: U012AB3CD
@@ -1442,12 +1443,12 @@ paths:
                   example: C0AEJ87JSKF
       responses:
         '200':
-          description: ACK posted to Slack; explanation (or step picker) arrives as a threaded reply
+          description: ACK posted to Slack; step-selection button list arrives as a threaded reply
           content:
             application/json:
               example: {}
         '400':
-          description: text is empty, or first token is neither a valid UUID v4 nor an integer run_id
+          description: text is empty or not an integer run_id
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
@@ -2811,19 +2812,19 @@ paths:
       summary: Continue a diagnostic conversation anchored to a specific llm_call step, or resolve a run to its steps
       description: >
         HTTP test path for the EXPLAIN_QUERY SQS message type.
-        Accepts either queryId (anchored to one llm_call diagnostic session, requires
-        prompt) or runId (PGC_WorkflowRun.id, never carries a prompt). runId always
-        resolves to an EXPLAIN_STEP_SELECT callback — one button per llm_call step in
-        that run, even when there's only one — since the question is only ever
-        collected via a Slack modal after a specific step is chosen (see
-        interactive.mjs handleExplainStepSelectButton). The response reports
-        stepSelectionRequired: true in this case; no LLM call is made.
-        For the queryId form: looks up the PGC_Session, appends the user turn as a
-        PGC_SessionEntry, reconstructs the full messages array, and calls the LLM
-        (anthropic/claude-sonnet-4-5). On first invocation (seq=3), the LLM reasoning
-        from the original step (seq=2) is surfaced in the reply if present. Subsequent
-        invocations continue the conversation.
-        In production the /explain Slack command enqueues EXPLAIN_QUERY to SQS.
+        The /explain slash command only ever sends runId (PGC_WorkflowRun.id, never
+        a prompt) — this always resolves to an EXPLAIN_STEP_SELECT callback, one
+        button per llm_call step in that run, even when there's only one, since the
+        question is only ever collected via a Slack modal after a specific step is
+        chosen (see interactive.mjs handleExplainStepSelectButton). The response
+        reports stepSelectionRequired: true in this case; no LLM call is made.
+        queryId (+ required prompt) is internal plumbing only, reached from the
+        step-select modal submission or the "Ask follow-up" button on an existing
+        reply — never typed directly by a user. That path looks up the PGC_Session,
+        appends the user turn as a PGC_SessionEntry, reconstructs the full messages
+        array, and calls the LLM (anthropic/claude-sonnet-4-5). On first invocation
+        (seq=3), the LLM reasoning from the original step (seq=2) is surfaced in the
+        reply if present. Subsequent invocations continue the conversation.
       tags: [PROC]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
