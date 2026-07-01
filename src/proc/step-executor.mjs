@@ -610,7 +610,7 @@ async function executeServInsert({ step, localState, traceId }) {
     const resp = await insertRows(tableName, row);
     if (!resp.success) throw new Error(`serv_insert bulk failed for "${tableName}": ${resp.error}`);
     return {
-      outputValue: resp.rows ?? { tableName, inserted: row.length },
+      outputValue: Array.isArray(resp.rows) ? resp.rows : resp.rows ? [resp.rows] : [],
       nextAction:  resolveNextAction(step.on_success, null),
     };
   }

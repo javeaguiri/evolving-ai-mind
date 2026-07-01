@@ -58,6 +58,12 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
 | C3 `PGC_Prompt` write access for Novia + SOP step | AC4 | ⬜ |
+| A4 Standard global params (`userInput`, `domain`) in prompts + classify-intent domain fallback | AC1 | ⬜ |
+| A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ⬜ |
+| A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ⬜ |
+| A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ⬜ |
+| G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ⬜ |
+| G2 `research_workflow_domain` surfaces raw input format (section headers, collapsed tables) | AC1 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
 | C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ⬜ |
@@ -84,6 +90,38 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - Update `create_workflow` steps 35b/36: build one-row-per-phrase inserts instead of a joined string.
 - `matchIntentMap` in `classify-intent.mjs` already iterates rows and tests each pattern — no change needed there.
 - `PGC_Workflow.intent_keywords` folds into this model as `source: auto` rows, eliminating the two-store split.
+
+---
+
+### Track G — Raw Input Parsing + serv_insert Consistency
+
+**G1 — `step-executor.mjs` — serv_insert bulk always returns array**
+- The bulk insert path returns `resp.rows ?? { tableName, inserted: row.length }`. When SERV returns a single-item object instead of an array (one-row bulk), downstream js_transform `.forEach()` / `.map()` calls crash.
+- Fix: `outputValue: Array.isArray(resp.rows) ? resp.rows : resp.rows ? [resp.rows] : []` — always array.
+
+**G2 — `research_workflow_domain` — surface raw input format**
+- When the workflow intent involves parsing copy-pasted spreadsheet data, receipt photos, or other degraded-format input, `research_workflow_domain` must emit a findings entry flagging the raw input format: section headers that double as type/category labels, collapsed columns, headings appearing as individual plain-text lines.
+- This feeds `design_workflow_process` → `design_notes` for the parsing step → `generate_workflow_steps` prompt_draft, completing the chain that A7 starts from the other end.
+- Update `research_workflow_domain` prompt to look for keywords like "paste", "copy", "photo", "receipt", "import", "spreadsheet" in userInput and emit a structured finding about expected input format.
+
+### Track A — Prompt Instruction Fixes (additions)
+
+**A4 — Standard global params in prompts + classify-intent domain fallback**
+- `generate_workflow_steps` TRANSLATION RULES: document `{{input.userInput}}` (camelCase — never snake_case) and `{{input.domain}}` as standard variables always available without a preceding step.
+- `design_workflow_process`, `design_workflow_dialogs`, `design_workflow_prompts`: add matching note on global params where relevant.
+- `classify-intent.mjs` line 427: after fetching the workflow row, set `workflowDomain = result.domain ?? wfResp.rows[0].domain ?? null` and use it in `workflowInput.domain`. Ensures domain-registered workflows always receive their domain even when Pass 2 alias lookup didn't resolve it.
+
+**A5 — Enum constraint rule**
+- `design_workflow_process`: when designing a step that assigns an enum-constrained column (check constraint in domain_schema), include the exact allowed values in the step's `description` or `design_notes` so generate_workflow_steps can copy them into prompt_draft.
+- `design_workflow_prompts`: when writing `prompt_text` for a step that assigns an enum-constrained column, copy the exact allowed values from domain_schema check constraints and explicitly forbid all other values.
+
+**A6 — Reveal content rule in `design_workflow_dialogs`**
+- `reveal.content` must reference a pre-formatted string key written by a preceding js_transform — never a raw array or object key. Directly referencing an array key renders as `[object Object]` at runtime.
+- Add to design_workflow_dialogs reveal / reveals field instructions.
+
+**A7 — Raw data parsing rule in `generate_workflow_steps`**
+- When an llm_call step parses copy-pasted, photo-scanned, or scraped data, the prompt_draft must instruct the LLM that the input may arrive in degraded form: section/group headings as plain-text lines, columns collapsed one per line, mixed heading and data rows.
+- Rules for prompt_draft: skip heading rows (they are not data records); derive the appropriate domain column value from the heading and apply it to all rows below; use check constraint values from domain_schema for any enum column the heading maps to; output one structured object per data row with all heading-derived values promoted to columns.
 
 ---
 
