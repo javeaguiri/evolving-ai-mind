@@ -92,8 +92,7 @@ export async function handle(req) {
   }
 
   // explain_step_select — step chosen from an EXPLAIN_STEP_SELECT button list
-  // (posted when /explain <run_id> matched multiple llm_call steps).
-  // No workflowRunId; routes to EXPLAIN_QUERY with the resolved queryId.
+  // (posted by /explain <run_id>). Opens the question modal; no workflowRunId.
   if (buttonValue.action === 'explain_step_select') {
     return handleExplainStepSelectButton(buttonValue, payload, req.correlationId);
   }
@@ -404,51 +403,70 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
 
 // ---------------------------------------------------------------------------
 // handleExplainStepSelectButton — step chosen from an EXPLAIN_STEP_SELECT
-// button list. The prompt was already typed in the original /explain <run_id>
-// <prompt> command, so this enqueues EXPLAIN_QUERY directly — no modal needed.
+// button list (posted by /explain <run_id>). The button carries only queryId —
+// no question has been asked yet, so this opens the same question-collection
+// modal as handleExplainFollowupButton, using this click's own trigger_id.
+// Submission (handleExplainViewSubmission) enqueues EXPLAIN_QUERY as normal.
 // ---------------------------------------------------------------------------
 
 async function handleExplainStepSelectButton(buttonValue, payload, correlationId) {
-  const { queryId, prompt } = buttonValue;
-  const channel  = payload.channel?.id;
-  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
-  const traceId  = correlationId || randomUUID();
+  const { queryId } = buttonValue;
+  const triggerId = payload.trigger_id;
+  const channel   = payload.channel?.id;
+  const threadTs  = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId   = correlationId || randomUUID();
 
-  if (!queryId || !prompt) {
-    console.warn('interactive: explain_step_select missing queryId or prompt', { traceId });
-    return err(400, 'explain_step_select button value must contain queryId and prompt', correlationId);
+  if (!queryId) {
+    console.warn('interactive: explain_step_select missing queryId', { traceId });
+    return err(400, 'explain_step_select button value missing queryId', correlationId);
   }
 
-  // Disable the button list — replace with a static confirmation showing the pick was made.
+  // Disable the step-picker button list — replace with a static confirmation.
   if (channel && threadTs) {
     try {
       await slack.chat.update({
         channel,
         ts:     threadTs,
-        text:   '🔍 Explaining this step...',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🔍 Explaining this step...' } }],
+        text:   '🔍 Step selected — opening question dialog...',
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🔍 Step selected — opening question dialog...' } }],
       });
     } catch (error) {
       console.warn('interactive: explain_step_select chat.update failed (non-fatal)', { error: error.message, traceId });
     }
   }
 
-  try {
-    await sqs.send(new SendMessageCommand({
-      QueueUrl:    process.env.SQS_WORKFLOW_URL,
-      MessageBody: JSON.stringify({
-        type:      'EXPLAIN_QUERY',
-        traceId,
-        queryId,
-        prompt,
-        slackUser: payload.user?.id,
-        callback:  { provider: 'slack', channel, threadId: threadTs },
-        enqueuedAt: new Date().toISOString(),
-      }),
-    }));
-  } catch (error) {
-    console.error('interactive: explain_step_select SQS enqueue failed', { error: error.message, traceId });
-    return err(500, `SQS enqueue failed: ${error.message}`, traceId);
+  if (triggerId) {
+    try {
+      await slack.views.open({
+        trigger_id: triggerId,
+        view: {
+          type:             'modal',
+          callback_id:      'explain_followup_modal',
+          notify_on_close:  false,
+          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId }),
+          title:  { type: 'plain_text', text: 'Ask about this step' },
+          submit: { type: 'plain_text', text: 'Ask' },
+          close:  { type: 'plain_text', text: 'Cancel' },
+          blocks: [{
+            type:     'input',
+            block_id: 'followup_input_block',
+            label:    { type: 'plain_text', text: 'Your question' },
+            element: {
+              type:        'plain_text_input',
+              action_id:   'followup_input_value',
+              multiline:   true,
+              placeholder: { type: 'plain_text', text: 'What would you like to know about this step?' },
+            },
+          }],
+        },
+      });
+      console.info('interactive: explain_step_select modal opened', { queryId, traceId });
+    } catch (error) {
+      console.error('interactive: explain_step_select views.open failed', { error: error.message, traceId });
+      return err(500, `views.open failed: ${error.message}`, correlationId);
+    }
+  } else {
+    console.warn('interactive: explain_step_select missing trigger_id', { queryId, traceId });
   }
 
   return { statusCode: 200, body: '' };
