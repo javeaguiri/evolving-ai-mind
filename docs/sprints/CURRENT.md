@@ -57,6 +57,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | B1 `PGC_WorkflowRun.session_id` column migration | AC2 | ⬜ |
 | B2 PGC_SessionEntry writes for all `llm_call` steps | AC2 | ⬜ |
 | B3 `/explain` step-selection gate | AC3 | ⬜ |
+| C3 `PGC_Prompt` write access for Novia + SOP step | AC4 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
 | C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ⬜ |
@@ -121,6 +122,8 @@ Three defects in the prompt (line 2743 of `seed_PGC_Prompt.json`):
 
 ### Track B — Session & Explain Infrastructure
 
+> **Priority note:** B1+B2 are a prerequisite for Novia's full diagnostic SOP (C1/C3). Without session entries for user-triggered workflow runs, Novia can only read the prompt template — not the assembled prompt or LLM response. Prioritise B1+B2 before C3.
+
 **B1 — `PGC_WorkflowRun.session_id` FK column**
 - Migration: `POST /api/v1/serv/schema/addColumn` → `PGC_WorkflowRun.session_id integer nullable FK → PGC_Session.id`.
 - Update `PGC_Schema` seed to register column.
@@ -166,6 +169,13 @@ Implementation:
 - `query_table` already works on registered views (they appear in `PGC_TableMap`) — no change needed.
 - Update `minds_eye_system_prompt` to document both tools with when-to-use guidance.
 - Run `upsert-system-context.mjs`.
+
+**C3 — `PGC_Prompt` write access for Novia + SOP step**
+- C1 (novia_diagnostic_protocol) lists "propose + confirm: prompt text" as a fix authority, but `update_data` silently fails on `PGC_Prompt` because it is not registered in `PGC_TableMap` as writable.
+- Fix 1: register `PGC_Prompt` in `PGC_TableMap` with `allow_write: true` (gated — Novia proposes, user confirms, same pattern as other PGC write operations).
+- Fix 2: add procedure 10 to `novia_diagnostic_protocol`: "To fix a prompt instruction gap — (a) query `PGC_SessionEntry` for the assembled prompt content (requires B2 live); (b) identify the missing or wrong instruction; (c) read the current `prompt_text` via `read_prompt`; (d) propose the corrected text via `update_data PGC_Prompt` (gated — user must confirm before write)."
+- Run `upsert-system-context.mjs` after updating `seed_PGC_SystemContext.json`.
+- **Depends on B1+B2** for full effectiveness (step (a) above requires session entries to exist).
 
 ---
 
@@ -247,5 +257,7 @@ Implementation:
 ## Session Notes
 
 **2026-06-29 (session 1):** Sprint 7 scoped. Dead code removal (/chat, design-domain.mjs) moved to Sprint 8 along with test env, README, and log hygiene. Track A fleshed out: A1 (generate_workflow_steps no-reuse rule) + A2 (design_workflow_prompts — three defects identified: no domain check on reuse rule, example teaches cross-domain reuse, no uniqueness guard; primary fix is filtering domain:null from step 23c query). Track C expanded: C1 with 9 diagnostic procedures including view diagnostics, C1a (js_transform_timeout_ms configurable via PGC_SystemContext), C2 (Novia create_view/drop_view tools). Track E rescoped: E1 createView + E2 dropView SERV endpoints, E3 /proc/addView (callable standalone or from workflow step), E4 create_view core workflow (LLM design → create → serv_getRows live test → approve or drop+iterate), E5 UC-E4 budget report. UI Polish track (D1–D5) added. Functionality gap list TBD — additional items to be added to tracks as gaps are identified.
+
+**2026-07-01 (session 3):** Diagnosed runs 613–617. Root causes: (1) generate_workflow_steps v40 — 6 of 10 SystemContext tokens were dead (inject_for declared but {{token}} missing from prompt text); wired step_type_contracts, step_usage_patterns, workflow_constraints. (2) workflow_routing_rules v2 — condition routing contradiction removed; both bare keys and step:N now accepted. (3) generate_workflow_steps v41 — output_schema serv_insert.row type constraint removed; template strings and arrays now accepted. (4) bulk_import_budgets run 617 — section headers treated as categories + invalid type values in budgets_parse_spreadsheet_input prompt_draft (Generation fault; Novia fixed workflow to v3; prompt fix deferred to C3). Added C3 (PGC_Prompt write access + Novia SOP step for prompt fixes) and priority note on B1+B2 as prerequisite for Novia run-scoped diagnostics.
 
 **2026-06-30 (session 2):** Diagnosed and fixed multiple create_workflow + import_budget_from_csv failures (runs 608–613). Fixes: (1) string arrays in `reveals` collapsed into single bulleted reveal (step-executor.mjs); (2) empty reveal content guard in callback.mjs; (3) iterator catch blocks use optional chaining so WORKFLOW_ERROR always fires (run-workflow.mjs); (4) L1 iterator_missing_item_step check added to simulation-engine.mjs; (5) generate_workflow_steps output_schema allOf extended to enforce required fields for all 9 step types (v38); (6) design_workflow_prompts v4 — prior-pass reuse injects capability_decisions into retry so unchanged steps are copied verbatim; (7) create_workflow v73/74 — step 22a captures previous_prompt_designs, step 23d injects it + simulation_error_summary, step 18 reads p.prompt_model; (8) analyze_workflow_gaps v13 — explicit prompt_model field instruction, model alias removed from schema; (9) simulation-engine.mjs — iterator_missing_item_step skipped in skeleton mode (was false-positiving on step 21b BFS, causing infinite loop at step 21c); (10) generate_workflow_steps v39 — rule 8: prefer serv_insert array over iterator for bulk inserts of new rows.
