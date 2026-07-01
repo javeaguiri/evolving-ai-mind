@@ -120,8 +120,10 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - Add to design_workflow_dialogs reveal / reveals field instructions.
 
 **A7 — Raw data parsing rule in `generate_workflow_steps`**
-- When an llm_call step parses copy-pasted, photo-scanned, or scraped data, the prompt_draft must instruct the LLM that the input may arrive in degraded form: section/group headings as plain-text lines, columns collapsed one per line, mixed heading and data rows.
-- Rules for prompt_draft: skip heading rows (they are not data records); derive the appropriate domain column value from the heading and apply it to all rows below; use check constraint values from domain_schema for any enum column the heading maps to; output one structured object per data row with all heading-derived values promoted to columns.
+- When an llm_call step parses copy-pasted or scanned data, the input may originate from a pivot table or aggregated view where row group labels serve as dimension values for rows beneath them, not as data records. Copy-pasting may collapse the table structure so labels and column headers arrive as individual plain-text lines mixed with data.
+- Where this pattern applies, prompt_draft should describe the un-pivot transformation in domain-specific language: group label levels adapted to actual domain column names and check constraint values from domain_schema. Avoid generic terms like "heading"/"sub-heading" in prompt_draft — prefer real column names where they can be inferred.
+- Includes a state → city → person example showing pivot source, degraded arrival, and expected flat output. The parsing LLM should use judgment when input doesn't map cleanly; goal is the flattest representation the downstream serv_insert can consume.
+- Language is intentionally softened (should/may/where applicable) since inference must adjust to actual data shape.
 
 ---
 
