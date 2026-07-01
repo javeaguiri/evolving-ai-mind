@@ -907,20 +907,6 @@
     }
   },
   {
-    "key": "diagnostics_config",
-    "section": "config",
-    "inject_always": false,
-    "inject_for": [],
-    "version": 1,
-    "content": {
-      "enabled_workflows": [
-        "create_workflow",
-        "create_domain",
-        "add_entity"
-      ]
-    }
-  },
-  {
     "key": "general_chat_system_prompt",
     "section": "chat",
     "inject_always": false,

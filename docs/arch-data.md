@@ -572,7 +572,7 @@ CREATE TABLE "PGC_SessionEntry" (
 | sequence_number | integer NOT NULL | 1-based; UNIQUE per session; drives messages array order |
 | role | varchar(15) NOT NULL | `system` \| `user` \| `assistant` \| `tool` — `tool` rows store Novia tool call results in the reasoning transcript |
 | content | text NOT NULL | Raw message content sent to or received from the LLM |
-| reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows when `diagnostics_config` enables the workflow; **never** included in the reconstructed messages array |
+| reasoning | text NULL | Diagnostic metadata — populated on `assistant` rows; **never** included in the reconstructed messages array |
 | compressed | boolean NOT NULL DEFAULT FALSE | ✦ When `true`, this entry's content has been summarised into a later compression entry and is excluded from the active context window |
 | created_at | timestamp | |
 

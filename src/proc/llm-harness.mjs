@@ -275,14 +275,11 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   const finalOutput = validationResult.correctedOutput ?? rawOutput;
 
-  // Diagnostics — non-blocking; failure is logged but does not fail the step
-  let diagnosticPayload = null;
+  // Diagnostics — non-blocking; failure is logged but does not fail the step.
+  // Written unconditionally for every llm_call step so /explain can look up
+  // the assembled prompt and response for any workflow run via run_id.
   try {
-    const diagnosticsRow    = contextRows.find(r => r.key === 'diagnostics_config');
-    const diagnosticsConfig = diagnosticsRow?.content ?? null;
-    const enabledWorkflows  = diagnosticsConfig?.enabled_workflows ?? [];
-
-    if (run?.workflow_name && enabledWorkflows.includes(run.workflow_name)) {
+    if (run?.workflow_name) {
       const sessionResp = await insertRow('PGC_Session', {
         session_type:    'llm_call_diagnostic',
         workflow_name:   run.workflow_name,
@@ -293,7 +290,6 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
       });
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;
-        const queryId   = sessionResp.row.query_id;
         const effectiveUserMsg = userInput || JSON.stringify(resolvedInput);
         let seq = 1;
         await insertRow('PGC_SessionEntry', {
@@ -322,8 +318,7 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
             content: typeof corrected === 'object' ? JSON.stringify(corrected) : String(corrected),
           });
         }
-        diagnosticPayload = { queryId, sessionId, intentCategory, traceId };
-        console.info('step-executor: diagnostics session created', { sessionId, queryId, traceId });
+        console.info('step-executor: diagnostics session created', { sessionId, traceId });
       }
     }
   } catch (diagErr) {
@@ -331,12 +326,10 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
   }
 
   if (!validationResult.valid) {
-    const validationError = new Error(
+    throw new Error(
       `llm_call validation failed after ${validationResult.attempt} attempt(s): ` +
       JSON.stringify(validationResult.errors)
     );
-    if (diagnosticPayload) validationError.diagnosticPayload = diagnosticPayload;
-    throw validationError;
   }
 
   // Memory write — non-fatal; Option B: await but swallow errors so the
@@ -369,9 +362,8 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
   }
 
   return {
-    outputValue:      finalOutput,
-    nextAction:       resolveNextAction(step.on_success),
-    meta:             { llmMs, attempt: validationResult.attempt },
-    diagnosticPayload,
+    outputValue: finalOutput,
+    nextAction:  resolveNextAction(step.on_success),
+    meta:        { llmMs, attempt: validationResult.attempt },
   };
 }

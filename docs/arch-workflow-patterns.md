@@ -271,9 +271,8 @@ simulation correction loops, and implementation notes — is in
 ### 6.10 Session Architecture — Chat and Diagnostics
 
 Session architecture — including `PGC_Session` and `PGC_SessionEntry` table design,
-the `llm_call` diagnostic flow, `/chat` and `/explain` Slack commands, messages array
-reconstruction, and the `diagnostics_config` `PGC_SystemContext` entry — is fully
-specified in `docs/arch-session.md`.
+the `llm_call` diagnostic flow, `/chat` and `/explain` Slack commands, and messages
+array reconstruction — is fully specified in `docs/arch-session.md`.
 
 Table DDL, column definitions, and `PGC_Schema` registration entries are in
 `docs/arch-data.md` section 4.3.4.
@@ -963,8 +962,8 @@ right locus for all static workflow validation.
 **Option B becomes relevant only for analysing already-registered workflows that are
 not being regenerated.** If that diagnostic use case is needed, a minimal implementation
 is: a new `serv_query PGC_Workflow` step + a `js_transform` that calls the Level 1
-analysis function on the stored `steps` array, piped through a notify or LLM_DIAGNOSTIC
-message. This requires no new PROC handler and no new SQS type.
+analysis function on the stored `steps` array, piped through a notify message.
+This requires no new PROC handler and no new SQS type.
 
 #### Integration with `create_workflow` gap detection
 

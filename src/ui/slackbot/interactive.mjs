@@ -85,10 +85,17 @@ export async function handle(req) {
     return err(400, 'Invalid button value encoding', req.correlationId);
   }
 
-  // explain_followup — button on LLM_DIAGNOSTIC or explain HUMAN_NOTIFICATION.
+  // explain_followup — button on explain HUMAN_NOTIFICATION.
   // No workflowRunId; routes to EXPLAIN_QUERY, not resume_gate.
   if (buttonValue.action === 'explain_followup') {
     return handleExplainFollowupButton(buttonValue, payload, req.correlationId);
+  }
+
+  // explain_step_select — step chosen from an EXPLAIN_STEP_SELECT button list
+  // (posted when /explain <run_id> matched multiple llm_call steps).
+  // No workflowRunId; routes to EXPLAIN_QUERY with the resolved queryId.
+  if (buttonValue.action === 'explain_step_select') {
+    return handleExplainStepSelectButton(buttonValue, payload, req.correlationId);
   }
 
   // minds_eye_followup — "Continue with Novia" button on a Novia response.
@@ -323,8 +330,8 @@ export async function handle(req) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// handleExplainFollowupButton — "Ask follow-up" clicked on a LLM_DIAGNOSTIC
-// or explain HUMAN_NOTIFICATION. Opens a modal whose submission routes to
+// handleExplainFollowupButton — "Ask follow-up" clicked on an explain
+// HUMAN_NOTIFICATION. Opens a modal whose submission routes to
 // EXPLAIN_QUERY (not resume_gate). No workflowRunId involved.
 // ---------------------------------------------------------------------------
 
@@ -390,6 +397,58 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
     }
   } else {
     console.warn('interactive: explain_followup missing trigger_id', { queryId, traceId });
+  }
+
+  return { statusCode: 200, body: '' };
+}
+
+// ---------------------------------------------------------------------------
+// handleExplainStepSelectButton — step chosen from an EXPLAIN_STEP_SELECT
+// button list. The prompt was already typed in the original /explain <run_id>
+// <prompt> command, so this enqueues EXPLAIN_QUERY directly — no modal needed.
+// ---------------------------------------------------------------------------
+
+async function handleExplainStepSelectButton(buttonValue, payload, correlationId) {
+  const { queryId, prompt } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
+
+  if (!queryId || !prompt) {
+    console.warn('interactive: explain_step_select missing queryId or prompt', { traceId });
+    return err(400, 'explain_step_select button value must contain queryId and prompt', correlationId);
+  }
+
+  // Disable the button list — replace with a static confirmation showing the pick was made.
+  if (channel && threadTs) {
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   '🔍 Explaining this step...',
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🔍 Explaining this step...' } }],
+      });
+    } catch (error) {
+      console.warn('interactive: explain_step_select chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:      'EXPLAIN_QUERY',
+        traceId,
+        queryId,
+        prompt,
+        slackUser: payload.user?.id,
+        callback:  { provider: 'slack', channel, threadId: threadTs },
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: explain_step_select SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, traceId);
   }
 
   return { statusCode: 200, body: '' };

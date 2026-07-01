@@ -1410,11 +1410,17 @@ paths:
     post:
       summary: /explain slash command — continues a diagnostic conversation
       description: >
-        Handles the /explain Slack slash command. Takes a query_id (UUID) and optional
-        prompt, loads the existing PGC_Session entries for that query, and enqueues
-        EXPLAIN_QUERY to ProcFunction for an async LLM follow-up.
+        Handles the /explain Slack slash command. Takes either a query_id (UUID,
+        anchored to one llm_call step) or a run_id (PGC_WorkflowRun.id, may span
+        several llm_call steps) plus a prompt, and enqueues EXPLAIN_QUERY to
+        ProcFunction for an async LLM follow-up.
 
-        Usage: /explain <query_id> <optional follow-up question>
+        Usage: /explain <query_id|run_id> <prompt>
+
+        When a run_id resolves to more than one llm_call diagnostic session,
+        ProcFunction posts an EXPLAIN_STEP_SELECT button list instead of calling
+        the LLM immediately — the user picks a step, which routes back through
+        EXPLAIN_QUERY with the resolved query_id.
 
         Flow: Slack POST → SlackbotFunction → ACK → SQS EXPLAIN_QUERY → ProcFunction → reply
       tags: [UI-Slack]
@@ -1428,7 +1434,7 @@ paths:
               properties:
                 text:
                   type: string
-                  description: "<query_id> <optional prompt>"
+                  description: "<query_id|run_id> <prompt>"
                   example: "550e8400-e29b-41d4-a716-446655440000 why did step 14 fail?"
                 user_id:
                   type: string
@@ -1438,12 +1444,12 @@ paths:
                   example: C0AEJ87JSKF
       responses:
         '200':
-          description: ACK posted to Slack; explanation arrives as a threaded reply
+          description: ACK posted to Slack; explanation (or step picker) arrives as a threaded reply
           content:
             application/json:
               example: {}
         '400':
-          description: text is empty or query_id is not a valid UUID v4
+          description: text is empty, or first token is neither a valid UUID v4 nor an integer run_id
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
@@ -2804,13 +2810,18 @@ paths:
 
   /api/v1/proc/explain:
     post:
-      summary: Continue a diagnostic conversation anchored to a specific llm_call step
+      summary: Continue a diagnostic conversation anchored to a specific llm_call step or run
       description: >
         HTTP test path for the EXPLAIN_QUERY SQS message type.
-        Looks up the PGC_Session by query_id, appends the user turn as a PGC_SessionEntry,
-        reconstructs the full messages array, and calls the LLM (anthropic/claude-sonnet-4-5).
-        On first invocation (seq=3), the LLM reasoning from the original step (seq=2) is
-        surfaced in the reply if present. Subsequent invocations continue the conversation.
+        Accepts either queryId (anchored to one llm_call diagnostic session) or runId
+        (PGC_WorkflowRun.id). When runId resolves to more than one PGC_Session row,
+        an EXPLAIN_STEP_SELECT callback is enqueued with a button per step instead of
+        calling the LLM — the response reports stepSelectionRequired: true.
+        Otherwise: looks up the PGC_Session by query_id, appends the user turn as a
+        PGC_SessionEntry, reconstructs the full messages array, and calls the LLM
+        (anthropic/claude-sonnet-4-5). On first invocation (seq=3), the LLM reasoning
+        from the original step (seq=2) is surfaced in the reply if present. Subsequent
+        invocations continue the conversation.
         In production the /explain Slack command enqueues EXPLAIN_QUERY to SQS.
       tags: [PROC]
       parameters:
@@ -2821,12 +2832,15 @@ paths:
           application/json:
             schema:
               type: object
-              required: [queryId, prompt]
+              required: [prompt]
               properties:
                 queryId:
                   type: string
                   format: uuid
-                  description: PGC_Session.query_id — obtained from LLM_DIAGNOSTIC Slack notification
+                  description: PGC_Session.query_id — mutually exclusive with runId
+                runId:
+                  type: integer
+                  description: PGC_WorkflowRun.id — resolved to one or more PGC_Session rows via run_id
                 prompt:
                   type: string
                   description: User question about the LLM output
@@ -2836,9 +2850,14 @@ paths:
                 value:
                   queryId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
                   prompt: "Why did you choose those column names for the recipes table?"
+              explain_run:
+                summary: Ask about a run — may trigger step selection
+                value:
+                  runId: 621
+                  prompt: "Why did the parsing step emit those extra rows?"
       responses:
         '200':
-          description: LLM explanation response
+          description: LLM explanation response, or step-selection acknowledgement
           content:
             application/json:
               schema:
@@ -2850,6 +2869,10 @@ paths:
                     type: integer
                   response:
                     type: string
+                  stepSelectionRequired:
+                    type: boolean
+                  steps:
+                    type: integer
               examples:
                 explain_response:
                   summary: Explanation of LLM output
@@ -2857,14 +2880,20 @@ paths:
                     success: true
                     sessionId: 17
                     response: "I chose those column names because..."
+                step_selection:
+                  summary: runId matched multiple llm_call steps
+                  value:
+                    success: true
+                    stepSelectionRequired: true
+                    steps: 3
         '400':
-          description: Missing queryId or prompt, or queryId not a valid UUID
+          description: Missing prompt, or neither a valid queryId nor a runId with sessions was provided
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: No PGC_Session found for the given query_id
+          description: No PGC_Session found for the given query_id or runId
           content:
             application/json:
               schema:
