@@ -11,6 +11,7 @@
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 import vm from 'vm';
+import { resolveInput, resolvePath } from './template-resolver.mjs';
 
 // Known valid routing token pattern — "next", "end", "cancel",
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
@@ -1020,6 +1021,110 @@ function inferMockIndexKeys(expr) {
   return keys;
 }
 
+// ---------------------------------------------------------------------------
+// Step-input contract validation (data-flow trace)
+//
+// Resolves each step's declared input fields against mockState — which by
+// this point in the loop already holds the real js_transform-computed
+// output of every prior step — and checks the resolved value's shape
+// against the same contracts table.mjs enforces at runtime. Catches shape
+// mismatches (e.g. a js_transform building a nested filter-group array
+// instead of a flat filter array) at create time instead of on first
+// execution. Resolution reuses resolveInput/resolvePath from
+// template-resolver.mjs — the same functions step-executor.mjs uses at
+// runtime — so simulation and execution never diverge in interpretation.
+// ---------------------------------------------------------------------------
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function filterArrayShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const f of value) {
+    if (!isPlainObject(f) || !f.column) return 'each filter must be an object with a column field';
+  }
+  return null;
+}
+
+function plainObjectShape(value) {
+  return isPlainObject(value) ? null : 'must be a non-null object';
+}
+
+function arrayOfObjectsShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const item of value) {
+    if (!isPlainObject(item)) return 'each item must be an object';
+  }
+  return null;
+}
+
+function arrayShape(value) {
+  return Array.isArray(value) ? null : 'must be an array';
+}
+
+// { stepType: { fieldName: validatorFn } } — fields resolved from step.input
+// via resolveInput. Mirrors table.mjs's own runtime validators (validateFilters,
+// insertRow/updateRows shape checks) — these fields throw a hard error at
+// runtime today, so a mismatch here is a hard L2 failure.
+const STEP_INPUT_CONTRACTS = {
+  serv_query:  { filters: filterArrayShape },
+  serv_update: { filters: filterArrayShape, updates: plainObjectShape },
+  serv_delete: { filters: filterArrayShape },
+  serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
+};
+
+// { stepType: [{ field, validate }] } — dot-path fields (not {{ }}-wrapped)
+// resolved via resolvePath directly against mockState. These fields fall
+// back silently at runtime (`?? []` / `?? {}`) rather than throwing, so a
+// mismatch here is a soft warning, not a hard failure.
+const STEP_PATH_CONTRACTS = {
+  iterator:   [{ field: 'items_key',   validate: arrayShape }],
+  human_gate: [{ field: 'context_key', validate: arrayShape }],
+};
+
+function checkStepInputContracts(s, mockState, issues) {
+  const key = String(s.step);
+
+  const inputContracts = STEP_INPUT_CONTRACTS[s.type];
+  if (inputContracts && s.input) {
+    for (const [field, validate] of Object.entries(inputContracts)) {
+      const raw = s.input[field];
+      if (raw === undefined) continue; // optional field not present on this step
+      const resolved = resolveInput(raw, mockState);
+      const problem = validate(resolved);
+      if (problem) {
+        issues.push({
+          check:         'serv_input_shape_mismatch',
+          step:          key,
+          failure_class: 'serv_input_shape_mismatch',
+          detail:        `Step "${key}" (${s.type}) input.${field} ${problem}. Resolved value: ${JSON.stringify(resolved)}`,
+        });
+      }
+    }
+  }
+
+  const pathContracts = STEP_PATH_CONTRACTS[s.type];
+  if (pathContracts) {
+    for (const { field, validate } of pathContracts) {
+      const raw = s[field];
+      if (typeof raw !== 'string' || !raw) continue;
+      const resolved = resolvePath(mockState, raw);
+      if (resolved === undefined) continue; // unresolved path is a separate concern, not a shape mismatch
+      const problem = validate(resolved);
+      if (problem) {
+        issues.push({
+          check:         'serv_input_shape_mismatch',
+          step:          key,
+          failure_class: 'serv_input_shape_mismatch',
+          severity:      'warning',
+          detail:        `Step "${key}" (${s.type}) ${field} ("${raw}") ${problem}. Resolved value: ${JSON.stringify(resolved)}`,
+        });
+      }
+    }
+  }
+}
+
 function runJsTransformSmokeTest(steps, traceId) {
   const issues    = [];
   let stepsTested = 0;
@@ -1027,6 +1132,8 @@ function runJsTransformSmokeTest(steps, traceId) {
 
   for (const s of steps) {
     const key = String(s.step);
+
+    checkStepInputContracts(s, mockState, issues);
 
     if (s.type === 'js_transform') {
       const expr = s.expression;
@@ -1121,11 +1228,14 @@ function runJsTransformSmokeTest(steps, traceId) {
     }
   }
 
-  // Hard failures (affect passed): syntax errors and void returns.
-  // Runtime errors are soft warnings — mock state may not match real data shapes.
+  // Hard failures (affect passed): syntax errors, void returns, and step-input
+  // shape mismatches on fields that throw at runtime (filters/updates/row/rows).
+  // Runtime errors and severity:'warning' shape mismatches (items_key/context_key,
+  // which fail silently at runtime) are soft — mock state may not match real data shapes.
   const hardFailures = issues.filter(i =>
     i.failure_class === 'js_transform_syntax_error' ||
-    i.failure_class === 'js_transform_void_return'
+    i.failure_class === 'js_transform_void_return' ||
+    (i.failure_class === 'serv_input_shape_mismatch' && i.severity !== 'warning')
   );
 
   return {

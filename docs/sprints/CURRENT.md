@@ -45,6 +45,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
 - **AC7 — IntentMap one row per phrase:** migration splits existing combined patterns; `create_workflow` steps 35b/36 write individual rows; `matchIntentMap` unchanged.
 - **AC8 — `serv_upsert` step type live:** `/serv/table/upsertRows` endpoint + `serv_upsert` step type registered (`PGC_StepType`, `serv_db_step_shapes`, `generate_workflow_steps` known-step-types list); validated end-to-end from Slack.
+- **AC9 — L2 data-flow trace catches shape mismatches at create-time:** L2b simulation (`simulation-engine.mjs`) resolves known step-input fields (filters, updates, row/rows, items_key, context_key) against the real js_transform-computed mock state and flags contract violations before a workflow is registered. Validated by reproducing the run 623 nested-filter-array bug in a test workflow and confirming L2 rejects it.
 
 ---
 
@@ -79,9 +80,11 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E4 `create_view` core workflow | AC6 | ⬜ |
 | E5 UC-E4 budget report | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
-| H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ⬜ |
+| H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — code only, not yet deployed/validated |
 | H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ⬜ |
 | H3 Prompt/context wiring (`serv_db_step_shapes`, `generate_workflow_steps`, `step_type_contracts`) | AC8 | ⬜ |
+| I1 Generalize `runJsTransformSmokeTest` → data-flow trace with `STEP_INPUT_CONTRACTS` | AC9 | ✅ DONE — unit-tested (run 623 repro + 3 more cases), not yet validated live |
+| I2 Wire `serv_upsert` contract into `STEP_INPUT_CONTRACTS` (depends on H2) | AC8, AC9 | ⬜ |
 
 ---
 
@@ -308,7 +311,26 @@ Implementation:
 - Add `serv_upsert` to `generate_workflow_steps` known-step-types list and `step_type_contracts` per the `PGC_StepType` registration rule in CLAUDE.md.
 - Run `upsert-step-type.mjs` + `upsert-system-context.mjs` + `upsert-prompt.mjs`.
 
-**Validation:** repair `import_budget_data` via `fix_workflow_steps` (not a manual patch) once `serv_upsert` is live, replacing steps 10–13/16; validate end-to-end from Slack with a re-run of the run 623 scenario.
+**Validation:** delete `import_budget_data` (workflow 348) and regenerate it from scratch via `create_workflow` once H1–H3 are live — confirms `generate_workflow_steps` naturally selects `serv_upsert` over the old hand-rolled filter pattern, not just that a one-off repair works. Validate the regenerated workflow end-to-end from Slack with the run 623 input.
+
+---
+
+### Track I — L2 Data-Flow Trace (generalizes the run 623 Validation gap)
+
+**Context:** `runJsTransformSmokeTest` (L2b, `simulation-engine.mjs`) already executes every `js_transform` expression against mock state via `vm.runInNewContext` and propagates the *real computed result* into `mockState` for downstream steps — the exact data that would have shown `budget_lookup_filters` as a nested array in run 623's `create_workflow` pass. Nothing currently reads that `mockState` back out to check it against a downstream step's input contract. `table.mjs` already hard-validates four of these shapes at runtime (`filters` on `serv_query`/`serv_update`/`serv_delete`, `updates` on `serv_update`, `row`/`rows` on `serv_insert`) — this track catches the same violations at create-time instead of at first execution. Two more fields (`iterator.items_key`, `human_gate.context_key`) fail *silently* at runtime (`?? []`/`?? {}` fallback — no crash, just a workflow that quietly does nothing) and are included as warnings.
+
+Sequenced after H1 (SERV-Table `upsertRows`) so `serv_upsert`'s own contract can be added once its field names are settled.
+
+**I1 — Generalize the L2b pass**
+- Rename/broaden `runJsTransformSmokeTest`'s scope (function stays in the same forward loop over `steps`, since it already builds `mockState` in step order) to also check step-input contracts.
+- Add a declarative `STEP_INPUT_CONTRACTS` table: `{ stepType: { fieldName: validatorFn } }` for `{{template}}`-resolved fields, resolved via `resolveInput(step.input, mockState)` (imported from `template-resolver.mjs` — same function `step-executor.mjs` uses at runtime, so simulation and execution never diverge in interpretation).
+- Add a `STEP_PATH_CONTRACTS` table for dot-path fields (`items_key`, `context_key`), resolved via `resolvePath(mockState, step.field)`.
+- Validators: `filterArrayShape` (array of `{column, op, value}` objects — mirrors `table.mjs`'s `validateFilters`), `plainObjectShape`, `arrayOfObjectsShape`, `arrayShape`.
+- Hard failures (block registration): `filters`, `updates`, `row`, `rows` — these crash at runtime today. New `failure_class: 'serv_input_shape_mismatch'`.
+- Soft warnings (do not block): `items_key`, `context_key` — silent-failure risk, not a crash.
+
+**I2 — `serv_upsert` contract entry**
+- Once H2 lands, add `serv_upsert: { rows: arrayOfObjectsShape, matchColumns: arrayOfStringsShape }` to `STEP_INPUT_CONTRACTS`.
 
 ---
 
@@ -328,7 +350,7 @@ Implementation:
 
 ## Session Notes
 
-**2026-07-02 (session 6):** Diagnosed run 623 (`import_budget_data`, workflow 348) with `/explain 623` — step 12 failed "each filter must have a column". Root cause: step 11 (js_transform) built a per-record array-of-filter-groups intended for OR-across-records matching; step 12 (`serv_query`) only accepts a flat AND-filter array per `serv_db_step_shapes`. Not a harness gap (no genuinely new OR-of-composite-tuples query capability needed — year/month were invariant across the batch, `in` on `category_id` alone would have worked). Agreed this is instead a step-type capability gap: insert-vs-update resolution is generic infra logic that belongs in the harness, not hand-rolled per workflow. Scoped **Track H — `serv_upsert`**: Sprint 7 implements it as a query-then-write workaround (`PGD_Budgets` has no compound unique constraint today, so native `ON CONFLICT` isn't available); Sprint 8 adds compound unique constraint inference to `design_table`/`create_domain` and upgrades to native `ON CONFLICT` (added to backlog). Not yet implemented — next session.
+**2026-07-02 (session 6):** Diagnosed run 623 (`import_budget_data`, workflow 348) with `/explain 623` — step 12 failed "each filter must have a column". Root cause: step 11 (js_transform) built a per-record array-of-filter-groups intended for OR-across-records matching; step 12 (`serv_query`) only accepts a flat AND-filter array per `serv_db_step_shapes`. Not a harness gap (no genuinely new OR-of-composite-tuples query capability needed — year/month were invariant across the batch, `in` on `category_id` alone would have worked). Agreed this is instead a step-type capability gap: insert-vs-update resolution is generic infra logic that belongs in the harness, not hand-rolled per workflow. Scoped **Track H — `serv_upsert`**: Sprint 7 implements it as a query-then-write workaround (`PGD_Budgets` has no compound unique constraint today, so native `ON CONFLICT` isn't available); Sprint 8 adds compound unique constraint inference to `design_table`/`create_domain` and upgrades to native `ON CONFLICT` (added to backlog). Scoped **Track I — L2 Data-Flow Trace**: `runJsTransformSmokeTest` already computes real js_transform output shapes into `mockState` for downstream steps but never validates them against a consuming step's input contract; generalized to a declarative `STEP_INPUT_CONTRACTS`/`STEP_PATH_CONTRACTS` table reusing `resolveInput`/`resolvePath` from `template-resolver.mjs` (same functions the runtime uses), catching the run 623 bug class (and `updates`/`row`/`rows`/`items_key`/`context_key` shape mismatches) at create-time. Sequenced after H1. **Both H1 and I1 implemented and unit-tested this session** — `docs/openapi.yaml` `/serv/table/upsertRows` spec + `src/serv/table.mjs` `upsertRows()` (transactional, matchColumns-based query-then-write, reuses `buildWhereClause`/`getEmbedColumns`/`resolveEmbedding`); `src/proc/simulation-engine.mjs` `STEP_INPUT_CONTRACTS`/`STEP_PATH_CONTRACTS` + `checkStepInputContracts()` wired into the existing L2b forward loop (no change to `runSimulation`'s orchestration — extends `runJsTransformSmokeTest`'s issues/hardFailures in place). New `tests/unit/simulation-engine.test.mjs` (4 tests): reproduces the run 623 nested-filter-group bug and confirms it's caught, confirms a correctly-flattened filter array does not false-positive, confirms `serv_update.updates` array-shape is caught, confirms `iterator.items_key` shape issues are warnings that don't fail the smoke test. All 370 unit tests pass (366 + 4 new). Not yet deployed or validated live. Next: H2 (`serv_upsert` step type + `PGC_StepType`), H3 (prompt/context wiring), I2 (`serv_upsert` contract entry), then deploy + delete/recreate `import_budget_data` validation for both AC8 and AC9.
 
 **2026-07-01 (session 5):** Track B implemented (B2, B3; B1 found unnecessary — see Track B notes). B2: removed the 3-workflow `enabled_workflows` allowlist gating diagnostic session writes in `llm-harness.mjs` (universal now) and the `LLM_DIAGNOSTIC` per-step notification it would otherwise spam; `run_id` already visible in every notify/error footer. B3 went through two corrections from live testing (run 621/622/623) and user review before landing: (1) initial design let a question typed inline with `run_id` get blindly reused across whichever step button was clicked — fixed by never accepting the question inline for `run_id`, always showing the step picker first and collecting the question via modal only after a step is chosen; (2) direct `query_id` slash-command input removed entirely — a user should never type/see one; it's internal-only now (step-select modal submission, "Ask follow-up" button). Also caught and fixed a real process gap along the way: code was pushed to GitHub but not deployed before live testing began, causing confusing stale-code errors — see `feedback_deploy_before_live_test` memory. Two `sam deploy`s done this session; both live. All 366 unit tests pass. **Not yet validated from Slack** — user will test `/explain 623` tomorrow. Next: validate B3 live, then C3 Novia SOP prompt-fix procedure (B2/B3 prerequisite now satisfied) or C1/C2 view tooling.
 

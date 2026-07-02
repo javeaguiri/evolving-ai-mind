@@ -4047,6 +4047,89 @@ paths:
         '500':
           description: Delete failed
 
+  /api/v1/serv/table/upsertRows:
+    post:
+      summary: INSERT or UPDATE each row depending on whether a match already exists
+      description: >
+        For each row in `rows`, queries the table for an existing row whose
+        `matchColumns` values equal that row's values. A match updates the
+        existing row by id; no match inserts a new row. Gated by both
+        allow_insert and allow_update in PGC_TableMap. The whole batch runs
+        inside a single transaction — a failure partway through rolls back
+        the entire call.
+
+        **Workaround, not a native upsert:** no table in the system currently
+        declares a compound unique constraint on `matchColumns`, so this is a
+        query-then-write implementation, not `INSERT ... ON CONFLICT`. Matching
+        is best-effort (`LIMIT 1` on the first row satisfying `matchColumns`).
+        A future migration may add compound unique constraints and switch this
+        endpoint to native `ON CONFLICT` for tables that have one — see backlog.
+
+        **Automatic embedding**
+
+        Same behaviour as insertRow/updateRows — vector columns with
+        embed_source in PGC_Schema are computed/recomputed server-side;
+        callers must not supply them.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, matchColumns, rows]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGD_Budgets
+                matchColumns:
+                  type: array
+                  minItems: 1
+                  description: Column names whose combined values identify an existing row.
+                  items:
+                    type: string
+                rows:
+                  type: array
+                  minItems: 1
+                  description: Full row objects — one per record to upsert.
+                  items:
+                    type: object
+            example:
+              tableName: PGD_Budgets
+              matchColumns: [year, month, category_id]
+              rows:
+                - { year: 2026, month: 7, category_id: 3, planned_amount: 3300, currency: USD, type: non_discretionary }
+                - { year: 2026, month: 7, category_id: 4, planned_amount: 450,  currency: USD, type: non_discretionary }
+      responses:
+        '200':
+          description: Rows upserted — split into inserted and updated arrays
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGD_Budgets
+                inserted:
+                  - { id: 21, year: 2026, month: 7, category_id: 3, planned_amount: 3300 }
+                updated:
+                  - { id: 14, year: 2026, month: 7, category_id: 4, planned_amount: 450 }
+        '400':
+          description: >
+            Validation error — missing matchColumns/rows, bad table name,
+            unknown column in matchColumns or rows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: UPSERT requires both allow_insert and allow_update to be true in PGC_TableMap
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Upsert failed — transaction rolled back
+
   # ── SERV-Entity ────────────────────────────────────────────────────────────
   # User-facing domain data layer. Callers use entity names (Recipe, Stock),
   # never table names. PGC_EntitySchema defines the root_table, joins,
