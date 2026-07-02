@@ -1922,7 +1922,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 45,
+    "version": 46,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -2147,7 +2147,6 @@
                           "description": "Flat array of column name strings identifying an existing row — not a filter array."
                         },
                         "rows": {
-                          "type": "array",
                           "description": "Array of row objects, or a {{template}} reference — not \"row\", not \"data\"."
                         }
                       }
