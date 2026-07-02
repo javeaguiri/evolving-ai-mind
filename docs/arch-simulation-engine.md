@@ -140,9 +140,12 @@ Two things happen in one forward pass over the steps, in document order, sharing
 1. *js_transform smoke test* — runs every `js_transform` expression against `mockState`
    via `vm.runInNewContext` (500ms timeout). A syntax error or a `void` return (the
    expression evaluates to `undefined`) is a hard failure. A runtime error against mock
-   data is a soft warning (mock state may not match real data shapes). The step's real
-   computed result — not a placeholder — is written into `mockState[output_key]` so
-   downstream steps see the actual shape the expression produces.
+   data is a soft warning (mock state may not match real data shapes). When the
+   expression ran cleanly, its real computed result — not a placeholder — is written
+   into `mockState[output_key]` so downstream steps see the actual shape the expression
+   produces. When it didn't (threw, timed out, or returned `undefined`), a `{}`
+   placeholder is written instead and the output key is recorded as **uncertain** —
+   see the cascade rule below.
 2. *Step-input contract check* (`checkStepInputContracts`, Sprint 7 Track I) — for every
    step, resolves its declared input fields against `mockState` (via `resolveInput`/
    `resolvePath` from `template-resolver.mjs` — the same functions the runtime uses) and
@@ -166,6 +169,19 @@ Two things happen in one forward pass over the steps, in document order, sharing
    Level 1 cannot catch this because the bad value only exists after a `js_transform`
    actually runs; Level 2b catches it by actually running it, against mock data, before
    the workflow is registered.
+
+   **Uncertain-key cascade suppression.** A single forward pass over the step array
+   visits every step exactly once — it does not unroll loops. Flat-loop-pattern
+   workflows (e.g. testing each of 10 flashcards 3 times before advancing to the next
+   subset, then testing all subsets before the results reach a `human_gate`) depend on
+   accumulator state that only becomes meaningful after many real iterations; a single
+   mock pass frequently can't reconstruct it, causing the accumulating `js_transform` to
+   throw against placeholder mock data. When a field's entire value is inherited via a
+   bare `{{key}}` reference from a step recorded as uncertain (see above), the shape
+   check for that field is **skipped, not failed** — the upstream problem (if real) is
+   still visible as that step's own soft warning; the downstream check does not compound
+   it into a second, misleading hard failure. Absence of confirmation is not proof of a
+   defect — a check that can't determine a shape confidently must not report one.
 
    Returns `{ passed, steps_tested, issues }`. `passed` is `false` only for hard
    failures (`js_transform_syntax_error`, `js_transform_void_return`, or

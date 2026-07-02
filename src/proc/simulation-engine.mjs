@@ -1093,7 +1093,11 @@ const STEP_PATH_CONTRACTS = {
   human_gate: [{ field: 'context_key', validate: arrayShape }],
 };
 
-function checkStepInputContracts(s, mockState, issues) {
+// Bare "{{key.path}}" single-token template — matches the same pattern
+// resolveInput treats as a whole-value passthrough (see template-resolver.mjs).
+const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
+
+function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
   const key = String(s.step);
 
   const inputContracts = STEP_INPUT_CONTRACTS[s.type];
@@ -1101,6 +1105,20 @@ function checkStepInputContracts(s, mockState, issues) {
     for (const [field, validate] of Object.entries(inputContracts)) {
       const raw = s.input[field];
       if (raw === undefined) continue; // optional field not present on this step
+
+      // A field whose entire value is inherited from a step whose own smoke-test
+      // computation was inconclusive (threw, timed out, or returned undefined)
+      // cannot be confidently shape-checked — the mock state at that key is a
+      // placeholder fallback, not the step's real output. Skip rather than
+      // report a mismatch: absence of confirmation is not proof of a defect.
+      // Same reasoning applies to loop-accumulated state a single forward pass
+      // over the step array can only partially reconstruct (flat-loop patterns
+      // that iterate many times before a downstream step consumes the result).
+      if (typeof raw === 'string') {
+        const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
+        if (bareMatch && uncertainKeys.has(bareMatch[1].trim().split('.')[0])) continue;
+      }
+
       const resolved = resolveInput(raw, mockState);
       const problem = validate(resolved);
       if (problem) {
@@ -1136,14 +1154,17 @@ function checkStepInputContracts(s, mockState, issues) {
 }
 
 function runJsTransformSmokeTest(steps, traceId) {
-  const issues    = [];
-  let stepsTested = 0;
-  const mockState = { input: {} };
+  const issues        = [];
+  let stepsTested     = 0;
+  const mockState     = { input: {} };
+  // Base output_keys whose mockState value is a placeholder fallback rather
+  // than a real computed result — see checkStepInputContracts.
+  const uncertainKeys = new Set();
 
   for (const s of steps) {
     const key = String(s.step);
 
-    checkStepInputContracts(s, mockState, issues);
+    checkStepInputContracts(s, mockState, issues, uncertainKeys);
 
     if (s.type === 'js_transform') {
       const expr = s.expression;
@@ -1214,10 +1235,14 @@ function runJsTransformSmokeTest(steps, traceId) {
 
         // Propagate result to mockState for downstream steps
         if (s.output_key && typeof s.output_key === 'string') {
-          const useVal = (!threwSyntax && result !== undefined) ? result : {};
+          const isFallback = threwSyntax || threwRuntime || result === undefined;
+          const useVal      = isFallback ? {} : result;
           for (const rawKey of s.output_key.split(',')) {
             const baseOut = rawKey.trim().split('.')[0];
-            if (!(baseOut in mockState)) mockState[baseOut] = useVal;
+            if (!(baseOut in mockState)) {
+              mockState[baseOut] = useVal;
+              if (isFallback) uncertainKeys.add(baseOut);
+            }
           }
         }
       }
