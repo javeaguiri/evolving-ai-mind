@@ -692,44 +692,93 @@ for the `generate_workflow_paths` prompt enforces this minimum coverage.
 
 #### What the simulator validates
 
-The simulator runs each path independently. For each path it:
+`runSimulation` (`src/proc/simulation-engine.mjs`) combines four independent
+checks. **`result.passed` is determined by Level 1 + Level 2a + Level 2b only.**
+Level 2c (legacy path execution) still runs and its results are returned for
+diagnostic display, but does not gate `passed` — see the note on each level below.
+Checks run in order; a level only runs if the previous one passed.
 
-1. Resets `local_state` to `{ input: run.input }` — a clean slate per path
-2. Walks steps in execution order driven by the decision script
-3. At each step, records the `local_state` transition: keys present before, keys
-   added or mutated after, template variables resolved and to what values
-4. Flags any step where a template variable could not be resolved (`{{key}}` not
-   in `local_state` at that point)
-5. Verifies the path's terminal step matches `expected_terminal`
-6. Detects backward-reference loops: a step key reached more times than there are
-   gate decisions for it in the script is flagged as a potential infinite loop
-   (safe if a `human_gate` step exists on the path from target back to source —
-   the same rule as Guard 3)
+**Level 1 — Static analysis (`runLevel1StaticAnalysis`) — no execution, no mocks needed**
 
-**Three validation levels run in order. Later levels only run if earlier levels pass.**
-
-**Level 1 — Static analysis (no execution, no mocks needed)**
-
-Runs before any path simulation. Catches structural errors in the step array itself:
+Catches structural errors in the step array itself:
 
 | Check | Failure class |
 |---|---|
 | Every `on_success`, `on_else`, `on_select` value is a known routing token | Unknown routing value |
 | Every `step:N` routing target exists in the step array | Dead routing target |
-| Every `{{template}}` reference resolves to an `output_key` written by a prior step on that path | Unresolved template variable |
+| Every `{{template}}` reference resolves to an `output_key` written by a prior step | Unresolved template variable |
 | Every `items_key` in an `iterator` resolves to an array written by a prior step | Iterator source not an array |
 | Every `input.prompt` in an `llm_call` names an `intent_category` in `PGC_Prompt` | Unknown prompt reference |
 | No `output_key` is set on a `review_object` or `confirm` gate | Gate type does not write output |
 | Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
+| Required `input.*` fields present for each `serv_*` type (e.g. `serv_upsert` needs `tableName`, `matchColumns`, `rows`) | Serv step missing required input |
+| `output_key` (step-level or option-level) is a string, not another type | Malformed output_key |
 
-Level 1 failures are returned immediately — no path execution occurs.
+Level 1 failures are returned immediately — no Level 2 checks run.
 
-**Level 2 — Path execution (uses mocks and decision scripts)**
+**Level 2a — Routing matrix (`runRoutingMatrix`) — static graph reachability, no mocks**
 
-Executes each path in `simulation_paths`. For each step, injects the mock output
-or decision instead of calling the real service or LLM. Records the `local_state`
-transition log. Fails the path if any template variable is unresolvable or if the
-terminal step does not match `expected_terminal`.
+Builds an adjacency list from every routing field across all step types (`on_success`,
+`on_else`, `on_select`, `on_cancel`, `on_complete`, `on_empty`, `on_error`, resolving
+`next`/`step:N`/bare keys to concrete target keys) and checks every step is reachable
+from step 1 and every reachable step has a path to `end` or `cancel`. Returns
+`{ passed, reachable_count, unreachable_count, issues }`.
+
+**Level 2b — Data-flow trace (`runJsTransformSmokeTest`) — real execution against mock state**
+
+Two things happen in one forward pass over the steps, in document order, sharing one
+`mockState` object:
+
+1. *js_transform smoke test* — runs every `js_transform` expression against `mockState`
+   via `vm.runInNewContext` (500ms timeout). A syntax error or a `void` return (the
+   expression evaluates to `undefined`) is a hard failure. A runtime error against mock
+   data is a soft warning (mock state may not match real data shapes). The step's real
+   computed result — not a placeholder — is written into `mockState[output_key]` so
+   downstream steps see the actual shape the expression produces.
+2. *Step-input contract check* (`checkStepInputContracts`, Sprint 7 Track I) — for every
+   step, resolves its declared input fields against `mockState` (via `resolveInput`/
+   `resolvePath` from `template-resolver.mjs` — the same functions the runtime uses) and
+   validates the resolved value's shape against a declarative contract table:
+   - `STEP_INPUT_CONTRACTS` (`{{template}}`-resolved `input.*` fields) — `filters` on
+     `serv_query`/`serv_update`/`serv_delete` must be a flat array of `{column, op, value}`
+     objects; `updates` on `serv_update` and `row` on `serv_insert` must be plain objects;
+     `rows` on `serv_insert`/`serv_upsert` must be an array of objects; `matchColumns` on
+     `serv_upsert` must be an array of strings. These mirror `table.mjs`'s own runtime
+     validators — a mismatch here is a **hard failure**, since the equivalent request
+     throws a 400 at runtime today.
+   - `STEP_PATH_CONTRACTS` (dot-path fields, not `{{ }}`-wrapped) — `items_key` on
+     `iterator` and `context_key` on `human_gate` must resolve to an array. These fall
+     back silently at runtime (`?? []`) rather than throwing, so a mismatch here is a
+     **soft warning** — it predicts a workflow that quietly does nothing, not a crash.
+
+   This check exists because a `js_transform` can be syntactically valid and still build
+   the wrong shape for a downstream step — e.g. mapping each record to its own filter
+   array (`[[{...}], [{...}]]`) instead of one flat filter array, which `serv_query`
+   rejects at runtime with "each filter must have a column" (diagnosed from run 623).
+   Level 1 cannot catch this because the bad value only exists after a `js_transform`
+   actually runs; Level 2b catches it by actually running it, against mock data, before
+   the workflow is registered.
+
+   Returns `{ passed, steps_tested, issues }`. `passed` is `false` only for hard
+   failures (`js_transform_syntax_error`, `js_transform_void_return`, or
+   `serv_input_shape_mismatch` without `severity: "warning"`).
+
+**Level 2c — Legacy path execution (`executeSimPath`) — informational, does not gate `passed`**
+
+Runs when `simulation_paths` is supplied. For each named path: resets `local_state` to
+`{ input: run.input }`, walks steps in execution order driven by the path's decision
+script, injects the mock output or decision at each step instead of calling the real
+service or LLM, and records the `local_state` transition log (keys present before, keys
+added or mutated after, template variables resolved and to what values). Fails the path
+if a template variable is unresolvable or the terminal step doesn't match
+`expected_terminal`. Also detects backward-reference loops: a step key reached more times
+than there are gate decisions for it is flagged as a potential infinite loop (safe if a
+`human_gate` exists on the path from target back to source — the same rule as Guard 3).
+`path_results` is returned for diagnostic display (shown to the user on correction) but
+`result.passed` is computed from Level 1 + 2a + 2b only — a workflow can pass simulation
+and register even if a supplied `simulation_paths` entry fails, and conversely
+`simulation_paths` is optional (when absent, `paths_run: 0` and Level 2c is skipped
+entirely).
 
 **Level 3 — Skip-path analysis**
 
@@ -742,10 +791,13 @@ Written to `local_state[output_key]` on completion:
 ```json
 {
   "passed": true,
+  "total_issues": 0,
   "paths_run": 3,
   "paths_passed": 3,
   "paths_failed": 0,
   "static_analysis": { "passed": true, "issues": [] },
+  "routing_matrix": { "passed": true, "reachable_count": 12, "unreachable_count": 0, "issues": [] },
+  "smoke_test": { "passed": true, "steps_tested": 4, "issues": [] },
   "path_results": [
     {
       "path_name": "happy_path",
@@ -767,10 +819,12 @@ Written to `local_state[output_key]` on completion:
 }
 ```
 
-On failure, `passed: false` and `paths_failed > 0`. The first failed path's
-transition log is included in full, showing exactly which step failed and what
-`local_state` contained at that point. This is presented to the user in the
-`review_object` gate when `on_else: "step:3"` routes back for correction.
+On failure, `passed: false`. `routing_matrix.issues` and `smoke_test.issues` carry the
+Level 2a/2b failures (including `serv_input_shape_mismatch`); `path_results` carries the
+Level 2c diagnostic detail when `simulation_paths` was supplied — the first failed path's
+transition log shows exactly which step failed and what `local_state` contained at that
+point. This is presented to the user in the `review_object` gate when `on_else: "step:3"`
+routes back for correction.
 
 #### Simulation mode flag on WorkflowRun
 
