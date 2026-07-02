@@ -44,6 +44,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC5 — UI Polish complete:** All five sub-items (markdown blocks, format_entity_display, notify template audit, button/content separation, modal cancel audit) validated from Slack.
 - **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
 - **AC7 — IntentMap one row per phrase:** migration splits existing combined patterns; `create_workflow` steps 35b/36 write individual rows; `matchIntentMap` unchanged.
+- **AC8 — `serv_upsert` step type live:** `/serv/table/upsertRows` endpoint + `serv_upsert` step type registered (`PGC_StepType`, `serv_db_step_shapes`, `generate_workflow_steps` known-step-types list); validated end-to-end from Slack.
 
 ---
 
@@ -78,6 +79,9 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E4 `create_view` core workflow | AC6 | ⬜ |
 | E5 UC-E4 budget report | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
+| H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ⬜ |
+| H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ⬜ |
+| H3 Prompt/context wiring (`serv_db_step_shapes`, `generate_workflow_steps`, `step_type_contracts`) | AC8 | ⬜ |
 
 ---
 
@@ -138,6 +142,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - `PGC_WorkflowRunStep` audit log investigation — Sprint 8 or later
 - Cross-domain `create_workflow` (5 gaps) — Sprint 8 (prerequisite: Pantry + cross-domain schema coherence)
 - Pantry domain (D3), UC-P4 (W1), UC-P4+ cross-domain (W2), UC-P5 subtract ingredients (W5) — Sprint 8 (blocked on cross-domain)
+- `create_domain`/`design_table` compound unique constraint detection + native `ON CONFLICT` upgrade for `serv_upsert` — Sprint 8 (see backlog; Sprint 7's `serv_upsert` works around the missing constraint with query-then-write)
 
 ---
 
@@ -282,6 +287,31 @@ Implementation:
 
 ---
 
+### Track H — `serv_upsert` Step Type (workaround, no DB constraint)
+
+**Context (run 623 diagnosis):** `import_budget_data` (workflow 348) hand-rolled insert-vs-update resolution across 4 steps — build per-record lookup filters (js_transform), query existing rows (serv_query), diff into insert/update lists (js_transform), conditional write. Step 11's js_transform produced an array of per-record filter-groups (`[[{col,op,val}×3], [...], ...]`) and fed it straight into step 12's `serv_query.filters`, which only accepts a flat AND-combined filter array — runtime failure "each filter must have a column". Root cause: Instruction gap (`serv_db_step_shapes` documents the flat-filter contract and `in` op but gives no pattern for "resolve insert vs update against existing rows"). Fix direction agreed: this reusable check-existence-then-write logic belongs in the harness as a step type, not re-derived by the LLM per workflow.
+
+`PGD_Budgets` has no compound unique constraint on `(year, month, category_id)` today — no table in the system currently declares compound unique constraints. Native `INSERT ... ON CONFLICT` isn't available yet. Sprint 7 implements `serv_upsert` as a query-then-write workaround (system code does the lookup+diff that steps 10–13 did manually, in one step). Sprint 8 adds compound unique constraint inference to `design_table`/`create_domain` and upgrades `serv_upsert` to native `ON CONFLICT` where a constraint exists, falling back to the workaround otherwise — see backlog.
+
+**H1 — SERV-Table `upsertRows` (`table.mjs` + new endpoint)**
+- New `upsertRows({ tableName, matchColumns, rows })`: for each row, query existing row(s) matching `matchColumns` values against the row's own values, then `insertRow` or `updateRows` by id — inside a transaction per batch.
+- No `ON CONFLICT` — query-then-write, matching the current manual pattern but as one system call instead of four workflow steps.
+- New `/api/v1/serv/table/upsertRows` endpoint. Add to `openapi.yaml`.
+
+**H2 — `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`)**
+- Input: `{ tableName, matchColumns: string[], rows: array | {{template}} }`.
+- Calls SERV `upsertRows`; returns `{ inserted: [...], updated: [...] }` as `output_key`.
+- Register in `PGC_StepType`.
+
+**H3 — Prompt/context wiring**
+- Add `serv_upsert` example to `serv_db_step_shapes` (matchColumns + rows shape; when to use vs. `serv_insert`/`serv_update`; explicitly warn against building per-record filter-group arrays for `serv_query`).
+- Add `serv_upsert` to `generate_workflow_steps` known-step-types list and `step_type_contracts` per the `PGC_StepType` registration rule in CLAUDE.md.
+- Run `upsert-step-type.mjs` + `upsert-system-context.mjs` + `upsert-prompt.mjs`.
+
+**Validation:** repair `import_budget_data` via `fix_workflow_steps` (not a manual patch) once `serv_upsert` is live, replacing steps 10–13/16; validate end-to-end from Slack with a re-run of the run 623 scenario.
+
+---
+
 ## Sprint Close Checklist
 
 - [ ] `node --test tests/unit/*.test.mjs` passes
@@ -297,6 +327,8 @@ Implementation:
 ---
 
 ## Session Notes
+
+**2026-07-02 (session 6):** Diagnosed run 623 (`import_budget_data`, workflow 348) with `/explain 623` — step 12 failed "each filter must have a column". Root cause: step 11 (js_transform) built a per-record array-of-filter-groups intended for OR-across-records matching; step 12 (`serv_query`) only accepts a flat AND-filter array per `serv_db_step_shapes`. Not a harness gap (no genuinely new OR-of-composite-tuples query capability needed — year/month were invariant across the batch, `in` on `category_id` alone would have worked). Agreed this is instead a step-type capability gap: insert-vs-update resolution is generic infra logic that belongs in the harness, not hand-rolled per workflow. Scoped **Track H — `serv_upsert`**: Sprint 7 implements it as a query-then-write workaround (`PGD_Budgets` has no compound unique constraint today, so native `ON CONFLICT` isn't available); Sprint 8 adds compound unique constraint inference to `design_table`/`create_domain` and upgrades to native `ON CONFLICT` (added to backlog). Not yet implemented — next session.
 
 **2026-07-01 (session 5):** Track B implemented (B2, B3; B1 found unnecessary — see Track B notes). B2: removed the 3-workflow `enabled_workflows` allowlist gating diagnostic session writes in `llm-harness.mjs` (universal now) and the `LLM_DIAGNOSTIC` per-step notification it would otherwise spam; `run_id` already visible in every notify/error footer. B3 went through two corrections from live testing (run 621/622/623) and user review before landing: (1) initial design let a question typed inline with `run_id` get blindly reused across whichever step button was clicked — fixed by never accepting the question inline for `run_id`, always showing the step picker first and collecting the question via modal only after a step is chosen; (2) direct `query_id` slash-command input removed entirely — a user should never type/see one; it's internal-only now (step-select modal submission, "Ask follow-up" button). Also caught and fixed a real process gap along the way: code was pushed to GitHub but not deployed before live testing began, causing confusing stale-code errors — see `feedback_deploy_before_live_test` memory. Two `sam deploy`s done this session; both live. All 366 unit tests pass. **Not yet validated from Slack** — user will test `/explain 623` tomorrow. Next: validate B3 live, then C3 Novia SOP prompt-fix procedure (B2/B3 prerequisite now satisfied) or C1/C2 view tooling.
 
