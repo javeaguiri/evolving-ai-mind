@@ -84,6 +84,49 @@ describe('L2b data-flow trace — serv_query.filters shape (run 623 reproduction
   });
 });
 
+describe('L2b data-flow trace — inconclusive upstream data suppresses downstream cascade', () => {
+  it('does not flag a downstream shape mismatch when the upstream js_transform threw against mock data', () => {
+    // Simulates a flat-loop-pattern step (e.g. per-round accumulator state that
+    // only makes sense after many real loop iterations) that a single-pass
+    // smoke test cannot meaningfully mock — the expression throws because
+    // round_state was never seeded, not because the workflow is broken.
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `local_state.round_state.cards_remaining.map(function(c){ return { id: c.id }; })`,
+        on_success: 'next',
+        output_key: 'round_summary',
+      },
+      {
+        step: '2', type: 'serv_upsert',
+        input: {
+          tableName:    'PGD_QuizResults',
+          matchColumns: ['card_id'],
+          rows:         '{{round_summary}}',
+        },
+        on_success: 'next', on_else: 'cancel',
+        output_key: 'upserted',
+      },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+
+    const upstreamIssue = result.smoke_test.issues.find(
+      i => i.failure_class === 'js_transform_runtime_error' && i.step === '1'
+    );
+    assert.ok(upstreamIssue, 'expected the upstream runtime error to still be reported');
+    assert.equal(upstreamIssue.severity, 'warning');
+
+    const cascadedIssue = result.smoke_test.issues.find(
+      i => i.failure_class === 'serv_input_shape_mismatch' && i.step === '2'
+    );
+    assert.equal(cascadedIssue, undefined, `downstream shape check must be suppressed when upstream is inconclusive; got: ${JSON.stringify(result.smoke_test.issues)}`);
+
+    assert.equal(result.smoke_test.passed, true, 'a soft upstream warning with no confirmed downstream defect must not fail the smoke test');
+  });
+});
+
 describe('L2b data-flow trace — serv_update.updates shape', () => {
   it('flags an array resolved into updates (must be a plain object)', () => {
     const steps = [
