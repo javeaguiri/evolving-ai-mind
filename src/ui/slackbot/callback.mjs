@@ -712,7 +712,7 @@ function dialogToBlocks(dialog, workflowRunId) {
               style:    'bullet',
               elements: field.content.map(item => ({
                 type:     'rich_text_section',
-                elements: [{ type: 'text', text: String(item) }],
+                elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
               })),
             }],
           };
