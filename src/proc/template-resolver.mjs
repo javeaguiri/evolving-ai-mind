@@ -94,7 +94,9 @@ export function resolveTemplate(template, localState) {
       if (exprVal !== undefined && exprVal !== null) return String(exprVal);
       return match;
     }
-    if (Array.isArray(val)) return val.join(', ');
+    if (Array.isArray(val)) {
+      return val.map(item => (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)).join(', ');
+    }
     if (typeof val === 'object') return JSON.stringify(val);
     return String(val);
   });

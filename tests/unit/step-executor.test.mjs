@@ -17,7 +17,7 @@ import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
 import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
-import { resolvePath, resolveInput }          from '../../src/proc/template-resolver.mjs';
+import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1346,6 +1346,31 @@ describe('resolveInput — arithmetic expression in {{}} token', () => {
 
   it('leaves token unchanged when expression throws', () => {
     assert.strictEqual(resolveInput('{{undefined_var + 1}}', state), '{{undefined_var + 1}}');
+  });
+});
+
+describe('resolveTemplate — array interpolation', () => {
+  it('joins an array of primitives as plain comma-separated values', () => {
+    const state = { missing_category_names: ['Dining Out', 'Subscriptions', 'Clothing'] };
+    assert.strictEqual(
+      resolveTemplate('{{missing_category_names}}', state),
+      'Dining Out, Subscriptions, Clothing'
+    );
+  });
+
+  it('JSON-stringifies each element of an array of objects instead of producing [object Object]', () => {
+    const state = {
+      budget_rows_with_ids: [
+        { category_id: 1, planned_amount: 3300 },
+        { category_id: 2, planned_amount: 450 },
+      ],
+    };
+    const result = resolveTemplate('{{budget_rows_with_ids}}', state);
+    assert.ok(!result.includes('[object Object]'), `expected no [object Object], got: ${result}`);
+    assert.strictEqual(
+      result,
+      '{"category_id":1,"planned_amount":3300}, {"category_id":2,"planned_amount":450}'
+    );
   });
 });
 
