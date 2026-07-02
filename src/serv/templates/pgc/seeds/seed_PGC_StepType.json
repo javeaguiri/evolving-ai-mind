@@ -481,6 +481,66 @@
     "status": "live"
   },
   {
+    "step_type": "serv_upsert",
+    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing budget data, syncing recurring records). Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
+    "input_contract": [
+      {
+        "type": "string",
+        "field": "input.tableName",
+        "required": true,
+        "description": "Table name — must be registered in PGC_TableMap with allow_insert: true AND allow_update: true"
+      },
+      {
+        "type": "array",
+        "field": "input.matchColumns",
+        "required": true,
+        "description": "Non-empty array of column names whose combined values identify an existing row — e.g. [\"year\", \"month\", \"category_id\"]. Must be a flat array of strings, never per-row filter objects."
+      },
+      {
+        "type": "array",
+        "field": "input.rows",
+        "required": true,
+        "description": "Non-empty array of full row objects to upsert — one per record"
+      },
+      {
+        "type": "string",
+        "field": "output_key",
+        "required": false,
+        "description": "local_state key where { tableName, inserted, updated } is written"
+      },
+      {
+        "type": "string",
+        "field": "on_success",
+        "required": false,
+        "description": "Routing token"
+      },
+      {
+        "type": "string",
+        "field": "on_else",
+        "required": false,
+        "description": "Routing token"
+      }
+    ],
+    "output_contract": [
+      {
+        "type": "object",
+        "field": "output_key",
+        "description": "{ tableName, inserted: [...new rows], updated: [...changed rows] }"
+      }
+    ],
+    "on_success_options": [
+      "next",
+      "end",
+      "step:N"
+    ],
+    "on_failure_options": [
+      "cancel",
+      "step:N"
+    ],
+    "requires_capability": null,
+    "status": "live"
+  },
+  {
     "step_type": "serv_entity_query",
     "description": "Lists assembled entities via SERV-Entity listEntities. Returns root columns plus jsonb_agg child arrays. Use instead of serv_query for domains with child tables (e.g. recipes with ingredients and steps).",
     "input_contract": [

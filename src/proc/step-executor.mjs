@@ -40,7 +40,7 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
 import { executeLlmCall }               from './llm-harness.mjs';
 import {
   resolvePath,
@@ -78,6 +78,7 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_entity_insert': return executeServEntityInsert({ step, localState, traceId });
     case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
+    case 'serv_upsert':  return executeServUpsert({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
     case 'write_memory': return executeWriteMemory({ step, localState, run, traceId });
@@ -1347,6 +1348,55 @@ async function executeServDelete({ step, localState, traceId }) {
 
   return {
     outputValue: { tableName, deletedCount: resp.deletedCount ?? 0 },
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serv_upsert — INSERT or UPDATE each row depending on whether a match
+// already exists, via SERV-Table upsertRows
+// ---------------------------------------------------------------------------
+
+// Step input shape:
+//   {
+//     "tableName":     "PGD_Budgets",
+//     "matchColumns":  ["year", "month", "category_id"],
+//     "rows":          "{{budget_records_with_ids}}"
+//   }
+//
+// Replaces the query-existing-rows + diff-into-insert/update-lists pattern —
+// resolving which rows to insert vs update is handled server-side by SERV.
+// Workaround upsert — no table currently declares a compound unique
+// constraint on matchColumns, so this is query-then-write, not a native
+// INSERT ... ON CONFLICT. See docs/backlog.md for the Sprint 8 migration.
+
+async function executeServUpsert({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { tableName, matchColumns, rows } = resolvedInput;
+
+  if (!tableName) throw new Error('serv_upsert step missing input.tableName');
+  if (!Array.isArray(matchColumns) || matchColumns.length === 0) {
+    throw new Error('serv_upsert step missing or empty input.matchColumns');
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('serv_upsert step missing or empty input.rows');
+  }
+
+  console.info('step-executor: serv_upsert', {
+    tableName,
+    matchColumns,
+    rowCount: rows.length,
+    traceId,
+  });
+
+  const resp = await upsertRows(tableName, matchColumns, rows);
+
+  if (!resp.success) {
+    throw new Error(`serv_upsert failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: { tableName, inserted: resp.inserted ?? [], updated: resp.updated ?? [] },
     nextAction:  resolveNextAction(step.on_success, null),
   };
 }
