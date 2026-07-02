@@ -707,7 +707,7 @@
   },
   {
     "intent_category": "generate_workflow_mocks",
-    "version": 3,
+    "version": 4,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -725,14 +725,14 @@
       "properties": {
         "mock_outputs": {
           "type": "object",
-          "description": "Object keyed by step number string. Only steps that produce output need mocks: llm_call, serv_query, serv_insert, serv_update, serv_delete, js_transform.",
+          "description": "Object keyed by step number string. Only steps that produce output need mocks: llm_call, serv_query, serv_insert, serv_upsert, serv_update, serv_delete, js_transform.",
           "minProperties": 1,
           "additionalProperties": true
         }
       },
       "additionalProperties": false
     },
-    "prompt_text": "You are generating mock outputs for workflow simulation in evolving-mind-ai.\n\nThe confirmed workflow steps are:\n{{steps}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"mock_outputs\": {\n    \"<step_key>\": <representative output object>,\n    ...\n  }\n}\n\nRules:\n- Only include entries for steps that produce output: llm_call, serv_query, serv_insert, serv_update, serv_delete, js_transform\n- For llm_call steps: produce a representative JSON object that the prompt would realistically return\n- For serv_query steps: produce a representative rows array, e.g. [{\"id\": 1, \"name\": \"example\", ...}]\n- For serv_insert steps: produce a representative inserted row object with id populated, e.g. {\"id\": 42, \"name\": \"example\"}\n- For serv_update steps: produce {\"tableName\": \"<table>\", \"updatedCount\": 1, \"rows\": [...]}\n- For serv_delete steps: produce {\"tableName\": \"<table>\", \"deletedCount\": 1}\n- For js_transform steps: produce the enriched version of the input array\n- Mock shapes must be realistic — downstream steps use these values in template resolution during simulation\n- Keys must be the string step key exactly as it appears in the steps array (e.g. \"1\", \"3b\")\n- Do NOT include entries for: human_gate, notify, end, iterator, simulate\n- Return ONLY the JSON object, nothing else",
+    "prompt_text": "You are generating mock outputs for workflow simulation in evolving-mind-ai.\n\nThe confirmed workflow steps are:\n{{steps}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks.\n\n{\n  \"mock_outputs\": {\n    \"<step_key>\": <representative output object>,\n    ...\n  }\n}\n\nRules:\n- Only include entries for steps that produce output: llm_call, serv_query, serv_insert, serv_upsert, serv_update, serv_delete, js_transform\n- For llm_call steps: produce a representative JSON object that the prompt would realistically return\n- For serv_query steps: produce a representative rows array, e.g. [{\"id\": 1, \"name\": \"example\", ...}]\n- For serv_insert steps: produce a representative inserted row object with id populated, e.g. {\"id\": 42, \"name\": \"example\"}\n- For serv_upsert steps: produce {\"tableName\": \"<table>\", \"inserted\": [{\"id\": 42, \"name\": \"example\"}], \"updated\": [{\"id\": 7, \"name\": \"example\"}]}\n- For serv_update steps: produce {\"tableName\": \"<table>\", \"updatedCount\": 1, \"rows\": [...]}\n- For serv_delete steps: produce {\"tableName\": \"<table>\", \"deletedCount\": 1}\n- For js_transform steps: produce the enriched version of the input array\n- Mock shapes must be realistic — downstream steps use these values in template resolution during simulation\n- Keys must be the string step key exactly as it appears in the steps array (e.g. \"1\", \"3b\")\n- Do NOT include entries for: human_gate, notify, end, iterator, simulate\n- Return ONLY the JSON object, nothing else",
     "probe_input": null,
     "max_output_tokens": 16000
   },
@@ -1922,7 +1922,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 44,
+    "version": 45,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -2016,6 +2016,7 @@
                   "human_gate",
                   "serv_schema",
                   "serv_insert",
+                  "serv_upsert",
                   "serv_query",
                   "serv_update",
                   "serv_delete",
@@ -2108,6 +2109,46 @@
                         },
                         "row": {
                           "description": "Single object, array of objects, or {{template}} reference — not \"rows\", not \"data\"."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
+                      "const": "serv_upsert"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "input"
+                  ],
+                  "properties": {
+                    "input": {
+                      "type": "object",
+                      "required": [
+                        "tableName",
+                        "matchColumns",
+                        "rows"
+                      ],
+                      "properties": {
+                        "tableName": {
+                          "type": "string"
+                        },
+                        "matchColumns": {
+                          "type": "array",
+                          "description": "Flat array of column name strings identifying an existing row — not a filter array."
+                        },
+                        "rows": {
+                          "type": "array",
+                          "description": "Array of row objects, or a {{template}} reference — not \"row\", not \"data\"."
                         }
                       }
                     }
@@ -2365,7 +2406,7 @@
   },
   {
     "intent_category": "fix_workflow_routing",
-    "version": 5,
+    "version": 6,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
@@ -2439,6 +2480,7 @@
                   "human_gate",
                   "serv_schema",
                   "serv_insert",
+                  "serv_upsert",
                   "serv_query",
                   "serv_update",
                   "serv_delete",
