@@ -116,6 +116,64 @@ describe('L2b data-flow trace — serv_update.updates shape', () => {
   });
 });
 
+describe('L2b data-flow trace — serv_upsert.rows / matchColumns shape', () => {
+  it('flags rows resolving to an array of non-objects', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `[1, 2, 3]`,
+        on_success: 'next',
+        output_key: 'bad_rows',
+      },
+      {
+        step: '2', type: 'serv_upsert',
+        input: {
+          tableName:    'PGD_Budgets',
+          matchColumns: ['year', 'month', 'category_id'],
+          rows:         '{{bad_rows}}',
+        },
+        on_success: 'next', on_else: 'cancel',
+        output_key: 'upserted',
+      },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+
+    assert.equal(result.smoke_test.passed, false, 'smoke test must fail when rows resolves to non-object array');
+    const issue = result.smoke_test.issues.find(
+      i => i.failure_class === 'serv_input_shape_mismatch' && i.step === '2'
+    );
+    assert.ok(issue, `expected a serv_input_shape_mismatch issue on step 2; got: ${JSON.stringify(result.smoke_test.issues)}`);
+  });
+
+  it('does not flag a correctly shaped rows/matchColumns pair', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `[{ year: 2026, month: 7, category_id: 3, planned_amount: 100 }]`,
+        on_success: 'next',
+        output_key: 'good_rows',
+      },
+      {
+        step: '2', type: 'serv_upsert',
+        input: {
+          tableName:    'PGD_Budgets',
+          matchColumns: ['year', 'month', 'category_id'],
+          rows:         '{{good_rows}}',
+        },
+        on_success: 'next', on_else: 'cancel',
+        output_key: 'upserted',
+      },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+
+    assert.equal(result.smoke_test.passed, true, `smoke test must pass; issues: ${JSON.stringify(result.smoke_test.issues)}`);
+  });
+});
+
 describe('L2b data-flow trace — iterator.items_key is a soft warning', () => {
   it('flags a non-array items_key but does not fail the smoke test', () => {
     const steps = [

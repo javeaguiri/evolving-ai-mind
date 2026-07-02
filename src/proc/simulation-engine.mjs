@@ -392,6 +392,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       serv_insert: ['tableName', 'row'],
       serv_update: ['tableName', 'filters', 'updates'],
       serv_delete: ['tableName', 'filters'],
+      serv_upsert: ['tableName', 'matchColumns', 'rows'],
     };
     if (!skeleton && servRequired[s.type]) {
       const inputObj = s.input ?? {};
@@ -1063,15 +1064,24 @@ function arrayShape(value) {
   return Array.isArray(value) ? null : 'must be an array';
 }
 
+function arrayOfStringsShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const item of value) {
+    if (typeof item !== 'string') return 'each item must be a string';
+  }
+  return null;
+}
+
 // { stepType: { fieldName: validatorFn } } — fields resolved from step.input
 // via resolveInput. Mirrors table.mjs's own runtime validators (validateFilters,
-// insertRow/updateRows shape checks) — these fields throw a hard error at
-// runtime today, so a mismatch here is a hard L2 failure.
+// insertRow/updateRows/upsertRows shape checks) — these fields throw a hard
+// error at runtime today, so a mismatch here is a hard L2 failure.
 const STEP_INPUT_CONTRACTS = {
   serv_query:  { filters: filterArrayShape },
   serv_update: { filters: filterArrayShape, updates: plainObjectShape },
   serv_delete: { filters: filterArrayShape },
   serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
+  serv_upsert: { rows: arrayOfObjectsShape, matchColumns: arrayOfStringsShape },
 };
 
 // { stepType: [{ field, validate }] } — dot-path fields (not {{ }}-wrapped)
