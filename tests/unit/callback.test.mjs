@@ -134,6 +134,38 @@ function dialogToBlocks(dialog, workflowRunId) {
       case 'textbox':
         break;
 
+      case 'reveal': {
+        const revealBlock = {
+          type:    'task_card',
+          task_id: 'test-task-id',
+          title:   field.button_label,
+          status:  'complete',
+        };
+        if (Array.isArray(field.content)) {
+          revealBlock.details = {
+            type:     'rich_text',
+            elements: [{
+              type:     'rich_text_list',
+              style:    'bullet',
+              elements: field.content.map(item => ({
+                type:     'rich_text_section',
+                elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
+              })),
+            }],
+          };
+        } else if (field.content) {
+          revealBlock.output = {
+            type:     'rich_text',
+            elements: [{
+              type:     'rich_text_section',
+              elements: [{ type: 'text', text: field.content }],
+            }],
+          };
+        }
+        blocks.push(revealBlock);
+        break;
+      }
+
       case 'review_object': {
         const BLOCK_CHAR_LIMIT = 2800;
         for (const item of (field.items ?? [])) {
@@ -454,6 +486,36 @@ describe('dialogToBlocks — list', () => {
     };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
     assert.ok(block.text.text.includes('col1, col2'));
+  });
+});
+
+describe('dialogToBlocks — reveal', () => {
+  it('array of strings renders each item as plain text in the bullet list', () => {
+    const field = { type: 'reveal', button_label: 'Details', content: ['Dining Out', 'Subscriptions'] };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const items = block.details.elements[0].elements.map(e => e.elements[0].text);
+    assert.deepEqual(items, ['Dining Out', 'Subscriptions']);
+  });
+
+  it('array of objects JSON-stringifies each item instead of [object Object]', () => {
+    const field = {
+      type: 'reveal',
+      button_label: 'Sample records',
+      content: [{ category_id: 1, planned_amount: 3300 }, { category_id: 2, planned_amount: 450 }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const items = block.details.elements[0].elements.map(e => e.elements[0].text);
+    assert.ok(items.every(t => !t.includes('[object Object]')));
+    assert.deepEqual(items, [
+      '{"category_id":1,"planned_amount":3300}',
+      '{"category_id":2,"planned_amount":450}',
+    ]);
+  });
+
+  it('plain string content renders as output rich_text, not details', () => {
+    const field = { type: 'reveal', button_label: 'Info', content: 'Just a note' };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.output.elements[0].elements[0].text, 'Just a note');
   });
 });
 
