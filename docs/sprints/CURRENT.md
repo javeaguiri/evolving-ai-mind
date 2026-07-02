@@ -64,7 +64,6 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ✅ DONE |
 | A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ✅ DONE |
 | A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ✅ DONE |
-| A8 `generate_workflow_steps` Rule 2b — resolve `<placeholder>` tokens in copied `dialog_designs` content | AC1 | ✅ DONE — validated live (found via run 626's `[object Object]` bug; A6 itself was working correctly) |
 | G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ✅ DONE |
 | G2 `research_workflow_domain` surfaces raw input format (section headers, collapsed tables) | AC1 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
