@@ -44,7 +44,7 @@ For authoritative detail follow the section references in each row.
 | `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
 | `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
-| `src/proc/simulation-engine.mjs` | PROC | L1 static analysis + L2a routing matrix (graph reachability) + L2b data-flow trace (js_transform smoke test in `vm.runInNewContext`, 500ms timeout, plus step-input shape validation against mock state) + L2c legacy path execution (informational only) — pure function, no I/O. See Section 6.5.6 | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
+| `src/proc/simulation-engine.mjs` | PROC | L1 static analysis + L2a routing matrix (graph reachability) + L2b data-flow trace (js_transform smoke test in `vm.runInNewContext`, 500ms timeout, plus step-input shape validation against mock state) + L2c legacy path execution (informational only) — pure function, no I/O. See `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
 | `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
@@ -581,8 +581,9 @@ programmer's intent.
 | 6.1 | this file | Process Layer API — HTTP routes and SQS message types |
 | 6.2 | this file | Process Layer config tables — PGC as the brain's system memory |
 | 6.3 | `docs/arch-intent.md` | Intent Preprocessor — two-pass pipeline, I/O contracts, generic CRUD workflows (6.4) |
-| 6.5 | `docs/arch-step-processor.md` | Step Processor execution engine — WorkflowRun, stack, local_state, human gates, simulation |
+| 6.5 | `docs/arch-step-processor.md` | Step Processor execution engine — WorkflowRun, stack, local_state, human gates |
 | 6.5.1 | `docs/arch-step-types.md` | Step type reference — all fields, schemas, examples |
+| 6.5.6 | `docs/arch-simulation-engine.md` | Simulation engine — L1/L2a/L2b/L2c validation levels, result structure, standalone endpoint (consumer-agnostic — also used by Novia, dev tooling) |
 | 6.6–6.16 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, memory layer, self-repair, monitoring |
 
 ### Design documents
@@ -710,9 +711,10 @@ The Intent Preprocessor (`classify-intent.mjs`) is the kernel. It receives every
 
 ### 6.5 Step Processor — Execution Engine
 
-> **Full detail extracted to two focused docs:**
+> **Full detail extracted to three focused docs:**
 > - `docs/arch-step-types.md` — step type reference catalog: `llm_call`, `js_transform`, `human_gate`, `iterator`, `serv_*`, `condition`, `simulate`, `write_memory`, `notify`, `end` — all fields, schemas, examples
-> - `docs/arch-step-processor.md` — execution engine internals: PGC_WorkflowRun, execution loop, execution stack, `local_state`, Human-in-the-Loop (gate lifecycle + gate catalog + UI dialog contract), simulation (L1/L2, validation levels, result structure)
+> - `docs/arch-step-processor.md` — execution engine internals: PGC_WorkflowRun, execution loop, execution stack, `local_state`, Human-in-the-Loop (gate lifecycle + gate catalog + UI dialog contract)
+> - `docs/arch-simulation-engine.md` — simulation engine: L1/L2a/L2b/L2c validation levels, result structure, standalone endpoint — consumer-agnostic, also used by Novia's `simulate_workflow` tool and dev tooling, not just the Step Processor
 
 When the Intent Preprocessor decides a workflow should run, it creates a `PGC_WorkflowRun` row and enqueues `WORKFLOW_STEP execute_top`. The Step Processor (`run-workflow.mjs` + `step-executor.mjs`) takes over: one SQS message per stack frame, one step per invocation. Stack persisted to `PGC_WorkflowRun` before Lambda returns — no in-process state between invocations.
 

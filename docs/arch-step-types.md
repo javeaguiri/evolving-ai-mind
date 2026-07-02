@@ -487,7 +487,9 @@ matrix), and Level 2b (data-flow trace) always run once L1 passes; only Level
 2c (legacy path execution, informational-only) is skipped when they are absent.
 `on_else` routes back to the step where the user can review and correct the
 workflow definition before re-simulating.
-Full schema, validation levels, and result structure: see **Section 6.5.6**.
+Validation levels and result structure: see `docs/arch-simulation-engine.md`.
+Step definition schema and the `simulation_mode` execution flag: see
+`docs/arch-step-processor.md` Section 6.5.6.
 
 ##### Post-write L1 validation
 
