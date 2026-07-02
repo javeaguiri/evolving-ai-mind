@@ -65,6 +65,9 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_upsert  ║ INSERT or UPDATE rows in a PGD table via SERV —      ║ ✅ Sprint 7      ║
+║              ║ matches on matchColumns, else inserts                ║                 ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ notify       ║ Resolve message_template from local_state, enqueue   ║ ✅ Implemented   ║
 ║              ║ HUMAN_NOTIFICATION to callback                          ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
@@ -87,8 +90,8 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
 ║ simulate       ║ Dry-run a workflow step array against named         ║ ✅ live          ║
 ║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
-║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
-║               ║ execution, skip-path analysis. See Section 6.5.6.   ║ complete        ║
+║               ║ Static analysis, routing matrix, data-flow trace,    ║ workflow-       ║
+║               ║ legacy path execution (informational). Sec 6.5.6.   ║ complete        ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ write_memory  ║ Persist a PGC_Memory row. Reads content string from  ║ ✅ Sprint 3      ║
 ║               ║ local_state[content_key]. Never fails the run —      ║                  ║
@@ -388,6 +391,36 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
 }
 ```
 
+##### `serv_upsert`
+```json
+{
+  "step": "1", "type": "serv_upsert",
+  "input": {
+    "tableName":    "PGD_Budgets",
+    "matchColumns": ["year", "month", "category_id"],
+    "rows":         "{{budget_records_with_ids}}"
+  },
+  "output_key": "upsert_result",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+For each row in `rows`, updates the existing row if one matches all `matchColumns`
+values, otherwise inserts a new row. `matchColumns` is always a flat array of
+column name strings — never per-row filter objects. Replaces the
+query-existing-rows + diff-into-insert/update-lists pattern (a `serv_query` with
+`filters` built from a preceding `js_transform`, then a `condition`/iterator
+choosing `serv_insert` vs `serv_update` per record) for the common case of
+importing or syncing a batch of records that may already exist.
+`output_key` receives `{ tableName, inserted: [...], updated: [...] }`.
+
+Workaround upsert, not a native `INSERT ... ON CONFLICT` — no table currently
+declares a compound unique constraint on `matchColumns` (Sprint 8 backlog item
+adds constraint inference to `design_table`/`create_domain` and upgrades
+`serv_upsert` to use `ON CONFLICT` where a constraint exists). Matching today is
+query-then-write: SERV selects the first row satisfying `matchColumns` and
+inserts or updates accordingly, inside one transaction per call.
+
 ##### `serv_entity_query` / `serv_entity_get`
 ```json
 {
@@ -449,9 +482,11 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 }
 ```
 All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
-and `paths_key` are optional — if absent, the `simulate` step runs Level 1
-static analysis only. `on_else` routes back to the step where the user can
-review and correct the workflow definition before re-simulating.
+and `paths_key` are optional — Level 1 (static analysis), Level 2a (routing
+matrix), and Level 2b (data-flow trace) always run once L1 passes; only Level
+2c (legacy path execution, informational-only) is skipped when they are absent.
+`on_else` routes back to the step where the user can review and correct the
+workflow definition before re-simulating.
 Full schema, validation levels, and result structure: see **Section 6.5.6**.
 
 ##### Post-write L1 validation
