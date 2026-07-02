@@ -1922,7 +1922,7 @@
   },
   {
     "intent_category": "generate_workflow_steps",
-    "version": 46,
+    "version": 48,
     "model": "anthropic/claude-sonnet-4-5",
     "was_successful": null,
     "input_variables": [
