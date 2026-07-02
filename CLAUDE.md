@@ -252,7 +252,8 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 | `docs/architecture.md` | System overview, component quick ref (§1.5), tier structure, SQS queues, directory structure, inter-module call rules, PGC config table roles |
 | `docs/arch-intent.md` | Intent classification pipeline — Pass 1a/1b/1c/2/3, I/O contracts, handoff() routing, generic CRUD workflows |
 | `docs/arch-step-types.md` | Step type reference — every field, schema, and example for `llm_call`, `serv_*`, `iterator`, `human_gate`, `condition`, `js_transform`, `simulate`, `write_memory`, `notify`, `end` |
-| `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle, simulation (L1/L2) |
+| `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle |
+| `docs/arch-simulation-engine.md` | Simulation engine (`simulation-engine.mjs`) — L1/L2a/L2b/L2c validation levels, data-flow trace, result structure, standalone `/proc/simulate-workflow` endpoint. Consumer-agnostic: used by `create_workflow`/`fix_workflow`, Novia's `simulate_workflow` tool, `troubleshoot-workflow.mjs`, and `upsert-workflow.mjs`'s pre-write guard |
 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, session, memory layer, self-repair, monitoring |
 | `docs/arch-data.md` | PGC/PGD schema (all 16 tables), SERV API reference, **curl cookbook (§5.5)** |
 | `docs/arch-security.md` | Threat model, Slack signing, PROC/SERV API key enforcement |

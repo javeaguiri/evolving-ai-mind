@@ -25,9 +25,9 @@ because `output_key: "foo"` on step 3 is referenced as `{{bar}}` on step 6.
 This is a referential integrity problem, not a structural one. Ajv cannot catch it.
 
 Two mechanisms close this gap: **semantic validation rules** (static analysis on
-the step array — see Section 6.5.6 Level 1) and **simulation** (execution-time
-data flow validation — see Section 6.5.6 Levels 2 and 3). Both run before the
-workflow is registered.
+the step array — Level 1) and **simulation** (execution-time data flow
+validation — Levels 2a/2b/2c). Both run before the workflow is registered. See
+`docs/arch-simulation-engine.md` for the full validation-level breakdown.
 
 But there is a deeper problem than validation. A single LLM call asked to
 simultaneously understand the domain, research best practices, resolve design
