@@ -44,8 +44,8 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC5 — UI Polish complete:** All five sub-items (markdown blocks, format_entity_display, notify template audit, button/content separation, modal cancel audit) validated from Slack.
 - **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
 - **AC7 — IntentMap one row per phrase:** migration splits existing combined patterns; `create_workflow` steps 35b/36 write individual rows; `matchIntentMap` unchanged.
-- **AC8 — `serv_upsert` step type live:** `/serv/table/upsertRows` endpoint + `serv_upsert` step type registered (`PGC_StepType`, `serv_db_step_shapes`, `generate_workflow_steps` known-step-types list); validated end-to-end from Slack.
-- **AC9 — L2 data-flow trace catches shape mismatches at create-time:** L2b simulation (`simulation-engine.mjs`) resolves known step-input fields (filters, updates, row/rows, items_key, context_key) against the real js_transform-computed mock state and flags contract violations before a workflow is registered. Validated by reproducing the run 623 nested-filter-array bug in a test workflow and confirming L2 rejects it.
+- **AC8 — ✅ DONE — `serv_upsert` step type live:** `/serv/table/upsertRows` endpoint + `serv_upsert` step type registered (`PGC_StepType`, `serv_db_step_shapes`, `generate_workflow_steps` known-step-types list); validated end-to-end from Slack (run 626 — `import_budget_spreadsheet` registered with a correctly-formed `serv_upsert` step).
+- **AC9 — ✅ DONE — L2 data-flow trace catches shape mismatches at create-time:** L2b simulation (`simulation-engine.mjs`) resolves known step-input fields (filters, updates, row/rows, items_key, context_key) against the real js_transform-computed mock state and flags contract violations before a workflow is registered. Validated by reproducing the run 623 nested-filter-array bug in a test workflow and confirming L2 rejects it.
 
 ---
 
@@ -80,11 +80,11 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E4 `create_view` core workflow | AC6 | ⬜ |
 | E5 UC-E4 budget report | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
-| H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — code only, not yet deployed/validated |
-| H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ✅ DONE — code + seed only, not yet upserted/deployed/validated |
-| H3 Prompt/context wiring (`serv_db_step_shapes`, `generate_workflow_steps`, `step_type_contracts`) | AC8 | ✅ DONE — seed only, not yet upserted/deployed/validated |
-| I1 Generalize `runJsTransformSmokeTest` → data-flow trace with `STEP_INPUT_CONTRACTS` | AC9 | ✅ DONE — unit-tested (run 623 repro + 3 more cases), not yet validated live |
-| I2 Wire `serv_upsert` contract into `STEP_INPUT_CONTRACTS` (depends on H2) | AC8, AC9 | ✅ DONE — unit-tested |
+| H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — validated live (run 626) |
+| H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ✅ DONE — validated live (run 626) |
+| H3 Prompt/context wiring (`serv_db_step_shapes`, `generate_workflow_steps`, `step_type_contracts`) | AC8 | ✅ DONE — validated live (run 626); required 2 follow-up schema fixes (enum + `rows` type constraint) found via live testing |
+| I1 Generalize `runJsTransformSmokeTest` → data-flow trace with `STEP_INPUT_CONTRACTS` | AC9 | ✅ DONE — validated live (run 626) |
+| I2 Wire `serv_upsert` contract into `STEP_INPUT_CONTRACTS` (depends on H2) | AC8, AC9 | ✅ DONE — validated live (run 626) |
 
 ---
 
