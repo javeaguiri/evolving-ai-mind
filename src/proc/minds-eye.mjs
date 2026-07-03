@@ -741,7 +741,7 @@ async function executeWriteTool(action, params, traceId) {
           let inserted = 0;
           for (let i = 0; i < rows.length; i += CHUNK) {
             const resp = await insertRows(tableName, rows.slice(i, i + CHUNK));
-            inserted += resp.count ?? 0;
+            inserted += resp.rows?.length ?? 0;
           }
           return { success: true, count: inserted };
         }
