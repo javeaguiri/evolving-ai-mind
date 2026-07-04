@@ -60,6 +60,7 @@ const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
+  'run_sql',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
@@ -1186,6 +1187,14 @@ async function executeReadTool(action, params, traceId) {
         const { tableName, filters = [], orderBy, limit } = params;
         if (!tableName) return { error: 'tableName is required' };
         const resp = await getRows(tableName, filters, orderBy, limit ?? 20);
+        return { count: resp.count, rows: resp.rows ?? [] };
+      }
+
+      case 'run_sql': {
+        const { selectSql, target } = params;
+        if (!selectSql) return { error: 'selectSql is required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 
