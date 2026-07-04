@@ -27,7 +27,7 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, insertRows, updateRows, deleteRows } from '../shared/serv-client.mjs';
+import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 
@@ -63,7 +63,7 @@ const READ_TOOLS = new Set([
 
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
-  'update_data', 'insert_data',
+  'update_data', 'insert_data', 'upsert_data',
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
@@ -762,6 +762,19 @@ async function executeWriteTool(action, params, traceId) {
         }
         const resp = await insertRow(tableName, row ?? {});
         return { success: resp.success, row: resp.row };
+      }
+
+      case 'upsert_data': {
+        const { tableName, matchColumns, rows } = params;
+        if (!tableName)                                    return { error: 'tableName is required' };
+        if (!Array.isArray(matchColumns) || !matchColumns.length) return { error: 'matchColumns must be a non-empty array' };
+        if (!Array.isArray(rows) || !rows.length)           return { error: 'rows must be a non-empty array' };
+        const resp = await upsertRows(tableName, matchColumns, rows);
+        return {
+          success:  resp.success,
+          inserted: resp.inserted?.length ?? 0,
+          updated:  resp.updated?.length ?? 0,
+        };
       }
 
       case 'delete_data': {
