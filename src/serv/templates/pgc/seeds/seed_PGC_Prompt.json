@@ -3238,5 +3238,45 @@
     "prompt_text": "Select the entity type that best matches what the user wants to add.\n\nUser input:\n\"{{userInput}}\"\n\nAvailable entity types:\n{{schema_options}}\n\nReturn ONLY a valid JSON object — no markdown, no explanation:\n{ \"entity_name\": \"<the entity_name that best matches the user's request>\" }\n\nPick the entity_name whose name, description, or root_table best matches the user's intent. Consider semantic similarity — for example, \"budgetary\" matches an entity named \"Budget\", \"dining costs\" matches an entity named \"Expense\".",
     "probe_input": null,
     "max_output_tokens": 256
+  },
+  {
+    "intent_category": "propose_domain_view",
+    "version": 1,
+    "model": "anthropic/claude-sonnet-4-5",
+    "was_successful": null,
+    "input_variables": [
+      { "name": "domain", "required": true, "description": "Snake_case domain name whose tables were just confirmed" },
+      { "name": "tables", "required": true, "description": "JSON array of confirmed table objects (tableName, columns, foreignKeys) in FK dependency order" },
+      { "name": "previous_proposal", "required": true, "description": "JSON array — the prior view_proposals output being revised. Empty array on first pass." },
+      { "name": "view_feedback", "required": true, "description": "User-requested changes to the previous proposal. Empty string on first pass." }
+    ],
+    "output_schema": {
+      "type": "object",
+      "required": ["view_proposals"],
+      "properties": {
+        "view_proposals": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["tableName", "description", "rationale", "selectSql"],
+            "properties": {
+              "tableName":   { "type": "string", "pattern": "^PGD_[A-Za-z][A-Za-z0-9_]*$" },
+              "description": { "type": "string" },
+              "rationale":   { "type": "string" },
+              "selectSql":   { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "probe_input": {
+      "domain": "budgets_expenses",
+      "tables": "[{\"tableName\":\"PGD_Expenses\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"amount\",\"type\":\"numeric\"},{\"name\":\"category_id\",\"type\":\"integer\"},{\"name\":\"date\",\"type\":\"date\"}],\"foreignKeys\":[{\"name\":\"fk_expenses_category\",\"column\":\"category_id\",\"references\":{\"table\":\"PGD_SpendingCategories\",\"column\":\"id\"}}]},{\"tableName\":\"PGD_Budgets\",\"columns\":[{\"name\":\"id\",\"type\":\"serial\"},{\"name\":\"amount\",\"type\":\"numeric\"},{\"name\":\"year\",\"type\":\"integer\"},{\"name\":\"month\",\"type\":\"integer\"},{\"name\":\"category_id\",\"type\":\"integer\"}],\"foreignKeys\":[{\"name\":\"fk_budgets_category\",\"column\":\"category_id\",\"references\":{\"table\":\"PGD_SpendingCategories\",\"column\":\"id\"}}]}]",
+      "previous_proposal": "[]",
+      "view_feedback": ""
+    },
+    "max_output_tokens": 1500,
+    "prompt_text": "You are a PostgreSQL view designer for evolving-mind-ai, a personal data system. A new domain's tables have just been designed and confirmed. Decide whether a SQL view would provide clear, common-sense value for this domain — a rollup, join, or aggregation the user is likely to want (e.g. monthly totals by category, an active-items summary, a join collapsing a frequent lookup). Do NOT propose a view just because one is possible — the bar is genuine, obvious usefulness for this specific domain. This is a brand-new domain with no data yet, so reason structurally from the columns and foreign keys, not from example values.\n\nDomain: {{domain}}\nConfirmed tables (name, columns, foreign keys): {{tables}}\n\nPrevious proposal (empty array on first pass): {{previous_proposal}}\nUser-requested changes (empty string on first pass — if non-empty, revise the previous proposal to address the request; do not start over unless the feedback requires it): {{view_feedback}}\n\nPropose at most ONE view. If no view is clearly warranted, return an empty array — this is a common and correct answer, not a failure.\n\nReturn ONLY a valid JSON object — no markdown, no explanation, no backticks. Match this exact shape:\n{\n  \"view_proposals\": [\n    {\n      \"tableName\": \"PGD_<Name>\",\n      \"description\": \"<one sentence — what the view shows>\",\n      \"rationale\": \"<one sentence — why this is useful for this domain>\",\n      \"selectSql\": \"<a single SELECT or WITH statement, no trailing semicolon, referencing the confirmed tables by exact name>\"\n    }\n  ]\n}\n\nRules:\n- view_proposals must contain 0 or 1 items — never more than one.\n- tableName must start with PGD_ followed by PascalCase, and must not collide with any confirmed table name.\n- selectSql must be a single SELECT or WITH statement only — no trailing semicolon, no INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/GRANT/COPY/EXECUTE/TRUNCATE keywords.\n- Reference tables using their exact PGD_ names in double quotes, e.g. FROM \\\"PGD_Expenses\\\"."
   }
 ]
