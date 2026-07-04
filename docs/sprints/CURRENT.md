@@ -79,7 +79,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
 | E4 `serv_schema` step type generalized (table or view) | AC6 | ✅ DONE |
 | E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ✅ DONE |
-| E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ⬜ |
+| E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ✅ DONE |
 | E7 UC-E4 budget report — via Novia against existing `expenses` domain | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
 | H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — validated live (run 626) |
@@ -293,10 +293,13 @@ View creation/drop logic lives only inside `create_domain`'s own hand-authored s
 - No live-data sampling loop — a brand-new domain has no rows yet; that verification belongs to Novia's tool, once real data exists.
 - Not yet validated end-to-end from Slack — next domain creation run will exercise it.
 
-**E6 — Novia `create_view`/`drop_view` tools (`minds-eye.mjs`)**
-- Add to `GATED_WRITE_TOOLS`: `create_view` (`{ tableName, selectSql, domain, description }`, confirm gate) and `drop_view` (`{ tableName }`, danger gate — same style as `drop_table`).
-- Both call `servPost` inline (`createView` / `deleteTable`), mirroring `drop_table`'s existing pattern — no shared function with `step-executor.mjs`.
-- This is the actual delivery path for E7.
+**E6 — Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) — DONE**
+- Added to `GATED_WRITE_TOOLS`: `create_view` (`{ tableName, selectSql, target?, domain?, description? }`, confirm gate — `gateButtonConfig`/`buildGateText` show the proposed SQL for approval) and `drop_view` (`{ tableName }`, danger gate — same style as `drop_table`, minus `force: true` since the realistic use case is always a currently-registered view, not an orphan cleanup).
+- Both call `servPost` inline in `executeWriteTool` (`createView` / `deleteTable`), mirroring `drop_table`'s existing pattern exactly — no shared function with `step-executor.mjs`. Both added to `deriveScope` (`scope.table`), matching `drop_table`/`propose_schema_fix`. Not added to `writeFactualMemory` — `drop_table` doesn't write one either, matched that precedent.
+- `minds_eye_system_prompt` (v19→v20) — added `create_view`/`drop_view` to the WRITE TOOLS catalog the LLM actually sees (tool documentation is evolving-artifact content, not hardcoded in `minds-eye.mjs`).
+- `sop_view_diagnostics` (v1→v2) — replaced the Track-E-forward-looking stub with the real procedure (view not found → `create_view`; wrong data → read `select_sql` + compare to current source-table columns via `list_tables`, then `drop_view` + `create_view` with corrected SQL — no in-place "alter view," a view is always dropped and recreated). `sop_fix_authority` already correctly listed both tools as gated from when C1 was written — no change needed there.
+- Deployed (`sam build && sam deploy`) and upserted live. This is the actual delivery path for E7.
+- Not yet validated from Slack — per convention, Novia sessions are exercised by the user, not triggered by Claude.
 
 **E7 — UC-E4 budget report**
 - Use Novia's `create_view` tool to create `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount), current month) against the existing `expenses` domain.
