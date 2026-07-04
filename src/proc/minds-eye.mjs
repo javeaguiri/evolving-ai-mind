@@ -1142,34 +1142,15 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     parts.push(`CONVERSATION:\n${transcript}`);
   }
 
+  // Tool names, params, and gating are documented once in minds_eye_system_prompt
+  // (the instructions/system message) — not re-enumerated here. A second,
+  // hand-maintained copy in this per-turn message previously drifted stale
+  // (missing run_sql, upsert_data, create_view, drop_view) while still telling
+  // the model to use ONLY the tools listed here; removed rather than patched,
+  // since two copies of the same catalog will drift again.
   parts.push(
-    'Based on the context and conversation above, decide your next action.\n' +
-    'Respond with exactly one JSON object. Use ONLY these action values:\n' +
-    '- Read (no gate): search_domain_help, list_tables, list_physical_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
-    '- Write without gate (executes immediately): update_data, insert_data\n' +
-    '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data, drop_table\n' +
-    '- Memory (no gate, no action limit): write_memory\n' +
-    '- Trigger (dispatches to step-executor engine): run_workflow\n' +
-    '- respond (final answer to user)\n' +
-    'Params for read tools:\n' +
-    '  list_physical_tables: { prefix? } — lists tables physically present in the PGD database (default prefix "PGD_"); each row includes registered:bool to show whether it appears in PGC_Schema. Use to discover orphaned tables after a failed create_domain run.\n' +
-    'Params for write tools:\n' +
-    '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
-    '  insert_data: { tableName, row: {field: value} }                          -- single row\n' +
-    '  insert_data: { tableName, rows: [{field: value}, ...] }                 -- batch (any size, counts as one action)\n' +
-    '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
-    '  drop_table: { tableName } — physically drops a PGD table (force=true, CASCADE); also removes PGC_Schema row if present. Use after list_physical_tables to clean up orphaned tables from a failed create_domain run. Gated — requires approval.\n' +
-    '  propose_workflow_fix: { workflowName, steps: [...] } — corrects workflow steps; posts a diff gate for human approval before writing.\n' +
-    '  propose_schema_fix: { operation, tableName, ...opParams } — applies a schema change; posts description for human approval before executing.\n' +
-    '    addColumn:        { operation: "addColumn", tableName, column: { name, type, nullable? } }\n' +
-    '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
-    '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
-    '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
-    '    dropConstraint:   { operation: "dropConstraint", tableName, constraintName, target? }\n' +
-    '  write_memory: { content, memory_type? } — record diagnostic reasoning; call before final respond after any change or notable finding. Scope is auto-derived from your tool history — do not set scope.\n' +
-    'Params for trigger tools:\n' +
-    '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
-    'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
+    'Based on the context and conversation above, decide your next action. ' +
+    'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
   );
 
   return parts.join('\n\n---\n\n');
