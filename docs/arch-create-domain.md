@@ -3,7 +3,7 @@
 
 > Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.8, `docs/arch-prompt-rules.md` (prompt rule placement guide).
 
-Current as of Sprint 4. Describes the live workflow definition (v33) running in prod.
+Current as of Sprint 7. Describes the live workflow definition (v52) running in prod.
 
 ---
 
@@ -18,6 +18,7 @@ capability.
 
 **Outputs produced:**
 - Physical PGD tables in the domain database
+- Optionally, one PGD view (proposed and confirmed at step 16i — see Phase 3)
 - `PGC_DomainHelp` row (aliases, description, commands)
 - 5 `PGC_IntentMap` rows (add/list/get/update/delete patterns)
 - 1+ `PGC_EntitySchema` rows
@@ -100,10 +101,14 @@ Step 16  human_gate confirm — final DDL confirmation
            Create it → next (step 16b)   |   Cancel → cancelled
 ```
 
-### Phase 3 — Post-confirmation memory write (steps 16b–16c)
+### Phase 3 — Post-confirmation memory write and optional view proposal (steps 16b–16k)
 
-These steps run immediately after user confirmation, before any DDL. They write the
-semantic memory that `create_workflow` and `parse_entity_input` will retrieve.
+These steps run immediately after user confirmation, before any DDL. Steps 16b/16c
+write the semantic memory that `create_workflow` and `parse_entity_input` will
+retrieve. Steps 16d–16k are new in Sprint 7 (Track E) — they topologically sort the
+confirmed tables, then give the LLM one chance to propose an optional view before
+DDL executes. The proposal is entirely optional and every failure/skip path degrades
+gracefully to creating just the tables — it never blocks domain creation.
 
 ```
 Step 16b js_transform → domain_semantic_content
@@ -121,13 +126,79 @@ Step 16c write_memory SEMANTIC
            Priority: 2
            This is the definitive post-confirmation structural snapshot. Retrieved by
            both create_workflow and parse_entity_input (classify-intent data loads).
+
+Step 16d js_transform → sorted_tables, ddl_items (comma-separated output_key)
+           Topologically sorts proposed_scaffold.tables by FK dependency so parent
+           tables are created before child tables. ddl_items starts as an identical
+           copy of sorted_tables. The DDL iterator (step 17) always reads from
+           ddl_items — never sorted_tables directly — so a confirmed view can be
+           appended onto it later (step 16k) without disturbing sorted_tables, which
+           this same run still references by that name (steps 16g/16m/16k below).
+
+Step 16e serv_query PGC_SystemContext WHERE key = 'minds_eye_preferences'
+           → minds_eye_context_rows
+           Loads the assistant's configured name so step 16i's "do later" option
+           never hardcodes an assistant name in workflow text — the name is
+           evolving-artifact data (PGC_SystemContext), not system code.
+
+Step 16f js_transform → minds_eye_name
+           Extracts content.name from minds_eye_context_rows[0]. Falls back to the
+           generic string "the assistant" if the row is missing.
+
+Step 16g llm_call propose_domain_view (LEFT BRAIN)
+           Inputs: domain, tables (= sorted_tables), previous_proposal: "[]",
+             view_feedback: ""
+           Output: view_proposals — an array of 0 or 1 candidate view objects:
+             { tableName, description, rationale, selectSql }
+           A view is proposed only when it provides clear, obvious value for this
+           domain (e.g. a monthly rollup by category) — an empty array is a common
+           and correct answer, not a failure.
+           on_else → step 16h (an LLM failure here is treated the same as "no view
+             warranted" — never block domain creation over an optional suggestion)
+
+Step 16h condition: view_proposals.length
+           truthy → step 16i (present the gate)
+           falsy  → step 17  (skip straight to DDL — no gate shown when nothing
+                              was proposed; this is the common case)
+
+Step 16i human_gate choice — presents the proposed view (selectSql behind a reveal
+           button, never shown as raw message text)
+           Create it        → step 16k (merge the view into ddl_items)
+           Request changes  → step 16m (modal-captured feedback → view_feedback)
+           Do later         → step 17  (skip — ddl_items is already just the tables)
+           Cancel           → cancelled
+           See `arch-workflow-patterns.md` §6.7 "Choice gate cancel sentinel" —
+           "Do later" deliberately uses value: "later", not "cancel": a choice
+           option with value: "cancel" always terminates the whole workflow before
+           its on_select is ever consulted, regardless of what on_select says.
+
+Step 16m llm_call propose_domain_view (LEFT BRAIN, revision pass — same prompt as
+           step 16g, called again with feedback)
+           Inputs: domain, tables, previous_proposal (= the prior view_proposals),
+             view_feedback (from step 16i's modal)
+           Output: view_proposals (replaces the prior proposal)
+           on_success → step 16i (re-present the gate with the revised proposal.
+             Safe backward reference per Guard 3 — the target is the human_gate
+             itself, so the loop always suspends waiting for input.)
+           on_else → step 17 (best-effort — skip the view rather than get stuck in
+             a failed revision loop)
+
+Step 16k js_transform → ddl_items
+           Appends the confirmed view onto sorted_tables — views are always last,
+           since a view's selectSql may reference any of the domain's tables and
+           none of them exist yet until step 17 runs. Only reached from step 16i's
+           "Create it" option.
 ```
 
 ### Phase 4 — DDL execution and domain registration (steps 17–24)
 
 ```
-Step 17  iterator over proposed_scaffold.tables
-           item_step: serv_schema createTable(item)
+Step 17  iterator over ddl_items (the confirmed tables, plus a confirmed view if
+           one was proposed and accepted — see Phase 3)
+           item_step: serv_schema — branches on shape: a table object (columns
+             present) calls SERV-Schema createTable; a view object (selectSql
+             present, no columns) calls createView, which introspects the
+             resulting columns rather than trusting caller-declared metadata.
            → created_tables
 
 Step 17b llm_call generate_domain_aliases (Perplexity sonar)
@@ -152,7 +223,10 @@ Step 19  human_gate review_object — user reviews aliases and CRUD commands
 Step 20  serv_insert PGC_DomainHelp ← generated.domainHelp
 Step 21  iterator → serv_insert 5 PGC_IntentMap rows
 Step 22  iterator → serv_insert PGC_EntitySchema rows
-Step 23  notify → "Domain {{proposed_scaffold.domain}} is ready with N tables."
+Step 22a js_transform → domain_ready_message
+           Builds the notify text from the registered commands so the confirmation
+           includes the bulk-add command, not just a generic "domain ready" line.
+Step 23  notify → domain_ready_message
 Step 24  end
 ```
 
@@ -215,12 +289,18 @@ describe the application-level intent. Examples:
 | 10 | `create_domain` | smart | `proposed_scaffold` |
 | 12b | `revise_domain_schema` | smart | `proposed_scaffold` |
 | 13 | `design_table` | smart | `new_table` |
+| 16g, 16m | `propose_domain_view` | anthropic/claude-sonnet-4-5 | `view_proposals` |
 | 17b | `generate_domain_aliases` | perplexity/sonar | `domain_aliases` |
 
-All five prompts have `output_schema` defined. The correction loop runs on all five
-if LLM output is malformed. `create_domain`, `design_table`, and `revise_domain_schema`
-have `save_to_memory` wired in the workflow step definition — the harness strips the
-`reasoning` field before schema validation and writes it to `PGC_Memory`.
+All six prompts have `output_schema` defined. The correction loop runs on all six
+if LLM output is malformed. `propose_domain_view` is one prompt row invoked from two
+step keys — 16g (initial proposal, `previous_proposal`/`view_feedback` passed as
+empty literals) and 16m (revision pass, both populated from the prior turn) — same
+pattern as `design_table` being reused verbatim for every added table. `create_domain`,
+`design_table`, and `revise_domain_schema` have `save_to_memory` wired in the workflow
+step definition — the harness strips the `reasoning` field before schema validation
+and writes it to `PGC_Memory`. `propose_domain_view` does not — a view suggestion is
+not schema reasoning worth persisting the way table design is.
 
 ---
 
@@ -239,9 +319,28 @@ to step 12 has a distinct `frame_id` pushed by the gate suspension.
 based on feedback). Step 13 + step 14 add a single table (additive merge). Both loop
 back to step 12 for review.
 
-**Topological sort in step 14:** FK dependencies are sorted so parent tables precede
-child tables. Required because `createTable` in SERV will fail if a referenced table
-does not yet exist.
+**Topological sort in step 14 and step 16d:** FK dependencies are sorted so parent
+tables precede child tables. Step 14 re-sorts inline whenever a table is added
+during the review loop; step 16d does the final sort once the schema is confirmed,
+feeding both `sorted_tables` (referenced by the view-proposal steps) and `ddl_items`
+(what step 17 actually creates). Required because `createTable` in SERV will fail if
+a referenced table does not yet exist — and, as of Sprint 7, `createView` has the
+same requirement one level up: a view can't be created before *any* of its source
+tables exist, which is why views are appended to `ddl_items` after the sort rather
+than participating in it.
+
+**Optional post-confirmation view proposal (steps 16e–16k):** Runs after the tables
+are already confirmed and DDL-ready, and never blocks domain creation — every
+failure or skip path (`llm_call` `on_else`, the `condition` at 16h, "Do later")
+degrades gracefully to creating just the tables. This is a deliberate scope choice:
+the proposal has no live-data sampling loop, since a brand-new domain has no rows
+yet to sample — that verification belongs to Novia's `create_view` tool, once real
+data exists (see `arch-workflow-patterns.md` §6.8).
+
+**Choice gate cancel sentinel:** See `arch-workflow-patterns.md` §6.7 — a choice
+option with `value: "cancel"` always terminates the workflow before its `on_select`
+is consulted, regardless of what `on_select` says. Step 16i's "Do later" option uses
+`value: "later"` for exactly this reason.
 
 **Additive memory accumulation:** Steps 12b and 13 write semantic memory on every
 iteration. Multiple design cycles accumulate rows — retrieval sorts by `created_at DESC`

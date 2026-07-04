@@ -244,6 +244,31 @@ Every `execute_top` invocation checks status before executing any step. If
 `cancelled`, the message is discarded. The shutdown contract is: no step will
 execute after `/shutdown` is called, even if SQS messages are already in flight.
 
+#### Choice gate cancel sentinel
+
+`run-workflow.mjs`'s `resumeGate` checks `userResponse === 'cancel'` *before* looking
+up the matched option's `on_select` at all. For `gate_type: "choice"`, `userResponse`
+is the clicked option's `value` — so **any choice option with `value: "cancel"`
+unconditionally terminates the workflow**, regardless of what its `on_select` field
+says. The `on_select` value is never consulted once this sentinel matches.
+
+When authoring a choice gate that needs a genuine "skip / do later / go back" option
+that should *not* abort the run, give it a distinct `value` (anything other than the
+literal string `"cancel"`) and route its `on_select` wherever it needs to go. Reserve
+`value: "cancel"` for the one option that should actually end the workflow.
+
+`create_domain`'s view-proposal gate (step 16i — see `arch-create-domain.md` Phase 3)
+is the reference example: "Do later" uses `value: "later"` and routes onward to the
+DDL step; a separate "Cancel" option uses the literal `value: "cancel"` for a true
+abort.
+
+Discovered 2026-07-04 while wiring that gate. Not yet audited against other existing
+choice gates — `create_domain` step 12c's "Back" button (`action: "cancel"`, a
+`text_input` gate so the check is against `action` rather than `value`, but the same
+early-exit sentinel applies) likely has the same issue: clicking it probably cancels
+the whole domain creation rather than returning to step 12 as its `on_select: "12"`
+implies. Flagged, not fixed.
+
 ---
 
 ### 6.8 create_domain Workflow
@@ -251,6 +276,8 @@ execute after `/shutdown` is called, even if SQS messages are already in flight.
 Full annotated workflow design is in [`docs/arch-create-domain.md`](arch-create-domain.md).
 
 **Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
+
+**Sprint 7 additions (Track E):** Views register as first-class `PGC_Schema`/`PGC_TableMap` rows, same mechanism as tables (`docs/architecture.md` §1.5, `serv/schema.mjs`'s `createView`). `create_domain` gained an optional post-confirmation view-proposal branch (steps 16d–16k) between the topological table sort and DDL execution: `propose_domain_view` (LEFT BRAIN) proposes 0–1 candidate views from the confirmed schema; a `condition` skips the gate entirely when nothing was proposed; a `choice` gate offers create / request-changes (loops back with feedback) / do-later / cancel. Confirmed views are appended to a new `ddl_items` key — never to `sorted_tables` itself — since a view can't be created before its source tables exist; `ddl_items` is what step 17's DDL iterator actually reads. The now-generalized `serv_schema` step type (`step-executor.mjs`) branches on input shape (`selectSql` present → `createView`, else → `createTable`) to execute both in the same iterator. `create_domain` is never re-entered for existing domains — Novia's `create_view`/`drop_view` tools are the modification path once a domain already exists.
 
 ### 6.9 create_workflow Workflow
 
