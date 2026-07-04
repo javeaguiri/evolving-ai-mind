@@ -69,6 +69,7 @@ const INLINE_WRITE_TOOLS = new Set([
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
+  'create_view', 'drop_view',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -555,6 +556,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
+  if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
+  if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
@@ -710,6 +713,18 @@ async function buildGateText(action, params, traceId) {
         return `**Drop table: \`${tableName}\`** (force=true, CASCADE)\n\n${regNote}\n\nThis is irreversible.`;
       }
 
+      case 'create_view': {
+        const { tableName, selectSql } = params;
+        if (!tableName || !selectSql) return '**Create view** — missing tableName or selectSql';
+        return `**Create view: \`${tableName}\`**\n\n\`\`\`sql\n${selectSql}\n\`\`\``;
+      }
+
+      case 'drop_view': {
+        const { tableName } = params;
+        if (!tableName) return '**Drop view** — missing tableName';
+        return `**Drop view: \`${tableName}\`**\n\nThis is irreversible.`;
+      }
+
       default:
         return `**Proposed action:** \`${action}\`\n\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``;
     }
@@ -827,6 +842,20 @@ async function executeWriteTool(action, params, traceId) {
         return await servPost('/api/v1/serv/schema/deleteTable', { tableName, force: true });
       }
 
+      case 'create_view': {
+        const { tableName, selectSql, target = 'pgd', domain = null, description = '' } = params;
+        if (!tableName || !selectSql) return { error: 'tableName and selectSql are required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost('/api/v1/serv/schema/createView', { tableName, selectSql, target, domain, description });
+      }
+
+      case 'drop_view': {
+        const { tableName } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost('/api/v1/serv/schema/deleteTable', { tableName });
+      }
+
       default:
         return { error: `Unknown write tool: ${action}` };
     }
@@ -907,6 +936,8 @@ function deriveScope(workingHistory) {
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
     if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'create_view'          && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
   }
   return scope;
 }
