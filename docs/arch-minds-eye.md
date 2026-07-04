@@ -384,6 +384,39 @@ All preferences are read from `PGC_SystemContext.minds_eye_preferences` at sessi
 
 Any preference can be changed with one `updateRows` on `PGC_SystemContext WHERE key = 'minds_eye_preferences'` — no deploy required, takes effect from the next session. Can also be updated conversationally: "Novia, be more concise" → `update_preferences` action tool (Phase 2) proposes the change with a lightweight confirmation gate.
 
+### 6.4 LLM Call Composition and Persistence (current implementation, Sprint 7)
+
+Before the first reasoning turn of any invocation, the user's raw input is written to `PGC_SessionEntry` as its own `role: 'user'` row — this happens once, in `handle()` for a new message or the `followup` branch of `handleGateResume()` for a follow-up question, **before `runReasoningLoop` is ever entered**. The loop itself never writes a `role: 'user'` row; it only ever produces `assistant`/`tool` rows, one per turn.
+
+Each `callLlm` call sends four things — two fixed for the whole invocation, one fixed forever, and one rebuilt on every single turn:
+
+| Component | Source | Rebuilt how often |
+|---|---|---|
+| `model` | `prefs.model` — `minds_eye_preferences.content.model` | Once per invocation |
+| `instructions` (system prompt) | `minds_eye_system_prompt.content.text` + a name/tone/format line appended from `minds_eye_preferences` | Once per invocation, reused every turn |
+| `outputSchema` | Fixed `ACTION_SCHEMA` constant in code | Never changes |
+| `input` (user message) | `buildUserMessage(layer1Context, layer2Context, workingHistory, prefs)` | Every turn, fresh |
+
+`input` itself concatenates four blocks (`\n\n---\n\n`-joined): `layer1Context` (registered workflows, fetched once per invocation via `assembleContext()`), `layer2Context` (top 5 recent memories by priority, same), the full conversation transcript (every `PGC_SessionEntry` row for this session rendered as `User: ...` / `Assistant: ...` / `Tool (name): ...` lines — grows every turn), and a one-line trailing instruction pointing back to the system prompt's tool catalog and output format.
+
+This full resend on every turn is not a `buildUserMessage` inefficiency to optimize away — it is a hard constraint of the current model/gateway combination. `minds-eye.mjs` calls `callLlm` (flat `instructions` + `input`, no messages array), and the underlying Perplexity Agent gateway only honors native conversation history for `sonar` models; for `anthropic/*` models (Novia's default), that field is silently ignored, so the full context must be manually re-flattened into `input` on every call or the model loses everything from earlier turns. Avoiding this would require switching Novia to a `sonar` model and to `callLlmWithMessages` — a real model-capability tradeoff, not something to change incidentally.
+
+Nothing is written to the DB before a call — the components above are pure reads (`PGC_Workflow`, `PGC_Memory`, `PGC_SessionEntry`, `PGC_SystemContext`). After a call, exactly one `PGC_SessionEntry` row is written, shape depending on the decision:
+
+| Decision | Row written | Other side effects |
+|---|---|---|
+| `respond` | `{role: 'assistant', content: {action:'respond', message, reasoning, advisory}}` | `minds_eye_turn_count` (cumulative) + `slack_thread_ts` updated on `PGC_Session` |
+| Read tool | `{role: 'tool', content: {tool, params, result}}` | none |
+| `write_memory` | `{role: 'tool', content: {tool, params, result}}` | separately writes a row to `PGC_Memory` (not `SessionEntry`) |
+| Inline write (`update_data`/`insert_data`/`upsert_data`) | `{role: 'tool', content: {tool, params, result}}` | `minds_eye_action_count` incremented |
+| Gated write, proposed | `{role: 'tool', content: {tool: '__pending__', action, params}}` | `minds_eye_turn_count` persisted; loop suspends, waits for Slack |
+| Gated write, approved (on resume) | `{role: 'tool', content: {tool, params, result}}` | `writeFactualMemory()` — a second, separate `PGC_Memory` write, for `propose_workflow_fix`/`propose_schema_fix` only; `minds_eye_action_count` reset then set to `1` |
+| Gated write, rejected (on resume) | `{role: 'tool', content: {tool: '__cancelled__', action, params}}` | `minds_eye_action_count` reset to `0` |
+| Unknown/malformed action | none | Slack notification only, loop ends |
+| JSON-parse correction retry | none | purely internal — no row until a real decision is reached |
+
+`callLlm` always returns exactly one JSON object matching `ACTION_SCHEMA`: `{ action: "respond", message, reasoning, advisory? }` or `{ action: "<tool_name>", params, reasoning }` — no separate "thinking" field, no multi-part response structure.
+
 ---
 
 ## 7. Memory Integration
