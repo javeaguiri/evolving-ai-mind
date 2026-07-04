@@ -42,7 +42,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - **AC3 — `/explain` step-selection gate:** Failed runs with multiple LLM steps show a Slack button list of steps; user picks one; explain thread scoped to that step.
 - **AC4 — Novia diagnostic protocol live:** `novia_diagnostic_protocol` `PGC_SystemContext` row upserted; `minds_eye_system_prompt` updated with one-liner; Novia retrieves procedures on demand.
 - **AC5 — UI Polish complete:** All five sub-items (markdown blocks, format_entity_display, notify template audit, button/content separation, modal cancel audit) validated from Slack.
-- **AC6 — View infrastructure + UC-E4 budget report:** `/serv/schema/createView`, `/serv/schema/dropView`, and `/proc/addView` endpoints live; `create_view` core workflow registered; `PGD_MonthlyExpensesByCategory` view created via `create_view`; budget reporting workflow live and validated from Slack.
+- **AC6 — View infrastructure + UC-E4 budget report:** `PGC_Schema.type`/`select_sql` migration live; `/serv/schema/createView` endpoint live; `deleteTable` extended to drop views; `serv_schema` step type generalized to handle views; `create_domain` proposes candidate view(s) after table design with confirm/confirm-with-changes/do-later gate; Novia `create_view`/`drop_view` tools live; `PGD_MonthlyExpensesByCategory` view created via Novia against the existing `expenses` domain; budget reporting workflow live and validated from Slack.
 - **AC7 — IntentMap one row per phrase:** migration splits existing combined patterns; `create_workflow` steps 35b/36 write individual rows; `matchIntentMap` unchanged.
 - **AC8 — ✅ DONE — `serv_upsert` step type live:** `/serv/table/upsertRows` endpoint + `serv_upsert` step type registered (`PGC_StepType`, `serv_db_step_shapes`, `generate_workflow_steps` known-step-types list); validated end-to-end from Slack (run 626 — `import_budget_spreadsheet` registered with a correctly-formed `serv_upsert` step).
 - **AC9 — ✅ DONE — L2 data-flow trace catches shape mismatches at create-time:** L2b simulation (`simulation-engine.mjs`) resolves known step-input fields (filters, updates, row/rows, items_key, context_key) against the real js_transform-computed mock state and flags contract violations before a workflow is registered. Validated by reproducing the run 623 nested-filter-array bug in a test workflow and confirming L2 rejects it.
@@ -74,11 +74,13 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
 | D4 Button/content separation + preservation audit | AC5 | ⬜ |
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
-| E1 `/serv/schema/createView` endpoint | AC6 | ⬜ |
-| E2 `/serv/schema/dropView` endpoint | AC6 | ⬜ |
-| E3 `/proc/addView` endpoint | AC6 | ⬜ |
-| E4 `create_view` core workflow | AC6 | ⬜ |
-| E5 UC-E4 budget report | AC6 | ⬜ |
+| E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ⬜ |
+| E2 `/serv/schema/createView` endpoint | AC6 | ⬜ |
+| E3 `deleteTable` extended — DROP VIEW branch | AC6 | ⬜ |
+| E4 `serv_schema` step type generalized (table or view) | AC6 | ⬜ |
+| E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ⬜ |
+| E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ⬜ |
+| E7 UC-E4 budget report — via Novia against existing `expenses` domain | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
 | H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — validated live (run 626) |
 | H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ✅ DONE — validated live (run 626) |
@@ -260,33 +262,43 @@ Implementation:
 
 ### Track E — View Infrastructure & Budget Report
 
-**E1 — `/serv/schema/createView` endpoint**
-- Add `createView` case to `schema.mjs` alongside `createTable`.
-- Accepts `{ viewName, selectSql, target }`: runs `CREATE OR REPLACE VIEW "${viewName}" AS ${selectSql}`, registers in `PGC_Schema` (target: pgd, type: view) and `PGC_TableMap` (allow_read: true).
-- Existing `serv_getRows` can query registered views with no step type changes.
+**Context (design session 2026-07-04):** Views are first-class `PGC_Schema`/`PGC_TableMap` rows — same mechanism as tables — so `serv_getRows`/`serv_query` work on them with zero code changes (the read gate only checks `PGC_TableMap` membership). Domain association reuses the existing single `domain` string column already used identically by `PGC_Workflow`, `PGC_Prompt`, `PGC_DomainHelp`, and `PGC_EntitySchema` — no FK/junction. Multi-domain view tagging (a view spanning two domains) hits the same open question as Gap 4 of the cross-domain `create_workflow` backlog item and is deferred there, not solved separately here.
+
+View creation/drop logic lives only inside `create_domain`'s own hand-authored steps — mirroring `serv_schema`/`createTable` today, which is listed in `generate_workflow_steps`' output_schema type enum only for AJV validity (in case `create_domain`'s own steps ever pass through `fix_workflow_routing`) but is never emitted by the generic pipeline for an ordinary generated workflow. No new step type is added to the generic vocabulary for views either.
+
+`create_domain` is not re-entered for existing domains — Novia is the modification path. The new `create_domain` steps only offer view proposals to domains created from now on; they do nothing for `expenses`/`budgets`, which already exist. **UC-E4's view therefore ships via Novia's `create_view` tool, not through `create_domain`.**
+
+**E1 — `PGC_Schema` migration: `type` + `select_sql` columns**
+- Add `type` (`text`, `NOT NULL DEFAULT 'table'`, check `type IN ('table','view')`) and `select_sql` (`text`, nullable — populated for `type: 'view'` rows only, so a future redesign has the current definition to start from).
+- Follow the `migrate-step-key.mjs` pattern: update `PGC_Schema.json` template (bootstrap DDL for fresh deployments) + a one-off `dev_scripts/migrate-pgc-schema-view-columns.mjs` (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) run once against the live DB.
+
+**E2 — `/serv/schema/createView` endpoint**
+- New `createView` case in `schema.mjs`. Accepts `{ tableName, selectSql, target, domain, description }` — reuses `tableName` as the view's registered name (same `PGC_Schema.table_name` column tables use).
+- Security: `selectSql` must start with `SELECT`/`WITH`, reject `;` and a denylist (`INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|COPY|EXECUTE|TRUNCATE`). The human-gate review in `create_domain`'s propose-view step (and Novia's own confirm gate) is the primary defense; this is a backstop, not a parser.
+- Runs `CREATE OR REPLACE VIEW "${tableName}" AS ${selectSql}`, then introspects the resulting columns from `information_schema.columns` to populate `PGC_Schema.columns` (not caller-declared).
+- Registers `PGC_Schema` (`type: 'view'`, `select_sql` stored) + `PGC_TableMap` (`allow_insert`/`allow_update`/`allow_delete` all `false`).
 - Add endpoint to `openapi.yaml`.
 
-**E2 — `/serv/schema/dropView` endpoint**
-- Accepts `{ viewName }`: runs `DROP VIEW IF EXISTS "${viewName}"`, removes rows from `PGC_Schema` and `PGC_TableMap`.
-- Used by the `create_view` workflow iteration loop when the user rejects the current design and requests changes.
-- Also used by Novia `drop_view` tool (C2).
-- Add endpoint to `openapi.yaml`.
+**E3 — `deleteTable` extended to drop views**
+- Branch on `PGC_Schema.type`: `DROP VIEW IF EXISTS` for `type: 'view'`, existing `DROP TABLE IF EXISTS ... CASCADE` for `type: 'table'`. No new endpoint/route.
 
-**E3 — `/proc/addView` endpoint**
-- New `proc/add-view.mjs` handler: accepts `{ viewName, selectSql, description }`, calls SERV `createView`, returns registration confirmation.
-- First-class callable endpoint — invocable directly from Slack/Novia AND as a workflow step in the `create_view` workflow.
-- Wire into `proc/handler.mjs`.
-- Add endpoint to `openapi.yaml`.
+**E4 — `serv_schema` step type generalized**
+- `executeServSchema` (`step-executor.mjs`) branches on `input.selectSql` presence: call `createView` instead of `createTable` when present. Same step type, same `PGC_StepType` row, no change to `generate_workflow_steps`.
 
-**E4 — `create_view` core workflow**
-- New system workflow following the `create_domain` pattern: user-guided LLM design → create → test with live data → iterate → confirm.
-- Steps: (1) load domain schema from `PGC_Schema`; (2) LLM (left-brain, smart) designs `SELECT` / `GROUP BY` / aggregations + view name; (3) human gate — review proposed SQL; (4) call `/proc/addView` to create the view; (5) `serv_getRows` on the new view — sample rows from live data; (6) human gate — show sample results, approve or request changes; (7) if changes → `dropView` + loop back to step 2 with feedback; (8) if approved → notify.
-- Registered as a seed workflow in `seed_PGC_Workflow.json`.
+**E5 — `create_domain` — propose candidate view(s)**
+- Three new steps after table design is confirmed: (a) `serv_query` on `PGC_SystemContext` (`key = 'minds_eye_preferences'`) + `js_transform` extracting `content.name` into `local_state` (e.g. `minds_eye_name`) — the "do later" option text must reference this key, never hardcode "Novia" (`PGC_SystemContext.minds_eye_preferences.content.name` is evolving-artifact data, not system code); (b) LLM proposes 0–1 candidate view shape(s) + rationale from the confirmed table schema; (c) `human_gate` choice — **confirm** / **confirm with changes** (loop back with feedback) / **do later** (option label references `{{minds_eye_name}}`; no artifact created — purely a suggestion).
+- Confirmed view(s) fold into the existing step-17 DDL iterator alongside `sorted_tables`, executed via the now-generalized `serv_schema`.
+- No live-data sampling loop — a brand-new domain has no rows yet; that verification belongs to Novia's tool, once real data exists.
 
-**E5 — UC-E4 budget report**
-- Run `create_view` workflow to create `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount), current month).
+**E6 — Novia `create_view`/`drop_view` tools (`minds-eye.mjs`)**
+- Add to `GATED_WRITE_TOOLS`: `create_view` (`{ tableName, selectSql, domain, description }`, confirm gate) and `drop_view` (`{ tableName }`, danger gate — same style as `drop_table`).
+- Both call `servPost` inline (`createView` / `deleteTable`), mirroring `drop_table`'s existing pattern — no shared function with `step-executor.mjs`.
+- This is the actual delivery path for E7.
+
+**E7 — UC-E4 budget report**
+- Use Novia's `create_view` tool to create `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount), current month) against the existing `expenses` domain.
 - Use `create_workflow` to generate the reporting workflow: `serv_getRows` on view → `serv_getRows` on `PGD_Budgets` → `llm_call` to format comparison as readable Slack output. LLM for formatting only — no arithmetic.
-- Validate end-to-end from Slack once expenses + budgets have sufficient real data.
+- Validate end-to-end from Slack.
 
 ---
 

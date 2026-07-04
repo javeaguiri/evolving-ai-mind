@@ -3212,6 +3212,75 @@ paths:
         '500':
           description: DDL execution or PGC write failed
 
+  /api/v1/serv/schema/createView:
+    post:
+      summary: Create a view + register in PGC_Schema
+      description: >
+        Executes CREATE OR REPLACE VIEW on the target database (pgc or pgd),
+        introspects the resulting columns from information_schema (not
+        caller-declared), writes a metadata row to PGC_Schema (type: view,
+        select_sql stored for future redesign), and registers in PGC_TableMap
+        with allow_insert/allow_update/allow_delete all false — views are
+        read-only. selectSql must be a single SELECT/WITH statement; a
+        denylist rejects DDL/DML keywords and statement separators as a
+        backstop — the primary defense is human review of the SQL upstream.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, target, selectSql]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGD_MonthlyExpensesByCategory
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                domain:
+                  type: string
+                selectSql:
+                  type: string
+                description:
+                  type: string
+            example:
+              tableName: PGD_MonthlyExpensesByCategory
+              target: pgd
+              domain: expenses
+              selectSql: >-
+                SELECT category_id, SUM(amount) AS total_amount,
+                date_trunc('month', expense_date) AS month
+                FROM "PGD_Expenses" GROUP BY category_id, month
+              description: Monthly spend by category
+      responses:
+        '200':
+          description: View created and registered
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGD_MonthlyExpensesByCategory
+                target: pgd
+                domain: expenses
+                type: view
+                schemaId: 28
+                createdAt: "2026-07-04T15:18:24.000Z"
+        '400':
+          description: Validation error — invalid view name, missing fields, disallowed SQL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Table already exists in PGC_Schema
+        '500':
+          description: DDL execution or PGC write failed
+
   /api/v1/serv/schema/listTables:
     post:
       summary: List all tables in PGC_Schema
