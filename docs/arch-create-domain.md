@@ -133,7 +133,7 @@ Step 16d js_transform → sorted_tables, ddl_items (comma-separated output_key)
            copy of sorted_tables. The DDL iterator (step 17) always reads from
            ddl_items — never sorted_tables directly — so a confirmed view can be
            appended onto it later (step 16k) without disturbing sorted_tables, which
-           this same run still references by that name (steps 16g/16m/16k below).
+           this same run still references by that name (steps 16g/16k below).
 
 Step 16e serv_query PGC_SystemContext WHERE key = 'minds_eye_preferences'
            → minds_eye_context_rows
@@ -141,20 +141,33 @@ Step 16e serv_query PGC_SystemContext WHERE key = 'minds_eye_preferences'
            never hardcodes an assistant name in workflow text — the name is
            evolving-artifact data (PGC_SystemContext), not system code.
 
-Step 16f js_transform → minds_eye_name
-           Extracts content.name from minds_eye_context_rows[0]. Falls back to the
-           generic string "the assistant" if the row is missing.
+Step 16f js_transform → minds_eye_name, view_proposals, view_feedback
+           Extracts content.name from minds_eye_context_rows[0] (generic fallback
+           "the assistant" if the row is missing). Also seeds view_proposals/
+           view_feedback to []/'' — but only takes effect the first time through:
+           on a later loop-back visit (16i "Request changes" → 16g directly, see
+           below) this step is not re-executed, so the real accumulated values
+           from the prior 16g call and 16i's modal are left untouched.
 
 Step 16g llm_call propose_domain_view (LEFT BRAIN)
-           Inputs: domain, tables (= sorted_tables), previous_proposal: "[]",
-             view_feedback: ""
+           Inputs: domain, tables (= sorted_tables), previous_proposal, view_feedback
+             (both template references — [] and '' on the first visit via 16f's
+             seed, real accumulated values on a revision loop-back)
            Output: view_proposals — an array of 0 or 1 candidate view objects:
              { tableName, description, rationale, selectSql }
            A view is proposed only when it provides clear, obvious value for this
            domain (e.g. a monthly rollup by category) — an empty array is a common
            and correct answer, not a failure.
+           on_success → step 16h always (both the first call and every revision
+             pass route through the same condition check — see below)
            on_else → step 16h (an LLM failure here is treated the same as "no view
              warranted" — never block domain creation over an optional suggestion)
+           Reused directly for revision passes: step 16i's "Request changes" option
+           routes back to 16g itself rather than a separate revision step, so there
+           is only one llm_call to maintain. A failed revision leaves view_proposals
+           holding the last successful proposal (16g's output_key is only
+           overwritten on a successful call), so 16h/16i naturally re-present the
+           last known-good proposal rather than losing it.
 
 Step 16h condition: view_proposals.length
            truthy → step 16i (present the gate)
@@ -164,24 +177,17 @@ Step 16h condition: view_proposals.length
 Step 16i human_gate choice — presents the proposed view (selectSql behind a reveal
            button, never shown as raw message text)
            Create it        → step 16k (merge the view into ddl_items)
-           Request changes  → step 16m (modal-captured feedback → view_feedback)
+           Request changes  → step 16g (modal-captured feedback → view_feedback,
+                               then re-run the same llm_call as a revision pass —
+                               safe backward reference per Guard 3: the loop always
+                               passes back through this same human_gate, so it
+                               always suspends waiting for input)
            Do later         → step 17  (skip — ddl_items is already just the tables)
            Cancel           → cancelled
            See `arch-workflow-patterns.md` §6.7 "Choice gate cancel sentinel" —
            "Do later" deliberately uses value: "later", not "cancel": a choice
            option with value: "cancel" always terminates the whole workflow before
            its on_select is ever consulted, regardless of what on_select says.
-
-Step 16m llm_call propose_domain_view (LEFT BRAIN, revision pass — same prompt as
-           step 16g, called again with feedback)
-           Inputs: domain, tables, previous_proposal (= the prior view_proposals),
-             view_feedback (from step 16i's modal)
-           Output: view_proposals (replaces the prior proposal)
-           on_success → step 16i (re-present the gate with the revised proposal.
-             Safe backward reference per Guard 3 — the target is the human_gate
-             itself, so the loop always suspends waiting for input.)
-           on_else → step 17 (best-effort — skip the view rather than get stuck in
-             a failed revision loop)
 
 Step 16k js_transform → ddl_items
            Appends the confirmed view onto sorted_tables — views are always last,
@@ -289,14 +295,16 @@ describe the application-level intent. Examples:
 | 10 | `create_domain` | smart | `proposed_scaffold` |
 | 12b | `revise_domain_schema` | smart | `proposed_scaffold` |
 | 13 | `design_table` | smart | `new_table` |
-| 16g, 16m | `propose_domain_view` | anthropic/claude-sonnet-4-5 | `view_proposals` |
+| 16g | `propose_domain_view` | anthropic/claude-sonnet-4-5 | `view_proposals` |
 | 17b | `generate_domain_aliases` | perplexity/sonar | `domain_aliases` |
 
 All six prompts have `output_schema` defined. The correction loop runs on all six
-if LLM output is malformed. `propose_domain_view` is one prompt row invoked from two
-step keys — 16g (initial proposal, `previous_proposal`/`view_feedback` passed as
-empty literals) and 16m (revision pass, both populated from the prior turn) — same
-pattern as `design_table` being reused verbatim for every added table. `create_domain`,
+if LLM output is malformed. `propose_domain_view` is invoked from a single step key
+(16g) for both the initial proposal and every revision pass — 16i's "Request changes"
+routes back to 16g directly rather than to a separate revision step, so
+`previous_proposal`/`view_feedback` are template references (real accumulated values
+on a loop-back visit; empty defaults seeded once by step 16f on the first visit)
+rather than two near-duplicate llm_call steps to maintain. `create_domain`,
 `design_table`, and `revise_domain_schema` have `save_to_memory` wired in the workflow
 step definition — the harness strips the `reasoning` field before schema validation
 and writes it to `PGC_Memory`. `propose_domain_view` does not — a view suggestion is
