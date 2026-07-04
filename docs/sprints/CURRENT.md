@@ -68,7 +68,8 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | G2 `research_workflow_domain` surfaces raw input format (section headers, collapsed tables) | AC1 | ⬜ |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
-| C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ⬜ |
+| C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ✅ DONE — delivered as Track E's E6, same scope |
+| C4 Novia `upsert_data` tool | AC4 | ✅ DONE |
 | D1 `markdown` block type in `dialogToBlocks()` | AC5 | ⬜ |
 | D2 `format_entity_display` pretty-print formatter | AC5 | ⬜ |
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
@@ -216,12 +217,14 @@ Implementation:
 - Update `simulation-engine.mjs` and `template-resolver.mjs` to read the value from `PGC_SystemContext` at call time (with hardcoded fallback).
 - Run `upsert-system-context.mjs`.
 
-**C2 — Novia view tooling (`minds-eye.mjs`)**
-- Add `create_view` to `GATED_WRITE_TOOLS`: accepts `{ viewName, selectSql }`; calls `/api/v1/serv/schema/createView`; confirms with user before executing.
-- Add `drop_view` to `GATED_WRITE_TOOLS`: accepts `{ viewName }`; calls drop endpoint; danger gate (same pattern as `drop_table`).
-- `query_table` already works on registered views (they appear in `PGC_TableMap`) — no change needed.
-- Update `minds_eye_system_prompt` to document both tools with when-to-use guidance.
-- Run `upsert-system-context.mjs`.
+**C2 — Novia view tooling (`minds-eye.mjs`) — DONE, delivered as Track E's E6**
+- Superseded by E6 (Track E) once the domain-association design session settled on views being first-class `PGC_Schema` rows — same scope, same file, implemented there instead of here to keep it next to the SERV endpoints it depends on. See Track E for the actual implementation notes.
+
+**C4 — Novia `upsert_data` tool — DONE**
+- Added same session as a scope addition, prompted by the session 931 bulk-insert bug (`insert_data`'s `count: 0` misreport caused Novia to retry an already-successful 34-row batch 3 more times, quadruplicating rows — see session notes below). Novia had no upsert capability at all to fall back on; `insert_data` is not idempotent and repeats blindly on retry.
+- `minds-eye.mjs`: imported `upsertRows` from `serv-client.mjs` (already existed — built for Track H's `serv_upsert` step type, calls the same `/serv/table/upsertRows` endpoint). Added `upsert_data` to `INLINE_WRITE_TOOLS` (no gate, matching `insert_data`/`update_data` — inserting or updating known data isn't destructive). `executeWriteTool` case: `{ tableName, matchColumns, rows }` → `upsertRows(...)`, returning `{ success, inserted: count, updated: count }` — counts derived from `.length` on the response arrays, not a `resp.count` field, deliberately avoiding the exact mistake that caused session 931.
+- `minds_eye_system_prompt` (v20→v21) — documented `upsert_data` in the WRITE TOOLS catalog with explicit guidance: prefer it over `insert_data` whenever the same batch might be re-sent (e.g. retrying after an ambiguous result), since `upsert_data` is idempotent and `insert_data` is not.
+- Deployed (`sam build && sam deploy`) and upserted live. Not yet validated from Slack.
 
 **C3 — Novia SOP: prompt fix procedure**
 - `PGC_Prompt` already has `allow_update: true` in `PGC_TableMap` — `update_data` works on it today. Novia's advisory claiming it was not registered was incorrect; the gap is knowledge, not access.
