@@ -78,7 +78,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E2 `/serv/schema/createView` endpoint | AC6 | ✅ DONE |
 | E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
 | E4 `serv_schema` step type generalized (table or view) | AC6 | ✅ DONE |
-| E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ⬜ |
+| E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ✅ DONE |
 | E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ⬜ |
 | E7 UC-E4 budget report — via Novia against existing `expenses` domain | AC6 | ⬜ |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
@@ -285,10 +285,12 @@ View creation/drop logic lives only inside `create_domain`'s own hand-authored s
 **E4 — `serv_schema` step type generalized**
 - `executeServSchema` (`step-executor.mjs`) branches on `input.selectSql` presence: call `createView` instead of `createTable` when present. Same step type, same `PGC_StepType` row, no change to `generate_workflow_steps`.
 
-**E5 — `create_domain` — propose candidate view(s)**
-- Three new steps after table design is confirmed: (a) `serv_query` on `PGC_SystemContext` (`key = 'minds_eye_preferences'`) + `js_transform` extracting `content.name` into `local_state` (e.g. `minds_eye_name`) — the "do later" option text must reference this key, never hardcode "Novia" (`PGC_SystemContext.minds_eye_preferences.content.name` is evolving-artifact data, not system code); (b) LLM proposes 0–1 candidate view shape(s) + rationale from the confirmed table schema; (c) `human_gate` choice — **confirm** / **confirm with changes** (loop back with feedback) / **do later** (option label references `{{minds_eye_name}}`; no artifact created — purely a suggestion).
-- Confirmed view(s) fold into the existing step-17 DDL iterator alongside `sorted_tables`, executed via the now-generalized `serv_schema`.
+**E5 — `create_domain` — propose candidate view(s) — DONE**
+- Implemented as 7 new steps (16e–16k) between the topological table sort (16d) and the DDL iterator (17): 16e `serv_query` loads `PGC_SystemContext.minds_eye_preferences`; 16f `js_transform` extracts `content.name` into `minds_eye_name` (generic `'the assistant'` fallback if the row is missing — never "Novia" hardcoded); 16g `llm_call` (new system prompt `propose_domain_view`, id 113) proposes 0–1 candidate views from the confirmed `sorted_tables`; 16h `condition` skips straight to 17 when no candidate was proposed (no gate shown for the common "no view warranted" case); 16i `human_gate` choice presents the candidate (SQL behind a `reveal`) with **Create it** → 16k, **Request changes** → 16m (modal-captured feedback, loops back to 16i — safe per Guard 3, the backward target is the gate itself), **Do later** → 17, **Cancel** → true abort; 16k merges the confirmed view onto `ddl_items` (views only ever appended after all tables, never interleaved into `sorted_tables` itself, since a view can't be created before its source tables exist). Step 17's `items_key` changed from `sorted_tables` to `ddl_items` (16d now seeds both keys identically via a comma-separated `output_key`, so `ddl_items` is always defined even when no view is ever offered).
+- **Runtime discovery during implementation:** for `gate_type: "choice"`, `run-workflow.mjs`'s `resumeGate` checks `userResponse === 'cancel'` *before* looking up the clicked option's `on_select` at all (`run-workflow.mjs:526`) — so any choice option with `value: "cancel"` unconditionally terminates the workflow, regardless of what `on_select` says. This is why "Do later" uses `value: "later"` (routes to 17) with a *separate* literal `value: "cancel"` option for true abort — mirroring step 12's proven 4-option shape exactly. Flagged, not fixed: this same mechanism means step 12c's existing "Back" button (`action: "cancel", on_select: "12"`) likely never actually reaches step 12 — clicking it probably cancels the whole domain-creation workflow instead. Pre-existing, outside E5's scope — worth a look next session.
+- Upserted live: `create_domain` v51→v52 (passed the L1 pre-write guard), `propose_domain_view` v1 inserted. No code changes — seed-only, no deploy needed.
 - No live-data sampling loop — a brand-new domain has no rows yet; that verification belongs to Novia's tool, once real data exists.
+- Not yet validated end-to-end from Slack — next domain creation run will exercise it.
 
 **E6 — Novia `create_view`/`drop_view` tools (`minds-eye.mjs`)**
 - Add to `GATED_WRITE_TOOLS`: `create_view` (`{ tableName, selectSql, domain, description }`, confirm gate) and `drop_view` (`{ tableName }`, danger gate — same style as `drop_table`).
