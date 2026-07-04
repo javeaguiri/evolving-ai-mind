@@ -49,6 +49,7 @@ const DEFAULT_PREFERENCES = {
   max_output_tokens:      8192,
   turn_limit:             8,
   max_actions_per_session:5,
+  max_lifetime_turns:     100,
   tone:                   'concise but friendly',
   advisory_level:         'proactive',
   response_format:        'structured',
@@ -212,8 +213,9 @@ async function handleGateResume(body, callback, traceId, req) {
       role:            'user',
       content:         followupText.trim(),
     });
+    // minds_eye_turn_count is a cumulative lifetime tally — never reset here,
+    // only minds_eye_action_count (a human just engaged with the session).
     await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
-      minds_eye_turn_count:   0,
       minds_eye_action_count: 0,
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
@@ -227,7 +229,7 @@ async function handleGateResume(body, callback, traceId, req) {
       workingHistory:               [...entries, { role: 'user', content: followupText.trim(), sequence_number: newSeq }],
       callback,
       traceId,
-      currentTurnCount:             0,
+      currentTurnCount:             session.minds_eye_turn_count ?? 0,
       currentActionCount:           0,
       currentSeq:                   newSeq + 1,
       threadTs:                     callback?.threadId ?? session.slack_thread_ts,
@@ -238,14 +240,15 @@ async function handleGateResume(body, callback, traceId, req) {
   }
 
   // Turn-limit or action-limit continue — a human just reviewed and explicitly
-  // authorized more budget, so both counts reset regardless of which limit fired.
+  // authorized more budget. Only minds_eye_action_count resets (a human
+  // touchpoint); minds_eye_turn_count is a cumulative lifetime tally that never
+  // resets — it's checked against max_lifetime_turns inside runReasoningLoop.
   if (resumeType === 'continue') {
     if (!approved) {
       console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
     }
     await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
-      minds_eye_turn_count:   0,
       minds_eye_action_count: 0,
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
@@ -259,7 +262,7 @@ async function handleGateResume(body, callback, traceId, req) {
       workingHistory:     [...entries],
       callback,
       traceId,
-      currentTurnCount:   0,
+      currentTurnCount:   session.minds_eye_turn_count ?? 0,
       currentActionCount: 0,
       currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
       threadTs:           callback?.threadId ?? session.slack_thread_ts,
@@ -367,15 +370,37 @@ async function handleGateResume(body, callback, traceId, req) {
 // Shared reasoning loop — called from both handle() and handleGateResume()
 // ---------------------------------------------------------------------------
 
-async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
-  let turnCount   = currentTurnCount;
-  let actionCount = currentActionCount;
-  let seq         = currentSeq;
-  let responded   = false;
-  let earlyExit   = false;
-  let turnCost    = 0;
+// Cumulative, never-reset lifetime turn ceiling — a defense-in-depth guard
+// against a runaway session, distinct from turn_limit (a per-invocation budget
+// that always starts fresh). Checked both before starting a round (cheapest —
+// refuses before spending an LLM call) and after a round ends without a
+// response (so a session can't slip past it one continue-gate at a time).
+async function notifyLifetimeCeiling(session, callback, traceId, count) {
+  console.warn('proc/minds-eye: session at/over lifetime turn ceiling', { sessionId: session.id, count, traceId });
+  if (callback) {
+    await enqueueCallback(callback, {
+      type:      'HUMAN_NOTIFICATION',
+      traceId,
+      message:   `This session has run ${count} turns in total — that's unusually long. Please start a fresh session rather than continuing this one.`,
+      sessionId: session.id,
+    });
+  }
+}
 
-  while (turnCost < prefs.turn_limit) {
+async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
+  if (currentTurnCount >= prefs.max_lifetime_turns) {
+    await notifyLifetimeCeiling(session, callback, traceId, currentTurnCount);
+    return;
+  }
+
+  let turnCount      = currentTurnCount;  // cumulative lifetime tally — never reset, persisted
+  let turnsThisRound  = 0;                // per-invocation budget — always starts fresh
+  let actionCount     = currentActionCount;
+  let seq             = currentSeq;
+  let responded       = false;
+  let earlyExit       = false;
+
+  while (turnsThisRound < prefs.turn_limit) {
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
 
     let decision;
@@ -384,11 +409,12 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     } catch (llmError) {
       if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
-        // One correction turn (0.5 cost) — send raw output back and ask for reformat.
+        // The correction call is a real extra LLM call — counts as its own turn.
         try {
           const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
           decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
-          turnCost += 0.5;
+          turnCount += 1;
+          turnsThisRound += 1;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
           console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
@@ -410,7 +436,22 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       }
     }
 
+    // Every turn costs exactly 1, regardless of which tool ran or whether it
+    // errored — a tool call and a direct respond are the same cost; only the
+    // JSON-correction retry above adds an extra turn, since it's an extra LLM call.
     turnCount += 1;
+    turnsThisRound += 1;
+
+    // The top-of-function check only stops a *new* round from starting — a
+    // round already in progress could still push turnCount past the ceiling
+    // before turn_limit naturally ends it. Stop here too, before any of this
+    // iteration's branches try to persist turnCount (chk_pgc_session_turn_ceiling
+    // would reject anything over 100).
+    if (turnCount >= prefs.max_lifetime_turns) {
+      await notifyLifetimeCeiling(session, callback, traceId, turnCount);
+      earlyExit = true;
+      break;
+    }
 
     const { action, params = {}, reasoning, message, advisory } = decision;
 
@@ -464,7 +505,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += toolResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
     } else if (HOUSEKEEPING_TOOLS.has(action)) {
@@ -484,7 +524,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += hkResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -513,7 +552,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += writeResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
@@ -541,7 +579,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += triggerResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
     } else {
@@ -559,7 +596,11 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
-    await postTurnLimitGate(session.id, callback, traceId);
+    if (turnCount >= prefs.max_lifetime_turns) {
+      await notifyLifetimeCeiling(session, callback, traceId, turnCount);
+    } else {
+      await postTurnLimitGate(session.id, callback, traceId);
+    }
   }
 }
 
