@@ -85,7 +85,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | E4 `serv_schema` step type generalized (table or view) | AC6 | ✅ DONE |
 | E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ✅ DONE |
 | E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ✅ DONE |
-| E7 UC-E4 budget report — via Novia against existing `expenses` domain | AC6 | ⬜ |
+| E7 UC-E4 budget report — via Novia against existing `expenses` domain | AC6 | ✅ DONE |
 | F1 `PGC_IntentMap` one row per phrase structural refactor | AC7 | ⬜ |
 | H1 SERV-Table `upsertRows` (`table.mjs` + endpoint) | AC8 | ✅ DONE — validated live (run 626) |
 | H2 `serv_upsert` step type (`step-executor.mjs` + `PGC_StepType`) | AC8 | ✅ DONE — validated live (run 626) |
@@ -338,10 +338,12 @@ View creation/drop logic lives only inside `create_domain`'s own hand-authored s
 - Deployed (`sam build && sam deploy`) and upserted live. This is the actual delivery path for E7.
 - Not yet validated from Slack — per convention, Novia sessions are exercised by the user, not triggered by Claude.
 
-**E7 — UC-E4 budget report**
-- Use Novia's `create_view` tool to create `PGD_MonthlyExpensesByCategory` (GROUP BY category, SUM(amount), current month) against the existing `expenses` domain.
-- Use `create_workflow` to generate the reporting workflow: `serv_getRows` on view → `serv_getRows` on `PGD_Budgets` → `llm_call` to format comparison as readable Slack output. LLM for formatting only — no arithmetic.
-- Validate end-to-end from Slack.
+**E7 — UC-E4 budget report — DONE**
+- Novia created `PGD_BudgetExpenseSummary` against the live `budgets_expenses` domain — a monthly budget-vs-actual rollup by type plus a cash-spending breakdown by category, considerably richer than the originally-sketched single-category rollup.
+- First attempt (pre-C7) had a real join fan-out bug — inflated `total_budgeted` whenever a category had more than one expense transaction in a month (confirmed live: July `non_discretionary` reported $31,910 against a true $7,910). This was the trigger for Track C7 (`run_sql` tool + validate-before-presenting SOP).
+- Redone by Novia in the same session, using `run_sql` and the updated `sop_view_diagnostics`. Independently reverified here: `select_sql` now pre-aggregates both `budget_agg` and `expense_by_type` (`GROUP BY year, month, type`) before combining them via `FULL OUTER JOIN` — the correct fix — and the live view now reports July `non_discretionary` as exactly `$7,910`, matching the manual calculation.
+- Reporting workflow (via `create_workflow`, view → budgets → formatted Slack output) not built as a separate step — the view itself, queried directly, was sufficient for this use case.
+- Closes Track E. All of E1–E7 done.
 
 ---
 
