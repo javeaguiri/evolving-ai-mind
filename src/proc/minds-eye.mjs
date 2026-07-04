@@ -197,7 +197,8 @@ async function handleGateResume(body, callback, traceId, req) {
   );
   const entries = entriesResp.rows ?? [];
 
-  // Follow-up question — add user message, reset turns, run loop, re-post continue gate after response.
+  // Follow-up question — add user message, reset turns and actions (a human just
+  // engaged with the session), run loop, re-post continue gate after response.
   if (resumeType === 'followup') {
     const { followupText } = body;
     if (!followupText?.trim()) {
@@ -212,7 +213,8 @@ async function handleGateResume(body, callback, traceId, req) {
       content:         followupText.trim(),
     });
     await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
-      minds_eye_turn_count: 0,
+      minds_eye_turn_count:   0,
+      minds_eye_action_count: 0,
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
@@ -226,7 +228,7 @@ async function handleGateResume(body, callback, traceId, req) {
       callback,
       traceId,
       currentTurnCount:             0,
-      currentActionCount:           session.minds_eye_action_count ?? 0,
+      currentActionCount:           0,
       currentSeq:                   newSeq + 1,
       threadTs:                     callback?.threadId ?? session.slack_thread_ts,
       postContinueGateAfterRespond: true,
@@ -235,15 +237,17 @@ async function handleGateResume(body, callback, traceId, req) {
     return;
   }
 
-  // Turn-limit or action-limit continue — reset counts and re-enter the reasoning loop.
+  // Turn-limit or action-limit continue — a human just reviewed and explicitly
+  // authorized more budget, so both counts reset regardless of which limit fired.
   if (resumeType === 'continue') {
     if (!approved) {
       console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
     }
-    const resetFields = { minds_eye_turn_count: 0 };
-    if (body.resetActionCount) resetFields.minds_eye_action_count = 0;
-    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], resetFields);
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_turn_count:   0,
+      minds_eye_action_count: 0,
+    });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
     await runReasoningLoop({
@@ -256,7 +260,7 @@ async function handleGateResume(body, callback, traceId, req) {
       callback,
       traceId,
       currentTurnCount:   0,
-      currentActionCount: session.minds_eye_action_count ?? 0,
+      currentActionCount: 0,
       currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
       threadTs:           callback?.threadId ?? session.slack_thread_ts,
     });
@@ -293,6 +297,10 @@ async function handleGateResume(body, callback, traceId, req) {
       role:            'tool',
       content:         cancelEntry,
     });
+    // A rejection is still a human touchpoint — reset the action count same as approval.
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_action_count: 0,
+    });
     if (callback) {
       await enqueueCallback(callback, {
         type:      'HUMAN_NOTIFICATION',
@@ -319,7 +327,13 @@ async function handleGateResume(body, callback, traceId, req) {
 
   await writeFactualMemory(action, params, result, session.id, traceId);
 
-  const newActionCount = (session.minds_eye_action_count ?? 0) + 1;
+  // Any gate resumption is a human touchpoint, so the action count resets here
+  // rather than accumulating across approvals — this action becomes the first
+  // of a fresh count, not the Nth of a running session total. This means the
+  // action limit only ever fires on a streak of INLINE (ungated) writes with no
+  // human involved in between; a fully human-supervised sequence of gated
+  // actions never artificially hits the ceiling.
+  const newActionCount = 1;
   await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
     minds_eye_action_count: newActionCount,
   });
