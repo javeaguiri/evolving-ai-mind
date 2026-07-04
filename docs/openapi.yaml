@@ -3692,11 +3692,13 @@ paths:
 
   /api/v1/serv/schema/deleteTable:
     post:
-      summary: Drop table + remove from PGC_Schema
+      summary: Drop table or view + remove from PGC_Schema
       description: >
-        Drops the physical table (CASCADE) and removes rows from
-        PGC_Schema and PGC_TableMap. Protected system tables
-        (PGC_Schema, PGC_TableMap, PGC_EntitySchema, PGC_DomainHelp)
+        Drops the physical object (CASCADE) and removes rows from
+        PGC_Schema and PGC_TableMap. Branches on PGC_Schema.type — DROP VIEW
+        for a registered view, DROP TABLE for a table (defaults to table
+        when force=true and no PGC_Schema row exists). Protected system
+        tables (PGC_Schema, PGC_TableMap, PGC_EntitySchema, PGC_DomainHelp)
         are rejected with 403.
       tags: [SERV-Schema]
       parameters:

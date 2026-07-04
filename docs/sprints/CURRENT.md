@@ -74,9 +74,9 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
 | D4 Button/content separation + preservation audit | AC5 | ⬜ |
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
-| E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ⬜ |
-| E2 `/serv/schema/createView` endpoint | AC6 | ⬜ |
-| E3 `deleteTable` extended — DROP VIEW branch | AC6 | ⬜ |
+| E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ✅ DONE |
+| E2 `/serv/schema/createView` endpoint | AC6 | ✅ DONE |
+| E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
 | E4 `serv_schema` step type generalized (table or view) | AC6 | ⬜ |
 | E5 `create_domain` — propose candidate view(s) + confirm/changes/later gate | AC6 | ⬜ |
 | E6 Novia `create_view`/`drop_view` tools (`minds-eye.mjs`) | AC6 | ⬜ |

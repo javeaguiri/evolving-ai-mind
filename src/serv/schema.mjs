@@ -871,7 +871,7 @@ async function deleteTable(req) {
     // force=true allows dropping tables that are not yet registered (e.g. orphaned
     // from a failed create_domain run that never wrote the PGC_Schema row).
     const lookup = await pgcClient.query(
-      `SELECT id, target FROM "PGC_Schema" WHERE table_name = $1`,
+      `SELECT id, target, type FROM "PGC_Schema" WHERE table_name = $1`,
       [tableName]
     );
 
@@ -881,6 +881,7 @@ async function deleteTable(req) {
 
     const schemaRow  = lookup.rows[0] ?? null;
     const target     = schemaRow?.target ?? 'pgd';
+    const objectType = schemaRow?.type   ?? 'table';
     const schemaId   = schemaRow?.id     ?? null;
     const dropClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
@@ -888,9 +889,12 @@ async function deleteTable(req) {
 
     if (target === 'pgd') await dropClient.connect();
 
-    // Drop the physical table
-    await dropClient.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
-    console.info(`schema: dropped table ${tableName} from ${target.toUpperCase()}${force && !schemaRow ? ' (force — no PGC_Schema row)' : ''}`);
+    // Drop the physical object — a view requires DROP VIEW, not DROP TABLE.
+    const dropSQL = objectType === 'view'
+      ? `DROP VIEW IF EXISTS "${tableName}" CASCADE`
+      : `DROP TABLE IF EXISTS "${tableName}" CASCADE`;
+    await dropClient.query(dropSQL);
+    console.info(`schema: dropped ${objectType} ${tableName} from ${target.toUpperCase()}${force && !schemaRow ? ' (force — no PGC_Schema row)' : ''}`);
 
     // Best-effort cleanup of PGC_Schema + PGC_TableMap (may not exist when force=true)
     if (schemaId) {
@@ -902,6 +906,7 @@ async function deleteTable(req) {
     return ok({
       success:   true,
       tableName,
+      type:      objectType,
       dropped:   true,
       forced:    force && !schemaRow,
       correlationId: req.correlationId,
