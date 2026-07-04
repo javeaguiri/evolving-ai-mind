@@ -4201,6 +4201,62 @@ paths:
         '500':
           description: Upsert failed — transaction rolled back
 
+  /api/v1/serv/table/runSql:
+    post:
+      summary: Execute a read-only SELECT/WITH statement directly
+      description: >
+        A deliberate, narrow carve-out from SERV-Table's "no raw SQL" rule —
+        read-only only, not gated by PGC_TableMap (works on any table or view,
+        registered or not). selectSql must start with SELECT or WITH; a
+        denylist rejects semicolons and any DDL/DML keyword. Not intended for
+        general querying — built for Novia's view-creation validation
+        workflow (running a proposed view's selectSql directly, or an
+        independent aggregate cross-check against source tables, before
+        trusting a view's output) and for equivalent ad hoc read-only checks.
+        Shares its SQL guard with /serv/schema/createView's selectSql field.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selectSql]
+              properties:
+                selectSql:
+                  type: string
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                  default: pgd
+            example:
+              selectSql: >-
+                SELECT category_id, SUM(amount) AS total FROM "PGD_Expenses"
+                WHERE EXTRACT(YEAR FROM date) = 2026 AND EXTRACT(MONTH FROM date) = 7
+                GROUP BY category_id
+              target: pgd
+      responses:
+        '200':
+          description: Query executed — rows returned
+          content:
+            application/json:
+              example:
+                success: true
+                count: 3
+                rows:
+                  - { category_id: 3, total: "1200.00" }
+                  - { category_id: 4, total: "80.00" }
+        '400':
+          description: Validation error — selectSql missing, not a SELECT/WITH statement, or contains a disallowed keyword/semicolon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Query execution failed
+
   # ── SERV-Entity ────────────────────────────────────────────────────────────
   # User-facing domain data layer. Callers use entity names (Recipe, Stock),
   # never table names. PGC_EntitySchema defines the root_table, joins,

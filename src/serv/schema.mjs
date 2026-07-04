@@ -185,6 +185,22 @@ async function createTable(req) {
 const SELECT_ONLY_PATTERN = /^\s*(SELECT|WITH)\b/i;
 const SQL_DENYLIST_PATTERN = /;|\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|COPY|EXECUTE|TRUNCATE)\b/i;
 
+// Shared read-only SQL guard — used by createView's selectSql and by
+// SERV-Table's runSql. Not a parser — a backstop behind human review
+// (create_domain's propose-view gate, Novia's create_view/run_sql confirm).
+export function validateReadOnlySql(sql) {
+  if (!sql || typeof sql !== 'string' || !sql.trim()) {
+    return 'sql is required';
+  }
+  if (!SELECT_ONLY_PATTERN.test(sql)) {
+    return 'sql must be a SELECT or WITH statement';
+  }
+  if (SQL_DENYLIST_PATTERN.test(sql)) {
+    return 'sql contains a disallowed keyword or statement separator';
+  }
+  return null;
+}
+
 async function createView(req) {
   const {
     tableName, target, domain = null,
@@ -275,9 +291,6 @@ async function createView(req) {
 function validateCreateViewPayload({ tableName, target, selectSql }) {
   if (!tableName) return 'tableName is required';
   if (!target)    return 'target is required (pgc or pgd)';
-  if (!selectSql || typeof selectSql !== 'string' || !selectSql.trim()) {
-    return 'selectSql is required';
-  }
 
   if (!['pgc', 'pgd'].includes(target)) {
     return `target must be "pgc" or "pgd", got "${target}"`;
@@ -285,12 +298,9 @@ function validateCreateViewPayload({ tableName, target, selectSql }) {
   if (!TABLE_NAME_PATTERN.test(tableName)) {
     return `Invalid table name "${tableName}" — must match PGC_* or PGD_* pattern`;
   }
-  if (!SELECT_ONLY_PATTERN.test(selectSql)) {
-    return 'selectSql must be a SELECT or WITH statement';
-  }
-  if (SQL_DENYLIST_PATTERN.test(selectSql)) {
-    return 'selectSql contains a disallowed keyword or statement separator';
-  }
+
+  const sqlError = validateReadOnlySql(selectSql);
+  if (sqlError) return sqlError.replace(/^sql/, 'selectSql');
 
   return null;  // valid
 }

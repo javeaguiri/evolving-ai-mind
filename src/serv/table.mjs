@@ -14,17 +14,21 @@
 //   POST /serv/table/updateRows — parameterised UPDATE, gated by allow_update
 //   POST /serv/table/deleteRows — parameterised DELETE, gated by allow_delete
 //   POST /serv/table/upsertRows — per-row INSERT or UPDATE by matchColumns, gated by allow_insert + allow_update
+//   POST /serv/table/runSql     — read-only SELECT/WITH statement, not PGC_TableMap-gated
 //
 // Security gates:
 //   - Table must exist in PGC_TableMap
 //   - Column names in filters/updates validated against PGC_Schema columns for that table
 //   - Filter operators validated against whitelist
 //   - filters must be non-empty on UPDATE and DELETE — mass unfiltered writes are not permitted
-//   - No raw SQL accepted in any field
+//   - No raw SQL accepted in any field, except runSql — a deliberate, narrow carve-out
+//     (SELECT/WITH-only, keyword-denylisted, same guard as createView's selectSql) for
+//     ad hoc read-only validation queries — never write-capable
 
 import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
+import { validateReadOnlySql } from './schema.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -47,8 +51,42 @@ export async function handle(req) {
     case 'updateRows': return updateRows(req);
     case 'deleteRows': return deleteRows(req);
     case 'upsertRows': return upsertRows(req);
+    case 'runSql':     return runSql(req);
     default:
       return err(404, `SERV-Table route "${req.subRoute}" not found`, req.correlationId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/table/runSql
+// ---------------------------------------------------------------------------
+
+async function runSql(req) {
+  const { selectSql, target = 'pgd' } = req.body;
+
+  const sqlError = validateReadOnlySql(selectSql);
+  if (sqlError) return err(400, sqlError, req.correlationId);
+  if (!['pgc', 'pgd'].includes(target)) {
+    return err(400, `target must be "pgc" or "pgd", got "${target}"`, req.correlationId);
+  }
+
+  const dbUrl = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
+  const client = getClient(dbUrl);
+
+  try {
+    await client.connect();
+    const result = await client.query(selectSql);
+    return ok({
+      success: true,
+      count:   result.rows.length,
+      rows:    result.rows,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+  } catch (error) {
+    console.error('table runSql error:', error.message);
+    return err(500, `runSql failed: ${error.message}`, req.correlationId);
+  } finally {
+    await client.end();
   }
 }
 
