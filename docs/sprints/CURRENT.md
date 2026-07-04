@@ -79,6 +79,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
 | D4 Button/content separation + preservation audit | AC5 | ⬜ |
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
+| D6 Novia action-gate messages — plain-language summary + code/SQL/diff behind a reveal | AC5 | ⬜ |
 | E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ✅ DONE |
 | E2 `/serv/schema/createView` endpoint | AC6 | ✅ DONE |
 | E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
@@ -294,6 +295,11 @@ Implementation:
 - Confirm `handleViewClosed` does not enqueue `resume_gate` (gate stays suspended — correct).
 - Remove `on_modal_close` dead code branch from `run-workflow.mjs`.
 - Scan all `PGC_Workflow` rows for `on_modal_close` option declarations and remove them.
+
+**D6 — Novia action-gate messages: plain-language summary + code/SQL/diff behind a reveal**
+- Raised 2026-07-04: when Novia posts a `HUMAN_GATE` for a gated write tool (`drop_table`, `create_view`, `drop_view`, `delete_data`, `propose_schema_fix`, `propose_workflow_fix`), `buildGateText` (`minds-eye.mjs`) currently puts raw material — full step-diff JSON, SQL in a code fence, `JSON.stringify` dumps — directly in the gate's visible message text. The user has to read code to understand what's being proposed.
+- Fix direction: each `buildGateText` case should lead with a short, layman's-terms sentence — what was diagnosed and what action is about to be taken — and move the raw code/SQL/diff into a `reveal` (same progressive-disclosure pattern already used elsewhere: `button_label` + `content`), not the main message body. This is a distinct problem from Track D's D1–D5 (which cover generated-workflow `human_gate` rendering in `callback.mjs`'s `dialogToBlocks`) — `buildGateText` is Novia's own gate-text builder in `minds-eye.mjs`, a separate code path.
+- Not yet scoped in detail — needs a pass through each `buildGateText` case (`propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view`) to decide the summary wording and what exactly moves behind the reveal for each.
 
 ---
 
