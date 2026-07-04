@@ -557,29 +557,32 @@ export function buildDialog(step, localState) {
 }
 
 // ---------------------------------------------------------------------------
-// serv_schema — creates a PGD table
+// serv_schema — creates a PGD table or view
 // ---------------------------------------------------------------------------
 
 async function executeServSchema({ step, localState, traceId }) {
-  // step.input may be "{{item}}" — resolves to the full table object
-  const tableObj = resolveInput(step.input, localState);
+  // step.input may be "{{item}}" — resolves to the full table or view object.
+  // A view object carries selectSql; a table object carries columns instead.
+  const schemaObj = resolveInput(step.input, localState);
+  const isView    = typeof schemaObj.selectSql === 'string';
+  const endpoint  = isView ? 'createView' : 'createTable';
 
-  console.info('step-executor: serv_schema — createTable', {
-    tableName: tableObj.tableName,
+  console.info(`step-executor: serv_schema — ${endpoint}`, {
+    tableName: schemaObj.tableName,
     traceId,
   });
 
-  const resp = await servPost('/api/v1/serv/schema/createTable', tableObj);
+  const resp = await servPost(`/api/v1/serv/schema/${endpoint}`, schemaObj);
 
   if (resp.statusCode !== 200 && resp.statusCode !== 201) {
     throw new Error(
-      `serv_schema createTable failed for "${tableObj.tableName}": ` +
+      `serv_schema ${endpoint} failed for "${schemaObj.tableName}": ` +
       `${resp.error ?? resp.statusCode}`
     );
   }
 
   return {
-    outputValue: { tableName: tableObj.tableName, status: 'created' },
+    outputValue: { tableName: schemaObj.tableName, type: isView ? 'view' : 'table', status: 'created' },
     nextAction:  resolveNextAction(step.on_success, null),
   };
 }
