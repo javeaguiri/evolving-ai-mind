@@ -9,7 +9,7 @@
       "analyze_and_design_workflow",
       "fix_workflow_steps"
     ],
-    "version": 17,
+    "version": 18,
     "content": {
       "sections": [
         {
@@ -639,13 +639,13 @@
             },
             {
               "step_type": "serv_schema",
-              "description": "Creates a physical PostgreSQL table via SERV-Schema createTable. Registers in PGC_Schema and PGC_TableMap. Used inside iterators driven by a tables array.",
+              "description": "Creates a physical PostgreSQL table or view. Branches on input shape: a table definition (columns present) calls SERV-Schema createTable; a view definition (selectSql present, no columns) calls createView, which introspects the resulting columns rather than trusting caller-declared metadata. Registers in PGC_Schema (type: table|view) and PGC_TableMap (views registered read-only — allow_insert/update/delete all false). Used inside iterators driven by a tables (and optionally views) array. Only ever used by create_domain — never emit this step type when generating an ordinary domain workflow.",
               "input_contract": [
                 {
                   "type": "object",
                   "field": "input",
                   "required": true,
-                  "description": "Full table definition — tableName, target, columns, foreignKeys, constraints, triggers. May be \"{{item}}\" inside an iterator."
+                  "description": "Table definition — tableName, target, columns, foreignKeys, constraints, triggers. OR view definition — tableName, target, domain, selectSql, description. May be \"{{item}}\" inside an iterator."
                 },
                 {
                   "type": "string",
@@ -658,7 +658,7 @@
                 {
                   "type": "object",
                   "field": "output_key",
-                  "description": "{ tableName, status: \"created\" }"
+                  "description": "{ tableName, type: \"table\"|\"view\", status: \"created\" }"
                 }
               ],
               "on_success_options": [
