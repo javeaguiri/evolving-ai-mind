@@ -9,6 +9,7 @@
 //
 // Routes:
 //   POST   /serv/schema/createTable      — build DDL from JSON + register in PGC_Schema
+//   POST   /serv/schema/createView       — CREATE OR REPLACE VIEW + register in PGC_Schema (type: view)
 //   POST   /serv/schema/addColumn        — ALTER TABLE ... ADD COLUMN + PGC_Schema sync
 //   POST   /serv/schema/modifyColumn     — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
 //   POST   /serv/schema/dropColumn       — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
@@ -58,6 +59,7 @@ const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 export async function handle(req) {
   switch (req.subRoute) {
     case 'createTable': return createTable(req);
+    case 'createView':  return createView(req);
     case 'addColumn':    return addColumn(req);
     case 'modifyColumn': return modifyColumn(req);
     case 'dropColumn':   return dropColumn(req);
@@ -171,6 +173,126 @@ async function createTable(req) {
     await pgcClient.end();
     if (pgdClient) await pgdClient.end();
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/createView
+// ---------------------------------------------------------------------------
+
+// selectSql must be a single read-only SELECT/WITH statement. This is a
+// backstop, not a parser — the primary defense is human review of the SQL
+// upstream (create_domain's propose-view gate, Novia's confirm gate).
+const SELECT_ONLY_PATTERN = /^\s*(SELECT|WITH)\b/i;
+const SQL_DENYLIST_PATTERN = /;|\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|COPY|EXECUTE|TRUNCATE)\b/i;
+
+async function createView(req) {
+  const {
+    tableName, target, domain = null,
+    selectSql, description = '',
+  } = req.body;
+
+  const validationError = validateCreateViewPayload({ tableName, target, selectSql });
+  if (validationError) {
+    return err(400, validationError, req.correlationId);
+  }
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  const pgdClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : null;
+
+  try {
+    await pgcClient.connect();
+    if (pgdClient) await pgdClient.connect();
+
+    // --- Check for duplicate ---
+    const exists = await pgcClient.query(
+      `SELECT id FROM "PGC_Schema" WHERE table_name = $1`,
+      [tableName]
+    );
+    if (exists.rows.length > 0) {
+      return err(409, `Table "${tableName}" already exists in PGC_Schema`, req.correlationId);
+    }
+
+    const dbClient = target === 'pgd' ? pgdClient : pgcClient;
+
+    // --- Create the view ---
+    await dbClient.query(`CREATE OR REPLACE VIEW "${tableName}" AS ${selectSql}`);
+    console.info(`schema: view DDL executed for ${tableName} on ${target.toUpperCase()}`);
+
+    // --- Introspect resulting columns — not caller-declared ---
+    const introspect = await dbClient.query(
+      `SELECT column_name, data_type, udt_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_name = $1
+        ORDER BY ordinal_position`,
+      [tableName]
+    );
+    const columns = introspect.rows.map(c => ({
+      name:     c.column_name,
+      type:     c.data_type === 'USER-DEFINED' ? c.udt_name : c.data_type,
+      nullable: c.is_nullable === 'YES',
+    }));
+
+    // --- Register in PGC_Schema ---
+    const insert = await pgcClient.query(
+      `INSERT INTO "PGC_Schema"
+         (table_name, target, domain, type, select_sql, description, columns, foreign_keys, constraints, triggers)
+       VALUES ($1, $2, $3, 'view', $4, $5, $6, '[]', '[]', '[]')
+       RETURNING id, created_at`,
+      [tableName, target, domain, selectSql, description, JSON.stringify(columns)]
+    );
+    console.info(`schema: PGC_Schema row inserted for view ${tableName}`);
+
+    // --- Register in PGC_TableMap — views are read-only ---
+    await pgcClient.query(
+      `INSERT INTO "PGC_TableMap"
+         (table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete)
+       VALUES ($1, $2, $3, $4, false, false, false)`,
+      [tableName, target, domain, insert.rows[0].id]
+    );
+    console.info(`schema: PGC_TableMap row inserted for view ${tableName}`);
+
+    return ok({
+      success:       true,
+      tableName,
+      target,
+      domain,
+      type:       'view',
+      columns,
+      schemaId:   insert.rows[0].id,
+      createdAt:  insert.rows[0].created_at,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema createView error:', error.message);
+    return err(500, `createView failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgcClient.end();
+    if (pgdClient) await pgdClient.end();
+  }
+}
+
+function validateCreateViewPayload({ tableName, target, selectSql }) {
+  if (!tableName) return 'tableName is required';
+  if (!target)    return 'target is required (pgc or pgd)';
+  if (!selectSql || typeof selectSql !== 'string' || !selectSql.trim()) {
+    return 'selectSql is required';
+  }
+
+  if (!['pgc', 'pgd'].includes(target)) {
+    return `target must be "pgc" or "pgd", got "${target}"`;
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return `Invalid table name "${tableName}" — must match PGC_* or PGD_* pattern`;
+  }
+  if (!SELECT_ONLY_PATTERN.test(selectSql)) {
+    return 'selectSql must be a SELECT or WITH statement';
+  }
+  if (SQL_DENYLIST_PATTERN.test(selectSql)) {
+    return 'selectSql contains a disallowed keyword or statement separator';
+  }
+
+  return null;  // valid
 }
 
 // ---------------------------------------------------------------------------
