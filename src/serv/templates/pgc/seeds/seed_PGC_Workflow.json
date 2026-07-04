@@ -11,7 +11,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 19,
+    "version": 20,
     "steps": [
       {
         "step": "1",
@@ -472,22 +472,22 @@
       {
         "step": "16f",
         "type": "js_transform",
-        "description": "Extract the assistant's configured name, with a generic fallback if the system context row is unavailable.",
-        "output_key": "minds_eye_name",
+        "description": "Extract the assistant's configured name (generic fallback if unavailable), and seed view_proposals/view_feedback defaults for propose_domain_view's first call — on a later loop-back visit (16i 'Request changes' -> 16g) this step does not re-run, so the real accumulated values are left untouched.",
+        "output_key": "minds_eye_name,view_proposals,view_feedback",
         "on_success": "next",
         "on_else": "next",
-        "expression": "(function(){var rows=local_state.minds_eye_context_rows;var row=Array.isArray(rows)&&rows[0];var name=row&&row.content&&row.content.name;return name||'the assistant';})()"
+        "expression": "(function(){var rows=local_state.minds_eye_context_rows;var row=Array.isArray(rows)&&rows[0];var name=row&&row.content&&row.content.name;return {minds_eye_name:name||'the assistant',view_proposals:local_state.view_proposals||[],view_feedback:local_state.view_feedback||''};})()"
       },
       {
         "step": "16g",
         "type": "llm_call",
-        "description": "LEFT BRAIN: Decide whether a view would provide clear value for this domain and propose at most one candidate.",
+        "description": "LEFT BRAIN: Decide whether a view would provide clear value for this domain and propose at most one candidate. Reused for revision passes — 16i's 'Request changes' routes back here directly, with previous_proposal/view_feedback carrying real values from the prior visit.",
         "input": {
           "prompt": "propose_domain_view",
           "domain": "{{proposed_scaffold.domain}}",
           "tables": "{{sorted_tables}}",
-          "previous_proposal": "[]",
-          "view_feedback": ""
+          "previous_proposal": "{{view_proposals}}",
+          "view_feedback": "{{view_feedback}}"
         },
         "output_key": "view_proposals",
         "on_success": "next",
@@ -518,7 +518,7 @@
             "label": "Request changes",
             "value": "view_changes",
             "description": "Describe what to change about the proposed view",
-            "on_select": "16m",
+            "on_select": "16g",
             "output_key": "view_feedback",
             "modal": {
               "title": "Request view changes",
@@ -547,21 +547,6 @@
         "on_success": "next",
         "on_else": "cancel",
         "on_cancel": "cancel"
-      },
-      {
-        "step": "16m",
-        "type": "llm_call",
-        "description": "LEFT BRAIN: Revise the proposed view based on user feedback.",
-        "input": {
-          "prompt": "propose_domain_view",
-          "domain": "{{proposed_scaffold.domain}}",
-          "tables": "{{sorted_tables}}",
-          "previous_proposal": "{{view_proposals}}",
-          "view_feedback": "{{view_feedback}}"
-        },
-        "output_key": "view_proposals",
-        "on_success": "16i",
-        "on_else": "17"
       },
       {
         "step": "16k",
