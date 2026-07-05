@@ -1308,7 +1308,7 @@
       "design_workflow_prompts",
       "design_workflow_dialogs"
     ],
-    "version": 2,
-    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n> blockquote\n```\ncode block\n```\n\nUse **bold** text for section headings -- not every rendering surface supports distinct heading levels, so bold text is the correct substitute for a heading. Always use double-asterisk **bold** (never single-asterisk *bold*).\n\nThis list is not exhaustive -- extend it here as new formatting needs come up rather than adding formatting guidance to individual prompts."
+    "version": 3,
+    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n> blockquote\n```\ncode block\n```\n\nThis list is not exhaustive and other markdown conventions apply. One caution: '#' heading syntax may not render distinctly -- bold text is a safer substitute for section headings. Always use double-asterisk **bold** (never single-asterisk *bold*)."
   }
 ]
