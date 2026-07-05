@@ -332,6 +332,8 @@ export async function handle(req) {
 // handleExplainFollowupButton — "Ask follow-up" clicked on an explain
 // HUMAN_NOTIFICATION. Opens a modal whose submission routes to
 // EXPLAIN_QUERY (not resume_gate). No workflowRunId involved.
+// The source message is left untouched until actual submission
+// (handleExplainViewSubmission) — clicking Cancel must not mutate it.
 // ---------------------------------------------------------------------------
 
 async function handleExplainFollowupButton(buttonValue, payload, correlationId) {
@@ -346,24 +348,6 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
     return err(400, 'explain_followup button value missing queryId', correlationId);
   }
 
-  // Disable the clicked button by replacing the message with static text.
-  // Prevents stale "Ask follow-up" buttons accumulating in the explain thread.
-  // The subsequent /explain response will supply a fresh button.
-  if (channel && threadTs) {
-    const gateText    = payload.message?.text ?? '';
-    const gateContext = gateText ? `\n> _${gateText}_` : '';
-    try {
-      await slack.chat.update({
-        channel,
-        ts:     threadTs,
-        text:   `💬 Follow-up submitted.${gateContext}`,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `💬 Follow-up submitted.${gateContext}` } }],
-      });
-    } catch (error) {
-      console.warn('interactive: explain_followup chat.update failed (non-fatal)', { error: error.message, traceId });
-    }
-  }
-
   if (triggerId) {
     try {
       await slack.views.open({
@@ -372,7 +356,7 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
           type:             'modal',
           callback_id:      'explain_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId }),
+          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId, source: 'followup', originalText: payload.message?.text ?? '' }),
           title:  { type: 'plain_text', text: 'Ask a follow-up' },
           submit: { type: 'plain_text', text: 'Ask' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -407,6 +391,8 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
 // no question has been asked yet, so this opens the same question-collection
 // modal as handleExplainFollowupButton, using this click's own trigger_id.
 // Submission (handleExplainViewSubmission) enqueues EXPLAIN_QUERY as normal.
+// The step-picker is left untouched until actual submission — clicking
+// Cancel must not destroy the other steps' buttons.
 // ---------------------------------------------------------------------------
 
 async function handleExplainStepSelectButton(buttonValue, payload, correlationId) {
@@ -421,20 +407,6 @@ async function handleExplainStepSelectButton(buttonValue, payload, correlationId
     return err(400, 'explain_step_select button value missing queryId', correlationId);
   }
 
-  // Disable the step-picker button list — replace with a static confirmation.
-  if (channel && threadTs) {
-    try {
-      await slack.chat.update({
-        channel,
-        ts:     threadTs,
-        text:   '🔍 Step selected — opening question dialog...',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: '🔍 Step selected — opening question dialog...' } }],
-      });
-    } catch (error) {
-      console.warn('interactive: explain_step_select chat.update failed (non-fatal)', { error: error.message, traceId });
-    }
-  }
-
   if (triggerId) {
     try {
       await slack.views.open({
@@ -443,7 +415,7 @@ async function handleExplainStepSelectButton(buttonValue, payload, correlationId
           type:             'modal',
           callback_id:      'explain_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId }),
+          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId, source: 'stepSelect' }),
           title:  { type: 'plain_text', text: 'Ask about this step' },
           submit: { type: 'plain_text', text: 'Ask' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -854,7 +826,7 @@ async function handleExplainViewSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { queryId, channel, threadTs, traceId: metaTraceId } = meta;
+  const { queryId, channel, threadTs, source, originalText, traceId: metaTraceId } = meta;
   if (!queryId || !channel) {
     console.warn('interactive: explain_followup_modal missing queryId or channel', { meta, traceId });
     return err(400, 'explain_followup_modal private_metadata must contain queryId and channel', traceId);
@@ -872,6 +844,25 @@ async function handleExplainViewSubmission(payload, traceId) {
   if (!inputValue) {
     console.warn('interactive: explain_followup_modal empty submission', { queryId, traceId });
     return { statusCode: 200, body: '' };
+  }
+
+  // Disable the source message (button or step-picker) now that a question has
+  // actually been submitted — deferred from button-click time so Cancel leaves
+  // it untouched. Prevents stale "Ask follow-up"/step-picker buttons accumulating.
+  if (channel && threadTs) {
+    const disableText = source === 'stepSelect'
+      ? '🔍 Step selected — question submitted.'
+      : `💬 Follow-up submitted.${originalText ? `\n> _${originalText}_` : ''}`;
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   disableText,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: disableText } }],
+      });
+    } catch (error) {
+      console.warn('interactive: explain_followup_modal chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
   }
 
   // Echo the user's question to the thread so the full conversation is visible.
