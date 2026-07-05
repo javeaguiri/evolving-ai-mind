@@ -984,6 +984,7 @@
           "domain_schema": "{{domain_schema}}",
           "workflow_mode": "{{workflow_mode}}",
           "workflow_mode_label": "{{workflow_mode_label}}",
+          "special_instructions_message": "{{special_instructions_message}}",
           "user_mode_instructions": "{{user_mode_instructions}}"
         },
         "output_key": "right_brain_research",
@@ -1242,6 +1243,7 @@
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
           "user_design_notes": "{{user_design_notes}}",
+          "special_instructions_message": "{{special_instructions_message}}",
           "user_mode_instructions": "{{user_mode_instructions}}",
           "user_workflow_feedback": "{{user_workflow_feedback}}"
         },
