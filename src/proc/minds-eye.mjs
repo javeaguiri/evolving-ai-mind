@@ -1069,9 +1069,10 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
 // ---------------------------------------------------------------------------
 
 async function loadPrefsAndPrompt() {
-  const [prefResp, sysCtxResp] = await Promise.all([
+  const [prefResp, sysCtxResp, formattingResp] = await Promise.all([
     getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_preferences' }]),
     getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_system_prompt' }]),
+    getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'markdown_formatting_syntax' }]),
   ]);
 
   const prefContent = prefResp.rows?.[0]?.content ?? {};
@@ -1081,7 +1082,12 @@ async function loadPrefsAndPrompt() {
   const baseSystemPrompt = (typeof rawSysPrompt === 'object' ? rawSysPrompt?.text : rawSysPrompt)
     ?? 'You are a helpful AI assistant for evolving-mind-ai. Respond in JSON: { action, params, reasoning } or { action: "respond", message, reasoning }.';
 
-  const systemPrompt = `${baseSystemPrompt}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
+  // Shared with generate_workflow_steps/design_workflow_prompts/design_workflow_dialogs
+  // (PGC_SystemContext.markdown_formatting_syntax, injected there via inject_for) so
+  // formatting guidance has one source of truth instead of drifting copies.
+  const formattingGuidance = formattingResp.rows?.[0]?.content ?? '';
+
+  const systemPrompt = `${baseSystemPrompt}\n\n${formattingGuidance}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
 
   return { prefs, systemPrompt };
 }

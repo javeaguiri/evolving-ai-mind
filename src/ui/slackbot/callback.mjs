@@ -417,7 +417,7 @@ async function postHumanGate(message) {
       .filter(f => f.type === 'reveal')
       .map(buildRevealBlock);
     const blocks = [
-      ...textToBlocks(fallbackText),
+      ...markdownToBlocks(fallbackText),
       ...revealBlocks,
       inputBlock,
       { type: 'actions', elements: actionElements },
@@ -601,21 +601,21 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'typography':
         blocks.push({
-          type: 'section',
-          text: { type: 'mrkdwn', text: `\ud83e\udde0 ${field.value}` },
+          type: 'markdown',
+          text: `\ud83e\udde0 ${field.value}`,
         });
         break;
 
       case 'description_list': {
         // Renders choice gate options as a formatted list above the action buttons.
-        // One line per option: *A* — label: description
+        // One line per option: **A** — label: description
         const lines = (field.items ?? []).map(item =>
-          `*${item.label}* \u2014 ${item.description || item.label}`
+          `**${item.label}** \u2014 ${item.description || item.label}`
         );
         if (lines.length > 0) {
           blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: lines.join('\n') },
+            type: 'markdown',
+            text: lines.join('\n'),
           });
         }
         break;
