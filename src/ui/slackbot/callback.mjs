@@ -388,6 +388,10 @@ async function postExplainStepSelect(message) {
 
 async function postHumanGate(message) {
   const { callback, gate_type: gateType, dialog, workflowRunId, step: stepKey, message_ts, traceId } = message;
+  const gateContextText = workflowRunId
+    ? `runId: ${workflowRunId} | traceId: ${traceId}`
+    : `traceId: ${traceId}`;
+  const gateContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: gateContextText }] };
 
   // text_input gates render an inline input block directly in the message.
   // Slack input blocks work in messages — state.values is populated in the
@@ -448,6 +452,7 @@ async function postHumanGate(message) {
       ...markdownToBlocks(fallbackText),
       ...revealBlocks,
       inputBlock,
+      gateContextBlock,
       { type: 'actions', elements: actionElements },
     ];
     await routeCallback(callback, fallbackText.slice(0, 150), blocks);
@@ -461,6 +466,7 @@ async function postHumanGate(message) {
     const promptText = dialog?.fields?.find(f => f.type === 'typography')?.value ?? 'LLM output recorded.';
     const blocks = [
       ...textToBlocks(promptText),
+      gateContextBlock,
       {
         type:     'actions',
         elements: [{
@@ -488,8 +494,10 @@ async function postHumanGate(message) {
     const gateText = resetActionCount
       ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
       : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+    const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
+      sessionContextBlock,
       {
         type: 'actions',
         elements: [
@@ -531,8 +539,10 @@ async function postHumanGate(message) {
       value:     JSON.stringify({ action: 'minds_eye_action_gate', sessionId, approved: true }),
     };
     if (confirmStyle) approveButton.style = confirmStyle;
+    const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
+      sessionContextBlock,
       {
         type: 'actions',
         elements: [
@@ -552,6 +562,11 @@ async function postHumanGate(message) {
   }
 
   const blocks = dialogToBlocks(dialog, workflowRunId);
+  // Insert the context block before a trailing actions block (matches the
+  // content-then-context-then-actions order used elsewhere in this file),
+  // or append it at the end when the dialog has no actions block.
+  const lastBlockIsActions = blocks.length > 0 && blocks[blocks.length - 1].type === 'actions';
+  blocks.splice(lastBlockIsActions ? blocks.length - 1 : blocks.length, 0, gateContextBlock);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate \u2014 please review and respond.';
 

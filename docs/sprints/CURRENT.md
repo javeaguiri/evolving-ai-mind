@@ -79,9 +79,10 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D1 `markdown` block type in `dialogToBlocks()` | AC5 | ✅ DONE |
 | D2 `format_entity_display` pretty-print formatter | AC5 | ⬜ |
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
-| D4 Button/content separation + preservation audit | AC5 | ⬜ |
+| D4 Button/content separation + preservation audit | AC5 | 🔶 IN PROGRESS — one concrete instance found live and fixed (explain follow-up/step-select eager `chat.update`); rest of the interactive-handler audit still open |
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
 | D6 Novia action-gate messages — plain-language summary + code/SQL/diff behind a reveal | AC5 | ⬜ |
+| D7 `postHumanGate` — runId/traceId context block on every gate | AC5 | ✅ DONE |
 | E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ✅ DONE |
 | E2 `/serv/schema/createView` endpoint | AC6 | ✅ DONE |
 | E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
@@ -316,11 +317,20 @@ Implementation:
 - On any button click or dialog submission, filter out only the `actions` block and call `chat.update` with remaining content blocks intact — never replace the full message.
 - Audit all interactive handlers in `slackbot/` (`handleExplainFollowupButton`, `handleMindsEyeFollowupButton`, all gate response paths).
 - Update `design_workflow_dialogs` prompt to always emit content and buttons as separate blocks.
+- **One concrete instance found live 2026-07-05 and fixed:** user reported the `/explain` follow-up modal's Cancel button appeared to "cancel" something, unlike Novia's own follow-up modal (works fine). Root cause was not modal-close handling at all (`notify_on_close: false` on both modals means Slack never fires `view_closed`, and `handleViewClosed` is a no-op — its comment claiming otherwise was stale). The real bug: `handleExplainFollowupButton` and `handleExplainStepSelectButton` (`interactive.mjs`) fired an eager, unconditional `chat.update` on the *button click* — replacing the source message with "Follow-up submitted"/destroying the step-picker's other buttons — before the modal was even opened, not on actual submission. So Cancel left the original message permanently mangled with zero submission having occurred. Novia's identical modal does no `chat.update` until real submission, hence the asymmetry.
+- **Fix:** removed both eager `chat.update` calls; `source` (`'followup'`/`'stepSelect'`) and `originalText` now travel through `private_metadata` instead, and `handleExplainViewSubmission` performs the message-disable `chat.update` only after a non-empty submission is confirmed. Cancel (or closing the modal without typing anything) now leaves the source message/step-picker untouched, matching Novia's behavior. Fault domain: Execution. No test file exists for `interactive.mjs` (no faithful-copy convention to update here). 385/385 unit tests pass (unchanged — this module has no unit coverage). Not yet deployed or validated live.
+- Rest of the interactive-handler audit (systematic pass over every gate response path per the bullets above) still open.
 
 **D5 — Modal cancel audit + `on_modal_close` dead code removal**
 - Confirm `handleViewClosed` does not enqueue `resume_gate` (gate stays suspended — correct).
 - Remove `on_modal_close` dead code branch from `run-workflow.mjs`.
 - Scan all `PGC_Workflow` rows for `on_modal_close` option declarations and remove them.
+
+**D7 — `postHumanGate` runId/traceId context block — ✅ DONE**
+- Raised 2026-07-05 during a live `create_workflow` run: human gates gave the user no way to look up the run for `/explain <run_id>`, unlike `HUMAN_NOTIFICATION`/`WORKFLOW_ERROR`, which already show `runId | traceId` in a footer context block.
+- Root cause: `postHumanGate` (`callback.mjs:389`) already had `workflowRunId`/`traceId` in scope (threaded through by every HUMAN_GATE producer — `step-executor.mjs`, `run-workflow.mjs`, `minds-eye.mjs`, `design-domain.mjs`) but never built the `contextText` string or rendered a context block, unlike its two siblings. Presentational gap only, no wiring needed. Fault domain: Execution.
+- Fix: every branch of `postHumanGate` (`text_input`, `followup_prompt`, `minds_eye_continue_gate`, `minds_eye_gate`, and the default `dialogToBlocks` path) now appends a `{ type: 'context' }` block — `runId: X | traceId: Y` for workflow-run gates, `sessionId: X | traceId: Y` for the two Novia gate types (which key off `sessionId`, not `workflowRunId`) — positioned immediately before the trailing actions block, matching `postHumanNotification`'s existing content-then-context-then-actions order. The default path inserts the block via `blocks.splice()` before a trailing `actions` block if present, else appends it.
+- `dialogToBlocks` itself untouched — no change needed in `tests/unit/callback.test.mjs`'s synced copy. 385/385 unit tests pass. Not yet deployed or validated live.
 
 **D6 — Novia action-gate messages: plain-language summary + code/SQL/diff behind a reveal**
 - Raised 2026-07-04: when Novia posts a `HUMAN_GATE` for a gated write tool (`drop_table`, `create_view`, `drop_view`, `delete_data`, `propose_schema_fix`, `propose_workflow_fix`), `buildGateText` (`minds-eye.mjs`) currently puts raw material — full step-diff JSON, SQL in a code fence, `JSON.stringify` dumps — directly in the gate's visible message text. The user has to read code to understand what's being proposed.
