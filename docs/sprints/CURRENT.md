@@ -65,7 +65,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ✅ DONE |
 | A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ✅ DONE |
 | G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ✅ DONE |
-| G2 `research_workflow_domain` surfaces raw input format (section headers, collapsed tables) | AC1 | ⬜ |
+| G3 `create_workflow` — mode-specific additional-instructions gate (all modes) | AC1 | ✅ DONE |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
 | C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
 | C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ✅ DONE — delivered as Track E's E6, same scope |
@@ -114,10 +114,16 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - The bulk insert path returns `resp.rows ?? { tableName, inserted: row.length }`. When SERV returns a single-item object instead of an array (one-row bulk), downstream js_transform `.forEach()` / `.map()` calls crash.
 - Fix: `outputValue: Array.isArray(resp.rows) ? resp.rows : resp.rows ? [resp.rows] : []` — always array.
 
-**G2 — `research_workflow_domain` — surface raw input format**
-- When the workflow intent involves parsing copy-pasted spreadsheet data, receipt photos, or other degraded-format input, `research_workflow_domain` must emit a findings entry flagging the raw input format: section headers that double as type/category labels, collapsed columns, headings appearing as individual plain-text lines.
-- This feeds `design_workflow_process` → `design_notes` for the parsing step → `generate_workflow_steps` prompt_draft, completing the chain that A7 starts from the other end.
-- Update `research_workflow_domain` prompt to look for keywords like "paste", "copy", "photo", "receipt", "import", "spreadsheet" in userInput and emit a structured finding about expected input format.
+**G3 — `create_workflow` — mode-specific additional-instructions gate — ✅ DONE**
+- Extended beyond the original Mode-B-only scope during design: fires for **all** of A/B/C/D (read/write/enrich/analyze), skipped only for 'Other' (which already collects a full free-text description via its own step-2 modal). Captures explicit user direction at design time rather than inferring it later from freeform text — complements G2's keyword-based detection (backlog), which remains as the fallback for the 'Other' path.
+- **Step 2a** (existing, unchanged content) now routes to **2b** instead of directly to step 3.
+- **Step 2b** (new `js_transform`) builds `special_instructions_message` and `domain_table_reveals` from `workflow_mode`, `input.domain`, and `domain_schema` (checks for an existing `type: 'view'` row to tailor read-mode wording). Message opens with a shared preamble making clear this is for info not already covered in the original request, then a mode-specific body: **read** — summary rollup + explanation vs. (if a view exists) a formatted report from it; **write** — pivot-table/fuzzy-matching/FK-reference-by-name guidance for pasted/scanned/photographed input; **enrich** — asks for a specific algorithm/formula/function to paste in, and what the result should explain or add; **analyze** — asks whether it is a trend analysis, comparison/breakdown, anomaly/outlier check, or other, plus any algorithm/calculation to paste in. `domain_table_reveals` is one panel per table/view (`button_label` = table name, `content` = `"column (type)"` list) — replaces an inline schema dump with an expandable reference.
+- **Step 2c** (new `condition`) — `local_state.workflow_mode !== 'other'` → `2d`, else → `3`. Condition routing uses **bare step keys** (`"2d"`/`"3"`, not `"step:2d"`) — the only routing field the JSON schema restricts to this form; caught by `workflow-schema.test.mjs` during implementation.
+- **Step 2d** (new `human_gate text_input`) — `message_template: "{{special_instructions_message}}"`, `reveals: "{{domain_table_reveals}}"`, Submit/Skip → `step:3`, Cancel → cancel. `output_key: user_mode_instructions`.
+- `user_mode_instructions` wired into `research_workflow_domain` (step 3, prompt v7→v8) and `design_workflow_process` (step 21, prompt v18→v19) inputs, both instructed to treat it as explicit user direction and (for the process designer) fold it directly into the relevant step's `design_notes`.
+- Pure seed change — no new step types, no `step-executor.mjs`/`run-workflow.mjs` changes. `node --test tests/unit/*.test.mjs` (378/378 pass) + `upsert-workflow.mjs create_workflow` (v74→v75, pre-write simulation guard passed) + `upsert-prompt.mjs` for both prompts. Not yet validated live from Slack.
+
+**G2 — deferred to backlog** — see `docs/backlog.md` ("`research_workflow_domain` — surface raw/degraded input format; open question on where the fix belongs"). Comparing the live `import_budget_spreadsheet` workflow against `add_entity` raised an open design question — whether this signal belongs in `generate_workflow_steps` (G2's original scope) or in `parse_entity_input` — that needs resolving before implementation.
 
 ### Track A — Prompt Instruction Fixes (additions)
 

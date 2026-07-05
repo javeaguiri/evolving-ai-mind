@@ -924,8 +924,54 @@
         "description": "Map selected workflow_mode value to its user-facing description for the research LLM.",
         "output_key": "workflow_mode_label",
         "expression": "(function(){ var labels = { read: 'Read, query, or display existing records', write: 'Add, modify, or change data in the domain', enrich: 'Transform or update existing records', analyze: 'Aggregate, report, or summarize data', other: 'Other (as described by the user)' }; return labels[local_state.workflow_mode] || local_state.workflow_mode; })()",
+        "on_success": "step:2b",
+        "on_else": "step:2b"
+      },
+      {
+        "step": "2b",
+        "type": "js_transform",
+        "description": "Build the mode-specific additional-instructions gate message and per-table column reveals from domain_schema.",
+        "output_key": "special_instructions_message,domain_table_reveals",
+        "expression": "(function(){ var mode = local_state.workflow_mode; var domain = (local_state.input || {}).domain || ''; var schema = local_state.domain_schema || []; var hasView = schema.some(function(s){ return s.type === 'view'; }); var reveals = schema.map(function(s){ var cols = (s.columns || []).map(function(c){ return c.name + ' (' + c.type + ')'; }); var label = s.table_name + (s.type === 'view' ? ' — view' : ''); return { button_label: label, content: cols }; }); var preamble = 'One more thing before I start designing this workflow for the *' + domain + '* domain — this is for anything not already covered in your original request. Expand a table below to see its columns.'; var bodies = { read: 'This workflow will *read* data. Would you like a summary rollup with an explanation, or ' + (hasView ? 'since a view already exists for this domain, just a formatted report from it' : 'a straightforward listing of the records') + '? Any other special instructions?', write: 'This workflow will *write* data. If it will come from a pasted spreadsheet, scanned document, or photo, describe what to expect — e.g. a pivot-style layout, column headers that need fuzzy matching, or values that should resolve to an existing reference table by name.', enrich: 'This workflow will *enrich or transform* existing records. Is there a specific algorithm, formula, or function you want applied — paste it here if so — and what should the result explain or add?', analyze: 'This workflow will *analyze* data. Is this a trend analysis, a comparison or breakdown, an anomaly/outlier check, or something else? If there is a specific algorithm, formula, or calculation to use, paste it here.' }; var body = bodies[mode] || ''; return { special_instructions_message: preamble + '\\n\\n' + body + ' (optional — Skip if none)', domain_table_reveals: reveals }; })()",
+        "on_success": "step:2c",
+        "on_else": "step:2c"
+      },
+      {
+        "step": "2c",
+        "type": "condition",
+        "description": "Skip the additional-instructions gate for Other mode — that mode already collected a full free-text description via its own modal at step 2.",
+        "expression": "local_state.workflow_mode !== 'other'",
+        "on_success": "2d",
+        "on_else": "3"
+      },
+      {
+        "step": "2d",
+        "type": "human_gate",
+        "gate_type": "text_input",
+        "description": "Mode-specific gate asking for additional instructions not already covered in the user's original request, with per-table column reveals for reference.",
+        "message_template": "{{special_instructions_message}}",
+        "reveals": "{{domain_table_reveals}}",
+        "output_key": "user_mode_instructions",
+        "options": [
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "step:3"
+          },
+          {
+            "label": "Skip",
+            "action": "confirm",
+            "on_select": "step:3"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
         "on_success": "step:3",
-        "on_else": "step:3"
+        "on_else": "cancel",
+        "on_cancel": "cancel"
       },
       {
         "step": "3",
@@ -937,7 +983,8 @@
           "workflow_description": "{{input.userInput}}",
           "domain_schema": "{{domain_schema}}",
           "workflow_mode": "{{workflow_mode}}",
-          "workflow_mode_label": "{{workflow_mode_label}}"
+          "workflow_mode_label": "{{workflow_mode_label}}",
+          "user_mode_instructions": "{{user_mode_instructions}}"
         },
         "output_key": "right_brain_research",
         "on_success": "next",
@@ -1195,6 +1242,7 @@
           "right_brain_research": "{{right_brain_research}}",
           "user_preferences": "{{user_preferences}}",
           "user_design_notes": "{{user_design_notes}}",
+          "user_mode_instructions": "{{user_mode_instructions}}",
           "user_workflow_feedback": "{{user_workflow_feedback}}"
         },
         "output_key": "process_spec",
