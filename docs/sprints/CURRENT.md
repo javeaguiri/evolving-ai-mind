@@ -64,6 +64,8 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | A5 Enum constraint rule in `design_workflow_process` + `design_workflow_prompts` | AC1 | ✅ DONE |
 | A6 Reveal content rule in `design_workflow_dialogs` | AC1 | ✅ DONE |
 | A7 Raw data parsing rule in `generate_workflow_steps` | AC1 | ✅ DONE |
+| A8 `analyze_workflow_gaps` Type-4a formatting example + `output_formatting_style` override | AC1 | ✅ DONE |
+| A9 `research_workflow_domain` — `output_formatting_style` preference question (read/analyze modes) | AC1 | ✅ DONE |
 | G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ✅ DONE |
 | G3 `create_workflow` — mode-specific additional-instructions gate (all modes) | AC1 | ✅ DONE |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
@@ -146,6 +148,14 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - Where this pattern applies, prompt_draft should describe the un-pivot transformation in domain-specific language: group label levels adapted to actual domain column names and check constraint values from domain_schema. Avoid generic terms like "heading"/"sub-heading" in prompt_draft — prefer real column names where they can be inferred.
 - Includes a state → city → person example showing pivot source, degraded arrival, and expected flat output. The parsing LLM should use judgment when input doesn't map cleanly; goal is the flattest representation the downstream serv_insert can consume.
 - Language is intentionally softened (should/may/where applicable) since inference must adjust to actual data shape.
+
+**A8/A9 — LLM-for-formatting overcorrection, found live (run 634/635, `generate_budget_report`)**
+- **Symptom:** `create_workflow` built `generate_budget_report` (domain `budgets_expenses`) with an `llm_call` step to format a pre-aggregated view's rows into a report — full currency formatting, sign-based 🟢/🔴 indicators, section grouping by a known enum column, em-dash for nulls. Every rule was fully deterministic given the view's fixed, already-computed output.
+- **Diagnosis via `PGC_Session`/`PGC_SessionEntry` (B2 payoff — full prompt/response trail for run 634, not just truncated `PGC_WorkflowRunStep` summaries):** `research_workflow_domain`'s findings were requirements-level only ("format as currency," "color-code variance") and did not prescribe an implementation mechanism — not the fault. `analyze_workflow_gaps` made the actual Type-4a-vs-deterministic call and got it wrong: its own "junior developer could write this in plain JS" test should have caught this, but formatting-already-aggregated-data-as-prose apparently reads as "content synthesis" without a concrete counter-example. **Fault domain: Instruction.**
+- **A8 — `analyze_workflow_gaps`:** added an explicit example to the Type-4a rule — formatting already-aggregated, fixed-shape data (view/query rows with known columns) using deterministic rules is js_transform-eligible even though the output looks like prose; markdown (headers/bold/bullets) is preferred over manually-aligned plain-text columns, which removes the main reason formatting ever looked LLM-shaped in the first place. Also wired an explicit override: when `user_preferences` contains `output_formatting_style`, honor it exactly (`deterministic` forces js_transform, `intelligent` forces Type 4a) regardless of the heuristic test. `analyze_workflow_gaps` v13→v14.
+- **A9 — `research_workflow_domain`:** added a new `OUTPUT FORMATTING PREFERENCE` section (same conditional-block pattern as the existing FK DEPENDENCY FINDINGS) — for `workflow_mode` `read` or `analyze` where a dedicated formatting/display step will be designed, always add one `output_formatting_style` preference_question (default `deterministic`) so the user can explicitly choose LLM formatting when they genuinely want adaptive/narrative output, rather than the harness silently defaulting to LLM. Scoped to read **and** analyze (the user asked for "read-type workflows"; analyze shares the identical formatting-choice pattern and this bug's workflow was itself in `read` mode despite functionally aggregating/reporting data). `research_workflow_domain` v9→v10.
+- **Cleanup:** `generate_budget_report` (id 350) deleted via `/proc/delete-workflow` (run + run steps + IntentMap row + prompt all removed) rather than hand-patched, per the artifact-patch-shortcut convention — to be recreated via `create_workflow` now that the prompt fix is live.
+- `node --test tests/unit/*.test.mjs` 380/380 pass (seed-only change, no code). Not yet re-validated live — recreate `generate_budget_report` from Slack to confirm the new preference question appears and the resulting workflow uses js_transform + markdown instead of an llm_call.
 
 ---
 
