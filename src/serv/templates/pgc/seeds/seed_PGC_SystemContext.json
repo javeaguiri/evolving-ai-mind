@@ -1308,7 +1308,7 @@
       "design_workflow_prompts",
       "design_workflow_dialogs"
     ],
-    "version": 4,
-    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n> blockquote\n```\ncode block\n```\n---  (horizontal rule -- use as a section divider)\n\nThis list is not exhaustive and other markdown conventions apply. One caution: '#' heading syntax may not render distinctly -- for section headings, use bold text as the heading label, optionally paired with a horizontal rule between sections. Always use double-asterisk **bold** (never single-asterisk *bold*)."
+    "version": 5,
+    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n- [ ] task item / - [x] completed task item\n> blockquote\n```\ncode block\n```\n---  (horizontal rule -- use as a section divider)\n# Heading 1  ## Heading 2  ### Heading 3 (all heading levels render at the same visual size -- use bold text within or instead of a heading when visual size hierarchy matters, not for the heading syntax to \"work\")\n\nMarkdown tables are supported (standard `| col | col |` syntax) -- prefer them over manually-aligned plain-text columns for tabular data.\n\nThis list is not exhaustive and other standard markdown conventions apply. Always use double-asterisk **bold** (never single-asterisk *bold*). Images are not embedded -- avoid image markdown."
   }
 ]
