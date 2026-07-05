@@ -206,6 +206,38 @@ function markdownToBlocks(text, contextText) {
   return blocks;
 }
 
+// groupBlocksForSlack — splits content blocks into per-message groups honoring
+// both the 50-block-per-message limit (maxBlocksPerGroup) and Slack's documented
+// 12,000-character cumulative limit across all `markdown` blocks in one payload
+// (docs.slack.dev/reference/block-kit/blocks/markdown-block). markdownToBlocks
+// caps each individual block at 2800 chars, so no single block can exceed the
+// cumulative limit on its own — a group always makes progress.
+const MARKDOWN_CUMULATIVE_LIMIT = 12000;
+
+function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
+  const groups = [];
+  let current = [];
+  let currentMarkdownChars = 0;
+
+  for (const block of blocks) {
+    const blockMarkdownChars = block.type === 'markdown' ? block.text.length : 0;
+    const exceedsBlockCount   = current.length >= maxBlocksPerGroup;
+    const exceedsMarkdownChars = currentMarkdownChars + blockMarkdownChars > MARKDOWN_CUMULATIVE_LIMIT;
+
+    if (current.length > 0 && (exceedsBlockCount || exceedsMarkdownChars)) {
+      groups.push(current);
+      current = [];
+      currentMarkdownChars = 0;
+    }
+
+    current.push(block);
+    currentMarkdownChars += blockMarkdownChars;
+  }
+
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
 // ---------------------------------------------------------------------------
 // Dev / system ping handlers — unique timing context, always short.
 // Not merged into HUMAN_NOTIFICATION because their context blocks carry
@@ -279,15 +311,11 @@ async function postHumanNotification(message) {
 
   const SLACK_BLOCK_LIMIT = 50;
   const chunkSize = SLACK_BLOCK_LIMIT - suffixBlocks.length;
+  const groups     = groupBlocksForSlack(contentBlocks, chunkSize);
 
-  if (contentBlocks.length <= chunkSize) {
-    await routeCallback(callback, text.slice(0, 150), [...contentBlocks, ...suffixBlocks]);
-  } else {
-    for (let i = 0; i < contentBlocks.length; i += chunkSize) {
-      const chunk = contentBlocks.slice(i, i + chunkSize);
-      const isLast = i + chunkSize >= contentBlocks.length;
-      await routeCallback(callback, text.slice(0, 150), isLast ? [...chunk, ...suffixBlocks] : chunk);
-    }
+  for (let i = 0; i < groups.length; i++) {
+    const isLast = i === groups.length - 1;
+    await routeCallback(callback, text.slice(0, 150), isLast ? [...groups[i], ...suffixBlocks] : groups[i]);
   }
 
   console.info('callback: HUMAN_NOTIFICATION posted', {

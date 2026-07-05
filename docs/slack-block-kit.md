@@ -12,7 +12,7 @@
 
 Block Kit is built from three layers:
 
-- **Blocks** — visual layout components (`section`, `actions`, `input`, `context`, `divider`, `header`, `image`, `markdown`)
+- **Blocks** — visual layout components (`section`, `actions`, `input`, `context`, `divider`, `header`, `image`, `markdown`, `carousel`)
 - **Block elements** — interactive components inside blocks (`button`, `plain_text_input`, `static_select`, `radio_buttons`, `overflow`)
 - **Composition objects** — reusable text and option structures (`plain_text`, `mrkdwn`, `option`, `confirm`)
 
@@ -735,7 +735,13 @@ fires. Fires a `block_actions` event with the selected option's `value`.
 
 `type: "markdown"` renders standard CommonMark-flavored markdown directly in a Slack message. Unlike `mrkdwn` (Slack's proprietary syntax), the `markdown` block type accepts the syntax LLMs naturally produce — `**bold**` instead of `*bold*`, `~~strikethrough~~`, fenced code blocks, tables, and standard link syntax.
 
-**Used in evolving-mind-ai:** Novia (minds-eye agent) replies set `format: 'markdown'` on the `HUMAN_NOTIFICATION` callback payload, which routes to `markdownToBlocks()` in `callback.mjs` and emits `{ type: 'markdown', text }` blocks.
+**Used in evolving-mind-ai:** Novia (minds-eye agent) replies always set `format: 'markdown'` on the `HUMAN_NOTIFICATION` callback payload; `notify` steps in generated workflows (Sprint 7 Track D1) do the same via `run-workflow.mjs`. Both route to `markdownToBlocks()` in `callback.mjs` and emit `{ type: 'markdown', text }` blocks. `dialogToBlocks()`'s `typography` and `description_list` fields also emit `markdown` blocks (Sprint 7 D1), as does `postHumanGate`'s `text_input` branch.
+
+**Supported syntax** (verified against docs.slack.dev/reference/block-kit/blocks/markdown-block, 2026-07-05): bold, italic, strikethrough, inline code, bold+italic, links, unordered/ordered lists, task lists (`- [ ]` / `- [x]`), **headers at all levels (`#`–`######`)**, block quotes, fenced code blocks with syntax highlighting, dividers (`---`), and standard markdown tables. Only quirk: *"all header levels are rendered at the same size"* — headers work, they just have no visual size hierarchy; use bold within/instead of a header when size hierarchy matters. Images are **not embedded** — rendered as a link instead.
+
+**Limit:** the cumulative limit for all `markdown` blocks in a single payload is **12,000 characters** (separate from the 2800-char-per-block chunking already used by `markdownToBlocks`, and separate from the 50-block-per-message limit). `postHumanNotification`'s `groupBlocksForSlack()` helper (Sprint 7) splits content into multiple Slack messages when either the block-count limit or this cumulative markdown-char limit would be exceeded — added because a long Novia reply or generated report could otherwise silently fail to post.
+
+**Architecture note:** `/proc` and `/serv` are the transport-agnostic layers of this system — prompts and system context that describe formatting (e.g. `PGC_SystemContext.markdown_formatting_syntax`) describe *standard markdown* generically, with no mention of Slack. Translating that markdown to whatever a specific surface needs is `/ui/slackbot`'s job (`callback.mjs`). Since Slack's `markdown` block already accepts near-full CommonMark natively, that translation is currently a pass-through (`markdownToBlocks` sends the text as-is) — no per-syntax-element conversion is needed today.
 
 **Not available in Block Kit Builder** — test only in a live workspace.
 
@@ -769,6 +775,10 @@ fires. Fires a `block_actions` event with the selected option's `value`.
 | Link | `<url\|text>` | `[text](url)` |
 | Blockquote | `>text` | `> text` |
 | Table | Not supported | Standard markdown table |
+| Headers | Not supported (use bold instead) | `#`–`######` (all render at the same size) |
+| Task list | Not supported | `- [ ] item` / `- [x] item` |
+| Divider | Not supported inline (use a `divider` block) | `---` |
+| Image | `<url\|text>` as a link only | Not embedded — rendered as a link |
 
 ---
 
@@ -914,6 +924,72 @@ can mix `text`, `link`, and `emoji` inline — the full rich_text inline element
 - `details` is the correct field for any list content. `output` is plain prose only.
 - Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
 - `rich_text_list` supports `style: "bullet"` or `style: "ordered"` and optional `indent` (0-based nesting depth).
+
+### `carousel`
+
+A horizontally-scrollable row of `card` elements — image, title, subtitle, body text, and
+action buttons per card. Suited to a set of source links or reference items alongside a
+`markdown` body block. **Not yet used in evolving-mind-ai** — documented here from a
+user-provided example for future reference; not independently verified against official docs
+the way `task_card` and the `markdown` block limits above were.
+
+#### Fields (per `card` element)
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | `"card"` | Element type discriminator |
+| `block_id` | string | Unique id for the card |
+| `hero_image` | image object | `{ type: "image", image_url, alt_text }` — shown at the top of the card |
+| `title` | text object | Typically `{ type: "mrkdwn", text, verbatim }` |
+| `subtitle` | text object | Same shape as `title` — shown below it |
+| `body` | text object | Same shape — main card text |
+| `actions` | array of `button` | Standard button elements; a `url` field opens a link directly with no `action_id` round-trip needed |
+
+#### Example — three source cards alongside a markdown body
+
+```json
+{
+  "blocks": [
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "Your deep dive is ready 🌕" }
+    },
+    {
+      "type": "markdown",
+      "text": "## Report Title\n\nBody content with **bold**, tables, and lists.\n\n> A summary blockquote."
+    },
+    {
+      "type": "carousel",
+      "elements": [
+        {
+          "type": "card",
+          "block_id": "source-1",
+          "hero_image": { "type": "image", "image_url": "https://example.com/image.jpg", "alt_text": "..." },
+          "title": { "type": "mrkdwn", "text": "Source Title", "verbatim": false },
+          "subtitle": { "type": "mrkdwn", "text": "example.com", "verbatim": false },
+          "body": { "type": "mrkdwn", "text": "One-line summary of the source.", "verbatim": false },
+          "actions": [
+            {
+              "type": "button",
+              "text": { "type": "plain_text", "text": "Read", "emoji": false },
+              "url": "https://example.com/article",
+              "action_id": "read_source_1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [{ "type": "mrkdwn", "text": "This report was generated by AI. Verify important details before sharing or taking action." }]
+    }
+  ]
+}
+```
+
+Note the mixed pattern: a `section`/`mrkdwn` teaser, a `markdown` body block for the rich
+content, a `carousel` for reference cards, and a `context` disclaimer footer — all in one
+message.
 
 ---
 ## Overflow menu (hamburger expand icon)

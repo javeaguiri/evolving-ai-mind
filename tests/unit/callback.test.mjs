@@ -99,6 +99,34 @@ function markdownToBlocks(text, contextText) {
   return blocks;
 }
 
+// ── Faithful copy of groupBlocksForSlack from callback.mjs ──────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:groupBlocksForSlack
+const MARKDOWN_CUMULATIVE_LIMIT = 12000;
+
+function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
+  const groups = [];
+  let current = [];
+  let currentMarkdownChars = 0;
+
+  for (const block of blocks) {
+    const blockMarkdownChars = block.type === 'markdown' ? block.text.length : 0;
+    const exceedsBlockCount   = current.length >= maxBlocksPerGroup;
+    const exceedsMarkdownChars = currentMarkdownChars + blockMarkdownChars > MARKDOWN_CUMULATIVE_LIMIT;
+
+    if (current.length > 0 && (exceedsBlockCount || exceedsMarkdownChars)) {
+      groups.push(current);
+      current = [];
+      currentMarkdownChars = 0;
+    }
+
+    current.push(block);
+    currentMarkdownChars += blockMarkdownChars;
+  }
+
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
 // ── Faithful copy of buildRevealBlock from callback.mjs ─────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
 function buildRevealBlock(field) {
@@ -917,5 +945,63 @@ describe('dialogToBlocks — mixed fields', () => {
     const blocks = dialogToBlocks(dialog, 1);
     assert.equal(blocks.length, 3);
     assert.ok(blocks[1].text.includes('Warning'));
+  });
+});
+
+describe('groupBlocksForSlack', () => {
+  // Regression: Slack's markdown block enforces a 12,000-character cumulative
+  // limit across all markdown blocks in one payload (docs.slack.dev/reference/
+  // block-kit/blocks/markdown-block) — postHumanNotification previously only
+  // capped block *count* (50/message), with no cap on cumulative markdown chars.
+
+  it('keeps blocks in one group when under both limits', () => {
+    const blocks = [
+      { type: 'markdown', text: 'a'.repeat(1000) },
+      { type: 'markdown', text: 'b'.repeat(1000) },
+    ];
+    const groups = groupBlocksForSlack(blocks, 50);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].length, 2);
+  });
+
+  it('splits into a new group once cumulative markdown chars would exceed 12000', () => {
+    const blocks = [
+      { type: 'markdown', text: 'a'.repeat(2800) },
+      { type: 'markdown', text: 'b'.repeat(2800) },
+      { type: 'markdown', text: 'c'.repeat(2800) },
+      { type: 'markdown', text: 'd'.repeat(2800) },
+      { type: 'markdown', text: 'e'.repeat(2800) }, // 5th block pushes cumulative to 14000 > 12000
+    ];
+    const groups = groupBlocksForSlack(blocks, 50);
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].length, 4);
+    assert.equal(groups[1].length, 1);
+    assert.equal(groups[1][0].text, 'e'.repeat(2800));
+  });
+
+  it('non-markdown blocks (e.g. context) do not count toward the cumulative char limit', () => {
+    const blocks = [
+      { type: 'markdown', text: 'a'.repeat(2800) },
+      { type: 'markdown', text: 'b'.repeat(2800) },
+      { type: 'markdown', text: 'c'.repeat(2800) },
+      { type: 'markdown', text: 'd'.repeat(2800) },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'irrelevant' }] },
+    ];
+    const groups = groupBlocksForSlack(blocks, 50);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].length, 5);
+  });
+
+  it('splits into a new group once block count would exceed maxBlocksPerGroup', () => {
+    const blocks = Array.from({ length: 5 }, (_, i) => ({ type: 'markdown', text: `block ${i}` }));
+    const groups = groupBlocksForSlack(blocks, 2);
+    assert.equal(groups.length, 3);
+    assert.equal(groups[0].length, 2);
+    assert.equal(groups[1].length, 2);
+    assert.equal(groups[2].length, 1);
+  });
+
+  it('empty input produces no groups', () => {
+    assert.deepEqual(groupBlocksForSlack([], 50), []);
   });
 });
