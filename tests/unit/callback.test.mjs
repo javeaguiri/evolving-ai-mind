@@ -62,6 +62,39 @@ function textToBlocks(text, contextText) {
   return blocks;
 }
 
+// ── Faithful copy of buildRevealBlock from callback.mjs ─────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
+function buildRevealBlock(field) {
+  const revealBlock = {
+    type:    'task_card',
+    task_id: 'test-task-id',
+    title:   field.button_label,
+    status:  'complete',
+  };
+  if (Array.isArray(field.content)) {
+    revealBlock.details = {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_list',
+        style:    'bullet',
+        elements: field.content.map(item => ({
+          type:     'rich_text_section',
+          elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
+        })),
+      }],
+    };
+  } else if (field.content) {
+    revealBlock.output = {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_section',
+        elements: [{ type: 'text', text: field.content }],
+      }],
+    };
+  }
+  return revealBlock;
+}
+
 // ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:dialogToBlocks
 function dialogToBlocks(dialog, workflowRunId) {
@@ -135,34 +168,7 @@ function dialogToBlocks(dialog, workflowRunId) {
         break;
 
       case 'reveal': {
-        const revealBlock = {
-          type:    'task_card',
-          task_id: 'test-task-id',
-          title:   field.button_label,
-          status:  'complete',
-        };
-        if (Array.isArray(field.content)) {
-          revealBlock.details = {
-            type:     'rich_text',
-            elements: [{
-              type:     'rich_text_list',
-              style:    'bullet',
-              elements: field.content.map(item => ({
-                type:     'rich_text_section',
-                elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
-              })),
-            }],
-          };
-        } else if (field.content) {
-          revealBlock.output = {
-            type:     'rich_text',
-            elements: [{
-              type:     'rich_text_section',
-              elements: [{ type: 'text', text: field.content }],
-            }],
-          };
-        }
-        blocks.push(revealBlock);
+        blocks.push(buildRevealBlock(field));
         break;
       }
 
@@ -237,6 +243,47 @@ function dialogToBlocks(dialog, workflowRunId) {
   }
 
   return blocks;
+}
+
+// ── Faithful copy of the pure block-assembly slice of postHumanGate's
+// text_input branch from callback.mjs (excludes the routeCallback Slack call).
+// Keep in sync with src/ui/slackbot/callback.mjs:postHumanGate (text_input branch)
+function textInputGateBlocks(dialog, workflowRunId, stepKey) {
+  const textboxField = dialog?.fields?.find(f => f.type === 'textbox') ?? {};
+  const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
+    ?? 'Please enter your response.';
+  const isMultiline  = textboxField.multiline ?? false;
+  const inputBlock   = {
+    type:     'input',
+    block_id: `text_input_block_${workflowRunId}_${stepKey ?? 'x'}`,
+    element:  {
+      type:      'plain_text_input',
+      action_id: 'text_input_value',
+      multiline: isMultiline,
+      ...(textboxField.placeholder
+        ? { placeholder: { type: 'plain_text', text: textboxField.placeholder } }
+        : {}),
+    },
+    label: { type: 'plain_text', text: textboxField.label ?? 'Your input' },
+  };
+  const actionsField = dialog?.fields?.find(f => f.type === 'actions');
+  const actionElements = actionsField
+    ? (actionsField.buttons ?? []).map((btn, i) => ({
+        type:      'button',
+        text:      { type: 'plain_text', text: btn.label },
+        action_id: `workflow_action_${btn.action || i}_${i}`,
+        value:     JSON.stringify({ workflowRunId, action: btn.action }),
+      }))
+    : [];
+  const revealBlocks = (dialog?.fields ?? [])
+    .filter(f => f.type === 'reveal')
+    .map(buildRevealBlock);
+  return [
+    ...textToBlocks(fallbackText),
+    ...revealBlocks,
+    inputBlock,
+    { type: 'actions', elements: actionElements },
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +571,48 @@ describe('dialogToBlocks — textbox', () => {
     const field = { type: 'textbox', label: 'Enter text' };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
     assert.equal(blocks.length, 0);
+  });
+});
+
+describe('postHumanGate text_input branch — reveal fields', () => {
+  // Regression test: text_input gates build their blocks independently of
+  // dialogToBlocks (a separate early-return branch in postHumanGate), so a
+  // reveal field attached by buildDialog (step-executor.mjs) was silently
+  // dropped instead of rendered as a task_card. Sprint 7 Track G3, run 632.
+  it('renders reveal fields as task_card blocks between the message and the input block', () => {
+    const dialog = {
+      fields: [
+        { type: 'typography', value: 'Any special instructions?' },
+        { type: 'reveal', button_label: 'PGD_Budgets', content: ['category_id (integer)', 'amount (numeric)'] },
+        { type: 'reveal', button_label: 'PGD_SpendingCategories', content: ['name (text)'] },
+        { type: 'textbox', label: 'Your input' },
+        { type: 'actions', buttons: [{ label: 'Submit', action: 'confirm' }, { label: 'Skip', action: 'confirm' }] },
+      ],
+    };
+    const blocks = textInputGateBlocks(dialog, 632, '2d');
+
+    const taskCards = blocks.filter(b => b.type === 'task_card');
+    assert.equal(taskCards.length, 2);
+    assert.equal(taskCards[0].title, 'PGD_Budgets');
+    assert.equal(taskCards[1].title, 'PGD_SpendingCategories');
+
+    const inputIndex = blocks.findIndex(b => b.type === 'input');
+    assert.ok(inputIndex > 0, 'input block must be present');
+    assert.ok(
+      taskCards.every(card => blocks.indexOf(card) < inputIndex),
+      'reveal task_cards must render before the input block',
+    );
+  });
+
+  it('produces no task_card blocks when no reveal field is present', () => {
+    const dialog = {
+      fields: [
+        { type: 'typography', value: 'Anything else?' },
+        { type: 'textbox', label: 'Your input' },
+      ],
+    };
+    const blocks = textInputGateBlocks(dialog, 9, '9');
+    assert.equal(blocks.filter(b => b.type === 'task_card').length, 0);
   });
 });
 

@@ -411,8 +411,14 @@ async function postHumanGate(message) {
             value:     JSON.stringify({ workflowRunId, action: 'cancel', gateType: 'text_input' }),
           },
         ];
+    // reveal fields (e.g. per-table column reference) — text_input builds its own
+    // blocks independently of dialogToBlocks, so they must be rendered here too.
+    const revealBlocks = (dialog?.fields ?? [])
+      .filter(f => f.type === 'reveal')
+      .map(buildRevealBlock);
     const blocks = [
       ...textToBlocks(fallbackText),
+      ...revealBlocks,
       inputBlock,
       { type: 'actions', elements: actionElements },
     ];
@@ -551,6 +557,41 @@ async function postHumanGate(message) {
 // @param {number} workflowRunId    Encoded into button values
 // @returns {Array}                 Slack Block Kit blocks array
 // ---------------------------------------------------------------------------
+
+// buildRevealBlock — task_card Block Kit element for a reveal/reveals field.
+// content is a string → plain text in output; array of strings → bulleted list in details.
+// Shared by dialogToBlocks (all non-text_input gate types) and postHumanGate's
+// text_input branch, which builds its blocks independently of dialogToBlocks.
+function buildRevealBlock(field) {
+  const revealBlock = {
+    type:    'task_card',
+    task_id: randomUUID(),
+    title:   field.button_label,
+    status:  'complete',
+  };
+  if (Array.isArray(field.content)) {
+    revealBlock.details = {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_list',
+        style:    'bullet',
+        elements: field.content.map(item => ({
+          type:     'rich_text_section',
+          elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
+        })),
+      }],
+    };
+  } else if (field.content) {
+    revealBlock.output = {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_section',
+        elements: [{ type: 'text', text: field.content }],
+      }],
+    };
+  }
+  return revealBlock;
+}
 
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];
@@ -697,35 +738,7 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'reveal': {
         // Inline task_card shown above the gate buttons — no click required.
-        // content is a string → plain text in output; array of strings → bulleted list in details.
-        const revealBlock = {
-          type:    'task_card',
-          task_id: randomUUID(),
-          title:   field.button_label,
-          status:  'complete',
-        };
-        if (Array.isArray(field.content)) {
-          revealBlock.details = {
-            type:     'rich_text',
-            elements: [{
-              type:     'rich_text_list',
-              style:    'bullet',
-              elements: field.content.map(item => ({
-                type:     'rich_text_section',
-                elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
-              })),
-            }],
-          };
-        } else if (field.content) {
-          revealBlock.output = {
-            type:     'rich_text',
-            elements: [{
-              type:     'rich_text_section',
-              elements: [{ type: 'text', text: field.content }],
-            }],
-          };
-        }
-        blocks.push(revealBlock);
+        blocks.push(buildRevealBlock(field));
         break;
       }
 
