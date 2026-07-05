@@ -62,6 +62,43 @@ function textToBlocks(text, contextText) {
   return blocks;
 }
 
+// ── Faithful copy of markdownToBlocks from callback.mjs ─────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:markdownToBlocks
+function markdownToBlocks(text, contextText) {
+  const BLOCK_CHAR_LIMIT = 2800;
+  const blocks = [];
+
+  const segments = text.split(/(```[\s\S]*?```)/);
+
+  for (const seg of segments) {
+    if (seg.startsWith('```')) {
+      const block = seg.length > BLOCK_CHAR_LIMIT
+        ? `${seg.slice(0, BLOCK_CHAR_LIMIT - 7)}...\n\`\`\``
+        : seg;
+      blocks.push({ type: 'markdown', text: block });
+    } else {
+      const paragraphs = seg.split(/\n\n+/);
+      let chunk = '';
+      for (const para of paragraphs) {
+        if (!para.trim()) continue;
+        const candidate = chunk ? `${chunk}\n\n${para}` : para;
+        if (candidate.length > BLOCK_CHAR_LIMIT) {
+          if (chunk) blocks.push({ type: 'markdown', text: chunk });
+          chunk = para.length > BLOCK_CHAR_LIMIT ? `${para.slice(0, BLOCK_CHAR_LIMIT - 3)}...` : para;
+        } else {
+          chunk = candidate;
+        }
+      }
+      if (chunk) blocks.push({ type: 'markdown', text: chunk });
+    }
+  }
+
+  if (contextText) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
+  }
+  return blocks;
+}
+
 // ── Faithful copy of buildRevealBlock from callback.mjs ─────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
 function buildRevealBlock(field) {
@@ -105,19 +142,19 @@ function dialogToBlocks(dialog, workflowRunId) {
 
       case 'typography':
         blocks.push({
-          type: 'section',
-          text: { type: 'mrkdwn', text: `\ud83e\udde0 ${field.value}` },
+          type: 'markdown',
+          text: `\ud83e\udde0 ${field.value}`,
         });
         break;
 
       case 'description_list': {
         const lines = (field.items ?? []).map(item =>
-          `*${item.label}* \u2014 ${item.description || item.label}`
+          `**${item.label}** \u2014 ${item.description || item.label}`
         );
         if (lines.length > 0) {
           blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: lines.join('\n') },
+            type: 'markdown',
+            text: lines.join('\n'),
           });
         }
         break;
@@ -279,7 +316,7 @@ function textInputGateBlocks(dialog, workflowRunId, stepKey) {
     .filter(f => f.type === 'reveal')
     .map(buildRevealBlock);
   return [
-    ...textToBlocks(fallbackText),
+    ...markdownToBlocks(fallbackText),
     ...revealBlocks,
     inputBlock,
     { type: 'actions', elements: actionElements },
@@ -399,18 +436,18 @@ describe('dialogToBlocks — null / empty dialog', () => {
 });
 
 describe('dialogToBlocks — typography', () => {
-  it('renders as a mrkdwn section with brain emoji prefix', () => {
+  it('renders as a markdown block with brain emoji prefix', () => {
     const blocks = dialogToBlocks({ fields: [{ type: 'typography', value: 'Plan ready.' }] }, 1);
     assert.equal(blocks.length, 1);
-    assert.equal(blocks[0].type, 'section');
-    assert.ok(blocks[0].text.text.includes('Plan ready.'));
+    assert.equal(blocks[0].type, 'markdown');
+    assert.ok(blocks[0].text.includes('Plan ready.'));
     // emoji present (rendered as unicode surrogate pair in JS source)
-    assert.ok(blocks[0].text.text.startsWith('\ud83e\udde0'));
+    assert.ok(blocks[0].text.startsWith('\ud83e\udde0'));
   });
 });
 
 describe('dialogToBlocks — description_list', () => {
-  it('renders items as *label* — description lines', () => {
+  it('renders items as **label** — description lines', () => {
     const field = {
       type: 'description_list',
       items: [
@@ -420,15 +457,16 @@ describe('dialogToBlocks — description_list', () => {
     };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
     assert.equal(blocks.length, 1);
-    assert.ok(blocks[0].text.text.includes('*A*'));
-    assert.ok(blocks[0].text.text.includes('Option Alpha'));
-    assert.ok(blocks[0].text.text.includes('*B*'));
+    assert.equal(blocks[0].type, 'markdown');
+    assert.ok(blocks[0].text.includes('**A**'));
+    assert.ok(blocks[0].text.includes('Option Alpha'));
+    assert.ok(blocks[0].text.includes('**B**'));
   });
 
   it('falls back to label when description absent', () => {
     const field = { type: 'description_list', items: [{ label: 'X' }] };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(blocks[0].text.text.includes('*X*'));
+    assert.ok(blocks[0].text.includes('**X**'));
   });
 
   it('empty items list produces no block', () => {
@@ -855,7 +893,7 @@ describe('dialogToBlocks — mixed fields', () => {
 
     // 1 typography + 1 label + 2 list items + 1 actions = 5 blocks
     assert.equal(blocks.length, 5);
-    assert.equal(blocks[0].type, 'section');  // typography
+    assert.equal(blocks[0].type, 'markdown');  // typography
     assert.equal(blocks[1].type, 'section');  // label
     assert.equal(blocks[2].type, 'section');  // PGD_Recipes — no accessory
     assert.equal(blocks[2].accessory, undefined);
@@ -878,6 +916,6 @@ describe('dialogToBlocks — mixed fields', () => {
     };
     const blocks = dialogToBlocks(dialog, 1);
     assert.equal(blocks.length, 3);
-    assert.ok(blocks[1].text.text.includes('Warning'));
+    assert.ok(blocks[1].text.includes('Warning'));
   });
 });

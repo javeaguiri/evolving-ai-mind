@@ -409,6 +409,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       type:          step.notify_type ?? 'HUMAN_NOTIFICATION',
       workflowRunId: run.id,
       message:       result.notifyMessage,
+      format:        'markdown',
       traceId,
     });
   }
