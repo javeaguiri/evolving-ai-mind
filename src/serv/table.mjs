@@ -345,11 +345,17 @@ async function insertRow(req) {
 
   // Accept either a single row object or an array of rows for bulk insert.
   // Bulk path: all rows must have the same column set (derived from the first row).
-  const isBatch = Array.isArray(rows) && rows.length > 0;
+  const isBatch = Array.isArray(rows);
 
   if (!tableName) return err(400, 'tableName is required', req.correlationId);
 
   if (isBatch) {
+    // An empty batch is a valid no-op (e.g. "insert whichever of these rows
+    // are missing" resolving to zero rows) — not an error, and not a single-row
+    // insert. Must be checked before rows[0]-dependent validation below.
+    if (rows.length === 0) {
+      return ok({ success: true, tableName, rows: [], correlationId: req.correlationId }, req.correlationId);
+    }
     if (rows.some(r => !r || typeof r !== 'object' || Array.isArray(r))) {
       return err(400, 'rows must be an array of non-null objects', req.correlationId);
     }
