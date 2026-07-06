@@ -113,7 +113,7 @@ being written — aliases are not assumed from LLM output alone.
 | domain | text UNIQUE | e.g. "recipes" |
 | aliases | jsonb | e.g. ["recipe", "cooking"] — human-confirmed at domain creation |
 | description | text | |
-| commands | jsonb | Array of command definitions with examples |
+| commands | jsonb | Array of `{ syntax, description, workflow_id? }`. `workflow_id` (added Sprint 7 Track F3) is set on commands written by `create_workflow`'s registration step so `delete-workflow.mjs` can prune the matching entry when that workflow is deleted — falls back to matching on `description` for older entries with no `workflow_id`. The 5 generic CRUD command descriptions (`create_domain` step 18) append a multi-entity note listing real entity names whenever a domain has more than one root table (Track F2) — see `docs/arch-create-domain.md`. |
 | embedding | vector | ✦ pplx-embed-v1-4b (2560-dim) of `domain + description + aliases`. Populated automatically by `insertRow` on domain creation — no backfill needed. Used by `semanticDomainMatch()` in `classify-intent-tiers.mjs`. PGD embedding columns use `vector(2560)`. **Changing the embedding model dimension requires updates in two places: `EMBEDDING_DIMENSION` in `embed-client.mjs` AND the `embedding_config` PGC_SystemContext row.** |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |

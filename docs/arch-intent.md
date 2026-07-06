@@ -26,11 +26,15 @@ and Pass 1c into a single **domain-workflow-aware Pass 2** that checks registere
 workflows before falling back to CRUD verb detection.
 
 **Session 17 — generic CRUD workflows:** `create_domain` no longer generates
-domain-specific workflows (`add_recipes`, `list_recipes`, etc.). It produces five
-`PGC_IntentMap` rows per domain using `*_entity` intent categories that route to
+domain-specific workflows (`add_recipes`, `list_recipes`, etc.). It routes to
 five universal generic workflows (`add_entity`, `list_entity`, `get_entity`,
-`update_entity`, `delete_entity`) with `domain: null` in `PGC_Workflow`. This
-eliminated schema drift and made child-row insertion generically possible.
+`update_entity`, `delete_entity`) with `domain: null` in `PGC_Workflow`, using
+`*_entity` intent categories in `PGC_IntentMap`. This eliminated schema drift and
+made child-row insertion generically possible. **Sprint 7 Track F1b:** each of
+the 5 actions is now written as one `PGC_IntentMap` row per invocation phrase
+(3 phrases each = 15 rows per domain, `source: 'auto'`) rather than one row per
+action with a pipe-joined pattern — see `PGC_IntentMap` schema below and
+`docs/arch-create-domain.md` step 18/21.
 
 **Session 18 — Phase B pre-pass:** A new pre-pass runs before Pass 1 and detects
 `PGC_*/PGD_*` table-name prefixes in user input. This is the **sole trigger** for
@@ -186,7 +190,7 @@ table operations. When these appear in domain input (no `PGC_/PGD_` prefix), the
 to the workflow path — `handoff()` parses them from `userInput` and passes them as
 `input.updates` and `input.id` for the workflow steps to consume.
 
-**Generic `*_entity` workflows (Session 17):** `create_domain` registers five
+**Generic `*_entity` workflows (Session 17):** `create_domain` registers
 `PGC_IntentMap` rows per domain with `*_entity` intent categories pointing to five
 universal `PGC_Workflow` rows (`domain: null`). These replace domain-specific
 workflows (`add_recipes`, `list_recipes`, etc.), which are no longer generated.
@@ -292,10 +296,13 @@ Accented characters (U+00C0–U+024F) count as word characters so boundaries do 
 accented Spanish words. Tiebreaker changed from lowest DB id to earliest keyword position in input
 (verb-first semantics), with DB id as secondary.
 
-**`PGC_IntentMap` has no `workflow_id` column.** This was removed as a structural
-error — there is no genuine FK relationship between the intent map and workflow
-table. `handoff()` looks up the workflow by name from pre-loaded rows. `action_type`
-alone is the routing signal.
+**`handoff()` does not use `PGC_IntentMap.workflow_id` for routing.** The column
+exists (Sprint 7 Track F1/F3 — see `PGC_IntentMap` schema below) and is set on
+rows written by `create_workflow`, used only so `delete-workflow.mjs` can find
+and remove every phrase row belonging to a deleted workflow via one FK-matched
+`deleteRows` call. `handoff()` itself looks up the workflow by name from
+pre-loaded `PGC_Workflow` rows — `action_type` + `intent_category` are the
+routing signal, not the FK.
 
 #### matchIntentMap sort order — FINAL
 
@@ -327,7 +334,7 @@ Model selection is per-prompt row in `PGC_Prompt.model`.
 - Every classified intent resolves to a `PGC_Workflow` row or a known entry point
 - The preprocessor has no `PGC_WorkflowRun` row of its own — it is a routing
   function, not a workflow. It never touches the execution stack.
-- `PGC_IntentMap` and `PGC_Workflow` are structurally independent — no FK between them
+- `PGC_IntentMap.workflow_id` exists as a nullable FK (for `delete-workflow.mjs` cleanup) but is never read for routing — `handoff()` always resolves the target workflow by name
 
 ---
 
@@ -403,19 +410,23 @@ action_type === 'crud' AND no ad_hoc_step (Tier 2 crud path — no root table re
 
 ##### PGC_IntentMap schema
 
-Full column definitions: `docs/arch-data.md` Section 4.3.
+Full column definitions: `docs/arch-data.md` Section 4.3.4 — do not duplicate
+column details here; that doc is authoritative. Summary relevant to the
+classification pipeline: `pattern` (regex, tested case-insensitive against
+lowercased input), `intent_category`, `action_type` (`crud`/`workflow`/`heavy_lift`
+— the routing signal), `workflow_id` (nullable FK, write-side cleanup only, never
+read by `handoff()` or `matchIntentMap()`), `source` (`user`/`auto`/`name`/`NULL`
+— provenance of the phrase, not used for matching).
 
-```
-id              serial primary key
-pattern         text not null        — regex pattern, tested case-insensitive
-intent_category text not null        — e.g. "add_recipes", "help", "create_domain"
-action_type     text not null        — CHECK: 'crud' | 'workflow' | 'heavy_lift'
-created_at      timestamptz
-updated_at      timestamptz
-```
-
-**No `workflow_id` column.** Removed permanently — there is no structural
-relationship between `PGC_IntentMap` and `PGC_Workflow`. Do not add it back.
+**One row per invocation phrase (Sprint 7 Track F1/F1b), not a joined regex —
+for workflow-linked and generic-CRUD rows.** `matchIntentMap()` iterates every
+row and regex-tests its `pattern` independently, so this is transparent to the
+pipeline: N single-phrase rows match exactly the same set of inputs as one row
+with an N-way `\|`-joined pattern. The 6 true system rows (`create_domain`,
+`create_workflow`, `delete_domain`, `delete_workflow`, `list_domains`, `help`)
+are the one remaining exception — still one joined-pattern row each, managed by
+`seed_PGC_IntentMap.json` + `upsert-intent-map.mjs`, which upserts on
+`intent_category` alone and would fight a split.
 
 
 6.4 Generic CRUD Workflows
@@ -456,11 +467,13 @@ or absent. This eliminates the Lambda recursive loop detection emails that occur
 with 19 rapid proc→SQS→proc cycles during multi-child inserts. Operational ceiling:
 approximately 120 child rows at 60s Lambda timeout / ~400ms per SERV insert.
 
-**`create_domain` step 9 (Session 17):** No longer inserts domain-specific
-workflows. Now inserts five `PGC_IntentMap` rows using `*_entity` intent categories
-and LLM-generated patterns. `intentMapRows.intent_category` is constrained by Ajv
-to the enum `[list_entity, get_entity, add_entity, update_entity, delete_entity]` —
-the LLM cannot drift back to domain-specific categories.
+**`create_domain` step 18/21 (Session 17; one-row-per-phrase since Sprint 7 Track
+F1b):** No longer inserts domain-specific workflows. Bulk-inserts one
+`PGC_IntentMap` row per generic-CRUD invocation phrase (15 rows per domain — 3
+phrases × 5 `*_entity` actions), each `source: 'auto'`. `intent_category` per row
+is constrained to the enum `[list_entity, get_entity, add_entity, update_entity,
+delete_entity]` — the LLM cannot drift back to domain-specific categories. Full
+detail: `docs/arch-create-domain.md`.
 
 **`parseFieldValues` SYSTEM_COLS exclusion:** The `id`, `created_at`, and
 `updated_at` columns are excluded case-insensitively. If a user types `ID=5` or

@@ -273,27 +273,18 @@ implies. Flagged, not fixed.
 
 ### 6.8 create_domain Workflow
 
-Full annotated workflow design is in [`docs/arch-create-domain.md`](arch-create-domain.md).
-
-**Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
-
-**Sprint 7 additions (Track E):** Views register as first-class `PGC_Schema`/`PGC_TableMap` rows, same mechanism as tables (`docs/architecture.md` §1.5, `serv/schema.mjs`'s `createView`). `create_domain` gained an optional post-confirmation view-proposal branch (steps 16d–16k) between the topological table sort and DDL execution: `propose_domain_view` (LEFT BRAIN) proposes 0–1 candidate views from the confirmed schema; a `condition` skips the gate entirely when nothing was proposed; a `choice` gate offers create / request-changes (loops back with feedback) / do-later / cancel. Confirmed views are appended to a new `ddl_items` key — never to `sorted_tables` itself — since a view can't be created before its source tables exist; `ddl_items` is what step 17's DDL iterator actually reads. The now-generalized `serv_schema` step type (`step-executor.mjs`) branches on input shape (`selectSql` present → `createView`, else → `createTable`) to execute both in the same iterator. `create_domain` is never re-entered for existing domains — Novia's `create_view`/`drop_view` tools are the modification path once a domain already exists.
+Full annotated workflow design, memory layer, and design patterns are in
+[`docs/arch-create-domain.md`](arch-create-domain.md) — that doc is authoritative;
+do not duplicate step-by-step or per-sprint change detail here.
 
 ### 6.9 create_workflow Workflow
 
-Full design documentation — including L/R collaboration architecture decisions,
-the six-phase step structure with `local_state` data flow, gap taxonomy application,
-simulation correction loops, and implementation notes — is in
-[`docs/arch-create-workflow.md`](arch-create-workflow.md).
-
-**Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
-
-**Session 13 decisions:**
-
-*Skeleton mode for L1 (`input.skeleton: true` on simulate step):* The `serv_step_missing_required_input` L1 check is a **content completeness** check — it verifies that a fully-formed step declares `tableName`, `row`, `filters`, and `updates`. A routing skeleton is intentionally content-free; those fields are filled in by `generate_workflow_steps`. Running this check on a skeleton produces false positives on every serv_* step. Decision: add a `skeleton: boolean` flag to the `simulate` step input, threaded through `runSimulation` → `runLevel1StaticAnalysis`. When `skeleton=true`, `serv_step_missing_required_input` is skipped. All routing topology checks (dead targets, missing `on_cancel`, unresolved templates, condition keys) still run — these apply equally to skeletons. The skeleton validate step (21b) sets `input.skeleton: true`; the final pre-write simulate (step 25) does not. L1 and L2 level definitions are unchanged.
-
-*`on_cancel` required on all human_gate steps:* The `PGC_StepType` human_gate contract marked `on_cancel` as `required: false`, which LLMs correctly read as optional. This caused persistent `missing_on_cancel` and `missing_cancel_option` L1 failures on skeleton and full steps. Decision: add `on_cancel` explicitly to the human_gate `input_contract` as `required: true`, with a description that makes the coupling to the cancel option explicit. Applied in `seed_PGC_StepType.json` + `upsert-step-type.mjs`; no system code change.
-
+Full design documentation — L/R collaboration architecture decisions, the
+six-phase step structure with `local_state` data flow, gap taxonomy application,
+simulation correction loops, skeleton-mode/`on_cancel` decisions, and
+implementation notes — is in [`docs/arch-create-workflow.md`](arch-create-workflow.md) —
+that doc is authoritative; do not duplicate step-by-step or per-sprint change
+detail here.
 
 ### 6.10 Session Architecture — Chat and Diagnostics
 
@@ -1051,102 +1042,18 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 
 #### `create_domain`
 
-Full annotated design: `docs/arch-create-domain.md`.
-
-**Phase 1 — Pre-check and use case selection**
-- `1` `js_transform` — derive candidate domain slug for duplicate pre-check
-- `2` `serv_query` — check `PGC_DomainHelp` for existing domain
-- `3` `condition` — route to exists gate or continue
-- `4` `human_gate` (confirm) — domain already exists; offer recreate or cancel
-- `3a` `human_gate` (choice) — user selects use case (personal / household / professional); shapes research depth
-- `3d` `js_transform` — build `use_case_context` string for right brain
-
-**Phase 2 — Right brain research and preference gates**
-- `5` `llm_call` [`research_domain_schema`] — RIGHT BRAIN: domain data-modelling best practices; surfaces structural preference questions and autonomous design decisions
-- `6` `js_transform` — build `preference_gates` array from research output
-- `6a` `js_transform` — format auto-decision summary for user notification
-- `6b` `notify` — show autonomous decisions before gates begin
-- `7–9a` `condition` + `iterator` + `js_transform` — present each preference question as a choice gate; enrich answers with question text and option description into `user_preferences`
-
-**Phase 3 — Left brain schema design**
-- `10` `llm_call` [`create_domain`] — LEFT BRAIN: design full domain schema (tables, columns, constraints, triggers, FK relationships) from research findings and confirmed preferences
-- `11–11a` `js_transform` — enrich tables with `columnSummary`; build `schema_summary` and per-table review items
-- `12` `human_gate` (choice) — user reviews per-table schema; chooses approve / revise / add table
-  - `12b` `llm_call` [`revise_domain_schema`] — LEFT BRAIN: revise schema based on user feedback
-  - `12c` `human_gate` (text_input) — capture description for new table addition
-  - `13` `llm_call` [`design_table`] — design a single new table from user description
-  - `14` `js_transform` — merge new table, apply modifications, topological sort
-- `16` `human_gate` (confirm) — final confirmation before DDL
-
-**Phase 4 — DDL execution and registration**
-- `16b` `js_transform` — build `domain_semantic_content` structural snapshot (insert expectations, nullable columns, initial values)
-- `16c` `write_memory` — persist confirmed schema snapshot as semantic memory (retrieved by `create_workflow` and `parse_entity_input`)
-- `16d` `js_transform` — topological sort tables by FK dependency for DDL order
-- `17` `iterator` — create each `PGD_*` table via SERV `createTable`
-- `17b` `llm_call` [`generate_domain_aliases`] — generate natural language aliases (singular/plural/synonyms)
-- `17c` `human_gate` (text_input) — user adds custom aliases
-- `18` `js_transform` — merge LLM and user aliases; derive CRUD command list
-- `19` `human_gate` (review_object) — user reviews aliases and CRUD commands before write
-- `20` `serv_insert` — write to `PGC_DomainHelp`
-- `21` `iterator` — insert 5 `PGC_IntentMap` rows (add/list/get/update/delete)
-- `22` `iterator` — register each entity schema in `PGC_EntitySchema`
-- `22a–23` `js_transform` + `notify` — confirm domain creation with registered commands
+Full annotated step-by-step design (Phase 1–4, memory layer, prompt dependencies,
+design patterns): `docs/arch-create-domain.md` — authoritative, do not duplicate
+step detail here.
 
 ---
 
 #### `create_workflow`
 
-Full annotated design: `docs/arch-create-workflow.md`.
-
-**Phase 1 — Mode and right brain**
-- `1` `serv_query` — load live domain schema rows
-- `2` `human_gate` (choice) — user selects workflow mode (new / variant / scheduled)
-- `3` `llm_call` [`research_workflow_domain`] — RIGHT BRAIN (Perplexity sonar): domain best practices; identifies preference questions affecting workflow structure
-- `4–6` `js_transform` + `human_gate` (confirm) — build and display research findings; user sees autonomous decisions before preference gates
-
-**Phase 2 — Preference gates and user context**
-- `7–8a` `condition` + `iterator` + `js_transform` — Tier 1 preference gates (choice); enrich answers with question text
-- `9` `human_gate` (text_input) — optional free-text design context from user
-
-**Phase 3 — Left brain gap analysis**
-- `11` `llm_call` [`analyze_workflow_gaps`] — LEFT BRAIN pass 1: classify all gaps (schema gaps, missing prompts, blocked capabilities); emits `gap_analysis` with `confidence` flag
-- `12` `js_transform` — evaluate routing flags from `gap_analysis`
-- `13–14` `condition` + `notify` — hard stop if missing step type capability (Type 4b gap)
-- `15–17` `condition` + `js_transform` + `human_gate` (confirm) — schema gap decision gate (Type 3a/3b)
-- `18–20` `js_transform` + `condition` + `iterator` — seed missing prompts into `PGC_Prompt` (Type 4a auto-resolution)
-
-**Phase 4 — Left brain design (process → dialogs → steps)**
-- `20a` `js_transform` — initialise retry state keys
-- `21` `llm_call` [`design_workflow_process`] — LEFT BRAIN pass 2: design step sequence, state map, routing skeleton; emits `routing` fields per process item
-- `21a–21c` `js_transform` + `simulate` + `human_gate` — build routing skeleton; L1 BFS validates all targets; gate on failure before dialog or step content generated
-- `22` `llm_call` [`design_workflow_dialogs`] — LEFT BRAIN pass 3: design Slack dialogs for every `human_gate` step
-- `22a` `js_transform` — build step generation context; initialise or carry forward correction state
-- `23` `llm_call` [`generate_workflow_steps`] — translate three-part design spec (process + dialogs + domain schema) into concrete step array; correction mode when `previous_draft_steps` or `path_errors` are non-empty
-
-**Phase 4b — Domain prompt design (conditional)**
-- `23a–23b` `js_transform` + `condition` — count `llm_call` steps with `prompt_draft`; skip prompt design if none
-- `23c` `serv_query` — load existing `PGC_Prompt` entries for reuse check
-- `23d` `llm_call` [`design_workflow_prompts`] — classify each domain-specific `llm_call` step as reuse / create / convert; draft prompt text, output schema, and model for `create` decisions
-- `23e–23h` `js_transform` + `condition` + `iterator` + `js_transform` — extract create decisions; insert new prompts; apply decisions to `draft_workflow.steps`
-
-**Phase 5 — Simulation and correction**
-- `24` `human_gate` (review_object) — user reviews proposed step array before simulation
-- `25–26a` `simulate` + `js_transform` — Level 1 static analysis; format issues; mark steps by pass/fail
-- `27` `human_gate` (confirm) — L1 failure gate; offer regenerate or cancel (loops back to `22a`)
-- `28` `llm_call` [`generate_workflow_mocks`] — generate representative mock outputs for each step
-- `29` `llm_call` [`generate_workflow_paths`] — generate named simulation paths (happy / cancel / failure)
-- `30–31a` `simulate` + `js_transform` — Level 2 + Level 3 path simulation; format failures; mark steps
-- `32` `js_transform` — clear stale L1 result before L2 error gate
-- `33` `human_gate` (confirm) — L2 failure gate; offer regenerate automatically / with feedback / cancel
-- `33a` `llm_call` [`fix_workflow_routing`] — fix routing defects identified by Level 2 (targeted correction, not full regeneration)
-
-**Phase 6 — Registration**
-- `34–34a` `human_gate` (confirm) + `js_transform` — user confirms registration; strip correction state fields
-- `35` `serv_insert` — write workflow to `PGC_Workflow`
-- `35a–35b` `human_gate` (text_input) + `js_transform` — collect invocation phrases; build `|`-joined regex pattern
-- `36` `serv_insert` — write `PGC_IntentMap` row
-- `36a–36d` `condition` + `serv_query` + `js_transform` + `serv_update` — merge new command into `PGC_DomainHelp` if domain-associated
-- `37` `notify` — confirm workflow registered and ready
+Full annotated step-by-step design (six-phase structure, L/R collaboration
+decisions, gap taxonomy application, simulation correction loops, prompt
+dependencies): `docs/arch-create-workflow.md` — authoritative, do not duplicate
+step detail here.
 
 ---
 
