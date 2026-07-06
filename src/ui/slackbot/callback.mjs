@@ -721,9 +721,15 @@ function dialogToBlocks(dialog, workflowRunId) {
             },
           };
           if (item.secondaryAction) {
+            // Slack's button style enum is 'primary' | 'danger' only — there is no
+            // 'default' value. The default (no-emphasis) look comes from omitting
+            // the field entirely, not from sending style: 'default' (which Slack's
+            // API rejects outright as invalid_blocks). row_list gates commonly want
+            // the default look (e.g. "View"), unlike edit_list's hardcoded 'danger'.
+            const validStyle = item.secondaryAction.style === 'danger' || item.secondaryAction.style === 'primary';
             sectionBlock.accessory = {
-              type:      'button',
-              style:     item.secondaryAction.style === 'danger' ? 'danger' : 'default',
+              type: 'button',
+              ...(validStyle ? { style: item.secondaryAction.style } : {}),
               text:      { type: 'plain_text', text: item.secondaryAction.label },
               action_id: `workflow_action_${item.id || idx}_${idx}`,
               value:     JSON.stringify({
