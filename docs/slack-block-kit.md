@@ -847,6 +847,8 @@ read-only and does not advance the workflow. `trigger_id` is not needed.
 
 **Use `details` (not `output`) whenever the content is a list of items.** `output` supports only flat `rich_text_section` elements. `details` supports `rich_text_list` with `style: "bullet"` or `"ordered"`, which is required for tree-leaf presentation (parent title → bulleted children).
 
+**`task_card` never interprets markdown syntax, in either `details` or `output` (confirmed live 2026-07-06, Sprint 7 Track D2).** `rich_text` elements are structural, not markdown text — a `rich_text_section`'s `{ type: "text", text }` renders that string completely literally: `**bold**` shows as literal asterisks, `#` headings show as literal hash marks, and a scalar `output` string containing embedded `\n` line breaks does not reliably render as separate visual lines. The *only* way to get one bullet per item is to pass `content` as an **array** — `buildRevealBlock()` (`callback.mjs`) only builds a `rich_text_list` (one `rich_text_section`/bullet per array entry) when `Array.isArray(field.content)`; a single string, however formatted, always renders as one `output` blob. `format_entity_display`'s `reveals[].content` was originally specified as a markdown string (wrong assumption, not verified before shipping) and produced exactly this failure — one bullet containing an entire raw block of `1. **X** -- Y\n2. **Z**...` text; fixed (prompt v3) to require an array of plain-text lines instead.
+
 #### Example — plain text reveal (current `output` usage)
 
 ```json
