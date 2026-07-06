@@ -153,7 +153,7 @@ stack: [
 ```json
 stack: [
   { "frame_id": "A", "type": "workflow",    "current_step": "3",  "local_state": { "proposed_scaffold": {...} } },
-  { "frame_id": "B", "type": "human_gate",  "status": "awaiting", "gate_type": "edit_list", "step_number": "3" }
+  { "frame_id": "B", "type": "human_gate",  "status": "awaiting", "gate_type": "list_selection", "step_number": "3" }
 ]
 ```
 The workflow frame is paused at step `"3"`. The gate frame is on top. No SQS
@@ -460,7 +460,7 @@ translates it to Slack Block Kit. Adding a new UI is one new renderer in
 {
   "type":          "HUMAN_GATE",
   "workflowRunId": 23,
-  "gate_type":     "edit_list",
+  "gate_type":     "list_selection",
   "dialog": {
     "message":  "Here's my plan for domain stock_portfolio.",
     "fields": [
