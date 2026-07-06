@@ -136,6 +136,61 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
+  it('row_list gate renders one list item per row with a configurable action button, not hardcoded Remove/danger', () => {
+    // Sprint 7 Track D2 drill-down — row_list reuses edit_list's 'list' field
+    // rendering (callback.mjs needs no changes) but item_action's label/style
+    // are caller-configurable, and context_key items are expected pre-formatted
+    // as { id, primary, secondary }.
+    const step = {
+      step:         '9c',
+      type:         'human_gate',
+      gate_type:    'row_list',
+      context_key:  'row_items',
+      item_action:  { action: 'view_record', label: 'View', on_select: 'step:20' },
+      output_key:   'selected_record_id',
+      options:      [{ label: 'Done', action: 'cancel', on_select: 'cancel' }],
+    };
+    const localState = {
+      row_items: [
+        { id: 3, primary: 'Nov 20, 2024 (id: 3)', secondary: 'card_count=2' },
+        { id: 4, primary: 'Spanish Grammer (id: 4)', secondary: null },
+      ],
+    };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.ok(listField, 'list field must be present');
+    assert.equal(listField.items.length, 2);
+    assert.equal(listField.items[0].id, 3);
+    assert.equal(listField.items[0].primary, 'Nov 20, 2024 (id: 3)');
+    assert.equal(listField.items[0].secondary, 'card_count=2');
+    assert.equal(listField.items[0].secondaryAction.action, 'view_record');
+    assert.equal(listField.items[0].secondaryAction.label, 'View');
+    assert.equal(listField.items[0].secondaryAction.style, 'default');
+
+    // "Done" still renders as a real bottom button — view_record does NOT,
+    // since it's resolved via item_action.on_select directly (see run-workflow.mjs),
+    // not via a duplicate options[] entry.
+    const actionsField = dialog.fields.find(f => f.type === 'actions');
+    assert.equal(actionsField.buttons.length, 1);
+    assert.equal(actionsField.buttons[0].action, 'cancel');
+  });
+
+  it('row_list gate defaults item_action label/style when omitted', () => {
+    const step = {
+      step: '9c', type: 'human_gate', gate_type: 'row_list',
+      context_key: 'row_items',
+      item_action: { action: 'view_record' },
+      options: [{ label: 'Done', action: 'cancel', on_select: 'cancel' }],
+    };
+    const localState = { row_items: [{ id: 1, primary: 'Row 1', secondary: null }] };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.equal(listField.items[0].secondaryAction.label, 'View');
+    assert.equal(listField.items[0].secondaryAction.style, 'default');
+  });
+
   it('create_domain step 12 is a choice gate with per-table reveals and inline modal', () => {
     // Step 12 is the schema review gate — per-table task_card reveals, modal for Request changes.
     const step = getStep('create_domain', '12');

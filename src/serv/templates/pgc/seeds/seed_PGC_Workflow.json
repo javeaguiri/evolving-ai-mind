@@ -2618,9 +2618,9 @@
       {
         "step": "9a",
         "type": "condition",
-        "description": "Skip the formatter call entirely when nothing matched — a deterministic shortcut, not something worth an LLM call.",
+        "description": "Skip the row list entirely when nothing matched — a deterministic shortcut.",
         "expression": "{{entity_display_data.entities.length}}",
-        "on_success": "10",
+        "on_success": "9b",
         "on_else": "11b"
       },
       {
@@ -2630,28 +2630,72 @@
         "on_success": "end"
       },
       {
-        "step": "10",
+        "step": "9b",
+        "type": "js_transform",
+        "description": "Deterministic (no LLM needed): build one row per record — a short id-labeled summary line, no natural-language synthesis required for a flat list. Sprint 7 Track D2 drill-down.",
+        "output_key": "row_items",
+        "on_success": "9c",
+        "expression": "(function(){ var entities = (local_state.entity_display_data && local_state.entity_display_data.entities) || []; return entities.map(function(e){ var f = e.fields || {}; var label = f.title || f.name || 'Record'; var rest = Object.keys(f).filter(function(k){ return k !== 'id' && k !== 'title' && k !== 'name'; }).map(function(k){ return k + '=' + f[k]; }); return { id: f.id, primary: label + ' (id: ' + f.id + ')', secondary: rest.join(' · ') || null }; }); })()"
+      },
+      {
+        "step": "9c",
+        "type": "human_gate",
+        "gate_type": "row_list",
+        "description": "Show one row per record with a View button — clicking drills into that single record (steps 20-23) rather than resuming this list.",
+        "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
+        "context_key": "row_items",
+        "item_action": { "action": "view_record", "label": "View", "on_select": "step:20" },
+        "output_key": "selected_record_id",
+        "options": [
+          { "label": "Done", "action": "cancel", "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
+      },
+      {
+        "step": "20",
+        "type": "serv_entity_get",
+        "description": "Drill-down: fetch the single clicked record in full (root + child collections) — the list fetch above was root-only.",
+        "input": {
+          "entityName": "{{resolved_entity_name}}",
+          "id": "{{selected_record_id}}"
+        },
+        "output_key": "drill_result",
+        "on_success": "21",
+        "on_else": "cancel"
+      },
+      {
+        "step": "21",
+        "type": "js_transform",
+        "description": "Deterministic pre-processing for the single drilled-down record, with children this time — reuses root_table_schema and fk_label_map already resolved for the list (the clicked record's FK values were already covered since it was one of the listed rows).",
+        "output_key": "entity_display_data",
+        "on_success": "22",
+        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var resultsArr = Array.isArray(local_state.drill_result) ? local_state.drill_result : (local_state.drill_result ? [local_state.drill_result] : []); var schema = local_state.full_entity_schema || {}; var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fkCols = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fkCols.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } function cleanChildren(row){ var childKeys = Object.keys(row).filter(function(k){ return Array.isArray(row[k]); }); var children = {}; childKeys.forEach(function(k){ children[k] = row[k].map(function(child){ return (child && typeof child === 'object') ? cleanScalar(child) : child; }); }); return children; } var entities = resultsArr.map(function(row){ return { fields: cleanScalar(row), children: cleanChildren(row) }; }); return { entity_name: schema.entity_name || local_state.resolved_entity_name, entities: entities }; })()"
+      },
+      {
+        "step": "22",
         "type": "llm_call",
-        "description": "RIGHT BRAIN, cheap model: turn the pre-cleaned, pre-resolved entity_display_data into a readable markdown list, deciding only whether a reveal panel best condenses the record list (e.g. show the first few inline, reveal the rest). All lookups and column filtering already happened deterministically in steps 3-9 — this call is presentation only.",
+        "description": "RIGHT BRAIN, cheap model: format the single drilled-down record — same prompt and contract as get_entity's equivalent step.",
         "input": {
           "prompt": "format_entity_display",
           "domain": "{{input.domain}}",
           "entity_display_data": "{{entity_display_data}}"
         },
         "output_key": "formatted_display",
-        "on_success": "11",
-        "on_else": "11a"
+        "on_success": "23",
+        "on_else": "22a"
       },
       {
-        "step": "11a",
+        "step": "22a",
         "type": "js_transform",
         "description": "Degrade gracefully if the formatter call fails — fall back to raw JSON rather than losing the result entirely.",
         "output_key": "formatted_display",
-        "on_success": "11",
+        "on_success": "23",
         "expression": "(function(){ return { formatted_markdown: '```\\n' + JSON.stringify(local_state.entity_display_data, null, 2) + '\\n```', reveals: [] }; })()"
       },
       {
-        "step": "11",
+        "step": "23",
         "type": "notify",
         "message_template": "{{formatted_display.formatted_markdown}}",
         "reveals": "{{formatted_display.reveals}}",

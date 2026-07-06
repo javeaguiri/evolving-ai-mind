@@ -320,6 +320,35 @@ export function buildDialog(step, localState) {
       break;
     }
 
+    // row_list — one row per item, each with its own configurable accessory
+    // button (Sprint 7 Track D2 drill-down). Reuses the same 'list' field type
+    // and responseData.tableName carry-through as edit_list (callback.mjs needs
+    // no changes at all), but item_action's label/style are caller-configurable
+    // instead of hardcoded to "Remove"/danger, and context_key items are expected
+    // pre-formatted as { id, primary, secondary? } — building a natural-language
+    // summary line is a workflow-level (js_transform) concern, not this generic
+    // renderer's job.
+    case 'row_list': {
+      const items = resolvePath(localState, step.context_key) ?? [];
+      const resolvedItems = items.map(item => ({
+        id:        item.id,
+        primary:   item.primary,
+        secondary: item.secondary ?? null,
+        secondaryAction: step.item_action ? {
+          action: step.item_action.action,
+          label:  step.item_action.label ?? 'View',
+          style:  step.item_action.style ?? 'default',
+        } : null,
+      }));
+      fields.push({
+        type:  'list',
+        name:  (step.context_key ?? '').split('.').pop(),
+        label: step.message_template ? resolveTemplate(step.message_template, localState) : null,
+        items: resolvedItems,
+      });
+      break;
+    }
+
     case 'select_one': {
       const items = resolvePath(localState, step.context_key) ?? [];
       fields.push({
