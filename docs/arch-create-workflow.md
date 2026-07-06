@@ -1,7 +1,7 @@
 # create_workflow Workflow Design
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-simulation-engine.md` (`simulate` step validation levels), `docs/arch-workflow-patterns.md` §6.9, `docs/arch-prompt-rules.md` (prompt rule placement guide).
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-simulation-engine.md` (`simulate` step validation levels), `docs/arch-intent.md` (`PGC_IntentMap` schema, `matchIntentMap`), `docs/arch-prompt-rules.md` (prompt rule placement guide).
 
 `create_workflow` is the workflow that makes the brain self-extending. When a user
 says `/m create a workflow Spanish vocabulary quiz`, the brain researches the domain,
@@ -190,6 +190,35 @@ specification and the schema validates the correct shape for each gate type.
 
 ---
 
+## Decision: skeleton mode skips content-completeness checks
+
+The `serv_step_missing_required_input` L1 check is a **content completeness**
+check — it verifies that a fully-formed step declares `tableName`, `row`,
+`filters`, and `updates`. The routing skeleton built at step 21a (see Six-phase
+step structure below) is intentionally content-free — those fields are filled
+in later by `generate_workflow_steps`. Running this check against a skeleton
+produced false positives on every `serv_*` step.
+
+Fix: a `skeleton: boolean` flag on the `simulate` step's input, threaded through
+`runSimulation` → `runLevel1StaticAnalysis`. When `skeleton: true`,
+`serv_step_missing_required_input` is skipped — all routing topology checks
+(dead targets, missing `on_cancel`, unresolved templates, condition keys) still
+run, since those apply equally to skeletons. Step 21b sets `input.skeleton: true`;
+the final pre-write simulate at step 25 does not. L1/L2 level definitions
+themselves are unchanged — see `docs/arch-simulation-engine.md`.
+
+## Decision: `on_cancel` is required on every human_gate step
+
+`PGC_StepType`'s `human_gate` contract originally marked `on_cancel` as
+`required: false`, which LLMs correctly read as optional — causing persistent
+`missing_on_cancel` and `missing_cancel_option` L1 failures on both skeleton and
+full steps. Fixed by making `on_cancel` explicitly `required: true` in the
+`human_gate` `input_contract` (`seed_PGC_StepType.json`), with a description
+that makes the coupling to the cancel option explicit. Seed/context change only
+— no system code change.
+
+---
+
 ## Six-phase step structure (v4)
 
 > **Columns:** `Data Used` lists `local_state` keys this step reads (**bold** = actively used).
@@ -263,10 +292,10 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 34 | `human_gate confirm` — Show simulation results; ask user to confirm registration. Message: "Simulation passed `{{simulation_result.paths_passed}}` of `{{simulation_result.paths_run}}` paths. Ready to register `{{draft_workflow.name}}`?" Options: Register → next; Cancel → cancel | **`simulation_result.paths_passed`**, **`simulation_result.paths_run`**, **`draft_workflow.name`** | (no new keys) |
 | 34a | `js_transform` — Strip correction state fields (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) from `draft_workflow.steps` before registration. `input_key: draft_workflow`. `output_key: draft_workflow`. `on_success: next` | **`draft_workflow`** | **`draft_workflow`** ←Updated (steps cleaned) |
 | 35 | `serv_insert PGC_Workflow` — Write the new workflow. Row: `{ name, domain, description, intent_keywords, steps, version: 1, state_strategy: "sequential_with_confirmation" }`. Routes to `step:35a` (phrasing gate) on success. | **`draft_workflow.name`**, **`input.domain`**, **`draft_workflow.description`**, **`draft_workflow.intent_keywords`**, **`draft_workflow.steps`** | `…`, `path_error_summary`<br>**`registered_workflow`** ←Added |
-| **PHRASING GATE (Sprint 4 — Track I)** | | | |
+| **PHRASING GATE (Sprint 4 — Track I; one-row-per-phrase — Sprint 7 Track F1)** | | | |
 | 35a | `human_gate text_input` — Ask the user for the phrases they will use to invoke this workflow from Slack. Message: "How will you invoke `{{draft_workflow.name}}` from Slack? Enter one or more phrases separated by commas." Options: Submit → next; Skip → next (fallback to workflow name); Cancel → cancel. `output_key: invocation_phrases`. The value is null when the user skips. | **`draft_workflow.name`** | `…`, `registered_workflow`<br>**`invocation_phrases`** ←Added |
-| 35b | `js_transform` — Build `intent_pattern`: split `invocation_phrases` on commas, trim and lowercase each phrase, filter empty strings, append `draft_workflow.name` (lowercased) if not already included, join with `\|`. Fallback: if `invocation_phrases` is null/empty, result is just `draft_workflow.name`. The pattern is a `\|`-joined regex matched by Pass 1a in `classify-intent.mjs`. Output: `intent_pattern` (string). | **`invocation_phrases`**, **`draft_workflow.name`** | `…`, `invocation_phrases`<br>**`intent_pattern`** ←Added |
-| 36 | `serv_insert PGC_IntentMap` — Write the routing row using the user-supplied pattern. Row: `{ pattern: intent_pattern, intent_category: draft_workflow.name, action_type: "workflow" }`. `pattern` is the `\|`-joined regex from step 35b — always includes `draft_workflow.name` as a fallback alternation so the exact name always matches Pass 1a. NOTE: no `workflow_id` column — `PGC_IntentMap` and `PGC_Workflow` are structurally independent. | **`intent_pattern`**, **`draft_workflow.name`** | `…`, `intent_pattern`<br>**`registered_intent_row`** ←Added |
+| 35b | `js_transform` — **Sprint 7 Track F1:** Build `intent_pattern_rows`, an array of one `{ pattern, intent_category, action_type, workflow_id, source }` object per distinct invocation phrase — not a joined regex. Unions (deduped): user-typed `invocation_phrases` split on commas (`source: 'user'`) **and** `draft_workflow.intent_keywords` (`source: 'auto'` — previously an either/or fallback only used when the user typed nothing; now always included) **and** a truncated alias from the original `userInput` (`source: 'auto'`) **and** `draft_workflow.name` itself (`source: 'name'`). `workflow_id` is read directly from `local_state.registered_workflow.id` (already in scope from step 35). Output: `intent_pattern_rows` (array). | **`invocation_phrases`**, **`draft_workflow.name`**, **`draft_workflow.intent_keywords`**, **`registered_workflow.id`** | `…`, `invocation_phrases`<br>**`intent_pattern_rows`** ←Added |
+| 36 | `serv_insert PGC_IntentMap` — **Sprint 7 Track F1:** Bulk-insert `{{intent_pattern_rows}}` — one row per phrase — converted from a single-object insert to a bulk array insert. Every row carries `workflow_id` so `delete-workflow.mjs` can remove all of a workflow's phrase rows with one FK-matched `deleteRows` call; `handoff()` still routes by name lookup, never by this FK (see `docs/arch-intent.md`). | **`intent_pattern_rows`** | `…`, `intent_pattern_rows`<br>**`registered_intent_rows`** ←Added |
 | 37 | `notify` — "Workflow `{{draft_workflow.name}}` is registered and ready. Deferred enhancements: `{{gap_analysis.deferred.length}}` item(s)." `on_success: end` | **`draft_workflow.name`**, **`draft_workflow.description`**, **`gap_analysis.deferred.length`** | (no new keys) |
 | 38 | `end` | — | — |
 

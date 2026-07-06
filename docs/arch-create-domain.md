@@ -1,9 +1,9 @@
 # create_domain Workflow — Design Reference
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.8, `docs/arch-prompt-rules.md` (prompt rule placement guide).
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md`. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.7 (workflow safety, choice gate cancel sentinel), `docs/arch-prompt-rules.md` (prompt rule placement guide).
 
-Current as of Sprint 7. Describes the live workflow definition (v52) running in prod.
+Current as of Sprint 7. Describes the live workflow definition (v55) running in prod.
 
 ---
 
@@ -19,8 +19,10 @@ capability.
 **Outputs produced:**
 - Physical PGD tables in the domain database
 - Optionally, one PGD view (proposed and confirmed at step 16i — see Phase 3)
-- `PGC_DomainHelp` row (aliases, description, commands)
-- 5 `PGC_IntentMap` rows (add/list/get/update/delete patterns)
+- `PGC_DomainHelp` row (aliases, description, commands — commands' descriptions
+  name every root entity when the domain has more than one, Sprint 7 Track F2)
+- 15 `PGC_IntentMap` rows — one per invocation phrase across the 5 generic CRUD
+  actions (add/list/get/update/delete), `source: 'auto'` (Sprint 7 Track F1b)
 - 1+ `PGC_EntitySchema` rows
 - 3 `PGC_Memory` rows (see Memory layer below)
 
@@ -216,18 +218,28 @@ Step 17c human_gate text_input — user may add custom aliases
            or leaves blank and presses Done. Output key: user_aliases_raw.
            Cancel → cancelled.
 
-Step 18  js_transform → generated = { domainHelp, intentMapRows: [5], entitySchemas: [1+] }
+Step 18  js_transform → generated = { domainHelp, intentMapRows: [15], entitySchemas: [1+] }
            Derives domain registration from confirmed scaffold + LLM aliases + user aliases.
            user_aliases_raw (if set) is split on commas, trimmed, and merged into the
            aliases Set alongside the LLM-generated ones.
-           Also computes entity name (TitleCase singular), join/aggregation structure,
-           and 5 IntentMap patterns (add/list/get/update/delete).
+           Also computes entity name (TitleCase singular) and join/aggregation structure
+           for entitySchemas, reusing the same rootTables/fkChildNames (CASCADE-FK-based)
+           computation to build domainHelp.commands (Sprint 7 Track F2): when the domain
+           has more than one root table, each of the 5 generic CRUD commands' description
+           names the real entity types (e.g. "this domain has multiple record types:
+           Budget, Expense, ... — the system infers which one from your description").
+           Single-root-table domains are unaffected. intentMapRows is a flat array of one
+           row per invocation phrase across all 5 actions (15 rows: 3 phrases × 5 actions),
+           each { pattern, intent_category, action_type, source: 'auto' } — Sprint 7 Track
+           F1b, replacing the former 5-row joined-pattern-per-action shape.
 
 Step 19  human_gate review_object — user reviews aliases and CRUD commands
            Looks good → next   |   Cancel → cancelled
 
 Step 20  serv_insert PGC_DomainHelp ← generated.domainHelp
-Step 21  iterator → serv_insert 5 PGC_IntentMap rows
+Step 21  serv_insert → bulk-insert generated.intentMapRows (15 PGC_IntentMap rows,
+           one per phrase) in a single call — converted from a 5-item sequential
+           iterator to a bulk insert in Sprint 7 Track F1b
 Step 22  iterator → serv_insert PGC_EntitySchema rows
 Step 22a js_transform → domain_ready_message
            Builds the notify text from the registered commands so the confirmation
@@ -343,7 +355,7 @@ failure or skip path (`llm_call` `on_else`, the `condition` at 16h, "Do later")
 degrades gracefully to creating just the tables. This is a deliberate scope choice:
 the proposal has no live-data sampling loop, since a brand-new domain has no rows
 yet to sample — that verification belongs to Novia's `create_view` tool, once real
-data exists (see `arch-workflow-patterns.md` §6.8).
+data exists.
 
 **Choice gate cancel sentinel:** See `arch-workflow-patterns.md` §6.7 — a choice
 option with `value: "cancel"` always terminates the workflow before its `on_select`

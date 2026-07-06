@@ -590,7 +590,7 @@ programmer's intent.
 
 | Doc | Topic |
 |---|---|
-| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step reference (live v33) |
+| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step reference |
 | `docs/arch-create-workflow.md` | `create_workflow` workflow — full design, LLM call chain, L1/L2 |
 | `docs/arch-memory.md` | Memory layer — PGC_Memory write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat — PGC_Session/PGC_SessionEntry, `/chat`, `/explain` |
@@ -675,8 +675,8 @@ from PGC at runtime.
 | `PGC_WorkflowRun` | Process control block — stack, status, state, callback for each run | Step Processor | Step Processor |
 | `PGC_WorkflowRunStep` | Audit log — one row per step execution, used for idempotency | Step Processor | Step Processor |
 | `PGC_Prompt` | Prompt store — `prompt_text`, `output_schema`, `model`, `error_log` per intent | Step Processor (llm_call steps) | `upsert-prompt.mjs` / right-brain |
-| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `action_type`. Structurally independent from `PGC_Workflow` — no `workflow_id` FK. Routing uses `action_type` + `intent_category` name lookup | Intent Preprocessor | `create_domain` workflow (step 10) |
-| `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 8) |
+| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `action_type`, the routing signal. Full detail: `docs/arch-intent.md` | Intent Preprocessor | `create_domain` (step 18/21), `create_workflow` (step 35b/36) |
+| `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 20) |
 | `PGC_Schema` | Schema registry — column definitions per PGD table | SERV (column validation) | `create_domain` workflow (DDL iterator) |
 | `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
 | `PGC_SystemContext` | System-wide config — thresholds, defaults, feature flags | Step Processor, Preprocessor | `init-brain.mjs` / admin |
@@ -693,7 +693,7 @@ When `create_domain` runs, the Step Processor:
 3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
 4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
 5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
-6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` (5 rows — one per `*_entity` intent category, pointing to the 5 pre-existing generic `*_entity` workflows with `domain: null`), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` rows (routing the domain to the pre-existing generic `*_entity` workflows with `domain: null` — see `docs/arch-create-domain.md` for the current row shape), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
 
 The PGC tables are not just config — they are the evolving state of the brain.
 The Intent Preprocessor reads from PGC to route incoming intents. The Step
@@ -724,7 +724,7 @@ When the Intent Preprocessor decides a workflow should run, it creates a `PGC_Wo
 > **Full detail extracted to `docs/arch-workflow-patterns.md`** — covers:
 > - **6.6** Right-brain output validation pipeline (Ajv → semantic → routing rules, correction loop, `PGC_Prompt.error_log`)
 > - **6.7** Workflow safety — circuit breakers, Guard 1, `/shutdown`
-> - **6.8** `create_domain` workflow (annotated step-by-step)
+> - **6.8** `create_domain` workflow (pointer to `docs/arch-create-domain.md`)
 > - **6.9** `create_workflow` workflow (pointer to `docs/arch-create-workflow.md`)
 > - **6.10** Session architecture — chat and diagnostics (pointer to `docs/arch-session.md`)
 > - **6.11** Gap taxonomy — the five gap types and resolution sequence
