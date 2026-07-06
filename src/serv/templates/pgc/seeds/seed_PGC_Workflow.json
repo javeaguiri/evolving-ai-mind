@@ -2640,11 +2640,11 @@
       {
         "step": "9c",
         "type": "human_gate",
-        "gate_type": "row_list",
+        "gate_type": "list_selection",
         "description": "Show one row per record with a View button — clicking drills into that single record (steps 20-23) rather than resuming this list.",
         "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
         "context_key": "row_items",
-        "item_action": { "action": "view_record", "label": "View", "on_select": "step:20" },
+        "item_action": { "action": "view_record", "label": "View", "style": "default", "on_select": "step:20" },
         "output_key": "selected_record_id",
         "options": [
           { "label": "Done", "action": "cancel", "on_select": "cancel" }

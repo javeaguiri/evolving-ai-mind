@@ -172,6 +172,13 @@ function evalExpression(token, localState) {
  * @returns {boolean}
  */
 export function evalItemCondition(condition, item) {
+  // No condition means "show for every item" — a condition is a filter, and an
+  // absent filter must not filter everything out. Latent bug found Sprint 7
+  // Track D2: evaluating `(${undefined})` silently returned false, so any
+  // item_action with no condition set never rendered its button at all. Never
+  // surfaced before because this function's only caller (step-executor.mjs's
+  // list_selection/edit_list case) had no live workflow exercising it until now.
+  if (!condition) return true;
   try {
     return Boolean(vm.runInNewContext(`(${condition})`, { item }, { timeout: 200 }));
   } catch (e) {

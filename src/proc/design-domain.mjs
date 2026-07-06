@@ -333,7 +333,7 @@ async function runDesignDomain({ userInput, workflowRunId, callback, traceId, st
 // Shape emitted:
 // {
 //   type:          'HUMAN_GATE',
-//   gate_type:     'edit_list',
+//   gate_type:     'list_selection',
 //   workflowRunId: number,
 //   dialog: {
 //     fields: [
@@ -402,7 +402,7 @@ function buildGatePayload(scaffold, workflowRunId, traceId, { warning = null } =
 
   return {
     type:          'HUMAN_GATE',
-    gate_type:     'edit_list',
+    gate_type:     'list_selection',
     workflowRunId,
     dialog:        { fields },
     traceId,

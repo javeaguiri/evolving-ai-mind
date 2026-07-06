@@ -548,21 +548,24 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     isChoice ? o.value === userResponse : o.action === userResponse
   );
   // When the modal was dismissed without submitting (no inputValue), route via
-  // on_modal_close if the option declares it — allows edit_list gates to loop back
-  // to themselves rather than falling through to on_select (which would advance
-  // with no captured value).
+  // on_modal_close if the option declares it — allows list_selection gates to loop
+  // back to themselves rather than falling through to on_select (which would
+  // advance with no captured value).
   const hasModalInput = !!responseData?.inputValue;
-  // row_list: a row's action button click routes via item_action.on_select directly,
-  // never via a matching options[] entry — every options[] entry also renders as its
-  // own visible bottom button, which would duplicate the per-row button if used here.
-  const rowListMatch = gateType === 'row_list' && stepRef.item_action?.action === userResponse
+  // A row's own action button click routes via item_action.on_select directly —
+  // never via a matching options[] entry, since every options[] entry also
+  // renders as its own visible bottom button (would duplicate the per-row
+  // button). Gated only on item_action.on_select being present, not on
+  // gate_type: whether a row click advances (drill-down) or does something
+  // else entirely is the calling workflow's concern, not this gate's.
+  const itemActionMatch = stepRef.item_action?.action === userResponse && stepRef.item_action?.on_select
     ? stepRef.item_action
     : null;
   const onSelect = (
     !hasModalInput && matchedOption?.on_modal_close !== undefined
       ? matchedOption.on_modal_close
       : matchedOption?.on_select
-  ) ?? rowListMatch?.on_select ?? 'next';
+  ) ?? itemActionMatch?.on_select ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
   // before popping the frame. The value arrives in responseData.inputValue
@@ -627,17 +630,18 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
-  // row_list gate: a row's own accessory button was clicked (Sprint 7 Track D2
-  // drill-down). Every row shares the same item_action.action, so the clicked
-  // row is identified only by responseData.tableName (same field name
-  // callback.mjs's 'list' field type already sends for any row-level
-  // secondaryAction — see edit_list's remove_item usage above). Write it to
-  // output_key before the generic matchedOption/on_select advance below routes
-  // to the drill-down branch.
-  if (gateType === 'row_list' && stepRef.item_action?.action === userResponse && stepRef.output_key) {
+  // A row's own accessory button was clicked and its item_action declares
+  // on_select — an "advance" action (e.g. drill-down), as opposed to remove_item's
+  // "mutate this list and stay suspended" behavior handled above. Every row
+  // shares the same item_action.action, so the clicked row is identified only
+  // by responseData.tableName (same field name callback.mjs's 'list' field type
+  // already sends for any row-level secondaryAction, regardless of what the
+  // action does). Write it to output_key before the generic matchedOption/
+  // on_select advance below routes to wherever item_action.on_select points.
+  if (itemActionMatch && stepRef.output_key) {
     setPath(localState, stepRef.output_key, responseData?.tableName);
     frame.local_state = localState;
-    console.info('run-workflow: row_list gate — clicked row id written to local_state', {
+    console.info('run-workflow: list_selection item_action — clicked row id written to local_state', {
       output_key: stepRef.output_key,
       id:         responseData?.tableName,
       traceId,

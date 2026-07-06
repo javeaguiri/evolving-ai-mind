@@ -149,17 +149,17 @@
 
     "itemAction": {
       "type": "object",
-      "description": "Per-row action button for edit_list/row_list gates.",
+      "description": "Per-row action button for list_selection gates, applied uniformly to every item unless an item already carries its own secondaryAction. Rendering is always the same (one section block per row, one accessory button); what the action does is entirely up to the calling workflow, expressed here, not by a different gate_type.",
       "required": ["action"],
       "additionalProperties": false,
       "properties": {
         "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy do not receive the action button." },
-        "action":           { "type": "string", "description": "edit_list: 'remove_item'. row_list: any caller-chosen action name (e.g. 'view_record') — must match one options[] entry's action so on_select routing resolves." },
-        "action_data_key":  { "type": "string", "description": "edit_list only. Field on the item written to responseData. Typically 'tableName'." },
-        "confirm_template": { "type": "string", "description": "edit_list only. Slack mrkdwn shown in the removal confirmation dialog. Supports {{item.field}} placeholders." },
-        "label":            { "type": "string", "description": "row_list only. Button label. Defaults to 'View'." },
-        "style":            { "type": "string", "enum": ["default", "primary", "danger"], "description": "row_list only. Button style. Defaults to 'default'." },
-        "on_select":        { "$ref": "#/definitions/routingToken", "description": "row_list only. Routing target when any row's action button is clicked. Resolved directly — NOT via a matching entry in options[], since every options[] entry also renders as its own visible bottom button (which would duplicate the per-row button)." }
+        "action":           { "type": "string", "description": "Any caller-chosen action name (e.g. 'remove_item', 'view_record'). 'remove_item' is handled specially by resumeGate (mutates context_key, re-renders this same gate in place). Any other action name advances via on_select (below) once clicked." },
+        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName' (the historical name — carries whatever id/value the clicked row needs, regardless of action)." },
+        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in a confirmation dialog before the action fires. Supports {{item.field}} placeholders. Typically used with a destructive action like 'remove_item'." },
+        "label":            { "type": "string", "description": "Button label. Defaults to 'Remove'." },
+        "style":            { "type": "string", "enum": ["default", "primary", "danger"], "description": "Button style. Defaults to 'danger'. 'default' is never sent to Slack (no such enum value there) — omitted entirely so the button renders with no special emphasis." },
+        "on_select":        { "$ref": "#/definitions/routingToken", "description": "Routing target when any row's action button is clicked, for actions other than 'remove_item' (e.g. drill-down). Resolved directly — NOT via a matching entry in options[], since every options[] entry also renders as its own visible bottom button (which would duplicate the per-row button)." }
       }
     },
 
@@ -261,8 +261,8 @@
         "description": { "type": "string" },
         "gate_type": {
           "type": "string",
-          "enum": ["confirm", "edit_list", "row_list", "text_input", "review_object", "choice", "followup_prompt"],
-          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. edit_list: scrollable list with per-row remove actions. row_list: scrollable list with a configurable per-row action button (Sprint 7 Track D2 drill-down) — context_key items must be pre-formatted as { id, primary, secondary? }. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
+          "enum": ["confirm", "list_selection", "text_input", "review_object", "choice", "followup_prompt"],
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: scrollable list, one row per context_key item (pre-formatted as { id, primary, secondary?, secondaryAction? }), each with an optional per-row accessory button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. What clicking that button does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
         },
         "message_template": {
           "type": "string",
@@ -274,10 +274,10 @@
         },
         "context_key": {
           "type": "string",
-          "description": "Dot-path into local_state. Required for edit_list, row_list (both must resolve to an array — row_list items must be pre-formatted as { id, primary, secondary? }), and review_object (resolves to object or array). Optional for confirm with dynamic button list."
+          "description": "Dot-path into local_state. Required for list_selection (must resolve to an array, pre-formatted as { id, primary, secondary?, secondaryAction? } — building that shape is a preceding js_transform's job, not this gate's) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
         },
-        "item_primary_key":    { "type": "string", "description": "edit_list / review_object: field used as the row label. Defaults to 'tableName' for arrays." },
-        "item_secondary_key":  { "type": "string", "description": "edit_list: field shown as secondary text below the row label." },
+        "item_primary_key":    { "type": "string", "description": "review_object array mode: fallback single-field label. Defaults to 'tableName'." },
+        "item_secondary_key":  { "type": "string", "description": "review_object array mode: value field. Defaults to 'columns'." },
         "item_label_template": { "type": "string", "description": "review_object array mode: template for the row label, e.g. 'step {{step}} — {{field}}'. Resolved against each array item's own properties." },
         "item_action":         { "$ref": "#/definitions/itemAction" },
         "input_label": {
