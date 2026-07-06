@@ -1032,7 +1032,7 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
 | `get_entity` | 21 | 2 | Fetch a single entity by id or name |
-| `list_entity` | 19 | 2 | List all entities in a domain |
+| `list_entity` | 23 | 2 | List all entities in a domain, with row-click drill-down into one record |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1186,9 +1186,13 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 - `2` `serv_entity_query` — list all entities with domain-scoped default filters; root columns only
 - `3`–`8`: same FK-resolution preamble as `get_entity` steps 5–10, applied across all listed rows (deduplicated by distinct referenced id, not one lookup per row)
 - `9` `js_transform` — deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns — list mode has no `children` key at all (root columns only, matching the prior `root_only` behaviour)
-- `9a` `condition` — skip the formatter call entirely when nothing matched (`11b` `notify` "No records found." → `end`)
-- `10` `llm_call` [`format_entity_display`] — same prompt as `get_entity`, general enough to also handle a flat list of same-shaped entities with no children; `11a` `js_transform` degrades to a raw-JSON fallback on failure
-- `11` `notify` → `12` `end`
+- `9a` `condition` — skip the row list entirely when nothing matched (`11b` `notify` "No records found." → `end`)
+- `9b` `js_transform` — deterministic (no LLM): build one `{id, primary, secondary}` row per record — a short id-labeled summary, not natural-language synthesis (Sprint 7 Track D2 drill-down)
+- `9c` `human_gate` (`row_list`) — one row per record, each with a "View" button (`item_action.on_select` → `step:20`); "Done" ends the run
+- `20` `serv_entity_get` — drill-down: fetch the single clicked record in full (root + children — the list fetch above was root-only)
+- `21` `js_transform` — deterministic pre-processing for the one drilled-down record, with children this time; reuses `root_table_schema`/`fk_label_map` already resolved for the list (the clicked record's FK values were already covered)
+- `22` `llm_call` [`format_entity_display`] — same prompt and contract as `get_entity`'s equivalent step; `22a` `js_transform` degrades to a raw-JSON fallback on failure
+- `23` `notify` → `12` `end`
 
 ---
 

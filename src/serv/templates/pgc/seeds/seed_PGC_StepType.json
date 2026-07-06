@@ -134,7 +134,7 @@
         "type": "string",
         "field": "gate_type",
         "required": true,
-        "description": "confirm | edit_list | text_input | review_object | choice | followup_prompt. Common pattern for choice: pair with reveal field for 'question → reveal answer → grade response' workflows where hidden content must be verified before the user can accurately select an option."
+        "description": "confirm | edit_list | row_list | text_input | review_object | choice | followup_prompt. Common pattern for choice: pair with reveal field for 'question → reveal answer → grade response' workflows where hidden content must be verified before the user can accurately select an option. row_list (Sprint 7 Track D2): one row per context_key item ({id, primary, secondary?} — pre-format these in a preceding js_transform, not here), each with a configurable item_action button (label/style, defaults 'View'/'default') routed via item_action.on_select directly — never via a matching options[] entry, since every options[] entry also renders its own visible bottom button. Use for drill-down: clicking a row writes its id to output_key then routes to a back-edge step that fetches/displays that one record."
       },
       {
         "type": "string",

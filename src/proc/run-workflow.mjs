@@ -552,11 +552,17 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // to themselves rather than falling through to on_select (which would advance
   // with no captured value).
   const hasModalInput = !!responseData?.inputValue;
+  // row_list: a row's action button click routes via item_action.on_select directly,
+  // never via a matching options[] entry — every options[] entry also renders as its
+  // own visible bottom button, which would duplicate the per-row button if used here.
+  const rowListMatch = gateType === 'row_list' && stepRef.item_action?.action === userResponse
+    ? stepRef.item_action
+    : null;
   const onSelect = (
     !hasModalInput && matchedOption?.on_modal_close !== undefined
       ? matchedOption.on_modal_close
       : matchedOption?.on_select
-  ) ?? 'next';
+  ) ?? rowListMatch?.on_select ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
   // before popping the frame. The value arrives in responseData.inputValue
@@ -617,6 +623,23 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     console.info('run-workflow: dynamic confirm gate — selection written to local_state', {
       output_key: stepRef.output_key,
       selection:  userResponse,
+      traceId,
+    });
+  }
+
+  // row_list gate: a row's own accessory button was clicked (Sprint 7 Track D2
+  // drill-down). Every row shares the same item_action.action, so the clicked
+  // row is identified only by responseData.tableName (same field name
+  // callback.mjs's 'list' field type already sends for any row-level
+  // secondaryAction — see edit_list's remove_item usage above). Write it to
+  // output_key before the generic matchedOption/on_select advance below routes
+  // to the drill-down branch.
+  if (gateType === 'row_list' && stepRef.item_action?.action === userResponse && stepRef.output_key) {
+    setPath(localState, stepRef.output_key, responseData?.tableName);
+    frame.local_state = localState;
+    console.info('run-workflow: row_list gate — clicked row id written to local_state', {
+      output_key: stepRef.output_key,
+      id:         responseData?.tableName,
       traceId,
     });
   }

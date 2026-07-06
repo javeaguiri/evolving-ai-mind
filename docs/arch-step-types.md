@@ -45,8 +45,9 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║              ║ Generic expression field: Session 19.                ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
-║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
-║              ║ review_object. (select_one, select_many Backlog)     ║                  ║
+║              ║ response. Gate types: confirm, edit_list, row_list,  ║                  ║
+║              ║ text_input, review_object. (select_one, select_many  ║                  ║
+║              ║ Backlog)                                             ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_schema  ║ Create a PGD table via SERV createTable              ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
@@ -216,6 +217,47 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `context_key` is a dot-path into `local_state` — the data bound to the dialog.
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
+
+###### `row_list` gate_type (Sprint 7 Track D2 — drill-down)
+
+Same `'list'` Block Kit rendering as `edit_list` (one Slack `section` block per
+row, each with its own `accessory` button — no wall of buttons at the bottom),
+but the accessory button's label/style are caller-configurable instead of
+hardcoded to "Remove"/danger, and `context_key` items must arrive **pre-formatted**
+as `{ id, primary, secondary? }` — building a natural-language summary line is a
+workflow-level (`js_transform`) concern, not this generic renderer's job.
+
+```json
+{
+  "step": "9c", "type": "human_gate",
+  "gate_type":        "row_list",
+  "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
+  "context_key":      "row_items",
+  "item_action":       { "action": "view_record", "label": "View", "on_select": "step:20" },
+  "output_key":       "selected_record_id",
+  "options": [
+    { "label": "Done", "action": "cancel", "on_select": "cancel" }
+  ],
+  "on_success": "next",
+  "on_else":    "cancel",
+  "on_cancel":  "cancel"
+}
+```
+
+**`item_action.on_select` is resolved directly — never via a matching `options[]`
+entry.** Every `options[]` entry also renders as its own real, visible bottom
+button; since every row shares the same `item_action.action` (e.g. `view_record`),
+putting it in `options[]` too would render a redundant duplicate button below the
+per-row ones. `options[]` should only ever list buttons meant to be genuinely
+visible at the bottom (here, just "Done").
+
+On click, `run-workflow.mjs`'s `resumeGate` writes the clicked row's id
+(arrives as `responseData.tableName` — same field name `callback.mjs`'s `'list'`
+field type already sends for any row-level `secondaryAction`, regardless of
+gate_type) to `output_key`, then routes via `item_action.on_select` to a
+back-edge step that fetches and displays that one record — see `get_entity`'s
+equivalent steps 6-13 in `docs/arch-workflow-patterns.md` §6.17 for the pattern
+`list_entity`'s own drill-down branch (steps 20-23) follows.
 
 ###### `reveal` / `reveals` (optional, all gate types)
 
