@@ -222,16 +222,23 @@ Stores LLM prompts with versioning and quality tracking for self-improvement.
 
 ##### PGC_IntentMap
 Maps user input patterns to workflows or action types for the Intent Preprocessor.
-Rows are seeded at bootstrap for system-level intents, and written at runtime by
-`create_workflow` completion for user-defined workflows.
+Rows are seeded at bootstrap for system-level intents (still one joined-regex row per
+intent_category, managed by `seed_PGC_IntentMap.json` + `upsert-intent-map.mjs`), and
+written at runtime by `create_workflow` completion for user-defined workflows — **one
+row per invocation phrase**, not a joined regex, so each phrase is individually
+updatable/deletable (e.g. by Novia via `update_data`/`delete_data`) without reconstructing
+a combined pattern string. `matchIntentMap` is agnostic to which model produced a row —
+it iterates every row and regex-tests each `pattern` independently, so a joined-pattern
+row and several single-phrase rows behave identically at match time.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
-| pattern | text | Regex or keyword pattern — e.g. `create.domain\|new.domain\|build.domain` |
+| pattern | text | Regex or keyword pattern — single phrase for workflow-linked rows (e.g. `modify budget`); may still be a joined regex (e.g. `create.domain\|new.domain\|build.domain`) for system-seeded rows |
 | intent_category | text | |
 | workflow_id | integer FK | → PGC_Workflow.id (nullable — some intents are ad-hoc) |
 | action_type | text | `crud`, `workflow`, `heavy_lift` |
+| source | text | ✦ nullable — `user` (typed at the `create_workflow` invocation-phrases gate), `auto` (from `intent_keywords` or the truncated-userInput alias), `name` (the workflow's own name), or `NULL` (system-seeded / pre-migration rows, provenance not tracked) |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 

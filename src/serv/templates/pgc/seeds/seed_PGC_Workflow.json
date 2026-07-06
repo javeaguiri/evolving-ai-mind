@@ -1791,26 +1791,21 @@
       {
         "step": "35b",
         "type": "js_transform",
-        "description": "Build intent_pattern: user invocation phrases + alias extracted from original userInput (truncated at first stop word) + workflow name, joined with | for Pass 1a regex matching.",
-        "output_key": "intent_pattern",
+        "description": "Build one PGC_IntentMap row per distinct invocation phrase (user-typed phrases, intent_keywords, a truncated alias from the original userInput, and the workflow name), each tagged with its source, for a bulk serv_insert — one row per phrase, not a joined regex.",
+        "output_key": "intent_pattern_rows",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var keywords = (local_state.draft_workflow || {}).intent_keywords || []; var parts = []; if (raw && typeof raw === 'string' && raw.trim()) { parts = raw.split(',').map(function(p) { return p.trim().toLowerCase(); }).filter(function(p) { return p.length > 0; }); } else if (Array.isArray(keywords) && keywords.length > 0) { parts = keywords.map(function(k) { return String(k).trim().toLowerCase(); }).filter(function(k) { return k.length > 0; }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2 && parts.indexOf(truncated) === -1) { parts.push(truncated); } } if (name && parts.indexOf(name.toLowerCase()) === -1) { parts.push(name.toLowerCase()); } return parts.length > 0 ? parts.join('|') : name; })()"
+        "expression": "(function() { var raw = local_state.invocation_phrases; var name = (local_state.draft_workflow || {}).name || ''; var keywords = (local_state.draft_workflow || {}).intent_keywords || []; var workflowId = (local_state.registered_workflow || {}).id || null; var seen = {}; var rows = []; function addPhrase(phrase, source) { var p = String(phrase || '').trim().toLowerCase(); if (p.length === 0 || seen[p]) return; seen[p] = true; rows.push({ pattern: p, intent_category: name, action_type: 'workflow', workflow_id: workflowId, source: source }); } if (raw && typeof raw === 'string' && raw.trim()) { raw.split(',').forEach(function(p) { addPhrase(p, 'user'); }); } if (Array.isArray(keywords)) { keywords.forEach(function(k) { addPhrase(k, 'auto'); }); } var userInput = (typeof input !== 'undefined' && input && input.userInput) ? input.userInput : ''; if (userInput.trim()) { var truncated = userInput.replace(/\\s+\\b(that|which|using|with|based|for)\\b.*/i, '').trim().toLowerCase().slice(0, 60); if (truncated.length >= 2) addPhrase(truncated, 'auto'); } addPhrase(name, 'name'); return rows; })()"
       },
       {
         "step": "36",
         "type": "serv_insert",
-        "description": "Write the PGC_IntentMap routing row using the user-supplied invocation pattern.",
+        "description": "Bulk-write one PGC_IntentMap row per invocation phrase.",
         "input": {
           "tableName": "PGC_IntentMap",
-          "row": {
-            "pattern": "{{intent_pattern}}",
-            "intent_category": "{{draft_workflow.name}}",
-            "action_type": "workflow",
-            "workflow_id": "{{registered_workflow.id}}"
-          }
+          "row": "{{intent_pattern_rows}}"
         },
-        "output_key": "registered_intent_row",
+        "output_key": "registered_intent_rows",
         "on_success": "next",
         "on_else": "cancel"
       },
