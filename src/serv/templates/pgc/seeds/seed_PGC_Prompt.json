@@ -1189,7 +1189,7 @@
               "gate_type": {
                 "enum": [
                   "confirm",
-                  "edit_list",
+                  "list_selection",
                   "text_input",
                   "review_object",
                   "choice"
@@ -1883,7 +1883,7 @@
               "gate_type": {
                 "enum": [
                   "confirm",
-                  "edit_list",
+                  "list_selection",
                   "text_input",
                   "review_object",
                   "choice"
