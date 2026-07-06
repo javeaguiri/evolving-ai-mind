@@ -279,67 +279,53 @@ export function buildDialog(step, localState) {
   // Gate-type-specific fields
   switch (step.gate_type) {
 
-    case 'edit_list': {
+    // list_selection — one row per item, each with an optional accessory button.
+    // A single gate_type for "render a list with a per-row action" regardless of
+    // what that action does — behavior (mutate-and-restay vs write-and-advance)
+    // is entirely the calling workflow's concern, driven by item_action's own
+    // config (see run-workflow.mjs's resumeGate), never by this gate_type name.
+    // (Sprint 7 Track D2 — was briefly split into edit_list/row_list, merged
+    // back into one after review: rendering two ways for the same rendering
+    // need is exactly the one-off duplication this project avoids elsewhere.)
+    //
+    // context_key items are expected pre-formatted as { id, primary, secondary?,
+    // secondaryAction? } — the same shape design-domain.mjs's own hand-built
+    // review_tables gate already uses. Building that shape (a natural-language
+    // summary line, which items get an action at all, etc.) is a workflow-level
+    // (js_transform) concern, not this generic renderer's job. An item may carry
+    // its own fully custom secondaryAction (e.g. design-domain.mjs omits it for
+    // parent tables that can't be removed); otherwise step.item_action applies
+    // uniformly to every item — the common case (e.g. "View" on every row).
+    case 'list_selection': {
       const items = resolvePath(localState, step.context_key) ?? [];
       const resolvedItems = items.map(item => {
-        const primary   = item[step.item_primary_key] ?? String(item);
-        const secondary = item[step.item_secondary_key] ?? null;
-        let secondaryAction = null;
-
-        if (step.item_action) {
+        // Distinguish "item explicitly sets secondaryAction: null" (respect it —
+        // this item deliberately has no action) from "item never mentions the
+        // field at all" (fall back to step.item_action). Checking against null
+        // alone can't tell these apart, since both produce null.
+        const hasOwnAction = Object.prototype.hasOwnProperty.call(item, 'secondaryAction');
+        let secondaryAction = hasOwnAction ? item.secondaryAction : null;
+        if (!hasOwnAction && step.item_action) {
           const show = evalItemCondition(step.item_action.condition, item);
           if (show) {
             secondaryAction = {
-              action:  step.item_action.action,
-              label:   'Remove',
-              style:   'danger',
-              confirm: resolveTemplate(
-                step.item_action.confirm_template ?? '',
-                { ...localState, item },
-              ),
+              action: step.item_action.action,
+              label:  step.item_action.label ?? 'Remove',
+              style:  step.item_action.style ?? 'danger',
+              ...(step.item_action.confirm_template ? {
+                confirm: resolveTemplate(step.item_action.confirm_template, { ...localState, item }),
+              } : {}),
             };
           }
         }
-
         return {
-          id:              item[step.item_primary_key] ?? String(item),
-          primary,
-          secondary,
+          id:        item.id,
+          primary:   item.primary,
+          secondary: item.secondary ?? null,
           secondaryAction,
         };
       });
 
-      // label resolves template vars (e.g. table count)
-      const domain = resolvePath(localState, 'proposed_scaffold.domain') ?? '';
-      fields.push({
-        type:  'list',
-        name:  (step.context_key ?? '').split('.').pop(),
-        label: `${domain} — ${resolvedItems.length} tables selected`,
-        items: resolvedItems,
-      });
-      break;
-    }
-
-    // row_list — one row per item, each with its own configurable accessory
-    // button (Sprint 7 Track D2 drill-down). Reuses the same 'list' field type
-    // and responseData.tableName carry-through as edit_list (callback.mjs needs
-    // no changes at all), but item_action's label/style are caller-configurable
-    // instead of hardcoded to "Remove"/danger, and context_key items are expected
-    // pre-formatted as { id, primary, secondary? } — building a natural-language
-    // summary line is a workflow-level (js_transform) concern, not this generic
-    // renderer's job.
-    case 'row_list': {
-      const items = resolvePath(localState, step.context_key) ?? [];
-      const resolvedItems = items.map(item => ({
-        id:        item.id,
-        primary:   item.primary,
-        secondary: item.secondary ?? null,
-        secondaryAction: step.item_action ? {
-          action: step.item_action.action,
-          label:  step.item_action.label ?? 'View',
-          style:  step.item_action.style ?? 'default',
-        } : null,
-      }));
       fields.push({
         type:  'list',
         name:  (step.context_key ?? '').split('.').pop(),

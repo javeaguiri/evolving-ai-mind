@@ -85,7 +85,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     const step = {
       step:        '3',
       type:        'human_gate',
-      gate_type:   'edit_list',
+      gate_type:   'list_selection',
       description: 'Review tables',
       context_key: 'proposed_scaffold.tables',
       options: [
@@ -120,7 +120,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     const step = {
       step:        '3',
       type:        'human_gate',
-      gate_type:   'edit_list',
+      gate_type:   'list_selection',
       context_key: 'proposed_scaffold.tables',
       options: [
         { action: 'confirm', label: 'Looks good', on_select: 'next' },
@@ -136,17 +136,18 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
-  it('row_list gate renders one list item per row with a configurable action button, not hardcoded Remove/danger', () => {
-    // Sprint 7 Track D2 drill-down — row_list reuses edit_list's 'list' field
-    // rendering (callback.mjs needs no changes) but item_action's label/style
-    // are caller-configurable, and context_key items are expected pre-formatted
-    // as { id, primary, secondary }.
+  it('list_selection gate renders one row per item with a caller-configured action button (not the edit_list defaults)', () => {
+    // Sprint 7 Track D2 drill-down — list_selection unifies what were briefly
+    // two gate types (edit_list/row_list) into one: same 'list' field rendering
+    // regardless of what the button does. item_action's label/style/action/
+    // on_select are all caller-configurable; context_key items are expected
+    // pre-formatted as { id, primary, secondary? }.
     const step = {
       step:         '9c',
       type:         'human_gate',
-      gate_type:    'row_list',
+      gate_type:    'list_selection',
       context_key:  'row_items',
-      item_action:  { action: 'view_record', label: 'View', on_select: 'step:20' },
+      item_action:  { action: 'view_record', label: 'View', style: 'default', on_select: 'step:20' },
       output_key:   'selected_record_id',
       options:      [{ label: 'Done', action: 'cancel', on_select: 'cancel' }],
     };
@@ -176,19 +177,42 @@ describe('buildDialog — modal descriptor passthrough', () => {
     assert.equal(actionsField.buttons[0].action, 'cancel');
   });
 
-  it('row_list gate defaults item_action label/style when omitted', () => {
+  it('list_selection gate defaults item_action to Remove/danger when label/style omitted (the original edit_list behavior, preserved)', () => {
     const step = {
-      step: '9c', type: 'human_gate', gate_type: 'row_list',
+      step: '9c', type: 'human_gate', gate_type: 'list_selection',
       context_key: 'row_items',
-      item_action: { action: 'view_record' },
-      options: [{ label: 'Done', action: 'cancel', on_select: 'cancel' }],
+      item_action: { action: 'remove_item' },
+      options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
     };
     const localState = { row_items: [{ id: 1, primary: 'Row 1', secondary: null }] };
 
     const dialog = buildDialog(step, localState);
     const listField = dialog.fields.find(f => f.type === 'list');
-    assert.equal(listField.items[0].secondaryAction.label, 'View');
-    assert.equal(listField.items[0].secondaryAction.style, 'default');
+    assert.equal(listField.items[0].secondaryAction.label, 'Remove');
+    assert.equal(listField.items[0].secondaryAction.style, 'danger');
+  });
+
+  it('list_selection gate passes an item\'s own pre-built secondaryAction through untouched, ignoring step.item_action', () => {
+    // Matches design-domain.mjs's own pattern: some items (e.g. a referenced
+    // parent table) get no action at all, decided per-item upstream, not by
+    // this generic renderer.
+    const step = {
+      step: '9c', type: 'human_gate', gate_type: 'list_selection',
+      context_key: 'row_items',
+      item_action: { action: 'remove_item' },
+      options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
+    };
+    const localState = {
+      row_items: [
+        { id: 1, primary: 'Child', secondary: null, secondaryAction: { label: 'Remove', action: 'remove_item', style: 'danger' } },
+        { id: 2, primary: 'Parent (referenced)', secondary: null, secondaryAction: null },
+      ],
+    };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.ok(listField.items[0].secondaryAction, 'child item keeps its own action');
+    assert.equal(listField.items[1].secondaryAction, null, 'parent item explicitly has no action, step.item_action must not override it');
   });
 
   it('create_domain step 12 is a choice gate with per-table reveals and inline modal', () => {
