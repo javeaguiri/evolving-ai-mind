@@ -45,9 +45,9 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║              ║ Generic expression field: Session 19.                ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
-║              ║ response. Gate types: confirm, edit_list, row_list,  ║                  ║
-║              ║ text_input, review_object. (select_one, select_many  ║                  ║
-║              ║ Backlog)                                             ║                  ║
+║              ║ response. Gate types: confirm, list_selection,       ║                  ║
+║              ║ text_input, review_object, choice, followup_prompt.  ║                  ║
+║              ║ (select_one, select_many Backlog)                    ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_schema  ║ Create a PGD table via SERV createTable              ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
@@ -199,15 +199,11 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 ```json
 {
   "step": "3", "type": "human_gate",
-  "gate_type":        "edit_list",
+  "gate_type":        "confirm",
   "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
-  "context_key":      "proposed_scaffold.tables",
-  "item_primary_key": "tableName",
-  "item_secondary_key": "columnSummary",
   "options": [
-    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
-    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
-    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+    { "label": "Looks good", "action": "confirm", "on_select": "step:3d" },
+    { "label": "Cancel",     "action": "cancel",  "on_select": "cancel"  }
   ],
   "on_success": "next",
   "on_else": "cancel"
@@ -218,22 +214,61 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
-###### `row_list` gate_type (Sprint 7 Track D2 — drill-down)
+###### `list_selection` gate_type
 
-Same `'list'` Block Kit rendering as `edit_list` (one Slack `section` block per
-row, each with its own `accessory` button — no wall of buttons at the bottom),
-but the accessory button's label/style are caller-configurable instead of
-hardcoded to "Remove"/danger, and `context_key` items must arrive **pre-formatted**
-as `{ id, primary, secondary? }` — building a natural-language summary line is a
-workflow-level (`js_transform`) concern, not this generic renderer's job.
+Renders one Slack `section` block per `context_key` item, each with its own
+optional `accessory` button — no wall of buttons at the bottom, one click-target
+per row. **This gate_type is only concerned with rendering.** What clicking a
+row's button *does* is entirely the calling workflow's concern, expressed
+through `item_action`'s own config — never a different gate_type for a
+different action semantic (Sprint 7 Track D2: this merges what were briefly
+two separate gate types, `edit_list`/`row_list`, back into one — rendering the
+same thing two ways for two action semantics was exactly the one-off
+duplication this project avoids elsewhere).
+
+`context_key` items must arrive **pre-formatted** as `{ id, primary, secondary?,
+secondaryAction? }` — building that shape (a natural-language summary line,
+whether a given row gets an action at all) is a workflow-level (`js_transform`)
+concern, matching `design-domain.mjs`'s own hand-built review-tables gate,
+which uses this exact shape. An item may carry its own fully custom
+`secondaryAction` (e.g. omitted for a referenced parent table that can't be
+removed) that overrides `step.item_action` entirely for that one row.
+
+**Two behaviors, both driven by `item_action`, never by gate_type:**
+
+*Mutate-and-restay* (`action: "remove_item"`) — `resumeGate` filters the clicked
+item out of `context_key`, re-renders this same gate in place, stays suspended:
+
+```json
+{
+  "step": "3", "type": "human_gate",
+  "gate_type":        "list_selection",
+  "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
+  "context_key":      "table_review_items",
+  "item_action":       { "action": "remove_item", "confirm_template": "Remove {{item.primary}}?" },
+  "options": [
+    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
+    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
+    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+  ],
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+(`item_action.label`/`.style` default to `"Remove"`/`"danger"` when omitted —
+matching this gate_type's original, still-live default.)
+
+*Advance* (any other action name, with `item_action.on_select` set) — writes the
+clicked row's id to `output_key`, pops the gate frame, routes elsewhere (e.g.
+drill-down into a back-edge step that fetches and displays that one record):
 
 ```json
 {
   "step": "9c", "type": "human_gate",
-  "gate_type":        "row_list",
+  "gate_type":        "list_selection",
   "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
   "context_key":      "row_items",
-  "item_action":       { "action": "view_record", "label": "View", "on_select": "step:20" },
+  "item_action":       { "action": "view_record", "label": "View", "style": "default", "on_select": "step:20" },
   "output_key":       "selected_record_id",
   "options": [
     { "label": "Done", "action": "cancel", "on_select": "cancel" }
@@ -249,15 +284,19 @@ entry.** Every `options[]` entry also renders as its own real, visible bottom
 button; since every row shares the same `item_action.action` (e.g. `view_record`),
 putting it in `options[]` too would render a redundant duplicate button below the
 per-row ones. `options[]` should only ever list buttons meant to be genuinely
-visible at the bottom (here, just "Done").
+visible at the bottom (here, just "Done"). Note `style: "default"` is set
+explicitly here — the shared default is `"danger"` (matching the remove-item
+case above), which would render a "View" button as a destructive-looking red
+button if left unset. Slack itself has no `"default"` style value; the harness
+omits the field entirely rather than sending the literal string.
 
 On click, `run-workflow.mjs`'s `resumeGate` writes the clicked row's id
 (arrives as `responseData.tableName` — same field name `callback.mjs`'s `'list'`
 field type already sends for any row-level `secondaryAction`, regardless of
-gate_type) to `output_key`, then routes via `item_action.on_select` to a
-back-edge step that fetches and displays that one record — see `get_entity`'s
-equivalent steps 6-13 in `docs/arch-workflow-patterns.md` §6.17 for the pattern
-`list_entity`'s own drill-down branch (steps 20-23) follows.
+what the action does) to `output_key`, then routes via `item_action.on_select`
+to a back-edge step that fetches and displays that one record — see
+`get_entity`'s equivalent steps 6-13 in `docs/arch-workflow-patterns.md` §6.17
+for the pattern `list_entity`'s own drill-down branch (steps 20-23) follows.
 
 ###### `reveal` / `reveals` (optional, all gate types)
 
