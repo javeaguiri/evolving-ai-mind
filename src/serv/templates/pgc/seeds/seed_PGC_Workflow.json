@@ -2311,21 +2311,134 @@
       {
         "step": "5",
         "type": "js_transform",
-        "description": "Format matched entity with root columns and child arrays into Slack mrkdwn.",
-        "input_key": "results",
-        "max_rows": 5,
-        "output_key": "results_display",
+        "description": "Find the matched entity's own PGC_EntitySchema row (root_table, etc.) from the domain_schemas already loaded at step 1 — no new fetch needed.",
+        "output_key": "full_entity_schema",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 5; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var childKeys = allKeys.filter(function(k) { return Array.isArray(firstRow[k]); }); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  var rootLine = '• ' + [idPart].concat(rootParts).join(' | ');  var childLines = childKeys.reduce(function(acc, key) {   var children = row[key];   if (!Array.isArray(children) || children.length === 0) return acc;   acc.push('  _' + key + ':_');   children.forEach(function(child) {    if (!child || typeof child !== 'object') { acc.push('    ◦ ' + child); return; }    var parts = Object.entries(child).filter(function(e) { return !SYS.has(e[0]) && !Array.isArray(e[1]); }).map(function(e) { return e[0] + '=' + (e[1] != null ? e[1] : '—'); });    acc.push('    ◦ ' + parts.join(' | '));   });   return acc;  }, []);  return [rootLine].concat(childLines).join('\\n'); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "on_else": "6",
+        "expression": "(function(){ var ds = local_state.domain_schemas; var rows = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); var name = local_state.resolved_entity_name; return rows.find(function(r){ return r.entity_name === name; }) || null; })()"
       },
       {
         "step": "6",
-        "type": "notify",
-        "message_template": "{{results_display}}",
-        "on_success": "end"
+        "type": "serv_query",
+        "description": "Fetch the root table's foreign_keys so any FK columns on the result rows (e.g. a self-referential parent_id) can be resolved to a display label instead of shown as a bare id.",
+        "input": {
+          "tableName": "PGC_Schema",
+          "filters": [
+            {
+              "column": "table_name",
+              "op": "eq",
+              "value": "{{full_entity_schema.root_table}}"
+            }
+          ],
+          "limit": 1
+        },
+        "output_key": "root_table_schema",
+        "on_success": "next",
+        "on_else": "7"
       },
       {
         "step": "7",
+        "type": "js_transform",
+        "description": "Build the deduplicated list of FK lookups actually needed by the fetched row(s) — one entry per distinct (referenced table, referenced id) pair present, not one per row.",
+        "output_key": "fk_lookups",
+        "on_success": "8",
+        "on_else": "11",
+        "expression": "(function(){ var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fks = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var lookups = []; var seen = {}; resultsArr.forEach(function(row){ fks.forEach(function(fk){ var val = row[fk.column]; if (val == null) return; var key = fk.references.table + ':' + val; if (seen[key]) return; seen[key] = true; lookups.push({ column: fk.column, refTable: fk.references.table, refId: val }); }); }); return lookups; })()"
+      },
+      {
+        "step": "8",
+        "type": "condition",
+        "description": "Skip FK resolution entirely when the root table has no foreign keys or none are populated on the fetched row(s) — the common case for most domains.",
+        "expression": "{{fk_lookups.length}}",
+        "on_success": "9",
+        "on_else": "11"
+      },
+      {
+        "step": "9",
+        "type": "iterator",
+        "description": "Resolve each distinct FK reference to its display label (the referenced table's title column, per the Sprint 6 label-column convention).",
+        "items_key": "fk_lookups",
+        "item_step": {
+          "type": "serv_query",
+          "input": {
+            "tableName": "{{item.refTable}}",
+            "filters": [
+              {
+                "column": "id",
+                "op": "eq",
+                "value": "{{item.refId}}"
+              }
+            ],
+            "limit": 1
+          },
+          "on_else": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "fk_lookup_results",
+        "on_complete": "10",
+        "on_else": "10"
+      },
+      {
+        "step": "10",
+        "type": "js_transform",
+        "description": "Zip fk_lookups with their resolved rows into a { 'table:id': label } map for step 11 to substitute in.",
+        "output_key": "fk_label_map",
+        "on_success": "11",
+        "on_else": "11",
+        "expression": "(function(){ var lookups = local_state.fk_lookups || []; var results = local_state.fk_lookup_results || []; var map = {}; lookups.forEach(function(lookup, i){ var rows = results[i] || []; var row = rows[0]; var label = row ? (row.title || row.name || null) : null; if (label) map[lookup.refTable + ':' + lookup.refId] = label; }); return map; })()"
+      },
+      {
+        "step": "11",
+        "type": "js_transform",
+        "description": "Deterministic pre-processing (no LLM judgment needed here): strip system/embedding columns and null-valued fields, resolve FK columns to their looked-up label, and separate each row's scalar fields from its child array(s) into a bounded { entity_name, entities: [{fields, children}] } structure for format_entity_display to render.",
+        "output_key": "entity_display_data",
+        "on_success": "11a",
+        "expression": "(function(){ var SYS = new Set(['id','created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var schema = local_state.full_entity_schema || {}; var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fkCols = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fkCols.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } function cleanChildren(row){ var childKeys = Object.keys(row).filter(function(k){ return Array.isArray(row[k]); }); var children = {}; childKeys.forEach(function(k){ children[k] = row[k].map(function(child){ return (child && typeof child === 'object') ? cleanScalar(child) : child; }); }); return children; } var entities = resultsArr.map(function(row){ return { fields: cleanScalar(row), children: cleanChildren(row) }; }); return { entity_name: schema.entity_name || local_state.resolved_entity_name, entities: entities }; })()"
+      },
+      {
+        "step": "11a",
+        "type": "condition",
+        "description": "Skip the formatter call entirely when nothing matched — a deterministic shortcut, not something worth an LLM call.",
+        "expression": "{{entity_display_data.entities.length}}",
+        "on_success": "12",
+        "on_else": "13b"
+      },
+      {
+        "step": "13b",
+        "type": "notify",
+        "message_template": "No records found.",
+        "on_success": "end"
+      },
+      {
+        "step": "12",
+        "type": "llm_call",
+        "description": "RIGHT BRAIN, cheap model: turn the pre-cleaned, pre-resolved entity_display_data into readable markdown, deciding only where (if anywhere) a reveal panel best condenses a large child collection. All lookups and column filtering already happened deterministically in steps 5-11 — this call is presentation only.",
+        "input": {
+          "prompt": "format_entity_display",
+          "domain": "{{input.domain}}",
+          "entity_display_data": "{{entity_display_data}}"
+        },
+        "output_key": "formatted_display",
+        "on_success": "13",
+        "on_else": "13a"
+      },
+      {
+        "step": "13a",
+        "type": "js_transform",
+        "description": "Degrade gracefully if the formatter call fails — fall back to raw JSON rather than losing the result entirely.",
+        "output_key": "formatted_display",
+        "on_success": "13",
+        "expression": "(function(){ return { formatted_markdown: '```\\n' + JSON.stringify(local_state.entity_display_data, null, 2) + '\\n```', reveals: [] }; })()"
+      },
+      {
+        "step": "13",
+        "type": "notify",
+        "message_template": "{{formatted_display.formatted_markdown}}",
+        "reveals": "{{formatted_display.reveals}}",
+        "on_success": "end"
+      },
+      {
+        "step": "14",
         "type": "end"
       }
     ]
@@ -2418,22 +2531,134 @@
       {
         "step": "3",
         "type": "js_transform",
-        "description": "Format list results — root columns only, child arrays suppressed.",
-        "input_key": "results",
-        "max_rows": 20,
-        "root_only": true,
-        "output_key": "results_display",
+        "description": "Find the matched entity's own PGC_EntitySchema row (root_table, etc.) from the domain_schemas already loaded at step 1 — no new fetch needed.",
+        "output_key": "full_entity_schema",
         "on_success": "next",
-        "expression": "(function() { var SYS = new Set(['id','created_at','updated_at']); var rows = Array.isArray(items) ? items : (items && typeof items === 'object' ? [items] : []); var maxRows = 20; var capped = rows.slice(0, maxRows); if (capped.length === 0) return 'No records found.'; var firstRow = capped[0] || {}; var allKeys = Object.keys(firstRow); var scalarKeys = allKeys.filter(function(k) { return !Array.isArray(firstRow[k]) && !SYS.has(k); }); var lines = capped.map(function(row) {  var idPart = 'id=' + (row.id != null ? row.id : '—');  var rootParts = scalarKeys.map(function(col) { var val = row[col]; return col + '=' + (val == null ? '—' : String(val)); });  return '• ' + [idPart].concat(rootParts).join(' | '); }); var truncated = rows.length > maxRows ? '\\n_... and ' + (rows.length - maxRows) + ' more record(s) not shown._' : ''; return 'Found ' + rows.length + ' record(s).\\n' + lines.join('\\n') + truncated;})()"
+        "on_else": "4",
+        "expression": "(function(){ var ds = local_state.domain_schemas; var rows = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); var name = local_state.resolved_entity_name; return rows.find(function(r){ return r.entity_name === name; }) || null; })()"
       },
       {
         "step": "4",
-        "type": "notify",
-        "message_template": "{{results_display}}",
-        "on_success": "end"
+        "type": "serv_query",
+        "description": "Fetch the root table's foreign_keys so any FK columns on the result rows can be resolved to a display label instead of shown as a bare id.",
+        "input": {
+          "tableName": "PGC_Schema",
+          "filters": [
+            {
+              "column": "table_name",
+              "op": "eq",
+              "value": "{{full_entity_schema.root_table}}"
+            }
+          ],
+          "limit": 1
+        },
+        "output_key": "root_table_schema",
+        "on_success": "next",
+        "on_else": "5"
       },
       {
         "step": "5",
+        "type": "js_transform",
+        "description": "Build the deduplicated list of FK lookups needed across all listed rows — one entry per distinct (referenced table, referenced id) pair, not one per row.",
+        "output_key": "fk_lookups",
+        "on_success": "6",
+        "on_else": "9",
+        "expression": "(function(){ var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fks = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var lookups = []; var seen = {}; resultsArr.forEach(function(row){ fks.forEach(function(fk){ var val = row[fk.column]; if (val == null) return; var key = fk.references.table + ':' + val; if (seen[key]) return; seen[key] = true; lookups.push({ column: fk.column, refTable: fk.references.table, refId: val }); }); }); return lookups; })()"
+      },
+      {
+        "step": "6",
+        "type": "condition",
+        "description": "Skip FK resolution entirely when no foreign keys are populated across the listed rows — the common case for most domains.",
+        "expression": "{{fk_lookups.length}}",
+        "on_success": "7",
+        "on_else": "9"
+      },
+      {
+        "step": "7",
+        "type": "iterator",
+        "description": "Resolve each distinct FK reference to its display label (the referenced table's title column).",
+        "items_key": "fk_lookups",
+        "item_step": {
+          "type": "serv_query",
+          "input": {
+            "tableName": "{{item.refTable}}",
+            "filters": [
+              {
+                "column": "id",
+                "op": "eq",
+                "value": "{{item.refId}}"
+              }
+            ],
+            "limit": 1
+          },
+          "on_else": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "fk_lookup_results",
+        "on_complete": "8",
+        "on_else": "8"
+      },
+      {
+        "step": "8",
+        "type": "js_transform",
+        "description": "Zip fk_lookups with their resolved rows into a { 'table:id': label } map for step 9 to substitute in.",
+        "output_key": "fk_label_map",
+        "on_success": "9",
+        "on_else": "9",
+        "expression": "(function(){ var lookups = local_state.fk_lookups || []; var results = local_state.fk_lookup_results || []; var map = {}; lookups.forEach(function(lookup, i){ var rows = results[i] || []; var row = rows[0]; var label = row ? (row.title || row.name || null) : null; if (label) map[lookup.refTable + ':' + lookup.refId] = label; }); return map; })()"
+      },
+      {
+        "step": "9",
+        "type": "js_transform",
+        "description": "Deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns to their looked-up label. List mode has no child arrays (root columns only — matches the prior root_only behaviour) into a bounded { entity_name, entities: [{fields}], truncated_count } structure for format_entity_display to render.",
+        "output_key": "entity_display_data",
+        "on_success": "9a",
+        "expression": "(function(){ var SYS = new Set(['id','created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var maxRows = 20; var capped = resultsArr.slice(0, maxRows); var schema = local_state.full_entity_schema || {}; var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fkCols = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fkCols.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } var entities = capped.map(function(row){ return { fields: cleanScalar(row) }; }); return { entity_name: schema.entity_name || local_state.resolved_entity_name, entities: entities, truncated_count: Math.max(0, resultsArr.length - maxRows) }; })()"
+      },
+      {
+        "step": "9a",
+        "type": "condition",
+        "description": "Skip the formatter call entirely when nothing matched — a deterministic shortcut, not something worth an LLM call.",
+        "expression": "{{entity_display_data.entities.length}}",
+        "on_success": "10",
+        "on_else": "11b"
+      },
+      {
+        "step": "11b",
+        "type": "notify",
+        "message_template": "No records found.",
+        "on_success": "end"
+      },
+      {
+        "step": "10",
+        "type": "llm_call",
+        "description": "RIGHT BRAIN, cheap model: turn the pre-cleaned, pre-resolved entity_display_data into a readable markdown list, deciding only whether a reveal panel best condenses the record list (e.g. show the first few inline, reveal the rest). All lookups and column filtering already happened deterministically in steps 3-9 — this call is presentation only.",
+        "input": {
+          "prompt": "format_entity_display",
+          "domain": "{{input.domain}}",
+          "entity_display_data": "{{entity_display_data}}"
+        },
+        "output_key": "formatted_display",
+        "on_success": "11",
+        "on_else": "11a"
+      },
+      {
+        "step": "11a",
+        "type": "js_transform",
+        "description": "Degrade gracefully if the formatter call fails — fall back to raw JSON rather than losing the result entirely.",
+        "output_key": "formatted_display",
+        "on_success": "11",
+        "expression": "(function(){ return { formatted_markdown: '```\\n' + JSON.stringify(local_state.entity_display_data, null, 2) + '\\n```', reveals: [] }; })()"
+      },
+      {
+        "step": "11",
+        "type": "notify",
+        "message_template": "{{formatted_display.formatted_markdown}}",
+        "reveals": "{{formatted_display.reveals}}",
+        "on_success": "end"
+      },
+      {
+        "step": "12",
         "type": "end"
       }
     ]

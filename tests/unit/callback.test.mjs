@@ -64,7 +64,36 @@ function textToBlocks(text, contextText) {
 
 // ── Faithful copy of markdownToBlocks from callback.mjs ─────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:markdownToBlocks
+const HEADER_TEXT_LIMIT = 150;
+
 function markdownToBlocks(text, contextText) {
+  const blocks = [];
+
+  const headingSegments = text.split(/^(#{1,6}[ \t]+.+)$/m);
+
+  for (const seg of headingSegments) {
+    const headingMatch = seg.match(/^(#{1,6})[ \t]+(.+)$/);
+    if (headingMatch) {
+      const level = Math.min(headingMatch[1].length, 4);
+      let headingText = headingMatch[2].trim();
+      if (headingText.length > HEADER_TEXT_LIMIT) {
+        headingText = `${headingText.slice(0, HEADER_TEXT_LIMIT - 3)}...`;
+      }
+      blocks.push({ type: 'header', text: { type: 'plain_text', text: headingText, emoji: true }, level });
+    } else if (seg.trim()) {
+      blocks.push(...markdownProseToBlocks(seg));
+    }
+  }
+
+  if (contextText) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
+  }
+  return blocks;
+}
+
+// ── Faithful copy of markdownProseToBlocks from callback.mjs ────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:markdownProseToBlocks
+function markdownProseToBlocks(text) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
 
@@ -91,10 +120,6 @@ function markdownToBlocks(text, contextText) {
       }
       if (chunk) blocks.push({ type: 'markdown', text: chunk });
     }
-  }
-
-  if (contextText) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
   }
   return blocks;
 }
@@ -442,6 +467,59 @@ describe('textToBlocks — long text chunking', () => {
       assert.equal(b.type, 'section');
       assert.equal(b.text.type, 'mrkdwn');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markdownToBlocks — heading splitting (Sprint 7 Track D2)
+// ---------------------------------------------------------------------------
+
+describe('markdownToBlocks — heading splitting', () => {
+  it('a single # heading becomes its own header block at level 1', () => {
+    const blocks = markdownToBlocks('# Spanish Vocabulary');
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].type, 'header');
+    assert.equal(blocks[0].text.type, 'plain_text');
+    assert.equal(blocks[0].text.text, 'Spanish Vocabulary');
+    assert.equal(blocks[0].level, 1);
+  });
+
+  it('## and ### produce level 2 and 3; #### and deeper cap at level 4', () => {
+    assert.equal(markdownToBlocks('## Nov 20, 2024')[0].level, 2);
+    assert.equal(markdownToBlocks('### Card 1')[0].level, 3);
+    assert.equal(markdownToBlocks('#### Detail')[0].level, 4);
+    assert.equal(markdownToBlocks('###### Deepest')[0].level, 4);
+  });
+
+  it('prose before and after a heading becomes markdown blocks around the header block', () => {
+    const blocks = markdownToBlocks('Intro text.\n\n# Heading\n\nBody text.');
+    assert.equal(blocks.length, 3);
+    assert.equal(blocks[0].type, 'markdown');
+    assert.equal(blocks[0].text, 'Intro text.');
+    assert.equal(blocks[1].type, 'header');
+    assert.equal(blocks[2].type, 'markdown');
+    assert.equal(blocks[2].text, 'Body text.');
+  });
+
+  it('text with no heading lines produces only markdown blocks, no header blocks', () => {
+    const blocks = markdownToBlocks('Just **bold** prose, no headings.');
+    assert.ok(blocks.every(b => b.type === 'markdown'));
+  });
+
+  it('a heading longer than 150 chars is truncated', () => {
+    const longTitle = 'x'.repeat(200);
+    const blocks = markdownToBlocks(`# ${longTitle}`);
+    assert.equal(blocks[0].text.text.length, 150);
+    assert.ok(blocks[0].text.text.endsWith('...'));
+  });
+
+  it('multiple headings each become their own header block, in document order', () => {
+    const blocks = markdownToBlocks('# Spanish Vocabulary\n\n## Nov 20, 2024\n\nStats line.');
+    assert.deepEqual(blocks.map(b => b.type), ['header', 'header', 'markdown']);
+    assert.equal(blocks[0].text.text, 'Spanish Vocabulary');
+    assert.equal(blocks[0].level, 1);
+    assert.equal(blocks[1].text.text, 'Nov 20, 2024');
+    assert.equal(blocks[1].level, 2);
   });
 });
 

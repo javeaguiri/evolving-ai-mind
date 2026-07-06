@@ -737,7 +737,43 @@ fires. Fires a `block_actions` event with the selected option's `value`.
 
 **Used in evolving-mind-ai:** Novia (minds-eye agent) replies always set `format: 'markdown'` on the `HUMAN_NOTIFICATION` callback payload; `notify` steps in generated workflows (Sprint 7 Track D1) do the same via `run-workflow.mjs`. Both route to `markdownToBlocks()` in `callback.mjs` and emit `{ type: 'markdown', text }` blocks. `dialogToBlocks()`'s `typography` and `description_list` fields also emit `markdown` blocks (Sprint 7 D1), as does `postHumanGate`'s `text_input` branch.
 
-**Supported syntax** (verified against docs.slack.dev/reference/block-kit/blocks/markdown-block, 2026-07-05): bold, italic, strikethrough, inline code, bold+italic, links, unordered/ordered lists, task lists (`- [ ]` / `- [x]`), **headers at all levels (`#`–`######`)**, block quotes, fenced code blocks with syntax highlighting, dividers (`---`), and standard markdown tables. Only quirk: *"all header levels are rendered at the same size"* — headers work, they just have no visual size hierarchy; use bold within/instead of a header when size hierarchy matters. Images are **not embedded** — rendered as a link instead.
+**Supported syntax** (verified against docs.slack.dev/reference/block-kit/blocks/markdown-block, 2026-07-05): bold, italic, strikethrough, inline code, bold+italic, links, unordered/ordered lists, task lists (`- [ ]` / `- [x]`), **headers at all levels (`#`–`######`)**, block quotes, fenced code blocks with syntax highlighting, dividers (`---`), and standard markdown tables. Images are **not embedded** — rendered as a link instead.
+
+**Known doc/live-rendering discrepancy (found 2026-07-06, not yet reconciled):** the Slack docs text says *"all header levels are rendered at the same size"* — but a live render of a single `markdown` block containing `#` through `######` in sequence showed `#`/`##`/`###` each at a visibly distinct size, while `####`/`#####`/`######` collapsed to one shared size (matching `###` or close to it — not independently confirmed which). So the "no size hierarchy" quirk is real but narrower than the docs state: it appears to kick in only at H4 and deeper, not from H1. Not re-verified beyond one live test; see backlog for follow-up. Until reconciled, don't rely on `####`+ for any intended visual distinction within a `markdown` block.
+
+**This quirk is specific to `#` syntax inside a `markdown` block.** It does not apply to the separate `header` block type below, which has a real `level` field (though `header.level` is documented as capped at 4 — H1-H4 — so a source document using `#`-`######` still needs a level-capping decision somewhere if translated to `header` blocks; see this project's `markdownToBlocks()` splitter, which caps at `level: 4`).
+
+---
+
+## Header block
+
+`type: "header"` — a distinct Block Kit block, not a markdown-syntax feature. Unlike the `markdown` block's inline `#` headers (same visual size at every level, see above), `header` blocks genuinely render at different sizes via a `level` field.
+
+**Fields** (verified against docs.slack.dev/reference/block-kit/blocks/header-block, 2026-07-06):
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `type` | string | Yes | Always `"header"` |
+| `text` | object | Yes | `{ type: "plain_text", text, emoji? }` — **`plain_text` only**, no `mrkdwn`/`markdown` object type accepted, so no bold/italic/links inside a header's own text |
+| `block_id` | string | No | |
+| `level` | integer | No | 1–4, corresponding to H1–H4. Omitted = a default level (not H1–specific per docs; verify visually if exact default sizing matters) |
+
+```json
+{
+  "type": "header",
+  "text": { "type": "plain_text", "text": "Spanish Vocabulary", "emoji": true },
+  "level": 1
+}
+```
+
+**Not used in evolving-mind-ai yet.** Candidate use: rendering genuine visual
+hierarchy (root entity vs. child records) for `format_entity_display` (Sprint 7
+Track D2) — would require a harness step that splits an LLM's plain markdown
+`#`/`##`/`###` output into alternating `header` (per heading line, `level =
+min(#-count, 4)`) and `markdown` (body text between headings) blocks, since the
+LLM's job is to produce standard markdown, not hand-assemble Block Kit JSON
+(same extend-the-harness-not-the-prompt principle as everywhere else in this
+project). Not yet implemented.
 
 **Limit:** the cumulative limit for all `markdown` blocks in a single payload is **12,000 characters** (separate from the 2800-char-per-block chunking already used by `markdownToBlocks`, and separate from the 50-block-per-message limit). `postHumanNotification`'s `groupBlocksForSlack()` helper (Sprint 7) splits content into multiple Slack messages when either the block-count limit or this cumulative markdown-char limit would be exceeded — added because a long Novia reply or generated report could otherwise silently fail to post.
 

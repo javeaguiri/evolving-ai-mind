@@ -461,6 +461,19 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 }
 ```
 
+**`reveal` / `reveals` (optional, Sprint 7 Track D2)** — same shape and resolution as `human_gate`'s (see §"`reveal` / `reveals`" below): `reveal` is a single `{ button_label, content }` object; `reveals` is an inline array or a `{{template}}` reference to a `local_state` array of the same shape. Rendered by `postHumanNotification` via the shared `buildRevealBlock()` helper, appended after the message content.
+
+```json
+{
+  "step": "13", "type": "notify",
+  "message_template": "{{formatted_display.formatted_markdown}}",
+  "reveals": "{{formatted_display.reveals}}",
+  "on_success": "end"
+}
+```
+
+`message_template` supports standard markdown headings (`#`–`######`) — `markdownToBlocks()` (`callback.mjs`) splits heading lines into real Slack `header` blocks with genuine H1–H4 visual sizing (a different mechanism from a `markdown` block's own inline `#` syntax, which renders all levels at one size — see `docs/slack-block-kit.md`).
+
 ##### `end`
 ```json
 { "step": "12", "type": "end" }
@@ -585,7 +598,7 @@ Any of the following causes an immediate throw:
 | `columnSummary` | Expression reading `local_state.proposed_scaffold.domain` | `create_domain` steps 2, 3c |
 | `buildHelpOptions` | Expression over `items` (registered_domains) | `help` step 2 |
 | `resolveHelpContent` | Expression reading `local_state.help_selection` + `local_state.help_options` | `help` step 4 |
-| `formatRecordList` | Expression with root_only variant | `get_entity` step 4, `list_entity` step 2 |
+| `formatRecordList` | Deterministic `js_transform` pre-processing (FK resolution, null/system/embedding stripping) feeding the `format_entity_display` `llm_call` (Sprint 7 Track D2) — see `docs/arch-workflow-patterns.md` §6.17 | `get_entity` steps 5-11, `list_entity` steps 3-9 |
 | `buildChildInserts` | Expression reading `local_state.full_entity_schema`, `local_state.parsed_entity`, `local_state.new_record` | `add_entity` step 5 |
 
 ##### `serv_entity_schema`
