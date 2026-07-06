@@ -69,7 +69,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | G1 `step-executor.mjs` — serv_insert bulk always returns array | AC1 | ✅ DONE |
 | G3 `create_workflow` — mode-specific additional-instructions gate (all modes) | AC1 | ✅ DONE |
 | C1 `novia_diagnostic_protocol` system context | AC4 | ✅ DONE |
-| C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | ⬜ |
+| C1a `js_transform_timeout_ms` configurable via `PGC_SystemContext` | AC4 | 🔁 DEFERRED — see `docs/backlog.md` (needs caching + safety-ceiling design pass first) |
 | C2 Novia view tooling (`create_view`, `drop_view`) | AC4 | ✅ DONE — delivered as Track E's E6, same scope |
 | C4 Novia `upsert_data` tool | AC4 | ✅ DONE |
 | C5 Novia action-count reset on every gate resumption | AC4 | ✅ DONE |
@@ -235,10 +235,9 @@ Implementation:
 - Add one-liner to `minds_eye_system_prompt`: "For detailed diagnostic and modification procedures, query PGC_SystemContext by key='novia_diagnostic_protocol' before proceeding."
 - Run `upsert-system-context.mjs`.
 
-**C1a — `js_transform_timeout_ms` configurable via `PGC_SystemContext`**
-- Add `js_transform_timeout_ms` row to `seed_PGC_SystemContext.json` (default: `{ "simulation": 500, "runtime": 200 }`).
-- Update `simulation-engine.mjs` and `template-resolver.mjs` to read the value from `PGC_SystemContext` at call time (with hardcoded fallback).
-- Run `upsert-system-context.mjs`.
+**C1a — `js_transform_timeout_ms` configurable via `PGC_SystemContext` — 🔁 DEFERRED to backlog (2026-07-06)**
+- Design review surfaced two open questions bigger than this one field: (1) no PGC config read anywhere in the proc tier is cached today — a naive "read at call time" implementation would add a fresh SERV round-trip per `js_transform` call, including inside iterators; (2) the value needs a hard-coded safety ceiling so Novia can't tune it past what `ProcFunction`'s Lambda timeout can tolerate. Both need a real design pass, not a quick add. See `docs/backlog.md` Medium Priority — "PGC config read caching" for the generalized caching design (module-level cache + TTL) this should build on, and the AC4/C1 note below for the safety-ceiling requirement.
+- Original scope preserved for when this is picked back up: add `js_transform_timeout_ms` row to `seed_PGC_SystemContext.json` (default: `{ "simulation": 500, "runtime": 200 }`); update `simulation-engine.mjs` and `template-resolver.mjs` to read the value (cached, with hardcoded fallback and a hard-coded max clamp); run `upsert-system-context.mjs`.
 
 **C2 — Novia view tooling (`minds-eye.mjs`) — DONE, delivered as Track E's E6**
 - Superseded by E6 (Track E) once the domain-association design session settled on views being first-class `PGC_Schema` rows — same scope, same file, implemented there instead of here to keep it next to the SERV endpoints it depends on. See Track E for the actual implementation notes.
@@ -334,7 +333,7 @@ Implementation:
   - Also checked the user's separate concern that Novia "added a new step" whose count didn't match in her diff tool: pulled session 953's `simulate_workflow` (v1) and `propose_workflow_fix` (v2) tool-call params directly — both have exactly 15 steps; the only diff is `row`→`rows` on steps 9/9a. No step was added or removed; the diff tool reported correctly.
 - Fix: `table.mjs`'s `insertRow` — `isBatch` now only checks `Array.isArray(rows)` (length-independent); an empty array short-circuits to an immediate no-op success (`{success:true, rows:[]}`) before any `rows[0]`-dependent validation or DB connection, since a batch of zero is a valid "nothing to insert" outcome, not an error.
 - `table.mjs` has no existing unit test file (same gap noted for `interactive.mjs` in the D4 fix above) — 385/385 unit tests pass (no regressions; this specific change has no direct coverage either direction). Not yet deployed.
-- **Follow-up needed:** ask Novia to revert `budget_vs_expense_report` steps 9/9a back to `input.row` (singular field name) now that the harness handles empty arrays correctly — the rename to `rows` should not persist once this ships.
+- **Follow-up — ✅ DONE (2026-07-06):** user had Novia revert `budget_vs_expense_report` steps 9/9a back to `input.row`; confirmed no error at the `/serv` layer.
 
 **D7 — `postHumanGate` runId/traceId context block — ✅ DONE**
 - Raised 2026-07-05 during a live `create_workflow` run: human gates gave the user no way to look up the run for `/explain <run_id>`, unlike `HUMAN_NOTIFICATION`/`WORKFLOW_ERROR`, which already show `runId | traceId` in a footer context block.
@@ -466,6 +465,10 @@ Sequenced after H1 (SERV-Table `upsertRows`) so `serv_upsert`'s own contract can
 ---
 
 ## Session Notes
+
+**2026-07-06 (session 10):** User resolved the two carry-forward items from session 9 directly with Novia: (1) rebuilt `PGD_BudgetExpenseSummary` (or its successor view/workflow) to include category-level line items, no longer just type-level sub-totals; (2) reverted `budget_vs_expense_report` steps 9/9a back to `input.row` now that `table.mjs` handles empty arrays correctly. Budget report confirmed working as required, no errors at the `/serv` layer.
+
+Reviewed C3 (Novia SOP: prompt fix procedure) and C1a (`js_transform_timeout_ms`) — user's question about template.yaml vs runtime config and Lambda-timeout tuning applied to C1a, not C3. Confirmed via code search: no PGC config read (SystemContext/Prompt/TableMap) is cached anywhere in the proc tier today — every read is a fresh SERV round-trip, cold or warm; the one existing module-scope cache (`init-brain.mjs`'s bootstrap singleton) is a one-shot, not reusable. Since `js_transform` can run inside an `iterator`, a naive "read at call time" implementation of C1a would multiply SERV round-trips per workflow run. Deferred C1a to backlog pending a generalized module-level-cache-with-TTL design (also flagged by the user as applicable to workflow definitions and Novia's prompt during a run) — see `docs/backlog.md` Medium Priority. Also flagged: C1a's value needs a hard-coded safety ceiling so Novia can't tune the timeout past what `ProcFunction`'s Lambda timeout budget can absorb across multiple `js_transform` steps in one run.
 
 **2026-07-05 (session 9):** D7 (human gate runId/traceId context block) and one concrete D4 instance (explain-modal eager `chat.update` on Cancel) implemented, tested (385/385), committed (`f7fba4b`), and deployed. Separately, evaluated Novia's session-953 diagnosis/fix for `budget_vs_expense_report` (run 638 failure at step 9: `"row must be a non-null object"`) — her fix (renaming the step's `input.row` to `input.rows`) was wrong on both root cause and remedy; verified via live `PGC_WorkflowRun`/`PGC_Session` records that the real bug was an Execution-domain edge case in `table.mjs`'s `insertRow` (`isBatch` required `rows.length > 0`, so a legitimate empty bulk array fell through to the singular-row check and failed). `create_workflow` run 637 was not at fault. Also confirmed via the same session records that no step was added (15 steps before and after; the diff tool's report was correct) — resolving the user's separate "did she add a step" question. Fixed `table.mjs` (empty array now short-circuits to a no-op success), committed (`7ff6065`), deployed. Flagged as follow-up: ask Novia to revert `budget_vs_expense_report` steps 9/9a back to `input.row` now that the harness handles empty arrays. Deploy also surfaced one incidental, pre-existing seed/DB content drift on `propose_domain_view` (v1 content differed from seed at the same version number) — corrected by the upsert script in the safe direction (seed → DB); not investigated further, flagged only.
 
