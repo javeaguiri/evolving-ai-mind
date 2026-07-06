@@ -436,7 +436,7 @@ describe('get_entity step 11 — entity_display_data builder (with children)', (
     const entity = result.entities[0];
     assert.equal(entity.fields.front_text, 'hola');
     assert.equal(entity.fields.parent_id, 'Spanish Vocabulary'); // FK resolved to label, not raw id
-    assert.equal(entity.fields.id, undefined);          // system col suppressed
+    assert.equal(entity.fields.id, 1);                   // id kept — needed to reference this record in get/update/delete
     assert.equal(entity.fields.created_at, undefined);  // system col suppressed
     assert.equal(entity.fields.review_logs, undefined); // arrays never land in fields
     assert.equal(entity.children.review_logs.length, 1);
