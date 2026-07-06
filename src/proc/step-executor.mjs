@@ -1546,13 +1546,37 @@ function executeCondition({ step, localState, traceId }) {
 async function executeNotify({ step, localState, traceId }) {
   const message = resolveTemplate(step.message_template ?? step.message ?? '', localState);
 
-  console.info('step-executor: notify', { traceId });
+  // reveal / reveals — same resolution as human_gate's buildDialog (see above).
+  // Optional collapsible panels rendered by postHumanNotification via buildRevealBlock.
+  const reveals = [];
+  if (step.reveal) {
+    reveals.push({
+      button_label: step.reveal.button_label,
+      content:      resolveInput(step.reveal.content ?? '', localState),
+    });
+  }
+  const revealsArray = typeof step.reveals === 'string'
+    ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])
+    : (Array.isArray(step.reveals) ? step.reveals : []);
+  const stringRevealItems = revealsArray.filter(r => typeof r === 'string');
+  if (stringRevealItems.length > 0) {
+    reveals.push({ button_label: 'Details', content: stringRevealItems });
+  }
+  for (const r of revealsArray.filter(r => typeof r !== 'string')) {
+    reveals.push({
+      button_label: r.button_label,
+      content:      resolveInput(r.content ?? '', localState),
+    });
+  }
+
+  console.info('step-executor: notify', { traceId, revealCount: reveals.length });
 
   // run-workflow.mjs will enqueue the HUMAN_NOTIFICATION to SlackResultsQueue
   return {
     outputValue: { message },
     nextAction:  resolveNextAction(step.on_success, null),
     notifyMessage: message,
+    notifyReveals: reveals.length > 0 ? reveals : undefined,
   };
 }
 

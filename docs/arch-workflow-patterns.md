@@ -1031,8 +1031,8 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `fix_workflow` | 21 | 1 | Repair a broken registered workflow |
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
-| `get_entity` | 11 | 1 | Fetch a single entity by id or name |
-| `list_entity` | 9 | 1 | List all entities in a domain |
+| `get_entity` | 21 | 2 | Fetch a single entity by id or name |
+| `list_entity` | 19 | 2 | List all entities in a domain |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1166,8 +1166,16 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 - `2` `condition` — `input.id` set → `3` (id lookup); else → `4` (name search)
 - `3` `serv_entity_get` — fetch entity by exact id (root + child aggregations) → `step:5`
 - `4` `serv_entity_query` — search by LIKE filter on `title` column
-- `5` `js_transform` — format matched entity (root columns + child arrays) into Slack mrkdwn; vector columns stripped
-- `6` `notify` → `7` `end`
+- `5` `js_transform` — find this entity's own `PGC_EntitySchema` row (already loaded at step 1) for its `root_table`
+- `6` `serv_query PGC_Schema` — fetch the root table's `foreign_keys`
+- `7` `js_transform` — build the deduplicated list of FK lookups the fetched row(s) actually need
+- `8` `condition` — skip resolution entirely if no FK columns are populated (the common case)
+- `9` `iterator` — resolve each distinct FK reference to its display label (`title` column of the referenced table)
+- `10` `js_transform` — zip lookups + results into a `{ 'table:id': label }` map
+- `11` `js_transform` — deterministic pre-processing (no LLM judgment): strip system/embedding columns and nulls, resolve FK columns via the label map, separate each row's scalar `fields` from its `children` collection(s) into a bounded structure
+- `11a` `condition` — skip the formatter call entirely when nothing matched (`13b` `notify` "No records found." → `end`)
+- `12` `llm_call` [`format_entity_display`] (cheap model) — presentation only: render the pre-cleaned structure as markdown, deciding only where (if anywhere) a single reveal panel best condenses a large child collection (Sprint 7 Track D2); `13a` `js_transform` degrades to a raw-JSON fallback on failure
+- `13` `notify` — `message_template` from `formatted_markdown`, `reveals` wired from the LLM's `reveals` output → `14` `end`
 
 ---
 
@@ -1176,8 +1184,11 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 
 - `2` `serv_entity_query` — list all entities with domain-scoped default filters; root columns only
-- `3` `js_transform` — format list results; child arrays and vector columns suppressed
-- `4` `notify` → `5` `end`
+- `3`–`8`: same FK-resolution preamble as `get_entity` steps 5–10, applied across all listed rows (deduplicated by distinct referenced id, not one lookup per row)
+- `9` `js_transform` — deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns — list mode has no `children` key at all (root columns only, matching the prior `root_only` behaviour)
+- `9a` `condition` — skip the formatter call entirely when nothing matched (`11b` `notify` "No records found." → `end`)
+- `10` `llm_call` [`format_entity_display`] — same prompt as `get_entity`, general enough to also handle a flat list of same-shaped entities with no children; `11a` `js_transform` degrades to a raw-JSON fallback on failure
+- `11` `notify` → `12` `end`
 
 ---
 

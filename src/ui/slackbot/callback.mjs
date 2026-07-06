@@ -161,14 +161,55 @@ function textToBlocks(text, contextText) {
 
 // ---------------------------------------------------------------------------
 // markdownToBlocks — Novia reply renderer using Slack's markdown block type.
-// Splits text into code-block and prose segments first. Code blocks become a
-// dedicated single block each — splitting on \n\n inside a code block would
-// break the ``` pair across separate Slack blocks (each renders independently),
-// leaving fences unclosed. Prose segments are then split on paragraph
-// boundaries as before.
+// Splits text into heading, code-block, and prose segments first.
+//
+// Heading lines (`#` through `######`) become dedicated `header` blocks with a
+// real `level` (1-4, capped — Slack's header block only supports H1-H4; `####`
+// and deeper all render as H4). This is a different mechanism from the `#`
+// syntax inside a `markdown` block's own text, which Slack renders at a single
+// fixed size regardless of level (verified against docs.slack.dev/reference/
+// block-kit/blocks/markdown-block — see docs/slack-block-kit.md). Splitting
+// headings out into their own `header` blocks is the only way to get real
+// visual hierarchy (Sprint 7 Track D2).
+//
+// Code blocks become a dedicated single block each — splitting on \n\n inside
+// a code block would break the ``` pair across separate Slack blocks (each
+// renders independently), leaving fences unclosed. Prose segments are then
+// split on paragraph boundaries as before.
 // ---------------------------------------------------------------------------
 
+const HEADER_TEXT_LIMIT = 150; // Slack header block text.text max length
+
 function markdownToBlocks(text, contextText) {
+  const blocks = [];
+
+  // Split on heading lines first (capturing so they're isolated from prose).
+  const headingSegments = text.split(/^(#{1,6}[ \t]+.+)$/m);
+
+  for (const seg of headingSegments) {
+    const headingMatch = seg.match(/^(#{1,6})[ \t]+(.+)$/);
+    if (headingMatch) {
+      const level = Math.min(headingMatch[1].length, 4);
+      let headingText = headingMatch[2].trim();
+      if (headingText.length > HEADER_TEXT_LIMIT) {
+        headingText = `${headingText.slice(0, HEADER_TEXT_LIMIT - 3)}...`;
+      }
+      blocks.push({ type: 'header', text: { type: 'plain_text', text: headingText, emoji: true }, level });
+    } else if (seg.trim()) {
+      blocks.push(...markdownProseToBlocks(seg));
+    }
+  }
+
+  if (contextText) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
+  }
+  return blocks;
+}
+
+// markdownProseToBlocks — code-block and paragraph chunking for non-heading
+// markdown text. Extracted from markdownToBlocks so heading segments never
+// enter this path (a heading line is never chunked as prose).
+function markdownProseToBlocks(text) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
 
@@ -198,10 +239,6 @@ function markdownToBlocks(text, contextText) {
       }
       if (chunk) blocks.push({ type: 'markdown', text: chunk });
     }
-  }
-
-  if (contextText) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextText }] });
   }
   return blocks;
 }
@@ -272,16 +309,20 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
     : `traceId: ${traceId}`;
 
   // Build content blocks without suffix so chunking can manage them independently.
-  const contentBlocks = format === 'markdown'
-    ? markdownToBlocks(text)
-    : textToBlocks(text);
+  // reveals (optional, notify steps only — Sprint 7 Track D2) render the same
+  // way human_gate's reveal/reveals fields do, via the shared buildRevealBlock.
+  const revealBlocks = Array.isArray(reveals) ? reveals.map(buildRevealBlock) : [];
+  const contentBlocks = [
+    ...(format === 'markdown' ? markdownToBlocks(text) : textToBlocks(text)),
+    ...revealBlocks,
+  ];
 
   // Suffix: context block + optional actions block — always on the last chunk only.
   const suffixBlocks = [

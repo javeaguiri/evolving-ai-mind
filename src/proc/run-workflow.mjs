@@ -411,6 +411,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       message:       result.notifyMessage,
       format:        'markdown',
       traceId,
+      ...(result.notifyReveals ? { reveals: result.notifyReveals } : {}),
     });
   }
 

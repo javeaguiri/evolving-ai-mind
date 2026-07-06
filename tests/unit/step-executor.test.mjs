@@ -405,7 +405,13 @@ describe('help step 4 — resolveHelpContent expression', () => {
 // get_entity / list_entity expressions
 // ---------------------------------------------------------------------------
 
-describe('get_entity step 5 — formatRecordList expression (with children)', () => {
+// Sprint 7 Track D2 — get_entity/list_entity steps replaced their crude
+// markdown-flattening js_transform with a deterministic pre-processing step
+// that builds a { entity_name, entities: [{fields, children?}] } structure
+// for the format_entity_display llm_call to render. These tests cover the
+// deterministic builder only (FK resolution, system/embedding/null stripping,
+// scalar/child separation) — not the LLM formatting step itself.
+describe('get_entity step 11 — entity_display_data builder (with children)', () => {
   const RESULTS = [
     {
       id:           1,
@@ -413,27 +419,39 @@ describe('get_entity step 5 — formatRecordList expression (with children)', ()
       back_text:    'hello',
       created_at:   '2026-01-01',
       updated_at:   '2026-01-01',
+      parent_id:    5,
       review_logs:  [{ id: 10, result: 'pass', created_at: '2026-01-01' }],
     },
   ];
+  const ROOT_TABLE_SCHEMA = [{
+    foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Decks', column: 'id' } }],
+  }];
+  const FK_LABEL_MAP = { 'PGD_Decks:5': 'Spanish Vocabulary' };
 
-  it('formats root columns and includes child arrays', () => {
-    const step = getStep('get_entity', '5');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(typeof result === 'string');
-    assert.ok(result.includes('front_text=hola'));
-    assert.ok(result.includes('review_logs'));
-    assert.ok(!result.includes('created_at='));  // system cols suppressed
+  it('strips system/embedding columns, elides nulls, resolves FK columns, and keeps child arrays separately', () => {
+    const step = getStep('get_entity', '11');
+    const localState = { results: RESULTS, root_table_schema: ROOT_TABLE_SCHEMA, fk_label_map: FK_LABEL_MAP };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.entities.length, 1);
+    const entity = result.entities[0];
+    assert.equal(entity.fields.front_text, 'hola');
+    assert.equal(entity.fields.parent_id, 'Spanish Vocabulary'); // FK resolved to label, not raw id
+    assert.equal(entity.fields.id, undefined);          // system col suppressed
+    assert.equal(entity.fields.created_at, undefined);  // system col suppressed
+    assert.equal(entity.fields.review_logs, undefined); // arrays never land in fields
+    assert.equal(entity.children.review_logs.length, 1);
+    assert.equal(entity.children.review_logs[0].result, 'pass');
+    assert.equal(entity.children.review_logs[0].created_at, undefined); // system col suppressed on children too
   });
 
-  it('returns "No records found." for empty array', () => {
-    const step = getStep('get_entity', '5');
-    const result = runSandboxedExpression(step.expression, [], {}, 'test');
-    assert.equal(result, 'No records found.');
+  it('returns an empty entities array for no results', () => {
+    const step = getStep('get_entity', '11');
+    const result = runSandboxedExpression(step.expression, null, { results: [] }, 'test');
+    assert.deepEqual(result.entities, []);
   });
 });
 
-describe('list_entity step 3 — formatRecordList expression (root only)', () => {
+describe('list_entity step 9 — entity_display_data builder (root only)', () => {
   const RESULTS = [
     { id: 1, front_text: 'hola', back_text: 'hello', created_at: '2026', updated_at: '2026',
       review_logs: [{ result: 'pass' }] },
@@ -441,17 +459,20 @@ describe('list_entity step 3 — formatRecordList expression (root only)', () =>
       review_logs: [] },
   ];
 
-  it('formats root columns and suppresses child arrays', () => {
-    const step = getStep('list_entity', '3');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(result.includes('front_text=hola'));
-    assert.ok(!result.includes('review_logs'), 'child arrays must be suppressed');
+  it('includes root scalar fields and suppresses child arrays entirely', () => {
+    const step = getStep('list_entity', '9');
+    const result = runSandboxedExpression(step.expression, null, { results: RESULTS }, 'test');
+    assert.equal(result.entities.length, 2);
+    assert.equal(result.entities[0].fields.front_text, 'hola');
+    assert.equal(result.entities[0].children, undefined, 'list mode has no children key at all');
   });
 
-  it('includes record count in output', () => {
-    const step = getStep('list_entity', '3');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(result.includes('Found 2 record(s)'));
+  it('caps at 20 rows and reports the truncated count', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: i, front_text: `word${i}` }));
+    const step = getStep('list_entity', '9');
+    const result = runSandboxedExpression(step.expression, null, { results: many }, 'test');
+    assert.equal(result.entities.length, 20);
+    assert.equal(result.truncated_count, 5);
   });
 });
 
