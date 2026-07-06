@@ -1848,7 +1848,7 @@
         "output_key": "updated_domain_commands",
         "on_success": "36d",
         "on_else": "37",
-        "expression": "(() => { const helpRows = Array.isArray(local_state.domain_help_row) ? local_state.domain_help_row : []; if (helpRows.length === 0) { throw new Error('no_domain_help_row'); } const existingHelp = helpRows[0]; const draft = local_state.draft_workflow; const keyword = Array.isArray(draft.intent_keywords) && draft.intent_keywords.length > 0 ? draft.intent_keywords[0] : draft.name; const newCommand = { syntax: '/m ' + keyword, description: draft.description || ('Run ' + draft.name) }; const existing = Array.isArray(existingHelp.commands) ? existingHelp.commands : []; return existing.filter(function(c) { return c.syntax !== newCommand.syntax; }).concat([newCommand]); })()"
+        "expression": "(() => { const helpRows = Array.isArray(local_state.domain_help_row) ? local_state.domain_help_row : []; if (helpRows.length === 0) { throw new Error('no_domain_help_row'); } const existingHelp = helpRows[0]; const draft = local_state.draft_workflow; const keyword = Array.isArray(draft.intent_keywords) && draft.intent_keywords.length > 0 ? draft.intent_keywords[0] : draft.name; const newCommand = { syntax: '/m ' + keyword, description: draft.description || ('Run ' + draft.name), workflow_id: (local_state.registered_workflow || {}).id || null }; const existing = Array.isArray(existingHelp.commands) ? existingHelp.commands : []; return existing.filter(function(c) { return c.syntax !== newCommand.syntax; }).concat([newCommand]); })()"
       },
       {
         "step": "36d",
