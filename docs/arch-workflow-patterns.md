@@ -1188,7 +1188,7 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 - `9` `js_transform` — deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns — list mode has no `children` key at all (root columns only, matching the prior `root_only` behaviour)
 - `9a` `condition` — skip the row list entirely when nothing matched (`11b` `notify` "No records found." → `end`)
 - `9b` `js_transform` — deterministic (no LLM): build one `{id, primary, secondary}` row per record — a short id-labeled summary, not natural-language synthesis (Sprint 7 Track D2 drill-down)
-- `9c` `human_gate` (`row_list`) — one row per record, each with a "View" button (`item_action.on_select` → `step:20`); "Done" ends the run
+- `9c` `human_gate` (`list_selection`) — one row per record, each with a "View" button (`item_action.on_select` → `step:20`); "Done" ends the run
 - `20` `serv_entity_get` — drill-down: fetch the single clicked record in full (root + children — the list fetch above was root-only)
 - `21` `js_transform` — deterministic pre-processing for the one drilled-down record, with children this time; reuses `root_table_schema`/`fk_label_map` already resolved for the list (the clicked record's FK values were already covered)
 - `22` `llm_call` [`format_entity_display`] — same prompt and contract as `get_entity`'s equivalent step; `22a` `js_transform` degrades to a raw-JSON fallback on failure
