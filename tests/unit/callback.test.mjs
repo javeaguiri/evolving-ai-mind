@@ -229,9 +229,10 @@ function dialogToBlocks(dialog, workflowRunId) {
             },
           };
           if (item.secondaryAction) {
+            const validStyle = item.secondaryAction.style === 'danger' || item.secondaryAction.style === 'primary';
             sectionBlock.accessory = {
-              type:      'button',
-              style:     item.secondaryAction.style === 'danger' ? 'danger' : 'default',
+              type: 'button',
+              ...(validStyle ? { style: item.secondaryAction.style } : {}),
               text:      { type: 'plain_text', text: item.secondaryAction.label },
               action_id: `workflow_action_${item.id || idx}_${idx}`,
               value:     JSON.stringify({
@@ -627,6 +628,28 @@ describe('dialogToBlocks — list', () => {
     assert.ok(block.accessory, 'accessory should be present');
     assert.equal(block.accessory.style, 'danger');
     assert.equal(block.accessory.text.text, 'Remove');
+  });
+
+  it('secondaryAction with style "default" (or omitted) sends no style field at all — Slack rejects style: "default" as invalid_blocks', () => {
+    const field = {
+      type: 'list',
+      items: [
+        { id: 'A', primary: 'A', secondaryAction: { label: 'View', action: 'view_record', style: 'default' } },
+        { id: 'B', primary: 'B', secondaryAction: { label: 'View', action: 'view_record' } },
+      ],
+    };
+    const [blockA, blockB] = dialogToBlocks({ fields: [field] }, 1);
+    assert.ok(!('style' in blockA.accessory), 'style: "default" must not be forwarded — Slack has no such enum value');
+    assert.ok(!('style' in blockB.accessory), 'omitted style must not default to sending style: "default"');
+  });
+
+  it('secondaryAction with style "danger" or "primary" still sends the style field', () => {
+    const field = {
+      type: 'list',
+      items: [{ id: 'A', primary: 'A', secondaryAction: { label: 'Go', action: 'go', style: 'primary' } }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.accessory.style, 'primary');
   });
 
   it('secondaryAction button value encodes workflowRunId and tableName', () => {
