@@ -1121,7 +1121,7 @@ async function checkIdempotency(runId, frameId, stepKey) {
       { column: 'frame_id', op: 'eq', value: frameId },
       { column: 'step_key', op: 'eq', value: String(stepKey) },
     ],
-    undefined, 1
+    undefined, 1, undefined, ['id']
   );
   return resp.success && resp.count > 0;
 }
