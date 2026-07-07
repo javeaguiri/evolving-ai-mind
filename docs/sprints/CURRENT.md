@@ -83,6 +83,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
 | D6 Novia action-gate messages — plain-language summary + code/SQL/diff behind a reveal | AC5 | ⬜ |
 | D7 `postHumanGate` — runId/traceId context block on every gate | AC5 | ✅ DONE |
+| D8 `list_entity` root query skips child aggregations (lazy-fetch; details come via row_list drill-down) | AC5 | ⬜ |
 | E1 `PGC_Schema` migration — `type` + `select_sql` columns | AC6 | ✅ DONE |
 | E2 `/serv/schema/createView` endpoint | AC6 | ✅ DONE |
 | E3 `deleteTable` extended — DROP VIEW branch | AC6 | ✅ DONE |
@@ -389,6 +390,11 @@ Implementation:
 - Fix direction: each `buildGateText` case should lead with a short, layman's-terms sentence — what was diagnosed and what action is about to be taken — and move the raw code/SQL/diff into a `reveal` (same progressive-disclosure pattern already used elsewhere: `button_label` + `content`), not the main message body. This is a distinct problem from Track D's D1–D5 (which cover generated-workflow `human_gate` rendering in `callback.mjs`'s `dialogToBlocks`) — `buildGateText` is Novia's own gate-text builder in `minds-eye.mjs`, a separate code path.
 - Not yet scoped in detail — needs a pass through each `buildGateText` case (`propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view`) to decide the summary wording and what exactly moves behind the reveal for each.
 
+**D8 — `list_entity` root query should not fetch child aggregations at all**
+- Raised 2026-07-07 while diagnosing the run-663 `SERV HTTP 413` crash (see Session Notes): `list_entity`'s own formatting step already discards child data (`format_entity_display`'s root-only mode, per D2), but the underlying `serv_entity_query` call still runs the full joined + `jsonb_agg` query and fetches every child row for every parent row, only to throw it away. For a domain with many child rows per parent (e.g. many cards per deck) this is pure waste — and was a contributing factor in the 413 alongside the unstripped-embedding bug.
+- Direction: since D2's `row_list` gate already re-fetches full parent+children detail via a dedicated `serv_entity_get` the moment a user drills into one specific row, `list_entity`'s initial `serv_entity_query` call never needs children at all. Add a `rootOnly` flag to `serv_entity_query`'s input (and `entity.mjs`'s `listEntities`) that skips the `joins`/`aggregations` SQL entirely for the list pass, and wire `list_entity`'s step accordingly.
+- Not yet scoped in detail — needs a pass through `entity.mjs`'s `buildSelectSQL`/`listEntities` to confirm a root-only query path is a clean branch (not a bolt-on flag threaded through everywhere), and confirmation that no other `serv_entity_query` caller relies on children being present in list mode.
+
 ---
 
 ### Track E — View Infrastructure & Budget Report
@@ -508,6 +514,19 @@ Sequenced after H1 (SERV-Table `upsertRows`) so `serv_upsert`'s own contract can
 ---
 
 ## Session Notes
+
+**2026-07-07 (session 12):** Resolved session 11's carry-forward (user retest of `parse_entity_input` — false alarm, rule works; user's actual finding was a fresh crash in `/m list flashcards`, run 663). Diagnosed and fixed via live log/DB inspection, not guesswork.
+
+- **Root cause chain:** `PGC_EntitySchema` (id 37, `Flashcard` entity)'s `cards` aggregation column list includes `front_embedding`/`back_embedding` (pgvector columns) — `create_domain`'s aggregation-column generator (`seed_PGC_Workflow.json`) excludes only `id`/`created_at`/`updated_at`, unlike the sibling `domainHelp` column generator on the same line which already excludes embedding columns. Compounding this, `entity.mjs`'s `stripVectors()` only stripped vector-like strings from a row's **top-level** keys — it never recursed into the `jsonb_agg`-built nested child arrays, so every card's two embeddings rode along uncleaned in every `serv_entity_query`/`get_entity`/`list_entity` response for this domain. `list_entity` run 663's step 2 pulled all decks + all cards + embeddings into `local_state`; step 7's iterator (`run-workflow.mjs`'s `startIterator`) then wrote that bloated `local_state` back to `PGC_WorkflowRun` as part of pushing the new iterator frame, and that write exceeded a payload limit — `SERV HTTP 413`. Fault domain: **Execution** (same class as `d075fd2`, but a new instance — vector leak through nested aggregations, not a missing `columns` projection on a read).
+- **Second, independent gap found while tracing this:** the crash was never caught anywhere — `startIterator` has no try/catch, and the top-level SQS handler's catch-all (`handler.mjs`) logged the error and sent a "stalled" Slack notification but never updated `PGC_WorkflowRun.status`, leaving the row silently stuck in `running` forever (confirmed live: run 663 sat at `status: running`, `step_count: 9`, indefinitely).
+- **Fixes:**
+  1. `entity.mjs`'s `stripVectors()` rewritten to recurse into nested arrays/objects, not just top-level row keys.
+  2. `create_domain`'s aggregation-column generator (`seed_PGC_Workflow.json`) now excludes columns containing `embedding`, matching the sibling `domainHelp` generator's existing pattern. `create_domain` v55→v56, upserted live.
+  3. `handler.mjs`'s catch-all SQS error handler now sets `PGC_WorkflowRun.status = 'failed'` (with `error` detail) before notifying, for any uncaught error tied to a `workflowRunId` — closes the silent-stuck-run gap generically, not just for this one crash site.
+  4. One-time live data fix: removed `front_embedding`/`back_embedding` from the live `flashcards` domain's `PGC_EntitySchema` (id 37) `cards` aggregation columns, matching the F2 precedent that `create_domain` only runs at domain-creation time so existing domains need a manual refresh.
+  5. Run 663 manually marked `failed` (was stuck in `running`).
+- 401/401 unit tests pass. Deployed (`sam build && sam deploy`) — `entity.mjs`/`handler.mjs` changed. Not yet re-validated live from Slack — re-run `/m list flashcards` to confirm.
+- **New backlog item added to this sprint (D8):** even with the leak fixed, `list_entity`'s root query still fetches full child aggregations only to discard them in the formatting step (root-only display, per D2) — wasteful, and was a contributing factor to the payload size here. Since D2's `row_list` gate already does a dedicated full-detail fetch (`serv_entity_get`) the moment a user drills into one row, `list_entity`'s initial query never needs children at all. Scoped as a lazy-fetch (`rootOnly` flag on `serv_entity_query`) rather than implemented this session.
 
 **2026-07-07 (session 11):** Live-tested flashcard add via Slack (runs 657/658/660) and traced a chain of real bugs back through the memory-retrieval stack, plus two unrelated harness bugs surfaced along the way. Not yet re-validated — see carry-forward at the end.
 
