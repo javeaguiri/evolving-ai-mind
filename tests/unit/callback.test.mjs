@@ -185,6 +185,14 @@ function buildRevealBlock(field) {
   return revealBlock;
 }
 
+// ── Faithful copy of summarizeObjectForReview from callback.mjs ─────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:summarizeObjectForReview
+function summarizeObjectForReview(v) {
+  const stringEntries = Object.entries(v).filter(([, val]) => typeof val === 'string' && val.length > 0);
+  if (stringEntries.length === 0) return JSON.stringify(v);
+  return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
+}
+
 // ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:dialogToBlocks
 function dialogToBlocks(dialog, workflowRunId) {
@@ -272,7 +280,7 @@ function dialogToBlocks(dialog, workflowRunId) {
               valueText = '(none)';
             } else if (typeof item.value[0] === 'object') {
               valueText = '\n' + item.value
-                .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? summarizeObjectForReview(v)}`)
                 .join('\n');
             } else {
               valueText = item.value.join(', ');
@@ -837,17 +845,35 @@ describe('dialogToBlocks — review_object', () => {
     assert.ok(block.text.text.includes('run'));
   });
 
-  it('array of objects with neither syntax/verb/command falls back to JSON.stringify', () => {
-    // Regression: [object Object] bug — objects without known display fields
+  it('array of objects with neither syntax/verb/command falls back to a readable field summary, not raw JSON', () => {
+    // Regression (run 658): flashcard {front, back} pairs and ref-record
+    // proposals fell all the way to JSON.stringify. Now picks the first
+    // 1-2 string-valued fields instead of dumping the raw object.
     const field = {
       type:  'review_object',
       items: [{ key: 'steps', value: [{ description: 'Mix ingredients', order: 1 }] }],
     };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
-    // Must NOT produce "[object Object]"
-    assert.ok(!block.text.text.includes('[object Object]'), 'must not render [object Object]');
-    // Must produce valid JSON representation
     assert.ok(block.text.text.includes('Mix ingredients'));
+    assert.ok(!block.text.text.includes('{"description"'), 'must not render raw JSON');
+  });
+
+  it('array of objects with two string fields joins them with an em dash (flashcard front/back shape)', () => {
+    const field = {
+      type:  'review_object',
+      items: [{ key: 'cards', value: [{ front: 'gato', back: 'cat' }] }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.ok(block.text.text.includes('gato — cat'));
+  });
+
+  it('array of objects with no string fields at all falls back to JSON.stringify', () => {
+    const field = {
+      type:  'review_object',
+      items: [{ key: 'stats', value: [{ order: 1, count: 2 }] }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.ok(block.text.text.includes('{"order":1,"count":2}'));
   });
 
   it('plain object (non-array) value is stringified', () => {
