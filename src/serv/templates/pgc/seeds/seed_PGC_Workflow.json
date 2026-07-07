@@ -2890,7 +2890,7 @@
           "entity_name": "{{ref_data_ctx.entity_name}}",
           "ref_candidates": "{{ref_data_ctx.ref_candidates}}"
         },
-        "output_key": "proposed_ref_records",
+        "output_key": "ref_enrichment_result",
         "on_success": "2d",
         "on_else": "cancel"
       },
@@ -2900,7 +2900,7 @@
         "gate_type": "review_object",
         "description": "User confirms the reference records to be created before the entity insert.",
         "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?",
-        "context_key": "proposed_ref_records",
+        "context_key": "ref_enrichment_result.proposed_ref_records",
         "options": [
           {
             "label": "Looks good",
@@ -2921,7 +2921,7 @@
         "step": "2e",
         "type": "js_transform",
         "description": "Flatten proposed_ref_records to a row-per-item array for the insert iterator.",
-        "expression": "(function(){ var result=[]; var recs=local_state.proposed_ref_records; var arr=Array.isArray(recs)?recs:(recs&&recs.proposed_ref_records?recs.proposed_ref_records:[]); arr.forEach(function(entry){ (entry.rows||[]).forEach(function(row){ result.push({ref_table:entry.ref_table,lookup_column:entry.lookup_column,row:row}); }); }); return result; })()",
+        "expression": "(function(){ var result=[]; var arr=(local_state.ref_enrichment_result&&local_state.ref_enrichment_result.proposed_ref_records)||[]; arr.forEach(function(entry){ (entry.rows||[]).forEach(function(row){ result.push({ref_table:entry.ref_table,lookup_column:entry.lookup_column,row:row}); }); }); return result; })()",
         "output_key": "ref_rows_to_insert",
         "on_success": "2f",
         "on_else": "cancel"
