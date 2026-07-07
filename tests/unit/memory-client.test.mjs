@@ -322,4 +322,51 @@ describe('retrieveMemories', () => {
     // persona is NOT in expanded scopes for generation → filtered out
     assert.deepEqual(result, []);
   });
+
+  it('issues one targeted query per expanded scope candidate with memory_type + jsonb_contained_by filters', async () => {
+    const calls = [];
+    const _getRows = async (tableName, filters, orderBy, limit) => {
+      calls.push({ tableName, filters, orderBy, limit });
+      return { success: true, rows: [] };
+    };
+    await retrieveMemories({
+      scope:        { domain: 'flashcards', workflow: 'add_entity' },
+      memoryTypes:  ['semantic'],
+      budgetTokens: 400,
+      _getRows,
+    });
+
+    assert.equal(calls.length, 4, 'one call per expanded scope level (workflow, domain, conventions, global)');
+    const expectedScopes = [
+      { domain: 'flashcards', workflow: 'add_entity' },
+      { domain: 'flashcards' },
+      { topic: 'conventions' },
+      {},
+    ];
+    calls.forEach((call, i) => {
+      assert.equal(call.tableName, 'PGC_Memory');
+      assert.deepEqual(call.filters[0], { column: 'memory_type', op: 'in', value: ['semantic'] });
+      assert.deepEqual(call.filters[1], { column: 'scope', op: 'jsonb_contained_by', value: expectedScopes[i] });
+    });
+  });
+
+  it('deduplicates a row returned by more than one candidate scope query', async () => {
+    // A globally-scoped memory (scope: {}) is contained by every candidate,
+    // so a naive per-call fetch would return it once per candidate query.
+    const global = makeRow({ scope: {}, content: 'global pref', id: 7 });
+    let callCount = 0;
+    const _getRows = async () => {
+      callCount++;
+      return { success: true, rows: [global] };
+    };
+    const result = await retrieveMemories({
+      scope:        { domain: 'flashcards', workflow: 'add_entity' },
+      budgetTokens: 500,
+      _getRows,
+    });
+
+    assert.equal(callCount, 4, 'still queried once per candidate scope');
+    assert.equal(result.length, 1, 'but the row appears only once in the final result');
+    assert.equal(result[0].content, 'global pref');
+  });
 });

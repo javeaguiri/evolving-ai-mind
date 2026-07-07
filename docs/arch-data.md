@@ -880,7 +880,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 Security gate on all operations:
 - Table must be registered in `PGC_TableMap`
 - Column names validated against `PGC_Schema.columns` for that table
-- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`, `jsonb_contains` — PostgreSQL `@>` containment; value must be a JSON object or array)
+- Filter operators validated against whitelist (`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `like`, `in`, `is_null`, `not_null`, `jsonb_contains` — PostgreSQL `@>` containment, `jsonb_contained_by` — PostgreSQL `<@` containment; both require value to be a JSON object or array)
 - `updateRows` and `deleteRows` require non-empty `filters` — unfiltered mass writes rejected at 400
 - `allow_insert`, `allow_update`, `allow_delete` checked per-table from `PGC_TableMap`
 
@@ -951,7 +951,8 @@ All `filters` arrays are ANDed. Omit `filters` to return all rows.
 | `in` | value in list | `{ "column": "status", "op": "in", "value": ["running", "awaiting_human_gate"] }` |
 | `is_null` | IS NULL | `{ "column": "domain", "op": "is_null" }` |
 | `not_null` | IS NOT NULL | `{ "column": "domain", "op": "not_null" }` |
-| `jsonb_contains` | JSONB `@>` containment | `{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }` |
+| `jsonb_contains` | JSONB `@>` containment — row's column contains value | `{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }` |
+| `jsonb_contained_by` | JSONB `<@` containment — row's column is contained by value (inverse of `jsonb_contains`) | `{ "column": "scope", "op": "jsonb_contained_by", "value": { "domain": "flashcards", "workflow": "add_entity" } }` |
 
 Optional fields on any `getRows` call: `"orderBy": "column ASC|DESC"`, `"limit": N`.
 
