@@ -34,7 +34,7 @@ import { validateReadOnlySql } from './schema.mjs';
 // Allowed filter operators — security gate.
 // ---------------------------------------------------------------------------
 const ALLOWED_OPS = new Set([
-  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains',
+  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains', 'jsonb_contained_by',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -937,6 +937,10 @@ function buildWhereClause(filters, startIdx = 1) {
         break;
       case 'jsonb_contains':
         conditions.push(`${col} @> $${idx++}::jsonb`);
+        values.push(typeof f.value === 'string' ? f.value : JSON.stringify(f.value));
+        break;
+      case 'jsonb_contained_by':
+        conditions.push(`${col} <@ $${idx++}::jsonb`);
         values.push(typeof f.value === 'string' ? f.value : JSON.stringify(f.value));
         break;
     }

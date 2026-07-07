@@ -7,10 +7,12 @@
 // Provides scope expansion, client-side candidate filtering, budget-aware
 // selection, and prompt block formatting.
 //
-// Retrieval fetches all PGC_Memory rows and applies scope + expiry + tag filters
-// client-side. SERV now supports jsonb_contains (@>) but PGC_Memory stays small
-// at household scale — a full fetch avoids multiple round-trips for scope expansion.
-// At household scale PGC_Memory stays small (hundreds of rows at most).
+// Retrieval issues one targeted query per expanded scope level — memory_type
+// and scope containment are pushed server-side via SERV's `in` and
+// `jsonb_contained_by` filter operators, so unrelated rows (other domains,
+// other memory types) never compete for a shared row-count limit. Results
+// are merged and deduplicated by id, then expiry + tags are re-checked
+// client-side on the now-small candidate set.
 
 import { getRows } from '../shared/serv-client.mjs';
 
@@ -155,10 +157,22 @@ export async function retrieveMemories({
   const typeSet = new Set(memoryTypes);
   const now = Date.now();
 
-  const resp = await _getRows('PGC_Memory');
-  if (!resp.success || !resp.rows?.length) return [];
+  const byId = new Map();
+  for (const candidateScope of expandedScopes) {
+    const resp = await _getRows(
+      'PGC_Memory',
+      [
+        { column: 'memory_type', op: 'in', value: memoryTypes },
+        { column: 'scope', op: 'jsonb_contained_by', value: candidateScope },
+      ],
+      { column: 'priority', direction: 'asc' },
+      500,
+    );
+    if (!resp.success || !resp.rows?.length) continue;
+    for (const row of resp.rows) byId.set(row.id, row);
+  }
 
-  const candidates = resp.rows.filter(row => {
+  const candidates = [...byId.values()].filter(row => {
     if (!typeSet.has(row.memory_type)) return false;
     if (row.expires_at && new Date(row.expires_at).getTime() <= now) return false;
     if (!scopeIsReachable(row.scope ?? {}, expandedScopes)) return false;

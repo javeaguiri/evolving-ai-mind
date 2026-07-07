@@ -288,6 +288,12 @@ distillation (zero LLM cost): `"Completed workflow '<name>' for domain '<domain>
 
 ### 6.1 Retrieval algorithm (`memory-client.mjs`)
 
+`retrieveMemories()` issues one targeted `PGC_Memory` query per expanded scope
+level rather than a single unscoped fetch. `memory_type` and scope containment
+are filtered server-side via SERV's `in` and `jsonb_contained_by` filter
+operators, so rows outside the current call's scope — other domains, other
+memory types — never compete for a shared row limit.
+
 ```js
 async function retrieveMemories({ scope, tags, budgetTokens, memoryTypes, callContext }) {
   const expandedScopes = expandScope(scope);
@@ -295,9 +301,23 @@ async function retrieveMemories({ scope, tags, budgetTokens, memoryTypes, callCo
   // → [{"domain":"flashcards","workflow":"add_entity"}, {"domain":"flashcards"},
   //    {"topic":"conventions"}, {}]
 
-  // Load all rows and filter client-side (household scale — hundreds of rows max)
-  const rows = await getRows('PGC_Memory');
-  const candidates = rows.filter(row =>
+  // One query per expanded scope level. `scope <@ candidate` ("contained by")
+  // finds rows whose own scope is a subset of this one candidate — the
+  // inverse relationship of jsonb_contains (@>), used elsewhere for exact
+  // scope matches (e.g. write_memory's expire_prior).
+  const byId = new Map();
+  for (const candidateScope of expandedScopes) {
+    const resp = await getRows('PGC_Memory', [
+      { column: 'memory_type', op: 'in',                value: memoryTypes },
+      { column: 'scope',       op: 'jsonb_contained_by', value: candidateScope },
+    ], { column: 'priority', direction: 'asc' }, 500);
+    for (const row of resp.rows ?? []) byId.set(row.id, row);
+  }
+
+  // Client-side safety net on the now-small merged set: expiry and tags have
+  // no server-side filter here, and scopeIsReachable re-verifies the same
+  // containment relationship the SQL layer already enforced.
+  const candidates = [...byId.values()].filter(row =>
     typeSet.has(row.memory_type) &&
     !isExpired(row) &&
     scopeIsReachable(row.scope, expandedScopes) &&
@@ -319,8 +339,35 @@ async function retrieveMemories({ scope, tags, budgetTokens, memoryTypes, callCo
 }
 ```
 
+A memory row is only ever returned by a candidate query whose scope contains
+it — a row scoped to `{"domain":"flashcards"}` comes back from the
+`{"domain":"flashcards"}` and `{"domain":"flashcards","workflow":"add_entity"}`
+candidates, never from `{"topic":"conventions"}` or `{}`. A globally-scoped
+row (`{}`) is contained by every candidate, so it is returned by all of them —
+`byId` deduplicates by `id` before the client-side filters run.
+
 `scopeIsReachable(memScope, expandedScopes)` returns true when `memScope` is a
-subset of any scope in `expandedScopes`. An empty `memScope` (`{}`) is always reachable.
+subset of any scope in `expandedScopes` — the same relationship
+`jsonb_contained_by` checks in SQL, kept here as a second, cheap verification
+pass over the already-narrowed candidate set. An empty `memScope` (`{}`) is
+always reachable.
+
+#### Worked example: 4 candidate queries for one retrieval call
+
+For `retrieveMemories({ scope: { domain: "flashcards", workflow: "add_entity" }, memoryTypes: ["semantic"], budgetTokens: 400 })`:
+
+| # | Candidate scope | SERV `getRows` filters | Matches |
+|---|---|---|---|
+| 1 | `{"domain":"flashcards","workflow":"add_entity"}` | `memory_type IN ["semantic"]`, `scope <@ {"domain":"flashcards","workflow":"add_entity"}` | rows scoped exactly to this workflow |
+| 2 | `{"domain":"flashcards"}` | `memory_type IN ["semantic"]`, `scope <@ {"domain":"flashcards"}` | the `schema_snapshot`/`insert_expectations` row written by `create_domain` |
+| 3 | `{"topic":"conventions"}` | `memory_type IN ["semantic"]`, `scope <@ {"topic":"conventions"}` | cross-cutting conventions, if any |
+| 4 | `{}` | `memory_type IN ["semantic"]`, `scope <@ {}` | globally-scoped memories only |
+
+Four small, filtered queries, each scoped to exactly the rows that can
+possibly matter. None of them ever fetch the `episodic` `run_complete` rows
+written by unrelated workflow runs — `memory_type IN ["semantic"]` excludes
+those at the SQL level before scope containment is even evaluated, regardless
+of how large `PGC_Memory` grows.
 
 ### 6.2 Memory injection format
 
@@ -667,6 +714,7 @@ For memory maintenance beyond SQS delay limits:
 | `initial_value_conventions` in create_domain/design_table/revise_domain_schema prompts | ✅ Done | 4 |
 | `parse_entity_input` memory_config (classify-intent data load path) | ✅ Done | 4 |
 | `write_memory` schema in workflow-schema.json | ✅ Done | 4 |
+| Targeted per-scope retrieval (`jsonb_contained_by` operator, no unscoped fetch) | ✅ Done | 7 |
 | History threading within a workflow run | 🔲 Deferred | Sprint 5 |
 | Novia /chat Mode 4 agentic loop | 🔲 Deferred | Sprint 5 |
 | Memory consolidation (nightly sonar distillation) | 🔲 Deferred | Backlog |
