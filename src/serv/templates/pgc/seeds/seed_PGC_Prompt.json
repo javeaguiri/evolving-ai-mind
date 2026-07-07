@@ -887,7 +887,8 @@
       "userInput": "pasta carbonara with bacon, eggs, and pecorino romano cheese",
       "full_entity_schema": "{\"entity_name\":\"Recipe\",\"description\":\"A recipe with ingredients\",\"root\":{\"table\":\"PGD_Recipes\",\"columns\":[{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"description\",\"type\":\"text\"},{\"name\":\"servings\",\"type\":\"integer\"}]},\"children\":[{\"table\":\"PGD_Ingredients\",\"alias\":\"i\",\"fk_column\":\"recipe_id\",\"output_key\":\"ingredients\",\"columns\":[{\"name\":\"ingredient\",\"type\":\"text\"},{\"name\":\"quantity\",\"type\":\"text\"},{\"name\":\"unit\",\"type\":\"text\"}]}]}"
     },
-    "max_output_tokens": 16384
+    "max_output_tokens": 16384,
+    "memory_config": { "memory_budget_tokens": 400, "memory_types": ["semantic"] }
   },
   {
     "intent_category": "research_workflow_domain",
@@ -1042,7 +1043,8 @@
       "workflow_mode": "read",
       "workflow_description": "list my books sorted by rating"
     },
-    "max_output_tokens": 2500
+    "max_output_tokens": 2500,
+    "memory_config": { "memory_budget_tokens": 600, "memory_types": ["semantic"] }
   },
   {
     "intent_category": "analyze_and_design_workflow",
@@ -1505,7 +1507,8 @@
     },
     "prompt_text": "You are the right-brain repair module for evolving-mind-ai. Your job is to fix structural errors in a registered workflow step array.\n\nYou have been given:\n- The workflow name: {{workflow_name}}\n- The broken step array: {{broken_steps}}\n- The static analysis issues found: {{issues}}\n- The live step type contracts: {{step_type_contracts}}\n- The routing value rules: {{routing_value_rules}}\n- Step usage patterns with common mistakes: {{step_usage_patterns}}\n- Structural constraints: {{workflow_constraints}}\n- An optional runtime stack trace: {{stack_trace}}\n\nCRITICAL RULE — condition steps:\nCondition steps use BARE step keys for on_success/on_else — NOT routing tokens and NOT step:N prefixes. Therefore:\n- on_success and on_else MUST be bare step keys (e.g. '5', '9a')\n- NEVER use routing tokens (next, end, cancel) in on_success/on_else\n- NEVER use step:N prefix format — write the bare step key directly\n- If on_success should advance sequentially, look up the next step's key and write it as a bare key (e.g. '5', not 'step:5')\n\nSYSTEM CONTEXT GAPS:\nIf the issues indicate the LLM that generated these steps violated a step type contract, consider whether a PGC_SystemContext row should be updated to prevent recurrence. The four context rows injected into fix_workflow_steps are also injected into generate_workflow_steps and analyze_and_design_workflow — updating them here prevents the same error class from being generated again.\n\nPROMPT TEXT CHANGES:\nIf context updates alone cannot prevent recurrence and you believe a PGC_Prompt.prompt_text change is needed, include a prompt_text_change recommendation. This will be logged for human review — it will NOT be applied automatically. Only include this if context updates are genuinely insufficient.\n\nYOUR TASK:\n1. Analyse the broken steps and static analysis issues\n2. Identify the root cause — not just the symptom. Ask: why did the step generator produce these values? Is a context row missing the correct rule?\n3. Produce a fully corrected step array (complete array — not a diff)\n4. List every individual change: step key, field name, before value, after value, plain-language reason\n5. Write a concise diagnosis explaining what was wrong and why\n6. If a PGC_SystemContext row should be updated to prevent recurrence, include context_updates\n7. If a PGC_Prompt.prompt_text change would be the correct fix but context updates are insufficient, include prompt_text_change\n\nRespond ONLY with a valid JSON object — no markdown fences, no preamble.\n\n{\n  \"diagnosis\": \"Plain-language root cause explanation\",\n  \"changes_applied\": [\n    { \"step\": \"4\", \"field\": \"on_success\", \"before\": \"next\", \"after\": \"5\", \"reason\": \"on_success on a condition step must be a bare step key — routing tokens (next, end, cancel) and step:N format are not valid for condition routing\" }\n  ],\n  \"corrected_steps\": [ /* complete fixed step array */ ],\n  \"context_updates\": [\n    { \"key\": \"routing_value_rules\", \"updated_content\": \"<full updated content>\", \"reason\": \"Missing explicit rule about condition on_success/on_else\" }\n  ],\n  \"prompt_text_change\": {\n    \"intent_category\": \"generate_workflow_steps\",\n    \"recommendation\": \"<recommendation text>\"\n  }\n}",
     "probe_input": null,
-    "max_output_tokens": null
+    "max_output_tokens": null,
+    "memory_config": { "memory_budget_tokens": 800, "memory_types": ["semantic", "procedural"] }
   },
   {
     "intent_category": "analyze_workflow_gaps",
@@ -2401,7 +2404,8 @@
       "previous_draft_steps": "[]",
       "simulation_error_summary": ""
     },
-    "max_output_tokens": null
+    "max_output_tokens": null,
+    "memory_config": { "memory_budget_tokens": 800, "memory_types": ["semantic", "procedural"], "scope_additions": { "domain": "{{input.domain}}" } }
   },
   {
     "intent_category": "fix_workflow_routing",
