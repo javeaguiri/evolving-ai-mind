@@ -2891,8 +2891,17 @@
           "ref_candidates": "{{ref_data_ctx.ref_candidates}}"
         },
         "output_key": "ref_enrichment_result",
-        "on_success": "2d",
+        "on_success": "2c1",
         "on_else": "cancel"
+      },
+      {
+        "step": "2c1",
+        "type": "js_transform",
+        "description": "Reshape proposed ref records into a flat object keyed by ref_table for a readable review_object display.",
+        "output_key": "ref_enrichment_display",
+        "on_success": "2d",
+        "on_else": "cancel",
+        "expression": "(function(){ var arr=(local_state.ref_enrichment_result&&local_state.ref_enrichment_result.proposed_ref_records)||[]; var result={}; arr.forEach(function(entry){ result[entry.ref_table]=entry.rows||[]; }); return result; })()"
       },
       {
         "step": "2d",
@@ -2900,7 +2909,7 @@
         "gate_type": "review_object",
         "description": "User confirms the reference records to be created before the entity insert.",
         "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?",
-        "context_key": "ref_enrichment_result.proposed_ref_records",
+        "context_key": "ref_enrichment_display",
         "options": [
           {
             "label": "Looks good",

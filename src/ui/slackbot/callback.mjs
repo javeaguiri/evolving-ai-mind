@@ -677,6 +677,16 @@ function buildRevealBlock(field) {
   return revealBlock;
 }
 
+// Deterministic one-line summary for an object inside a review_object array
+// value, used when the object doesn't match a known field shape. Picks the
+// first 1-2 string-valued properties rather than dumping raw JSON — no LLM
+// call, no domain knowledge, just "show something a human can read."
+function summarizeObjectForReview(v) {
+  const stringEntries = Object.entries(v).filter(([, val]) => typeof val === 'string' && val.length > 0);
+  if (stringEntries.length === 0) return JSON.stringify(v);
+  return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
+}
+
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];
 
@@ -782,7 +792,7 @@ function dialogToBlocks(dialog, workflowRunId) {
                   valueText = `${item.value.length}\u00d7 ${first}`;
                 } else {
                   valueText = '\n' + item.value
-                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? JSON.stringify(v)}`)
+                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? summarizeObjectForReview(v)}`)
                     .join('\n');
                 }
               }
