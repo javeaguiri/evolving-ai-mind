@@ -240,16 +240,32 @@ describe('retrieveMemories', () => {
     assert.deepEqual(result, []);
   });
 
-  it('stops selecting when budget exceeded (greedy)', async () => {
+  it('skips a memory that would exceed the remaining budget', async () => {
     const big   = makeRow({ token_estimate: 400, content: 'big', id: 1, priority: 1 });
     const small = makeRow({ token_estimate: 200, content: 'small', id: 2, priority: 2 });
     const result = await retrieveMemories({
       budgetTokens: 500,
       _getRows:     mockGetRows([big, small]),
     });
-    // big (400) fits; small (400+200=600) exceeds 500 → stops
+    // big (400) fits; small (400+200=600) exceeds 500 → skipped
     assert.equal(result.length, 1);
     assert.equal(result[0].content, 'big');
+  });
+
+  it('skips an oversized higher-priority memory and still selects a smaller one behind it', async () => {
+    // A single memory bigger than the entire budget must not block everything
+    // that comes after it — this is the production bug: the flashcards
+    // schema_snapshot memory alone (664 tokens) exceeded parse_entity_input's
+    // then-400-token budget, and the old break-on-first-miss loop selected
+    // nothing at all even though smaller, still-useful memories existed.
+    const oversized = makeRow({ token_estimate: 600, content: 'oversized', id: 1, priority: 1 });
+    const fits      = makeRow({ token_estimate: 100, content: 'fits',      id: 2, priority: 2 });
+    const result    = await retrieveMemories({
+      budgetTokens: 500,
+      _getRows:     mockGetRows([oversized, fits]),
+    });
+    assert.equal(result.length, 1);
+    assert.equal(result[0].content, 'fits');
   });
 
   it('sorts by priority ascending', async () => {

@@ -196,12 +196,14 @@ export async function retrieveMemories({
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
 
-  // Budget-aware greedy selection — stop at first memory that doesn't fit
+  // Budget-aware greedy selection — skip any memory that doesn't fit and keep
+  // trying smaller/lower-priority ones, rather than stopping at the first miss.
+  // A single oversized high-priority memory must not block everything behind it.
   const selected = [];
   let usedTokens = 0;
   for (const row of candidates) {
     const est = row.token_estimate ?? 0;
-    if (usedTokens + est > budgetTokens) break;
+    if (usedTokens + est > budgetTokens) continue;
     selected.push(row);
     usedTokens += est;
   }
