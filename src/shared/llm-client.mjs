@@ -148,8 +148,13 @@ export async function callLlmWithMessages(model, messages, traceId) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
 
-  const systemMsg    = messages.find(m => m.role === 'system');
-  const instructions = systemMsg?.content ?? '';
+  // Concatenate every system-role message rather than taking only the first —
+  // callers (e.g. explain.mjs) may layer their own meta-instructions on top of
+  // stored context (e.g. the original llm_call's full prompt_text) that is
+  // also recorded with role: 'system'. Dropping anything past the first
+  // silently discards that context instead of just narrowing the persona.
+  const systemMessages = messages.filter(m => m.role === 'system');
+  const instructions   = systemMessages.map(m => m.content).join('\n\n');
 
   const lastUserIdx = messages.findLastIndex(m => m.role === 'user');
   const input       = lastUserIdx !== -1 ? messages[lastUserIdx].content : '';
