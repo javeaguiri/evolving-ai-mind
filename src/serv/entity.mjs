@@ -31,14 +31,24 @@ const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
 
 // pgvector columns come back as raw strings (no pg type parser registered).
 // Strip them from results — embeddings are large and not useful to callers.
-function stripVectors(row) {
-  const out = { ...row };
-  for (const [k, v] of Object.entries(out)) {
-    if (typeof v === 'string' && v.startsWith('[') && /^[-\d.,eE ]+/.test(v.slice(1, 20))) {
-      delete out[k];
-    }
+// Recurses into jsonb_agg aggregation arrays (nested child rows), not just
+// the root row's own columns.
+function stripVectors(value) {
+  if (Array.isArray(value)) {
+    return value.map(stripVectors);
   }
-  return out;
+  if (value && typeof value === 'object') {
+    const out = { ...value };
+    for (const [k, v] of Object.entries(out)) {
+      if (typeof v === 'string' && v.startsWith('[') && /^[-\d.,eE ]+/.test(v.slice(1, 20))) {
+        delete out[k];
+      } else if (v && typeof v === 'object') {
+        out[k] = stripVectors(v);
+      }
+    }
+    return out;
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------

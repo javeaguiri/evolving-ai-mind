@@ -20,7 +20,7 @@
 
 import { parseEvent, err, ok, buildReqFromSqs } from '../shared/lambda-utils.mjs';
 import { enqueueCallback, deleteReceivedBatch } from '../shared/sqs-callback.mjs';
-import { getRows }                              from '../shared/serv-client.mjs';
+import { getRows, updateRows }                  from '../shared/serv-client.mjs';
 import { handle as pingLlm }            from './ping-llm.mjs';
 import { handle as pingCore }           from './ping-core.mjs';
 import { handle as createDomain }       from './create-domain.mjs';
@@ -228,11 +228,15 @@ async function processSqsBatch(records) {
             [{ column: 'id', op: 'eq', value: message.workflowRunId }],
           );
           const run = rows?.[0];
+          await updateRows('PGC_WorkflowRun',
+            [{ column: 'id', op: 'eq', value: message.workflowRunId }],
+            { status: 'failed', error: { message: error.message } },
+          );
           if (run?.callback) {
             await enqueueCallback(run.callback, {
               type:    'HUMAN_NOTIFICATION',
               traceId: message.traceId,
-              message: `Run ${run.id} (${run.workflow_name}) failed with an unexpected error and is now stalled. Use Novia to diagnose or re-enqueue the run manually.\n\nError: ${error.message}`,
+              message: `Run ${run.id} (${run.workflow_name}) failed with an unexpected error. Use Novia to diagnose or re-enqueue the run manually.\n\nError: ${error.message}`,
             });
           }
         } catch (notifyErr) {
