@@ -18,12 +18,17 @@
 //      collected via modal after a specific step is chosen — see interactive.mjs.
 //   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
-//   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
-//   4. Append new user entry (seq 3+)
-//   5. Reconstruct messages array (reasoning excluded)
+//   3. Load existing PGC_SessionEntry rows — llm-harness.mjs seeds 3 (system:
+//      the original llm_call's full prompt_text, user: its resolved input,
+//      assistant: its raw output) before any explain Q&A is appended
+//   4. Append new user entry
+//   5. Reconstruct messages array (reasoning excluded) — found by role, not a
+//      hardcoded sequence number, since the seed-entry count above is not
+//      part of this module's contract
 //   6. Call LLM (heavy model) with full context
 //   7. INSERT PGC_SessionEntry for assistant response
-//   8. Enqueue HUMAN_NOTIFICATION with response (surfaces reasoning from seq 2 if present)
+//   8. Enqueue HUMAN_NOTIFICATION with response (surfaces reasoning from the
+//      original assistant entry, on the first reply only)
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -140,8 +145,11 @@ export async function handle(req) {
   );
   const existingEntries = entriesResp.rows ?? [];
 
-  // Extract reasoning from seq 2 (assistant) for surfacing in reply
-  const assistantEntry = existingEntries.find(e => e.role === 'assistant' && e.sequence_number === 2);
+  // Extract reasoning from the first assistant entry (the original llm_call's
+  // own output) for surfacing in reply — found by role, not a hardcoded
+  // sequence number, since llm-harness.mjs's seed-entry count for a session
+  // is not part of this module's contract and has already changed once.
+  const assistantEntry = existingEntries.find(e => e.role === 'assistant');
   const reasoning = assistantEntry?.reasoning ?? null;
 
   // Next sequence number
@@ -207,7 +215,11 @@ export async function handle(req) {
   // preventing stale button accumulation in the thread.
   if (responseCallback) {
     let replyText = responseText;
-    if (reasoning && nextSeq === 3) {
+    // Surface reasoning only on the very first follow-up — i.e. this new turn
+    // immediately follows the original assistant entry, with no prior explain
+    // Q&A in between. Checked by position relative to assistantEntry itself,
+    // not a hardcoded sequence number, for the same reason as the lookup above.
+    if (reasoning && assistantEntry && nextSeq === assistantEntry.sequence_number + 1) {
       replyText = `*LLM reasoning for this output:*\n>${reasoning.replace(/\n/g, '\n>')}\n\n${responseText}`;
     }
     await enqueueCallback(responseCallback, {
