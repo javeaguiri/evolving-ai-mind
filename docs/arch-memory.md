@@ -327,11 +327,13 @@ async function retrieveMemories({ scope, tags, budgetTokens, memoryTypes, callCo
   // Sort: priority ASC, type order, created_at DESC
   candidates.sort(byPriorityTypeThenDate);
 
-  // Greedy budget selection
+  // Greedy budget selection — skip (not stop at) any memory that doesn't fit,
+  // so a single oversized high-priority memory can't block smaller,
+  // lower-priority ones behind it.
   const selected = [];
   let usedTokens = 0;
   for (const row of candidates) {
-    if (usedTokens + row.token_estimate > budgetTokens) break;
+    if (usedTokens + row.token_estimate > budgetTokens) continue;
     selected.push(row);
     usedTokens += row.token_estimate;
   }
@@ -409,7 +411,7 @@ The block is omitted entirely when no memories are retrieved.
 | `research_workflow_domain` | 600 | semantic | Domain design decisions for research context |
 | `generate_workflow_steps` | 800 | semantic, procedural | `scope_additions: { domain: "{{input.domain}}" }` |
 | `fix_workflow_steps` | 800 | semantic, procedural | Retrieves workflow design intent for repair context |
-| `parse_entity_input` | 400 | semantic | Domain insert expectations for data loads ← Sprint 4 |
+| `parse_entity_input` | 800 | semantic | Domain insert expectations for data loads ← Sprint 4; raised from 400 in Sprint 7 (flashcards' own schema_snapshot alone is 664 tokens) |
 | All other prompts | 0 | — | Memory disabled |
 
 `memory_budget_tokens: 0` completely disables memory injection.
@@ -630,7 +632,7 @@ User: "/m add flashcard front=¿Cómo estás? back=How are you?"
 
 classify-intent → add_entity workflow
   → parse_entity_input LLM call
-    memory_config: { budget: 400, types: [semantic] }
+    memory_config: { budget: 800, types: [semantic] }
     → scope: { domain: flashcards, workflow: add_entity }
     → expandScope: includes {"domain":"flashcards"}
     → Retrieves schema_snapshot row

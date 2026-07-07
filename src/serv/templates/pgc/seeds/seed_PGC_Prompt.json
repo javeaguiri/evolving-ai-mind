@@ -888,7 +888,7 @@
       "full_entity_schema": "{\"entity_name\":\"Recipe\",\"description\":\"A recipe with ingredients\",\"root\":{\"table\":\"PGD_Recipes\",\"columns\":[{\"name\":\"name\",\"type\":\"text\"},{\"name\":\"description\",\"type\":\"text\"},{\"name\":\"servings\",\"type\":\"integer\"}]},\"children\":[{\"table\":\"PGD_Ingredients\",\"alias\":\"i\",\"fk_column\":\"recipe_id\",\"output_key\":\"ingredients\",\"columns\":[{\"name\":\"ingredient\",\"type\":\"text\"},{\"name\":\"quantity\",\"type\":\"text\"},{\"name\":\"unit\",\"type\":\"text\"}]}]}"
     },
     "max_output_tokens": 16384,
-    "memory_config": { "memory_budget_tokens": 400, "memory_types": ["semantic"] }
+    "memory_config": { "memory_budget_tokens": 800, "memory_types": ["semantic"] }
   },
   {
     "intent_category": "research_workflow_domain",
