@@ -167,7 +167,7 @@ async function runDeleteDomain({ domain, traceId }) {
   // PGC_TableMap.allow_delete must be true for PGC_WorkflowRunStep.
   let deletedRunStepCount = 0;
   if (workflowIds.length > 0) {
-    const runIdResp = await getRows('PGC_WorkflowRun', [{ column: 'workflow_id', op: 'in', value: workflowIds }]);
+    const runIdResp = await getRows('PGC_WorkflowRun', [{ column: 'workflow_id', op: 'in', value: workflowIds }], undefined, undefined, undefined, ['id']);
 
     const runIds = (runIdResp.success && runIdResp.count > 0)
       ? runIdResp.rows.map(r => r.id)
