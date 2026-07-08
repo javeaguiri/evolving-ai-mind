@@ -644,6 +644,21 @@ describe('list_entity step 26 — isDeck tagging', () => {
     assert.equal(result.row_items.length, 0);
     assert.match(result.message, /No related records/);
   });
+
+  // Regression: run 668 hit Slack's msg_blocks_too_long — two defs each capped
+  // at 20 rows (their own serv_query limit) combined into 40 uncapped row_items,
+  // and each row now costs 2 blocks (section + trailing divider from Track D10),
+  // well past Slack's 50-block hard limit. step 26 must cap the COMBINED total.
+  it('caps combined row_items at 20 across all defs and reports the truncated count', () => {
+    const step = getStep('list_entity', '26');
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: `PGD_Cards:${i}`, primary: `card${i}`, responseData: { table: 'PGD_Cards', id: i, isDeck: false },
+    }));
+    const localState = { isdeck_map: { PGD_Cards: false }, row_build: { row_items: many } };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.length, 20, 'must cap at 20 regardless of how many defs contributed rows');
+    assert.match(result.message, /Found 40 record.*showing the first 20/);
+  });
 });
 
 describe('list_entity step 51 — deterministic leaf formatter (same contract as get_entity step 12)', () => {
