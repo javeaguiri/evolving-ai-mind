@@ -582,13 +582,13 @@ describe('list_entity step 23 — row_build (fetch → resolved row_items + full
   const LOOP_STATE = {
     defs: [
       {
-        table: 'PGD_Decks',
+        table: 'PGD_Parent',
         fkColumn: 'parent_id',
-        foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Decks', column: 'id' } }],
+        foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }],
       },
       {
-        table: 'PGD_Cards',
-        fkColumn: 'deck_id',
+        table: 'PGD_Child',
+        fkColumn: 'parent_ref_id',
         foreign_keys: [],
       },
     ],
@@ -596,8 +596,8 @@ describe('list_entity step 23 — row_build (fetch → resolved row_items + full
     nav_stack: [],
   };
   const FETCHED = [
-    [ { id: 7, title: 'Sub-deck A', created_at: '2026', updated_at: '2026', parent_id: 3 } ], // PGD_Decks rows
-    [ { id: 20, front_text: 'hola', back_text: 'hello', deck_id: 3, review_logs: [{ result: 'pass' }] } ], // PGD_Cards rows
+    [ { id: 7, title: 'Nested Parent A', created_at: '2026', updated_at: '2026', parent_id: 3 } ], // PGD_Parent rows
+    [ { id: 20, front_text: 'hola', back_text: 'hello', parent_ref_id: 3, log_entries: [{ result: 'pass' }] } ], // PGD_Child rows
   ];
 
   it('flattens rows across defs, strips system/embedding/null fields, and resolves outgoing FK labels', () => {
@@ -605,31 +605,31 @@ describe('list_entity step 23 — row_build (fetch → resolved row_items + full
     const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.equal(result.row_items.length, 2);
-    const deckRow = result.row_items.find(r => r.responseData.table === 'PGD_Decks');
-    assert.equal(deckRow.responseData.id, 7);
-    assert.equal(deckRow.responseData.isDeck, false, 'isDeck starts false — tagged later by step 26');
-    assert.equal(result.full_rows_map['PGD_Decks:7'].created_at, undefined, 'system column suppressed');
-    assert.equal(result.full_rows_map['PGD_Cards:20'].review_logs, undefined, 'array-valued fields are stripped at list level — never split into a children key');
+    const parentRow = result.row_items.find(r => r.responseData.table === 'PGD_Parent');
+    assert.equal(parentRow.responseData.id, 7);
+    assert.equal(parentRow.responseData.hasChildren, false, 'hasChildren starts false — tagged later by step 26');
+    assert.equal(result.full_rows_map['PGD_Parent:7'].created_at, undefined, 'system column suppressed');
+    assert.equal(result.full_rows_map['PGD_Child:20'].log_entries, undefined, 'array-valued fields are stripped at list level — never split into a children key');
   });
 
   it('keeps full cleaned fields in full_rows_map for a later leaf-detail render without a re-fetch', () => {
     const step = getStep('list_entity', '23');
     const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.equal(result.full_rows_map['PGD_Cards:20'].front_text, 'hola');
+    assert.equal(result.full_rows_map['PGD_Child:20'].front_text, 'hola');
   });
 });
 
 // Sprint 7 Track D12 (refined) — "does anything reference this table" was too
-// broad a signal for isDeck: a table can have an incidental FK pointing at it
-// (e.g. an audit-log-style table) without that relationship being something a
-// user would ever want to navigate into. isDeck now requires either a
-// self-reference or a relationship create_domain already curated into some
-// entity's own `joins` — driven entirely by domain_schemas (loaded once at
-// step 1) and discovered table names, never a hardcoded table name, so this
-// must behave identically for any domain, not just the one these fixtures
-// happen to resemble.
-describe('list_entity step 25a — isDeck requires self-reference or a curated domain_schemas join', () => {
+// broad a signal for hasChildren: a table can have an incidental FK pointing
+// at it (e.g. an audit-log-style table) without that relationship being
+// something a user would ever want to navigate into. hasChildren now requires
+// either a self-reference or a relationship create_domain already curated
+// into some entity's own `joins` — driven entirely by domain_schemas (loaded
+// once at step 1) and discovered table names, never a hardcoded table name,
+// so this must behave identically for any domain, not just the one these
+// fixtures happen to resemble.
+describe('list_entity step 25a — hasChildren requires self-reference or a curated domain_schemas join', () => {
   const DOMAIN_SCHEMAS = [
     {
       entity_name: 'Widget',
@@ -638,37 +638,37 @@ describe('list_entity step 25a — isDeck requires self-reference or a curated d
     },
   ];
 
-  it('self-reference is always a deck, even with no domain_schemas entry for it', () => {
+  it('self-reference is always further-navigable, even with no domain_schemas entry for it', () => {
     const step = getStep('list_entity', '25a');
     const localState = {
       domain_schemas: [],
       distinct_child_tables: ['PGD_Parent'],
-      isdeck_discover_results: [[{ table_name: 'PGD_Parent' }]], // parent references itself
+      child_discover_results: [[{ table_name: 'PGD_Parent' }]], // parent references itself
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.equal(result.PGD_Parent, true);
   });
 
-  it('a table curated as a join child of the parent in domain_schemas is a deck', () => {
+  it('a table curated as a join child of the parent in domain_schemas is further-navigable', () => {
     const step = getStep('list_entity', '25a');
     const localState = {
       domain_schemas: DOMAIN_SCHEMAS,
       distinct_child_tables: ['PGD_Parent'],
-      isdeck_discover_results: [[{ table_name: 'PGD_Child' }]],
+      child_discover_results: [[{ table_name: 'PGD_Child' }]],
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.equal(result.PGD_Parent, true);
   });
 
-  it('a table with an incidental FK but no curated relationship is NOT a deck', () => {
+  it('a table with an incidental FK but no curated relationship is NOT further-navigable', () => {
     const step = getStep('list_entity', '25a');
     const localState = {
       domain_schemas: DOMAIN_SCHEMAS,
       distinct_child_tables: ['PGD_Child'],
-      isdeck_discover_results: [[{ table_name: 'PGD_Log' }]], // references PGD_Child, but not curated anywhere
+      child_discover_results: [[{ table_name: 'PGD_Log' }]], // references PGD_Child, but not curated anywhere
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.equal(result.PGD_Child, false, 'PGD_Log referencing PGD_Child does not make PGD_Child a deck — it is attached detail data');
+    assert.equal(result.PGD_Child, false, 'PGD_Log referencing PGD_Child does not make PGD_Child further-navigable — it is attached detail data');
   });
 });
 
@@ -689,7 +689,7 @@ describe('list_entity step 41b — next-level defs filtered to curated children 
     assert.equal(result.parent_id, 3);
   });
 
-  it('includes a self-referencing table (sub-decks) even though it is not in any joins list', () => {
+  it('includes a self-referencing table even though it is not in any joins list', () => {
     const step = getStep('list_entity', '41b');
     const localState = {
       domain_schemas: [],
@@ -710,7 +710,7 @@ describe('list_entity steps 50/50a/50b — leaf detail children (non-curated att
     const localState = {
       selected_row: { table: 'PGD_Child', id: 20 },
       distinct_child_tables: ['PGD_Child'],
-      isdeck_discover_results: [[
+      child_discover_results: [[
         { table_name: 'PGD_Log', foreign_keys: [{ column: 'child_id', references: { table: 'PGD_Child', column: 'id' } }] },
       ]],
     };
@@ -739,27 +739,27 @@ describe('list_entity steps 50/50a/50b — leaf detail children (non-curated att
   });
 });
 
-describe('list_entity step 26 — isDeck tagging', () => {
-  it('tags each row true/false from isdeck_map keyed by its own table', () => {
+describe('list_entity step 26 — hasChildren tagging', () => {
+  it('tags each row true/false from has_children_map keyed by its own table', () => {
     const step = getStep('list_entity', '26');
     const localState = {
-      isdeck_map: { PGD_Decks: true, PGD_Cards: false },
+      has_children_map: { PGD_Parent: true, PGD_Child: false },
       row_build: {
         row_items: [
-          { id: 'PGD_Decks:7', primary: 'Sub-deck A', responseData: { table: 'PGD_Decks', id: 7, isDeck: false } },
-          { id: 'PGD_Cards:20', primary: 'hola', responseData: { table: 'PGD_Cards', id: 20, isDeck: false } },
+          { id: 'PGD_Parent:7', primary: 'Nested Parent A', responseData: { table: 'PGD_Parent', id: 7, hasChildren: false } },
+          { id: 'PGD_Child:20', primary: 'hola', responseData: { table: 'PGD_Child', id: 20, hasChildren: false } },
         ],
       },
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Decks').responseData.isDeck, true);
-    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Cards').responseData.isDeck, false);
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Parent').responseData.hasChildren, true);
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Child').responseData.hasChildren, false);
     assert.match(result.message, /Found 2 record/);
   });
 
   it('reports "no related records" when row_items is empty', () => {
     const step = getStep('list_entity', '26');
-    const result = runSandboxedExpression(step.expression, null, { isdeck_map: {}, row_build: { row_items: [] } }, 'test');
+    const result = runSandboxedExpression(step.expression, null, { has_children_map: {}, row_build: { row_items: [] } }, 'test');
     assert.equal(result.row_items.length, 0);
     assert.match(result.message, /No related records/);
   });
@@ -771,9 +771,9 @@ describe('list_entity step 26 — isDeck tagging', () => {
   it('caps combined row_items at 20 across all defs and reports the truncated count', () => {
     const step = getStep('list_entity', '26');
     const many = Array.from({ length: 40 }, (_, i) => ({
-      id: `PGD_Cards:${i}`, primary: `card${i}`, responseData: { table: 'PGD_Cards', id: i, isDeck: false },
+      id: `PGD_Child:${i}`, primary: `item${i}`, responseData: { table: 'PGD_Child', id: i, hasChildren: false },
     }));
-    const localState = { isdeck_map: { PGD_Cards: false }, row_build: { row_items: many } };
+    const localState = { has_children_map: { PGD_Child: false }, row_build: { row_items: many } };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.equal(result.row_items.length, 20, 'must cap at 20 regardless of how many defs contributed rows');
     assert.match(result.message, /Found 40 record.*showing the first 20/);
@@ -785,12 +785,12 @@ describe('list_entity step 51 — deterministic leaf formatter (same contract as
     const step = getStep('list_entity', '51');
     const localState = {
       entity_display_data: {
-        entity_name: 'PGD_Cards',
+        entity_name: 'PGD_Child',
         entities: [ { fields: { id: 20, front_text: 'hola', back_text: 'hello' } } ],
       },
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.match(result.formatted_markdown, /PGD_Cards \(id: 20\)/, 'falls back to entity_name when the record has no title/name field');
+    assert.match(result.formatted_markdown, /PGD_Child \(id: 20\)/, 'falls back to entity_name when the record has no title/name field');
     assert.match(result.formatted_markdown, /\*front_text:\* hola/);
     assert.equal(result.reveals.length, 0);
   });

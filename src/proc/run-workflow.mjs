@@ -642,7 +642,7 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     // Legacy rows never set their own responseData, so callback.mjs sends the
     // { tableName } shape by default — write the bare scalar, exactly as before.
     // Rows that carry a workflow-supplied responseData (no tableName key, e.g.
-    // { table, id, isDeck } for recursive drill-down) get written through whole.
+    // { table, id, hasChildren } for recursive drill-down) get written through whole.
     const hasLegacyShape = responseData && Object.prototype.hasOwnProperty.call(responseData, 'tableName');
     const value = hasLegacyShape ? responseData.tableName : responseData;
     setPath(localState, stepRef.output_key, value);
