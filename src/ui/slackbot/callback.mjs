@@ -607,11 +607,11 @@ async function postHumanGate(message) {
   }
 
   const blocks = dialogToBlocks(dialog, workflowRunId);
-  // Insert the context block before a trailing actions block (matches the
-  // content-then-context-then-actions order used elsewhere in this file),
-  // or append it at the end when the dialog has no actions block.
-  const lastBlockIsActions = blocks.length > 0 && blocks[blocks.length - 1].type === 'actions';
-  blocks.splice(lastBlockIsActions ? blocks.length - 1 : blocks.length, 0, gateContextBlock);
+  // Always the last block — a true footer. Previously spliced before a
+  // trailing actions block, which put it above the buttons; list_selection
+  // now renders two actions blocks in sequence (Select, then Back/Done), so
+  // that rule landed the context line between them instead of at the bottom.
+  blocks.push(gateContextBlock);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate \u2014 please review and respond.';
 
