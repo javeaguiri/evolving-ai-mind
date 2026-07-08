@@ -222,7 +222,20 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 - `docs/arch-step-types.md`'s `list_selection` section and `docs/workflow-schema.json`/`seed_PGC_StepType.json`'s contract descriptions updated to match the new `{id, fields?, ...}` shape and header-formatting rule.
 - 429/429 unit tests pass (faithful-copy convention maintained in `tests/unit/callback.test.mjs` throughout every round). `list_entity` v18→v19 upserted live (pre-write simulation guard passed); `human_gate` step type upserted live. Deployed (`sam build && sam deploy`, three passes across the session — `step-executor.mjs`, `callback.mjs`, `run-workflow.mjs`).
 - **Live-validated end-to-end from Slack:** drill down and back up through multiple levels, a large table scrolling natively, and the heading hoist all confirmed working by the user directly.
-- **Open, carried to next session:** (1) date/timestamp fields render unformatted in the table — need real formatting. (2) a field named `level` (or a drill-down level's content — not yet clarified which) also renders unformatted; needs the user to clarify the exact case before diagnosing.
+- **Open, carried to next session — clarified after initial report:** the second item above ("level renders unformatted") turned out to mean the leaf-detail view (opening a single record, not a list) — user confirmed with a real example:
+  ```
+  🧠 PGD_Cards (id: 2)
+  back: Estar al máximo nivel se esfuerza o capacidad
+  front: A tope
+  deck_id: Nov 19, 2024
+  interval: 1
+  easiness_factor: 2.18
+  next_review_date: 2026-07-04T10:46:17.455Zid: 3 · grade: 4 · card_id: 2 · review_date: 2026-06-28T10:09:39.676Z · interval_before: 0 · time_spent_seconds: 8 · easiness_factor_before: 2.50id: 115 · grade: 2 · card_id: 2 · review_date: 2026-07-03T10:46:18.246Z · interval_before: 1 · time_spent_seconds: 11 · easiness_factor_before: 2.50
+  ```
+  Visible problems: raw table name (`PGD_Cards`) as the heading instead of a friendly label; unformatted snake_case field labels (`back`, `deck_id`, `easiness_factor`) — same issue D13 fixed for the list table's column headers, not yet applied here; `next_review_date` is a raw ISO timestamp (the "format dates" item from the original report); and the two `PGD_ReviewLog` child rows run together with no visible separation between `next_review_date`'s value and the first child row, and between the two child rows themselves.
+  **Root cause, not yet fixed — same class of issue D13 just resolved for `list_selection`:** `formatted_markdown` here is hand-built by raw JS string concatenation *inside* `list_entity` step 51's `js_transform` (and `get_entity` step 12's identical twin) — `/proc`-layer code building markdown directly, exactly the pattern today's architecture conversation agreed should be limited to genuine report/LLM content (Novia, `/explain`, `/m show budget`), not generic record display. The fix direction discussed but not started: mirror D13 — stop building markdown in the workflow step, pass the neutral `{fields, children}` JSON through the dialog instead (a new gate/field shape, analogous to `list_selection`'s `{id, fields, secondaryAction?}`), and let `callback.mjs` render it — reusing `formatColumnHeader` for label casing/FK-name resolution, adding real date formatting, and giving child records (`PGD_ReviewLog`) their own sub-table instead of a flattened `·`-joined blob with no row separation.
+  Not started — needs its own design pass next session (touches both `list_entity` step 51 and `get_entity` step 12, plus a new neutral contract shape).
+- **Small fix landed this session, not yet deployed/live-tested:** `postHumanGate`'s `runId`/`traceId` context footer was spliced before the *last* `actions` block — correct when a dialog had one trailing button row, but `list_selection` now renders two (Select, then Back/Done), so the footer landed between them instead of at the true bottom. Now unconditionally the last block. 429/429 unit tests pass; committed, **not yet upserted/deployed** — do that before the next live test.
 
 ---
 
