@@ -1032,7 +1032,7 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
 | `get_entity` | 20 | 1 | Fetch a single entity by id or name |
-| `list_entity` | 30 | 1 | List/recursively drill into a domain's entities — dynamic deck/leaf navigation |
+| `list_entity` | 32 | 1 | List/recursively drill into a domain's entities — dynamic parent/child navigation, click-time FK discovery |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1193,24 +1193,37 @@ by `loop_state = { defs, parent_id, nav_stack }`, where each `def` is
 `{ table, fkColumn, foreign_keys, filters }` — a fully self-contained
 description of one plain, unjoined table query. `list_entity` never uses
 `PGC_EntitySchema`'s precomputed join/aggregation tree (that model can't
-represent self-referential parent/child rows, e.g. a deck containing
-sub-decks, without hardcoding domain-specific structure into `create_domain`)
-— children are discovered dynamically at click time instead.
+represent a self-referential parent/child table without hardcoding
+domain-specific structure into `create_domain`) — children are discovered
+dynamically at click time instead.
+
+Not every table with an incoming FK is worth drilling into, though — an
+audit/history-style table logging events against a row has an FK back to it
+without that being a relationship a user would ever navigate. `hasChildren`
+(steps 25a/41b) is true only for a self-reference, or a relationship
+`create_domain` already curated into some entity's own `joins` — driven
+entirely by `domain_schemas` (loaded once at step 1) and the discovered
+table names at runtime; no table or entity name is hardcoded anywhere in
+these steps, so the rule applies identically to every domain. Anything else
+that merely has an FK pointing at the row is attached "detail" data — it
+never gets its own `row_selection`; the leaf-detail path (steps 50–50b)
+fetches it and folds it into the record's own view as a `reveals` panel or
+inline section instead.
 
 - `2` `js_transform` — find this entity's own `PGC_EntitySchema` row (root_table) from the domain_schemas loaded at step 1
 - `2a` `serv_query PGC_Schema` — the root table's own schema row (`foreign_keys`), for self-reference detection and outgoing FK label resolution
 - `2b` `js_transform` — build the initial `loop_state`: one synthetic `def` for the root table, filtered to top-level rows only (`IS NULL` on its own self-referential column) if it turns out to be self-referential; otherwise unfiltered, matching the original root-list behaviour
 - `20` `iterator` (shared loop entry, reached via every back-edge) — one plain `serv_query` per `loop_state.defs` entry: `SELECT * FROM <def.table> WHERE <def.filters>`, `limit: 20`. No joins, no aggregation.
 - `21`–`22a` — outgoing FK-lookup preamble across this level's fetched rows, same dedup/iterator/zip pattern as `get_entity` steps 7–10, sourced from each `def`'s own `foreign_keys` (already known from whichever discover query produced these defs)
-- `23` `js_transform` — deterministic: strip system/embedding/null fields, resolve outgoing FK labels, flatten every def's fetched rows into one `row_items` list (`responseData: { table, id, isDeck: false }` per row) and a `full_rows_map` (keyed `table:id`) so a later leaf-detail click can render without a re-fetch
-- `24`–`25a` — for each **distinct table** among this level's defs (not per row — rows sharing a table share the answer), a lightweight schema-only `jsonb_contains` query against `PGC_Schema` (`foreign_keys @> [{"references":{"table": X}}]`) answers "does anything reference X" — no data is fetched, only checked, so a table's children are never looked up until one of its rows is actually selected
-- `26` `js_transform` — apply the resulting `isDeck` flags to `row_items`, build the gate's message text
+- `23` `js_transform` — deterministic: strip system/embedding/null fields, resolve outgoing FK labels, flatten every def's fetched rows into one `row_items` list (`responseData: { table, id, hasChildren: false }` per row) and a `full_rows_map` (keyed `table:id`) so a later leaf-detail click can render without a re-fetch
+- `24`–`25a` — for each **distinct table** among this level's defs (not per row — rows sharing a table share the answer), a lightweight schema-only `jsonb_contains` query against `PGC_Schema` (`foreign_keys @> [{"references":{"table": X}}]`) finds every table referencing X, then filters to the self-reference-or-curated-join rule above — no row data is ever fetched just to make this decision
+- `26` `js_transform` — apply the resulting `hasChildren` flags to `row_items`, build the gate's message text
 - `27` `human_gate` (`list_selection`) — one row per record; `item_action.on_select` → `step:40` (router); `options`: "⬅ Back" → `step:42`, "Done" → `cancel`
-- `40` `condition` — routes on `selected_row.isDeck`: `true` → `41` (drill deeper), `false` → `50` (leaf detail)
-- `41`–`41b` — push the current level (`defs` + `parent_id`, not just an id — so Back can restore it exactly with no re-discovery) onto `nav_stack`; run the same `jsonb_contains` discover query against the clicked row's own table to build the next level's `defs`; loop back to `20`
+- `40` `condition` — routes on `selected_row.hasChildren`: `true` → `41` (drill deeper), `false` → `50` (leaf detail)
+- `41`–`41b` — push the current level (`defs` + `parent_id`, not just an id — so Back can restore it exactly with no re-discovery) onto `nav_stack`; run the same `jsonb_contains` discover query against the clicked row's own table, filtered to curated children only, to build the next level's `defs`; loop back to `20`
 - `42`/`42a` — Back: pop `nav_stack` and loop back to `20` with the restored level; at the root (empty `nav_stack`), Back ends the run like Done
-- `50` `js_transform` — leaf detail: look up the clicked row's already-resolved fields from `full_rows_map` (no re-fetch)
-- `51` `js_transform` — same deterministic formatter as `get_entity` step 12, reused verbatim (identical `{ entity_name, entities: [{fields, children?}] }` input contract)
+- `50`–`50b` — leaf detail: the clicked row's own table was already discovered as non-curated at the level it was listed on, so `50` reuses that cached discovery (no new schema query) to find its detail-child tables; `50a` fetches each one's rows for this specific record (the one query a leaf view needs, run only now that it's actually been opened); `50b` attaches them as `entity.children` alongside the row's already-resolved fields from `full_rows_map`
+- `51` `js_transform` — same deterministic formatter as `get_entity` step 12, reused verbatim (identical `{ entity_name, entities: [{fields, children?}] }` input contract) — a detail-children collection renders inline or behind a `reveals` panel depending on size, no different from any other child collection
 - `52` `human_gate` (`confirm`) — shows the formatted leaf detail with `reveals`; "⬅ Back" → `step:42`, "Done" → `cancel`
 
 ---

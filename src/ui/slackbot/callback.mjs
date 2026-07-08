@@ -750,7 +750,7 @@ function dialogToBlocks(dialog, workflowRunId) {
                 workflowRunId,
                 action:       item.secondaryAction.action,
                 // A row can carry its own structured responseData (set by the
-                // workflow, e.g. { table, id, isDeck } for recursive drill-down);
+                // workflow, e.g. { table, id, hasChildren } for recursive drill-down);
                 // otherwise fall back to the legacy bare-id shape every existing
                 // list_selection consumer already expects.
                 responseData: item.responseData !== undefined ? item.responseData : { tableName: item.id },

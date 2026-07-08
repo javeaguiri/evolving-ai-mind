@@ -236,7 +236,7 @@ that can't be removed) that overrides `step.item_action` entirely for that
 one row.
 
 **`responseData` (optional, per item)** — lets a row carry a structured
-payload beyond the bare id (e.g. `{ table: 'PGD_Decks', id: 7, isDeck: true }`)
+payload beyond the bare id (e.g. `{ table: 'PGD_SomeTable', id: 7, hasChildren: true }`)
 through to `output_key` on click. When an item omits it, `callback.mjs` falls
 back to the legacy `{ tableName: item.id }` shape every existing consumer
 expects — this is additive, not a breaking change to older workflows. See
@@ -308,7 +308,7 @@ row-level `secondaryAction`). When the row set a `responseData` object without
 a `tableName` key (the recursive drill-down case above), the whole object is
 written through instead — see `list_entity`'s navigation loop in
 `docs/arch-workflow-patterns.md` §6.17 for the live example (a shared loop
-entry step reads `{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.isDeck}}`
+entry step reads `{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.hasChildren}}`
 off exactly this payload).
 
 Every row also renders with a trailing Slack `divider` block, separating it

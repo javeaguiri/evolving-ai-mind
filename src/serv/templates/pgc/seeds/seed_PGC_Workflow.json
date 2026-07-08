@@ -2535,7 +2535,7 @@
       {
         "step": "2b",
         "type": "js_transform",
-        "description": "Initialize the navigation loop: a single synthetic 'def' describing what to fetch at the root level — the root table itself, filtered to top-level rows only if it turns out to be self-referential (e.g. a deck's own sub-decks stay hidden until their parent deck is opened).",
+        "description": "Initialize the navigation loop: a single synthetic 'def' describing what to fetch at the root level — the root table itself, filtered to top-level rows only if it turns out to be self-referential (a table with a foreign key back to its own name hides its own child rows at the root, until the specific parent row that owns them is opened).",
         "output_key": "loop_state",
         "on_success": "20",
         "on_else": "cancel",
@@ -2614,11 +2614,11 @@
       {
         "step": "23",
         "type": "js_transform",
-        "description": "Deterministic pre-processing: strip system/embedding/null fields, resolve outgoing FK columns to their looked-up label (e.g. expenses.category_id becomes a category name, never a bare id), and build one summary row per fetched record across every def at this level. full_rows_map keeps each record's full cleaned fields around so a later leaf-detail click can render them without a re-fetch.",
+        "description": "Deterministic pre-processing: strip system/embedding/null fields, resolve outgoing FK columns to their looked-up label (a foreign key column is never shown as a bare id, always the referenced row's own title/name), and build one summary row per fetched record across every def at this level. full_rows_map keeps each record's full cleaned fields around so a later leaf-detail click can render them without a re-fetch.",
         "output_key": "row_build",
         "on_success": "24",
         "on_else": "cancel",
-        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var defs = (local_state.loop_state && local_state.loop_state.defs) || []; var fetched = local_state.fetched_rows_by_def || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row, fks){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fks.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } var rowItems = []; var fullRowsMap = {}; defs.forEach(function(def, i){ var rows = fetched[i] || []; rows.forEach(function(row){ var fields = cleanScalar(row, def.foreign_keys || []); var label = fields.title || fields.name || def.table; var rest = Object.keys(fields).filter(function(k){ return k !== 'id' && k !== 'title' && k !== 'name'; }).map(function(k){ return k + '=' + fields[k]; }); fullRowsMap[def.table + ':' + row.id] = fields; rowItems.push({ id: def.table + ':' + row.id, primary: label + ' (id: ' + row.id + ')', secondary: rest.join(' · ') || null, responseData: { table: def.table, id: row.id, isDeck: false } }); }); }); return { row_items: rowItems, full_rows_map: fullRowsMap }; })()"
+        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var defs = (local_state.loop_state && local_state.loop_state.defs) || []; var fetched = local_state.fetched_rows_by_def || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row, fks){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fks.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } var rowItems = []; var fullRowsMap = {}; defs.forEach(function(def, i){ var rows = fetched[i] || []; rows.forEach(function(row){ var fields = cleanScalar(row, def.foreign_keys || []); var label = fields.title || fields.name || def.table; var rest = Object.keys(fields).filter(function(k){ return k !== 'id' && k !== 'title' && k !== 'name'; }).map(function(k){ return k + '=' + fields[k]; }); fullRowsMap[def.table + ':' + row.id] = fields; rowItems.push({ id: def.table + ':' + row.id, primary: label + ' (id: ' + row.id + ')', secondary: rest.join(' · ') || null, responseData: { table: def.table, id: row.id, hasChildren: false } }); }); }); return { row_items: rowItems, full_rows_map: fullRowsMap }; })()"
       },
       {
         "step": "24",
@@ -2632,7 +2632,7 @@
       {
         "step": "24a",
         "type": "condition",
-        "description": "Skip the deck/leaf eligibility check entirely when there are no rows at all.",
+        "description": "Skip the further-navigable-or-leaf eligibility check entirely when there are no rows at all.",
         "expression": "{{distinct_child_tables.length}}",
         "on_success": "25",
         "on_else": "26"
@@ -2658,33 +2658,33 @@
           "on_else": "cancel"
         },
         "execution_mode": "sequential",
-        "output_key": "isdeck_discover_results",
+        "output_key": "child_discover_results",
         "on_complete": "25a",
         "on_else": "25a"
       },
       {
         "step": "25a",
         "type": "js_transform",
-        "description": "Build the { table: isDeck } map from the discover results — not every table with an incoming FK is a 'deck' worth another row_selection. A table only counts as further-navigable when the reference is a self-reference (sub-decks under a deck) or a relationship create_domain already curated into some entity's own joins (e.g. Decks -> Cards). Anything else (e.g. a Card's ReviewLog rows) is incidental/attached data, not a navigable child — it surfaces as a reveal on the leaf's own detail view instead (steps 50-50b). Driven entirely by domain_schemas (already loaded at step 1) and the discovered table names — no domain-specific table names appear here, this must work identically for every domain.",
-        "output_key": "isdeck_map",
+        "description": "Build the { table: hasChildren } map from the discover results — not every table with an incoming FK is further-navigable. A table only counts as navigable when the reference is a self-reference (a table whose rows can themselves have children of the same table) or a relationship create_domain already curated into some entity's own joins (a genuine parent/content-child pair the domain's own design registered). Anything else (an incidental FK from some other table, e.g. an audit/history-style table logging events against this row) is attached detail data, not a navigable child — it surfaces as a reveal on the leaf's own detail view instead (steps 50-50b). Driven entirely by domain_schemas (already loaded at step 1) and the discovered table names — no table or entity name is hardcoded anywhere in this step, so the same logic applies to every domain, not just the one it happened to be validated against.",
+        "output_key": "has_children_map",
         "on_success": "26",
         "on_else": "26",
-        "expression": "(function(){ var tables = local_state.distinct_child_tables || []; var results = local_state.isdeck_discover_results || []; var ds = local_state.domain_schemas; var schemas = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); function isCuratedChild(childTable, parentTable){ if (childTable === parentTable) return true; return schemas.some(function(e){ return e.root_table === parentTable && (e.joins || []).some(function(j){ return j.table === childTable; }); }); } var map = {}; tables.forEach(function(t, i){ var r = results[i] || []; map[t] = r.some(function(row){ return isCuratedChild(row.table_name, t); }); }); return map; })()"
+        "expression": "(function(){ var tables = local_state.distinct_child_tables || []; var results = local_state.child_discover_results || []; var ds = local_state.domain_schemas; var schemas = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); function isCuratedChild(childTable, parentTable){ if (childTable === parentTable) return true; return schemas.some(function(e){ return e.root_table === parentTable && (e.joins || []).some(function(j){ return j.table === childTable; }); }); } var map = {}; tables.forEach(function(t, i){ var r = results[i] || []; map[t] = r.some(function(row){ return isCuratedChild(row.table_name, t); }); }); return map; })()"
       },
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Apply the isdeck_map to finalize row_items and build the gate's message text. Caps the COMBINED row count across every def at this level (not just each def's own query limit) — each row costs 2 Slack blocks (its section plus a trailing divider), so an uncapped multi-def level can exceed Slack's 50-block hard limit even though each individual fetch was already limited to 20 rows.",
+        "description": "Apply the has_children_map to finalize row_items and build the gate's message text. Caps the COMBINED row count across every def at this level (not just each def's own query limit) — each row costs 2 Slack blocks (its section plus a trailing divider), so an uncapped multi-def level can exceed Slack's 50-block hard limit even though each individual fetch was already limited to 20 rows.",
         "output_key": "list_view",
         "on_success": "27",
         "on_else": "cancel",
-        "expression": "(function(){ var map = local_state.isdeck_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { isDeck: !!map[it.responseData.table] }) }); }); var maxRows = 20; var capped = tagged.slice(0, maxRows); var truncated = Math.max(0, tagged.length - maxRows); var text = capped.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s)' + (truncated > 0 ? ' — showing the first ' + maxRows : '') + '. Click Open for details.'); return { row_items: capped, message: text }; })()"
+        "expression": "(function(){ var map = local_state.has_children_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { hasChildren: !!map[it.responseData.table] }) }); }); var maxRows = 20; var capped = tagged.slice(0, maxRows); var truncated = Math.max(0, tagged.length - maxRows); var text = capped.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s)' + (truncated > 0 ? ' — showing the first ' + maxRows : '') + '. Click Open for details.'); return { row_items: capped, message: text }; })()"
       },
       {
         "step": "27",
         "type": "human_gate",
         "gate_type": "list_selection",
-        "description": "Show one row per record at the current level. Opening a row either drills into its children (another pass through this same loop) or shows its full detail, decided by the router at step 40 based on the isDeck flag computed above — never fetched eagerly per row.",
+        "description": "Show one row per record at the current level. Opening a row either drills into its children (another pass through this same loop) or shows its full detail, decided by the router at step 40 based on the hasChildren flag computed above — never fetched eagerly per row.",
         "message_template": "{{list_view.message}}",
         "context_key": "list_view.row_items",
         "item_action": { "action": "select_row", "label": "Open", "style": "default", "on_select": "step:40" },
@@ -2701,7 +2701,7 @@
         "step": "40",
         "type": "condition",
         "description": "Route the clicked row: further drill-down if it can have children, leaf detail otherwise.",
-        "expression": "local_state.selected_row&&local_state.selected_row.isDeck===true",
+        "expression": "local_state.selected_row&&local_state.selected_row.hasChildren===true",
         "on_success": "41",
         "on_else": "50"
       },
@@ -2717,7 +2717,7 @@
       {
         "step": "41a",
         "type": "serv_query",
-        "description": "Discover which table(s) have a foreign key pointing at the clicked row's table — the same lightweight, schema-only jsonb_contains lookup used for isDeck tagging, now driving what to actually fetch next.",
+        "description": "Discover which table(s) have a foreign key pointing at the clicked row's table — the same lightweight, schema-only jsonb_contains lookup used for hasChildren tagging, now driving what to actually fetch next.",
         "input": {
           "tableName": "PGC_Schema",
           "filters": [
@@ -2736,7 +2736,7 @@
       {
         "step": "41b",
         "type": "js_transform",
-        "description": "Build the next level's defs from the discovered referencing tables, filtered to (a) children of the clicked row specifically and (b) curated children only — same self-reference-or-domain_schemas-join rule as step 25a's isDeck decision, kept in sync so a table this row was drilled into for is always one it was actually flagged isDeck for. Then loop back to the shared fetch step.",
+        "description": "Build the next level's defs from the discovered referencing tables, filtered to (a) children of the clicked row specifically and (b) curated children only — same self-reference-or-domain_schemas-join rule as step 25a's hasChildren decision, kept in sync so a table this row was drilled into for is always one it was actually flagged hasChildren for. Then loop back to the shared fetch step.",
         "output_key": "loop_state",
         "on_success": "20",
         "on_else": "cancel",
@@ -2762,11 +2762,11 @@
       {
         "step": "50",
         "type": "js_transform",
-        "description": "Leaf detail, part 1: this row's own table was already discovered as non-curated at the level it was listed on (isDeck false means every referencing table found there failed the curated-child test) — reuse that cached discovery instead of a fresh PGC_Schema query. These become the leaf's 'detail children': attached data (e.g. a card's review history) that never gets its own row_selection, only a reveal on this record's own view.",
+        "description": "Leaf detail, part 1: this row's own table was already discovered as non-curated at the level it was listed on (hasChildren false means every referencing table found there failed the curated-child test) — reuse that cached discovery instead of a fresh PGC_Schema query. These become the leaf's 'detail children': attached data (an incidental FK from some other table, e.g. an audit/history-style table logging events against this row) that never gets its own row_selection, only a reveal on this record's own view.",
         "output_key": "leaf_child_defs",
         "on_success": "50a",
         "on_else": "cancel",
-        "expression": "(function(){ var table = local_state.selected_row.table; var idx = (local_state.distinct_child_tables || []).indexOf(table); var referencingRows = idx >= 0 ? (local_state.isdeck_discover_results[idx] || []) : []; return referencingRows.map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === table; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks }; }).filter(Boolean); })()"
+        "expression": "(function(){ var table = local_state.selected_row.table; var idx = (local_state.distinct_child_tables || []).indexOf(table); var referencingRows = idx >= 0 ? (local_state.child_discover_results[idx] || []) : []; return referencingRows.map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === table; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks }; }).filter(Boolean); })()"
       },
       {
         "step": "50a",
