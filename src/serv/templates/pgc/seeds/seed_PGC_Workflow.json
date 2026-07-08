@@ -2674,11 +2674,11 @@
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Apply the isdeck_map to finalize row_items and build the gate's message text.",
+        "description": "Apply the isdeck_map to finalize row_items and build the gate's message text. Caps the COMBINED row count across every def at this level (not just each def's own query limit) — each row costs 2 Slack blocks (its section plus a trailing divider), so an uncapped multi-def level can exceed Slack's 50-block hard limit even though each individual fetch was already limited to 20 rows.",
         "output_key": "list_view",
         "on_success": "27",
         "on_else": "cancel",
-        "expression": "(function(){ var map = local_state.isdeck_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { isDeck: !!map[it.responseData.table] }) }); }); var count = tagged.length; var text = count === 0 ? 'No related records found.' : ('Found ' + count + ' record(s). Click Open for details.'); return { row_items: tagged, message: text }; })()"
+        "expression": "(function(){ var map = local_state.isdeck_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { isDeck: !!map[it.responseData.table] }) }); }); var maxRows = 20; var capped = tagged.slice(0, maxRows); var truncated = Math.max(0, tagged.length - maxRows); var text = capped.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s)' + (truncated > 0 ? ' — showing the first ' + maxRows : '') + '. Click Open for details.'); return { row_items: capped, message: text }; })()"
       },
       {
         "step": "27",
