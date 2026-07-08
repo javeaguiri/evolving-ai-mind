@@ -766,17 +766,21 @@ describe('list_entity step 26 — hasChildren tagging', () => {
 
   // Regression: run 668 hit Slack's msg_blocks_too_long — two defs each capped
   // at 20 rows (their own serv_query limit) combined into 40 uncapped row_items,
-  // and each row now costs 2 blocks (section + trailing divider from Track D10),
-  // well past Slack's 50-block hard limit. step 26 must cap the COMBINED total.
-  it('caps combined row_items at 20 across all defs and reports the truncated count', () => {
+  // and each row now costs 2 blocks (section + trailing divider from Track D10)
+  // plus an interactive accessory button. The cap was first set to 20 (still
+  // under Slack's documented 50-block limit by hand-count) but a live 20-row
+  // payload was rejected anyway with no further detail in Slack's error
+  // response to pin the exact threshold — recapped to 8 for a real safety
+  // margin instead of continuing to guess at the precise number.
+  it('caps combined row_items at 8 across all defs and reports the truncated count', () => {
     const step = getStep('list_entity', '26');
     const many = Array.from({ length: 40 }, (_, i) => ({
       id: `PGD_Child:${i}`, primary: `item${i}`, responseData: { table: 'PGD_Child', id: i, hasChildren: false },
     }));
     const localState = { has_children_map: { PGD_Child: false }, row_build: { row_items: many } };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.equal(result.row_items.length, 20, 'must cap at 20 regardless of how many defs contributed rows');
-    assert.match(result.message, /Found 40 record.*showing the first 20/);
+    assert.equal(result.row_items.length, 8, 'must cap at 8 regardless of how many defs contributed rows');
+    assert.match(result.message, /Found 40 record.*showing the first 8/);
   });
 });
 
