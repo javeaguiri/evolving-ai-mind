@@ -246,7 +246,7 @@ function dialogToBlocks(dialog, workflowRunId) {
               value:     JSON.stringify({
                 workflowRunId,
                 action:       item.secondaryAction.action,
-                responseData: { tableName: item.id },
+                responseData: item.responseData !== undefined ? item.responseData : { tableName: item.id },
               }),
               ...(item.secondaryAction.confirm ? {
                 confirm: {
@@ -259,6 +259,7 @@ function dialogToBlocks(dialog, workflowRunId) {
             };
           }
           blocks.push(sectionBlock);
+          blocks.push({ type: 'divider' });
         }
         break;
       }
@@ -608,9 +609,35 @@ describe('dialogToBlocks — list', () => {
       items: [{ id: 'T1', primary: 'PGD_T1' }],
     };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
-    // Only the item block — no label
-    assert.equal(blocks.length, 1);
+    // The item section block plus its trailing divider — no label block
+    assert.equal(blocks.length, 2);
     assert.ok(blocks[0].text.text.includes('PGD_T1'));
+  });
+
+  it('pushes a divider block after every row', () => {
+    const field = {
+      type:  'list',
+      items: [{ id: 'A', primary: 'A' }, { id: 'B', primary: 'B' }],
+    };
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(blocks.length, 4);
+    assert.equal(blocks[1].type, 'divider');
+    assert.equal(blocks[3].type, 'divider');
+  });
+
+  it('item-supplied responseData overrides the default { tableName } payload', () => {
+    const field = {
+      type:  'list',
+      items: [{
+        id: 'PGD_Decks:7',
+        primary: 'Sub-deck A',
+        secondaryAction: { label: 'Open', action: 'select_row' },
+        responseData: { table: 'PGD_Decks', id: 7, isDeck: true },
+      }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const value = JSON.parse(block.accessory.value);
+    assert.deepEqual(value.responseData, { table: 'PGD_Decks', id: 7, isDeck: true });
   });
 
   it('item WITHOUT secondaryAction has no accessory (parent table)', () => {
@@ -646,7 +673,7 @@ describe('dialogToBlocks — list', () => {
         { id: 'B', primary: 'B', secondaryAction: { label: 'View', action: 'view_record' } },
       ],
     };
-    const [blockA, blockB] = dialogToBlocks({ fields: [field] }, 1);
+    const [blockA, , blockB] = dialogToBlocks({ fields: [field] }, 1); // index 1 is the divider after row A
     assert.ok(!('style' in blockA.accessory), 'style: "default" must not be forwarded — Slack has no such enum value');
     assert.ok(!('style' in blockB.accessory), 'omitted style must not default to sending style: "default"');
   });
@@ -1046,18 +1073,20 @@ describe('dialogToBlocks — mixed fields', () => {
 
     const blocks = dialogToBlocks(dialog, 101);
 
-    // 1 typography + 1 label + 2 list items + 1 actions = 5 blocks
-    assert.equal(blocks.length, 5);
+    // 1 typography + 1 label + 2 list items (each with a trailing divider) + 1 actions = 7 blocks
+    assert.equal(blocks.length, 7);
     assert.equal(blocks[0].type, 'markdown');  // typography
     assert.equal(blocks[1].type, 'section');  // label
     assert.equal(blocks[2].type, 'section');  // PGD_Recipes — no accessory
     assert.equal(blocks[2].accessory, undefined);
-    assert.equal(blocks[3].type, 'section');  // PGD_Ingredients — has accessory
-    assert.ok(blocks[3].accessory);
-    assert.equal(blocks[4].type, 'actions');
+    assert.equal(blocks[3].type, 'divider');
+    assert.equal(blocks[4].type, 'section');  // PGD_Ingredients — has accessory
+    assert.ok(blocks[4].accessory);
+    assert.equal(blocks[5].type, 'divider');
+    assert.equal(blocks[6].type, 'actions');
 
     // workflowRunId propagates to all button values
-    const confirmValue = JSON.parse(blocks[4].elements[0].value);
+    const confirmValue = JSON.parse(blocks[6].elements[0].value);
     assert.equal(confirmValue.workflowRunId, 101);
   });
 

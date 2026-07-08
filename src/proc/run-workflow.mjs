@@ -639,11 +639,17 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // action does). Write it to output_key before the generic matchedOption/
   // on_select advance below routes to wherever item_action.on_select points.
   if (itemActionMatch && stepRef.output_key) {
-    setPath(localState, stepRef.output_key, responseData?.tableName);
+    // Legacy rows never set their own responseData, so callback.mjs sends the
+    // { tableName } shape by default — write the bare scalar, exactly as before.
+    // Rows that carry a workflow-supplied responseData (no tableName key, e.g.
+    // { table, id, isDeck } for recursive drill-down) get written through whole.
+    const hasLegacyShape = responseData && Object.prototype.hasOwnProperty.call(responseData, 'tableName');
+    const value = hasLegacyShape ? responseData.tableName : responseData;
+    setPath(localState, stepRef.output_key, value);
     frame.local_state = localState;
-    console.info('run-workflow: list_selection item_action — clicked row id written to local_state', {
+    console.info('run-workflow: list_selection item_action — clicked row value written to local_state', {
       output_key: stepRef.output_key,
-      id:         responseData?.tableName,
+      value,
       traceId,
     });
   }

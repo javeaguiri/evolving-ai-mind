@@ -2209,7 +2209,7 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 3,
+    "version": 4,
     "steps": [
       {
         "step": "1",
@@ -2411,24 +2411,12 @@
       },
       {
         "step": "12",
-        "type": "llm_call",
-        "description": "RIGHT BRAIN, cheap model: turn the pre-cleaned, pre-resolved entity_display_data into readable markdown, deciding only where (if anywhere) a reveal panel best condenses a large child collection. All lookups and column filtering already happened deterministically in steps 5-11 — this call is presentation only.",
-        "input": {
-          "prompt": "format_entity_display",
-          "domain": "{{input.domain}}",
-          "entity_display_data": "{{entity_display_data}}"
-        },
-        "output_key": "formatted_display",
-        "on_success": "13",
-        "on_else": "13a"
-      },
-      {
-        "step": "13a",
         "type": "js_transform",
-        "description": "Degrade gracefully if the formatter call fails — fall back to raw JSON rather than losing the result entirely.",
+        "description": "Deterministic presentation: turn the pre-cleaned, pre-resolved entity_display_data into readable markdown, collapsing any child collection over the reveal threshold into a reveal panel instead of showing it inline. All lookups and column filtering already happened deterministically in steps 5-11 — this step is formatting only, no LLM judgment needed for fixed-shape data.",
         "output_key": "formatted_display",
         "on_success": "13",
-        "expression": "(function(){ return { formatted_markdown: '```\\n' + JSON.stringify(local_state.entity_display_data, null, 2) + '\\n```', reveals: [] }; })()"
+        "on_else": "cancel",
+        "expression": "(function(){ var data = local_state.entity_display_data || { entities: [] }; var entities = data.entities || []; var REVEAL_THRESHOLD = 5; var reveals = []; function esc(v){ return (v === null || v === undefined) ? '—' : String(v); } function idSuffix(f){ return (f && f.id !== undefined && f.id !== null) ? ' (id: ' + f.id + ')' : ''; } function titleFor(f, fallback){ var t = f && (f.title || f.name); return (t || fallback) + idSuffix(f); } function fieldLines(f){ return Object.keys(f || {}).filter(function(k){ return k !== 'id'; }).map(function(k){ return '*' + k + ':* ' + esc(f[k]); }); } var sections = []; entities.forEach(function(entity){ var fields = entity.fields || {}; var heading = (entities.length > 1 ? '# ' : '') + titleFor(fields, data.entity_name || 'Record'); var lines = [heading].concat(fieldLines(fields)); var children = entity.children || {}; Object.keys(children).forEach(function(childKey){ var items = children[childKey] || []; if (items.length === 0) return; if (items.length > REVEAL_THRESHOLD) { reveals.push({ button_label: childKey + ' (' + items.length + ')', content: items.map(function(item){ return (item && typeof item === 'object') ? Object.keys(item).map(function(k){ return k + ': ' + esc(item[k]); }).join(' · ') : esc(item); }) }); } else { lines.push('### ' + childKey); items.forEach(function(item){ lines.push('- ' + ((item && typeof item === 'object') ? Object.keys(item).map(function(k){ return '*' + k + ':* ' + esc(item[k]); }).join(' · ') : esc(item))); }); } }); sections.push(lines.join('\\n')); }); if (data.truncated_count) { sections.push('_...and ' + data.truncated_count + ' more_'); } return { formatted_markdown: sections.join('\\n\\n'), reveals: reveals }; })()"
       },
       {
         "step": "13",
@@ -2456,7 +2444,7 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 3,
+    "version": 4,
     "steps": [
       {
         "step": "1",
@@ -2518,29 +2506,17 @@
       },
       {
         "step": "2",
-        "type": "serv_entity_query",
-        "description": "List all entities.",
-        "input": {
-          "entityName": "{{resolved_entity_name}}",
-          "limit": 50
-        },
-        "output_key": "results",
-        "on_success": "next",
-        "on_else": "cancel"
-      },
-      {
-        "step": "3",
         "type": "js_transform",
         "description": "Find the matched entity's own PGC_EntitySchema row (root_table, etc.) from the domain_schemas already loaded at step 1 — no new fetch needed.",
         "output_key": "full_entity_schema",
-        "on_success": "next",
-        "on_else": "4",
+        "on_success": "2a",
+        "on_else": "2a",
         "expression": "(function(){ var ds = local_state.domain_schemas; var rows = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); var name = local_state.resolved_entity_name; return rows.find(function(r){ return r.entity_name === name; }) || null; })()"
       },
       {
-        "step": "4",
+        "step": "2a",
         "type": "serv_query",
-        "description": "Fetch the root table's foreign_keys so any FK columns on the result rows can be resolved to a display label instead of shown as a bare id.",
+        "description": "Fetch the root table's own schema row (its foreign_keys) — used both to detect a self-referential parent column (so the root list can filter to top-level records only) and to resolve outgoing FK labels on the root-level rows.",
         "input": {
           "tableName": "PGC_Schema",
           "filters": [
@@ -2552,29 +2528,57 @@
           ],
           "limit": 1
         },
-        "output_key": "root_table_schema",
-        "on_success": "next",
-        "on_else": "5"
+        "output_key": "root_table_own_schema",
+        "on_success": "2b",
+        "on_else": "2b"
       },
       {
-        "step": "5",
+        "step": "2b",
         "type": "js_transform",
-        "description": "Build the deduplicated list of FK lookups needed across all listed rows — one entry per distinct (referenced table, referenced id) pair, not one per row.",
+        "description": "Initialize the navigation loop: a single synthetic 'def' describing what to fetch at the root level — the root table itself, filtered to top-level rows only if it turns out to be self-referential (e.g. a deck's own sub-decks stay hidden until their parent deck is opened).",
+        "output_key": "loop_state",
+        "on_success": "20",
+        "on_else": "cancel",
+        "expression": "(function(){ var rootTable = local_state.full_entity_schema && local_state.full_entity_schema.root_table; var schemaRows = Array.isArray(local_state.root_table_own_schema) ? local_state.root_table_own_schema : []; var ownFks = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var selfFk = ownFks.find(function(fk){ return fk.references && fk.references.table === rootTable; }); var filters = selfFk ? [{ column: selfFk.column, op: 'is_null' }] : []; var def = { table: rootTable, fkColumn: selfFk ? selfFk.column : null, foreign_keys: ownFks, filters: filters }; return { defs: [def], parent_id: null, nav_stack: [] }; })()"
+      },
+      {
+        "step": "20",
+        "type": "iterator",
+        "description": "Loop entry (reached at init and via every drill-in/back navigation): fetch each of the current level's defs as a plain, unjoined query against its own table — no aggregation, no precomputed entity_schema join tree.",
+        "items_key": "loop_state.defs",
+        "item_step": {
+          "type": "serv_query",
+          "input": {
+            "tableName": "{{item.table}}",
+            "filters": "{{item.filters}}",
+            "limit": 20
+          },
+          "on_else": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "fetched_rows_by_def",
+        "on_complete": "21",
+        "on_else": "21"
+      },
+      {
+        "step": "21",
+        "type": "js_transform",
+        "description": "Build the deduplicated list of outgoing FK lookups needed across this level's fetched rows — one entry per distinct (referenced table, referenced id) pair, sourced from each def's own foreign_keys (already known from the discover step that produced these defs).",
         "output_key": "fk_lookups",
-        "on_success": "6",
-        "on_else": "9",
-        "expression": "(function(){ var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fks = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var lookups = []; var seen = {}; resultsArr.forEach(function(row){ fks.forEach(function(fk){ var val = row[fk.column]; if (val == null) return; var key = fk.references.table + ':' + val; if (seen[key]) return; seen[key] = true; lookups.push({ column: fk.column, refTable: fk.references.table, refId: val }); }); }); return lookups; })()"
+        "on_success": "21a",
+        "on_else": "23",
+        "expression": "(function(){ var defs = (local_state.loop_state && local_state.loop_state.defs) || []; var fetched = local_state.fetched_rows_by_def || []; var lookups = []; var seen = {}; defs.forEach(function(def, i){ var rows = fetched[i] || []; var fks = def.foreign_keys || []; rows.forEach(function(row){ fks.forEach(function(fk){ var val = row[fk.column]; if (val == null) return; var key = fk.references.table + ':' + val; if (seen[key]) return; seen[key] = true; lookups.push({ column: fk.column, refTable: fk.references.table, refId: val }); }); }); }); return lookups; })()"
       },
       {
-        "step": "6",
+        "step": "21a",
         "type": "condition",
-        "description": "Skip FK resolution entirely when no foreign keys are populated across the listed rows — the common case for most domains.",
+        "description": "Skip FK resolution entirely when no foreign keys are populated across this level's rows — the common case for most domains.",
         "expression": "{{fk_lookups.length}}",
-        "on_success": "7",
-        "on_else": "9"
+        "on_success": "22",
+        "on_else": "23"
       },
       {
-        "step": "7",
+        "step": "22",
         "type": "iterator",
         "description": "Resolve each distinct FK reference to its display label (the referenced table's title column).",
         "items_key": "fk_lookups",
@@ -2595,58 +2599,98 @@
         },
         "execution_mode": "sequential",
         "output_key": "fk_lookup_results",
-        "on_complete": "8",
-        "on_else": "8"
+        "on_complete": "22a",
+        "on_else": "22a"
       },
       {
-        "step": "8",
+        "step": "22a",
         "type": "js_transform",
-        "description": "Zip fk_lookups with their resolved rows into a { 'table:id': label } map for step 9 to substitute in.",
+        "description": "Zip fk_lookups with their resolved rows into a { 'table:id': label } map for step 23 to substitute in.",
         "output_key": "fk_label_map",
-        "on_success": "9",
-        "on_else": "9",
+        "on_success": "23",
+        "on_else": "23",
         "expression": "(function(){ var lookups = local_state.fk_lookups || []; var results = local_state.fk_lookup_results || []; var map = {}; lookups.forEach(function(lookup, i){ var rows = results[i] || []; var row = rows[0]; var label = row ? (row.title || row.name || null) : null; if (label) map[lookup.refTable + ':' + lookup.refId] = label; }); return map; })()"
       },
       {
-        "step": "9",
+        "step": "23",
         "type": "js_transform",
-        "description": "Deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns to their looked-up label. List mode has no child arrays (root columns only — matches the prior root_only behaviour) into a bounded { entity_name, entities: [{fields}], truncated_count } structure for format_entity_display to render.",
-        "output_key": "entity_display_data",
-        "on_success": "9a",
-        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var resultsArr = Array.isArray(local_state.results) ? local_state.results : (local_state.results ? [local_state.results] : []); var maxRows = 20; var capped = resultsArr.slice(0, maxRows); var schema = local_state.full_entity_schema || {}; var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fkCols = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fkCols.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } var entities = capped.map(function(row){ return { fields: cleanScalar(row) }; }); return { entity_name: schema.entity_name || local_state.resolved_entity_name, entities: entities, truncated_count: Math.max(0, resultsArr.length - maxRows) }; })()"
+        "description": "Deterministic pre-processing: strip system/embedding/null fields, resolve outgoing FK columns to their looked-up label (e.g. expenses.category_id becomes a category name, never a bare id), and build one summary row per fetched record across every def at this level. full_rows_map keeps each record's full cleaned fields around so a later leaf-detail click can render them without a re-fetch.",
+        "output_key": "row_build",
+        "on_success": "24",
+        "on_else": "cancel",
+        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var defs = (local_state.loop_state && local_state.loop_state.defs) || []; var fetched = local_state.fetched_rows_by_def || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row, fks){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fks.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } var rowItems = []; var fullRowsMap = {}; defs.forEach(function(def, i){ var rows = fetched[i] || []; rows.forEach(function(row){ var fields = cleanScalar(row, def.foreign_keys || []); var label = fields.title || fields.name || def.table; var rest = Object.keys(fields).filter(function(k){ return k !== 'id' && k !== 'title' && k !== 'name'; }).map(function(k){ return k + '=' + fields[k]; }); fullRowsMap[def.table + ':' + row.id] = fields; rowItems.push({ id: def.table + ':' + row.id, primary: label + ' (id: ' + row.id + ')', secondary: rest.join(' · ') || null, responseData: { table: def.table, id: row.id, isDeck: false } }); }); }); return { row_items: rowItems, full_rows_map: fullRowsMap }; })()"
       },
       {
-        "step": "9a",
+        "step": "24",
+        "type": "js_transform",
+        "description": "Distinct tables among this level's defs — used to check, per table (not per row, since rows from the same table share the same answer), whether any of them can themselves be drilled into further.",
+        "output_key": "distinct_child_tables",
+        "on_success": "24a",
+        "on_else": "26",
+        "expression": "(function(){ var defs = (local_state.loop_state && local_state.loop_state.defs) || []; var seen = {}; var out = []; defs.forEach(function(def){ if (!seen[def.table]) { seen[def.table] = true; out.push(def.table); } }); return out; })()"
+      },
+      {
+        "step": "24a",
         "type": "condition",
-        "description": "Skip the row list entirely when nothing matched — a deterministic shortcut.",
-        "expression": "{{entity_display_data.entities.length}}",
-        "on_success": "9b",
-        "on_else": "11b"
+        "description": "Skip the deck/leaf eligibility check entirely when there are no rows at all.",
+        "expression": "{{distinct_child_tables.length}}",
+        "on_success": "25",
+        "on_else": "26"
       },
       {
-        "step": "11b",
-        "type": "notify",
-        "message_template": "No records found.",
-        "on_success": "end"
+        "step": "25",
+        "type": "iterator",
+        "description": "Lightweight, schema-only check per distinct table: does any table have a foreign key pointing at it? No row data is fetched here — only PGC_Schema is queried — so a table's children are never looked up until a row of that table is actually selected.",
+        "items_key": "distinct_child_tables",
+        "item_step": {
+          "type": "serv_query",
+          "input": {
+            "tableName": "PGC_Schema",
+            "filters": [
+              {
+                "column": "foreign_keys",
+                "op": "jsonb_contains",
+                "value": [ { "references": { "table": "{{item}}" } } ]
+              }
+            ],
+            "limit": 20
+          },
+          "on_else": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "isdeck_discover_results",
+        "on_complete": "25a",
+        "on_else": "25a"
       },
       {
-        "step": "9b",
+        "step": "25a",
         "type": "js_transform",
-        "description": "Deterministic (no LLM needed): build one row per record — a short id-labeled summary line, no natural-language synthesis required for a flat list. Sprint 7 Track D2 drill-down.",
-        "output_key": "row_items",
-        "on_success": "9c",
-        "expression": "(function(){ var entities = (local_state.entity_display_data && local_state.entity_display_data.entities) || []; return entities.map(function(e){ var f = e.fields || {}; var label = f.title || f.name || 'Record'; var rest = Object.keys(f).filter(function(k){ return k !== 'id' && k !== 'title' && k !== 'name'; }).map(function(k){ return k + '=' + f[k]; }); return { id: f.id, primary: label + ' (id: ' + f.id + ')', secondary: rest.join(' · ') || null }; }); })()"
+        "description": "Build the { table: hasChildren } map from the discover results.",
+        "output_key": "isdeck_map",
+        "on_success": "26",
+        "on_else": "26",
+        "expression": "(function(){ var tables = local_state.distinct_child_tables || []; var results = local_state.isdeck_discover_results || []; var map = {}; tables.forEach(function(t, i){ var r = results[i] || []; map[t] = Array.isArray(r) && r.length > 0; }); return map; })()"
       },
       {
-        "step": "9c",
+        "step": "26",
+        "type": "js_transform",
+        "description": "Apply the isdeck_map to finalize row_items and build the gate's message text.",
+        "output_key": "list_view",
+        "on_success": "27",
+        "on_else": "cancel",
+        "expression": "(function(){ var map = local_state.isdeck_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { isDeck: !!map[it.responseData.table] }) }); }); var count = tagged.length; var text = count === 0 ? 'No related records found.' : ('Found ' + count + ' record(s). Click Open for details.'); return { row_items: tagged, message: text }; })()"
+      },
+      {
+        "step": "27",
         "type": "human_gate",
         "gate_type": "list_selection",
-        "description": "Show one row per record with a View button — clicking drills into that single record (steps 20-23) rather than resuming this list.",
-        "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
-        "context_key": "row_items",
-        "item_action": { "action": "view_record", "label": "View", "style": "default", "on_select": "step:20" },
-        "output_key": "selected_record_id",
+        "description": "Show one row per record at the current level. Opening a row either drills into its children (another pass through this same loop) or shows its full detail, decided by the router at step 40 based on the isDeck flag computed above — never fetched eagerly per row.",
+        "message_template": "{{list_view.message}}",
+        "context_key": "list_view.row_items",
+        "item_action": { "action": "select_row", "label": "Open", "style": "default", "on_select": "step:40" },
+        "output_key": "selected_row",
         "options": [
+          { "label": "⬅ Back", "action": "go_back", "on_select": "step:42" },
           { "label": "Done", "action": "cancel", "on_select": "cancel" }
         ],
         "on_success": "next",
@@ -2654,55 +2698,102 @@
         "on_cancel": "cancel"
       },
       {
-        "step": "20",
-        "type": "serv_entity_get",
-        "description": "Drill-down: fetch the single clicked record in full (root + child collections) — the list fetch above was root-only.",
+        "step": "40",
+        "type": "condition",
+        "description": "Route the clicked row: further drill-down if it can have children, leaf detail otherwise.",
+        "expression": "local_state.selected_row&&local_state.selected_row.isDeck===true",
+        "on_success": "41",
+        "on_else": "50"
+      },
+      {
+        "step": "41",
+        "type": "js_transform",
+        "description": "Push the current level (its defs + parent_id, not just an id) onto nav_stack so Back can restore it exactly without re-discovering anything.",
+        "output_key": "nav_stack_pushed",
+        "on_success": "41a",
+        "on_else": "cancel",
+        "expression": "(function(){ var stack = (local_state.loop_state && local_state.loop_state.nav_stack) || []; var entry = { defs: local_state.loop_state.defs, parent_id: local_state.loop_state.parent_id }; return stack.concat([entry]); })()"
+      },
+      {
+        "step": "41a",
+        "type": "serv_query",
+        "description": "Discover which table(s) have a foreign key pointing at the clicked row's table — the same lightweight, schema-only jsonb_contains lookup used for isDeck tagging, now driving what to actually fetch next.",
         "input": {
-          "entityName": "{{resolved_entity_name}}",
-          "id": "{{selected_record_id}}"
+          "tableName": "PGC_Schema",
+          "filters": [
+            {
+              "column": "foreign_keys",
+              "op": "jsonb_contains",
+              "value": [ { "references": { "table": "{{selected_row.table}}" } } ]
+            }
+          ],
+          "limit": 20
         },
-        "output_key": "drill_result",
-        "on_success": "21",
+        "output_key": "clicked_referencing_tables",
+        "on_success": "41b",
+        "on_else": "41b"
+      },
+      {
+        "step": "41b",
+        "type": "js_transform",
+        "description": "Build the next level's defs from the discovered referencing tables, filtered to children of the clicked row specifically, then loop back to the shared fetch step.",
+        "output_key": "loop_state",
+        "on_success": "20",
+        "on_else": "cancel",
+        "expression": "(function(){ var rows = local_state.clicked_referencing_tables || []; var clickedTable = local_state.selected_row.table; var clickedId = local_state.selected_row.id; var defs = rows.map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === clickedTable; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks, filters: [{ column: match.column, op: 'eq', value: clickedId }] }; }).filter(Boolean); return { defs: defs, parent_id: clickedId, nav_stack: local_state.nav_stack_pushed }; })()"
+      },
+      {
+        "step": "42",
+        "type": "condition",
+        "description": "Back: only meaningful once at least one level has been pushed — at the root, Back ends the workflow like Done.",
+        "expression": "local_state.loop_state&&local_state.loop_state.nav_stack&&local_state.loop_state.nav_stack.length>0",
+        "on_success": "42a",
         "on_else": "cancel"
       },
       {
-        "step": "21",
+        "step": "42a",
         "type": "js_transform",
-        "description": "Deterministic pre-processing for the single drilled-down record, with children this time — reuses root_table_schema and fk_label_map already resolved for the list (the clicked record's FK values were already covered since it was one of the listed rows).",
+        "description": "Pop the last level off nav_stack and restore it, then loop back to the shared fetch step — no re-discovery needed, the popped entry already has its defs.",
+        "output_key": "loop_state",
+        "on_success": "20",
+        "on_else": "cancel",
+        "expression": "(function(){ var stack = (local_state.loop_state && local_state.loop_state.nav_stack) || []; var popped = stack[stack.length - 1]; var remaining = stack.slice(0, -1); return { defs: popped.defs, parent_id: popped.parent_id, nav_stack: remaining }; })()"
+      },
+      {
+        "step": "50",
+        "type": "js_transform",
+        "description": "Leaf detail: the clicked row's fields were already resolved and cached in full_rows_map when this level's list was built — no re-fetch needed.",
         "output_key": "entity_display_data",
-        "on_success": "22",
-        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; var resultsArr = Array.isArray(local_state.drill_result) ? local_state.drill_result : (local_state.drill_result ? [local_state.drill_result] : []); var schema = local_state.full_entity_schema || {}; var schemaRows = Array.isArray(local_state.root_table_schema) ? local_state.root_table_schema : []; var fkCols = (schemaRows[0] && schemaRows[0].foreign_keys) || []; var fkMap = local_state.fk_label_map || {}; function cleanScalar(row){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val === null || val === undefined) return; var fk = fkCols.find(function(f){ return f.column === k; }); out[k] = fk && fkMap[fk.references.table + ':' + val] ? fkMap[fk.references.table + ':' + val] : val; }); return out; } function cleanChildren(row){ var childKeys = Object.keys(row).filter(function(k){ return Array.isArray(row[k]); }); var children = {}; childKeys.forEach(function(k){ children[k] = row[k].map(function(child){ return (child && typeof child === 'object') ? cleanScalar(child) : child; }); }); return children; } var entities = resultsArr.map(function(row){ return { fields: cleanScalar(row), children: cleanChildren(row) }; }); return { entity_name: schema.entity_name || local_state.resolved_entity_name, entities: entities }; })()"
+        "on_success": "51",
+        "on_else": "cancel",
+        "expression": "(function(){ var map = (local_state.row_build && local_state.row_build.full_rows_map) || {}; var key = local_state.selected_row.table + ':' + local_state.selected_row.id; var fields = map[key] || {}; return { entity_name: local_state.selected_row.table, entities: [ { fields: fields } ] }; })()"
       },
       {
-        "step": "22",
-        "type": "llm_call",
-        "description": "RIGHT BRAIN, cheap model: format the single drilled-down record — same prompt and contract as get_entity's equivalent step.",
-        "input": {
-          "prompt": "format_entity_display",
-          "domain": "{{input.domain}}",
-          "entity_display_data": "{{entity_display_data}}"
-        },
-        "output_key": "formatted_display",
-        "on_success": "23",
-        "on_else": "22a"
-      },
-      {
-        "step": "22a",
+        "step": "51",
         "type": "js_transform",
-        "description": "Degrade gracefully if the formatter call fails — fall back to raw JSON rather than losing the result entirely.",
+        "description": "Deterministic presentation — same formatter as get_entity's equivalent step, reused verbatim since the input contract ({ entity_name, entities: [{fields, children?}] }) is identical.",
         "output_key": "formatted_display",
-        "on_success": "23",
-        "expression": "(function(){ return { formatted_markdown: '```\\n' + JSON.stringify(local_state.entity_display_data, null, 2) + '\\n```', reveals: [] }; })()"
+        "on_success": "52",
+        "on_else": "cancel",
+        "expression": "(function(){ var data = local_state.entity_display_data || { entities: [] }; var entities = data.entities || []; var REVEAL_THRESHOLD = 5; var reveals = []; function esc(v){ return (v === null || v === undefined) ? '—' : String(v); } function idSuffix(f){ return (f && f.id !== undefined && f.id !== null) ? ' (id: ' + f.id + ')' : ''; } function titleFor(f, fallback){ var t = f && (f.title || f.name); return (t || fallback) + idSuffix(f); } function fieldLines(f){ return Object.keys(f || {}).filter(function(k){ return k !== 'id'; }).map(function(k){ return '*' + k + ':* ' + esc(f[k]); }); } var sections = []; entities.forEach(function(entity){ var fields = entity.fields || {}; var heading = (entities.length > 1 ? '# ' : '') + titleFor(fields, data.entity_name || 'Record'); var lines = [heading].concat(fieldLines(fields)); var children = entity.children || {}; Object.keys(children).forEach(function(childKey){ var items = children[childKey] || []; if (items.length === 0) return; if (items.length > REVEAL_THRESHOLD) { reveals.push({ button_label: childKey + ' (' + items.length + ')', content: items.map(function(item){ return (item && typeof item === 'object') ? Object.keys(item).map(function(k){ return k + ': ' + esc(item[k]); }).join(' · ') : esc(item); }) }); } else { lines.push('### ' + childKey); items.forEach(function(item){ lines.push('- ' + ((item && typeof item === 'object') ? Object.keys(item).map(function(k){ return '*' + k + ':* ' + esc(item[k]); }).join(' · ') : esc(item))); }); } }); sections.push(lines.join('\\n')); }); if (data.truncated_count) { sections.push('_...and ' + data.truncated_count + ' more_'); } return { formatted_markdown: sections.join('\\n\\n'), reveals: reveals }; })()"
       },
       {
-        "step": "23",
-        "type": "notify",
+        "step": "52",
+        "type": "human_gate",
+        "gate_type": "confirm",
+        "description": "Show the leaf record's full detail with a Back button to return to the level it was opened from.",
         "message_template": "{{formatted_display.formatted_markdown}}",
         "reveals": "{{formatted_display.reveals}}",
-        "on_success": "end"
+        "options": [
+          { "label": "⬅ Back", "action": "go_back", "on_select": "step:42" },
+          { "label": "Done", "action": "cancel", "on_select": "cancel" }
+        ],
+        "on_success": "next",
+        "on_else": "cancel",
+        "on_cancel": "cancel"
       },
       {
-        "step": "12",
+        "step": "60",
         "type": "end"
       }
     ]

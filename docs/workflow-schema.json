@@ -87,14 +87,16 @@
         "column": { "type": "string" },
         "op": {
           "type": "string",
-          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in", "is_null", "not_null"],
-          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array), is_null/not_null=null check (no value needed)"
+          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in", "is_null", "not_null", "jsonb_contains", "jsonb_contained_by"],
+          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array), is_null/not_null=null check (no value needed), jsonb_contains/jsonb_contained_by=JSONB @>/<@ containment"
         },
         "value": {
-          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'. Omit for is_null/not_null.",
+          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'. Use an object or array of objects for op: 'jsonb_contains'/'jsonb_contained_by' — matched via Postgres @>/<@ containment, not string comparison. Omit for is_null/not_null.",
           "oneOf": [
             { "type": "string" },
-            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            { "type": "object" },
+            { "type": "array", "items": { "type": "object" }, "minItems": 1 }
           ]
         }
       }

@@ -227,12 +227,22 @@ same thing two ways for two action semantics was exactly the one-off
 duplication this project avoids elsewhere).
 
 `context_key` items must arrive **pre-formatted** as `{ id, primary, secondary?,
-secondaryAction? }` — building that shape (a natural-language summary line,
-whether a given row gets an action at all) is a workflow-level (`js_transform`)
-concern, matching `design-domain.mjs`'s own hand-built review-tables gate,
-which uses this exact shape. An item may carry its own fully custom
-`secondaryAction` (e.g. omitted for a referenced parent table that can't be
-removed) that overrides `step.item_action` entirely for that one row.
+secondaryAction?, responseData? }` — building that shape (a natural-language
+summary line, whether a given row gets an action at all) is a workflow-level
+(`js_transform`) concern, matching `design-domain.mjs`'s own hand-built
+review-tables gate, which uses this exact shape. An item may carry its own
+fully custom `secondaryAction` (e.g. omitted for a referenced parent table
+that can't be removed) that overrides `step.item_action` entirely for that
+one row.
+
+**`responseData` (optional, per item)** — lets a row carry a structured
+payload beyond the bare id (e.g. `{ table: 'PGD_Decks', id: 7, isDeck: true }`)
+through to `output_key` on click. When an item omits it, `callback.mjs` falls
+back to the legacy `{ tableName: item.id }` shape every existing consumer
+expects — this is additive, not a breaking change to older workflows. See
+`list_entity`'s recursive navigation loop (`docs/arch-workflow-patterns.md`
+§6.17) for the pattern this exists to support: a row needs to say which table
+it belongs to and whether it can be drilled into further, not just its id.
 
 **Two behaviors, both driven by `item_action`, never by gate_type:**
 
@@ -290,13 +300,20 @@ case above), which would render a "View" button as a destructive-looking red
 button if left unset. Slack itself has no `"default"` style value; the harness
 omits the field entirely rather than sending the literal string.
 
-On click, `run-workflow.mjs`'s `resumeGate` writes the clicked row's id
-(arrives as `responseData.tableName` — same field name `callback.mjs`'s `'list'`
-field type already sends for any row-level `secondaryAction`, regardless of
-what the action does) to `output_key`, then routes via `item_action.on_select`
-to a back-edge step that fetches and displays that one record — see
-`get_entity`'s equivalent steps 6-13 in `docs/arch-workflow-patterns.md` §6.17
-for the pattern `list_entity`'s own drill-down branch (steps 20-23) follows.
+On click, `run-workflow.mjs`'s `resumeGate` writes the clicked row's payload to
+`output_key`, then routes via `item_action.on_select`. When the row never set
+its own `responseData`, this is the legacy bare scalar (`responseData.tableName`
+— same field name `callback.mjs`'s `'list'` field type sends by default for any
+row-level `secondaryAction`). When the row set a `responseData` object without
+a `tableName` key (the recursive drill-down case above), the whole object is
+written through instead — see `list_entity`'s navigation loop in
+`docs/arch-workflow-patterns.md` §6.17 for the live example (a shared loop
+entry step reads `{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.isDeck}}`
+off exactly this payload).
+
+Every row also renders with a trailing Slack `divider` block, separating it
+from the next row (and from the bottom `options[]` buttons) without a wall of
+buttons collapsing together visually.
 
 ###### `reveal` / `reveals` (optional, all gate types)
 
