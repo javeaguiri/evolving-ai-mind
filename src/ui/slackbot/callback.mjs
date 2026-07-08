@@ -745,7 +745,11 @@ function dialogToBlocks(dialog, workflowRunId) {
               value:     JSON.stringify({
                 workflowRunId,
                 action:       item.secondaryAction.action,
-                responseData: { tableName: item.id },
+                // A row can carry its own structured responseData (set by the
+                // workflow, e.g. { table, id, isDeck } for recursive drill-down);
+                // otherwise fall back to the legacy bare-id shape every existing
+                // list_selection consumer already expects.
+                responseData: item.responseData !== undefined ? item.responseData : { tableName: item.id },
               }),
               ...(item.secondaryAction.confirm ? {
                 confirm: {
@@ -758,6 +762,7 @@ function dialogToBlocks(dialog, workflowRunId) {
             };
           }
           blocks.push(sectionBlock);
+          blocks.push({ type: 'divider' });
         }
         break;
       }

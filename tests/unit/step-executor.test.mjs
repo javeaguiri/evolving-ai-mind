@@ -484,12 +484,12 @@ describe('help step 4 — resolveHelpContent expression', () => {
 // get_entity / list_entity expressions
 // ---------------------------------------------------------------------------
 
-// Sprint 7 Track D2 — get_entity/list_entity steps replaced their crude
-// markdown-flattening js_transform with a deterministic pre-processing step
-// that builds a { entity_name, entities: [{fields, children?}] } structure
-// for the format_entity_display llm_call to render. These tests cover the
-// deterministic builder only (FK resolution, system/embedding/null stripping,
-// scalar/child separation) — not the LLM formatting step itself.
+// Sprint 7 Track D9 — get_entity/list_entity's presentation step builds a
+// { entity_name, entities: [{fields, children?}] } structure, then formats it
+// into markdown deterministically (no LLM call — format_entity_display was
+// removed as a Type-4a overcorrection, see Track A8/A9). These tests cover the
+// pre-processing builder (FK resolution, system/embedding/null stripping,
+// scalar/child separation) — the formatter itself is covered separately below.
 describe('get_entity step 11 — entity_display_data builder (with children)', () => {
   const RESULTS = [
     {
@@ -530,28 +530,135 @@ describe('get_entity step 11 — entity_display_data builder (with children)', (
   });
 });
 
-describe('list_entity step 9 — entity_display_data builder (root only)', () => {
-  const RESULTS = [
-    { id: 1, front_text: 'hola', back_text: 'hello', created_at: '2026', updated_at: '2026',
-      review_logs: [{ result: 'pass' }] },
-    { id: 2, front_text: 'adiós', back_text: 'goodbye', created_at: '2026', updated_at: '2026',
-      review_logs: [] },
-  ];
-
-  it('includes root scalar fields and suppresses child arrays entirely', () => {
-    const step = getStep('list_entity', '9');
-    const result = runSandboxedExpression(step.expression, null, { results: RESULTS }, 'test');
-    assert.equal(result.entities.length, 2);
-    assert.equal(result.entities[0].fields.front_text, 'hola');
-    assert.equal(result.entities[0].children, undefined, 'list mode has no children key at all');
+describe('get_entity step 12 — deterministic formatter (replaces format_entity_display llm_call)', () => {
+  it('renders scalar fields as bold lines and keeps the id visible', () => {
+    const step = getStep('get_entity', '12');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary', card_count: 2 } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /Spanish Vocabulary \(id: 3\)/);
+    assert.match(result.formatted_markdown, /\*card_count:\* 2/);
+    assert.equal(result.reveals.length, 0);
   });
 
-  it('caps at 20 rows and reports the truncated count', () => {
-    const many = Array.from({ length: 25 }, (_, i) => ({ id: i, front_text: `word${i}` }));
-    const step = getStep('list_entity', '9');
-    const result = runSandboxedExpression(step.expression, null, { results: many }, 'test');
-    assert.equal(result.entities.length, 20);
-    assert.equal(result.truncated_count, 5);
+  it('collapses a child collection over the reveal threshold into a reveal panel instead of inline', () => {
+    const step = getStep('get_entity', '12');
+    const many = Array.from({ length: 8 }, (_, i) => ({ front: `card${i}`, back: `back${i}` }));
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary' }, children: { cards: many } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.doesNotMatch(result.formatted_markdown, /card0/, 'dense collection must not appear inline');
+    assert.equal(result.reveals.length, 1);
+    assert.equal(result.reveals[0].content.length, 8);
+  });
+
+  it('keeps a short child collection inline, no reveal', () => {
+    const step = getStep('get_entity', '12');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary' }, children: { cards: [{ front: 'hola', back: 'hello' }] } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /### cards/);
+    assert.equal(result.reveals.length, 0);
+  });
+});
+
+// Sprint 7 Track D9/D12 — list_entity replaced its fixed "list root → view one
+// child level → end" shape with a recursive loop over dynamic, click-time FK
+// lookups (see docs/sprints/CURRENT.md Track D). These tests cover the loop's
+// pure js_transform steps directly, independent of the engine's step routing.
+describe('list_entity step 23 — row_build (fetch → resolved row_items + full_rows_map)', () => {
+  const LOOP_STATE = {
+    defs: [
+      {
+        table: 'PGD_Decks',
+        fkColumn: 'parent_id',
+        foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Decks', column: 'id' } }],
+      },
+      {
+        table: 'PGD_Cards',
+        fkColumn: 'deck_id',
+        foreign_keys: [],
+      },
+    ],
+    parent_id: 3,
+    nav_stack: [],
+  };
+  const FETCHED = [
+    [ { id: 7, title: 'Sub-deck A', created_at: '2026', updated_at: '2026', parent_id: 3 } ], // PGD_Decks rows
+    [ { id: 20, front_text: 'hola', back_text: 'hello', deck_id: 3, review_logs: [{ result: 'pass' }] } ], // PGD_Cards rows
+  ];
+
+  it('flattens rows across defs, strips system/embedding/null fields, and resolves outgoing FK labels', () => {
+    const step = getStep('list_entity', '23');
+    const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.length, 2);
+    const deckRow = result.row_items.find(r => r.responseData.table === 'PGD_Decks');
+    assert.equal(deckRow.responseData.id, 7);
+    assert.equal(deckRow.responseData.isDeck, false, 'isDeck starts false — tagged later by step 26');
+    assert.equal(result.full_rows_map['PGD_Decks:7'].created_at, undefined, 'system column suppressed');
+    assert.equal(result.full_rows_map['PGD_Cards:20'].review_logs, undefined, 'array-valued fields are stripped at list level — never split into a children key');
+  });
+
+  it('keeps full cleaned fields in full_rows_map for a later leaf-detail render without a re-fetch', () => {
+    const step = getStep('list_entity', '23');
+    const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.full_rows_map['PGD_Cards:20'].front_text, 'hola');
+  });
+});
+
+describe('list_entity step 26 — isDeck tagging', () => {
+  it('tags each row true/false from isdeck_map keyed by its own table', () => {
+    const step = getStep('list_entity', '26');
+    const localState = {
+      isdeck_map: { PGD_Decks: true, PGD_Cards: false },
+      row_build: {
+        row_items: [
+          { id: 'PGD_Decks:7', primary: 'Sub-deck A', responseData: { table: 'PGD_Decks', id: 7, isDeck: false } },
+          { id: 'PGD_Cards:20', primary: 'hola', responseData: { table: 'PGD_Cards', id: 20, isDeck: false } },
+        ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Decks').responseData.isDeck, true);
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Cards').responseData.isDeck, false);
+    assert.match(result.message, /Found 2 record/);
+  });
+
+  it('reports "no related records" when row_items is empty', () => {
+    const step = getStep('list_entity', '26');
+    const result = runSandboxedExpression(step.expression, null, { isdeck_map: {}, row_build: { row_items: [] } }, 'test');
+    assert.equal(result.row_items.length, 0);
+    assert.match(result.message, /No related records/);
+  });
+});
+
+describe('list_entity step 51 — deterministic leaf formatter (same contract as get_entity step 12)', () => {
+  it('produces formatted_markdown and reveals from entity_display_data without an LLM call', () => {
+    const step = getStep('list_entity', '51');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'PGD_Cards',
+        entities: [ { fields: { id: 20, front_text: 'hola', back_text: 'hello' } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /PGD_Cards \(id: 20\)/, 'falls back to entity_name when the record has no title/name field');
+    assert.match(result.formatted_markdown, /\*front_text:\* hola/);
+    assert.equal(result.reveals.length, 0);
   });
 });
 

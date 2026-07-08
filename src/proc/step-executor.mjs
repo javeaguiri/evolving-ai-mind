@@ -323,6 +323,11 @@ export function buildDialog(step, localState) {
           primary:   item.primary,
           secondary: item.secondary ?? null,
           secondaryAction,
+          // Optional per-row payload beyond the bare id — lets a workflow carry
+          // structured context (e.g. { table, isDeck }) through a row click
+          // without inventing a new gate_type. Undefined when the item doesn't
+          // set it; callback.mjs falls back to { tableName: item.id } in that case.
+          ...(Object.prototype.hasOwnProperty.call(item, 'responseData') ? { responseData: item.responseData } : {}),
         };
       });
 

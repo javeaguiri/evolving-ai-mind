@@ -1031,8 +1031,8 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `fix_workflow` | 21 | 1 | Repair a broken registered workflow |
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
-| `get_entity` | 21 | 2 | Fetch a single entity by id or name |
-| `list_entity` | 23 | 2 | List all entities in a domain, with row-click drill-down into one record |
+| `get_entity` | 20 | 1 | Fetch a single entity by id or name |
+| `list_entity` | 30 | 1 | List/recursively drill into a domain's entities — dynamic deck/leaf navigation |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1173,9 +1173,9 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 - `9` `iterator` — resolve each distinct FK reference to its display label (`title` column of the referenced table)
 - `10` `js_transform` — zip lookups + results into a `{ 'table:id': label }` map
 - `11` `js_transform` — deterministic pre-processing (no LLM judgment): strip system/embedding columns and nulls, resolve FK columns via the label map, separate each row's scalar `fields` from its `children` collection(s) into a bounded structure
-- `11a` `condition` — skip the formatter call entirely when nothing matched (`13b` `notify` "No records found." → `end`)
-- `12` `llm_call` [`format_entity_display`] (cheap model) — presentation only: render the pre-cleaned structure as markdown, deciding only where (if anywhere) a single reveal panel best condenses a large child collection (Sprint 7 Track D2); `13a` `js_transform` degrades to a raw-JSON fallback on failure
-- `13` `notify` — `message_template` from `formatted_markdown`, `reveals` wired from the LLM's `reveals` output → `14` `end`
+- `11a` `condition` — skip the formatter entirely when nothing matched (`13b` `notify` "No records found." → `end`)
+- `12` `js_transform` (Sprint 7 Track D9 — replaces the earlier `format_entity_display` `llm_call`) — deterministic presentation: render the pre-cleaned structure as markdown, collapsing any child collection over a fixed length threshold into a `reveals` entry instead of showing it inline. The old LLM step was a Type-4a overcorrection identical in kind to the one Track A8/A9 diagnosed elsewhere — `entity_display_data` is already fixed-shape, pre-resolved JSON; formatting it is a length check, not a judgment call.
+- `13` `notify` — `message_template` from `formatted_markdown`, `reveals` wired from the same step's `reveals` output → `14` `end`
 
 ---
 
@@ -1183,16 +1183,35 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 
 Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 
-- `2` `serv_entity_query` — list all entities with domain-scoped default filters; root columns only
-- `3`–`8`: same FK-resolution preamble as `get_entity` steps 5–10, applied across all listed rows (deduplicated by distinct referenced id, not one lookup per row)
-- `9` `js_transform` — deterministic pre-processing: cap at 20 rows (existing list limit), strip system/embedding/null fields, resolve FK columns — list mode has no `children` key at all (root columns only, matching the prior `root_only` behaviour)
-- `9a` `condition` — skip the row list entirely when nothing matched (`11b` `notify` "No records found." → `end`)
-- `9b` `js_transform` — deterministic (no LLM): build one `{id, primary, secondary}` row per record — a short id-labeled summary, not natural-language synthesis (Sprint 7 Track D2 drill-down)
-- `9c` `human_gate` (`list_selection`) — one row per record, each with a "View" button (`item_action.on_select` → `step:20`); "Done" ends the run
-- `20` `serv_entity_get` — drill-down: fetch the single clicked record in full (root + children — the list fetch above was root-only)
-- `21` `js_transform` — deterministic pre-processing for the one drilled-down record, with children this time; reuses `root_table_schema`/`fk_label_map` already resolved for the list (the clicked record's FK values were already covered)
-- `22` `llm_call` [`format_entity_display`] — same prompt and contract as `get_entity`'s equivalent step; `22a` `js_transform` degrades to a raw-JSON fallback on failure
-- `23` `notify` → `12` `end`
+Sprint 7 Track D9/D12 replaced the earlier fixed "list root → view one child
+level → end" shape with a single recursive loop, reached at init and re-entered
+on every drill-in/back click via backward step routing (the same established
+pattern `create_workflow`/`ping_core`/`fix_workflow` already use — safe here
+because each iteration is broken by a `human_gate` suspend, so the stuck-step
+guard's idempotency check never sees a repeated key). The loop is parameterized
+by `loop_state = { defs, parent_id, nav_stack }`, where each `def` is
+`{ table, fkColumn, foreign_keys, filters }` — a fully self-contained
+description of one plain, unjoined table query. `list_entity` never uses
+`PGC_EntitySchema`'s precomputed join/aggregation tree (that model can't
+represent self-referential parent/child rows, e.g. a deck containing
+sub-decks, without hardcoding domain-specific structure into `create_domain`)
+— children are discovered dynamically at click time instead.
+
+- `2` `js_transform` — find this entity's own `PGC_EntitySchema` row (root_table) from the domain_schemas loaded at step 1
+- `2a` `serv_query PGC_Schema` — the root table's own schema row (`foreign_keys`), for self-reference detection and outgoing FK label resolution
+- `2b` `js_transform` — build the initial `loop_state`: one synthetic `def` for the root table, filtered to top-level rows only (`IS NULL` on its own self-referential column) if it turns out to be self-referential; otherwise unfiltered, matching the original root-list behaviour
+- `20` `iterator` (shared loop entry, reached via every back-edge) — one plain `serv_query` per `loop_state.defs` entry: `SELECT * FROM <def.table> WHERE <def.filters>`, `limit: 20`. No joins, no aggregation.
+- `21`–`22a` — outgoing FK-lookup preamble across this level's fetched rows, same dedup/iterator/zip pattern as `get_entity` steps 7–10, sourced from each `def`'s own `foreign_keys` (already known from whichever discover query produced these defs)
+- `23` `js_transform` — deterministic: strip system/embedding/null fields, resolve outgoing FK labels, flatten every def's fetched rows into one `row_items` list (`responseData: { table, id, isDeck: false }` per row) and a `full_rows_map` (keyed `table:id`) so a later leaf-detail click can render without a re-fetch
+- `24`–`25a` — for each **distinct table** among this level's defs (not per row — rows sharing a table share the answer), a lightweight schema-only `jsonb_contains` query against `PGC_Schema` (`foreign_keys @> [{"references":{"table": X}}]`) answers "does anything reference X" — no data is fetched, only checked, so a table's children are never looked up until one of its rows is actually selected
+- `26` `js_transform` — apply the resulting `isDeck` flags to `row_items`, build the gate's message text
+- `27` `human_gate` (`list_selection`) — one row per record; `item_action.on_select` → `step:40` (router); `options`: "⬅ Back" → `step:42`, "Done" → `cancel`
+- `40` `condition` — routes on `selected_row.isDeck`: `true` → `41` (drill deeper), `false` → `50` (leaf detail)
+- `41`–`41b` — push the current level (`defs` + `parent_id`, not just an id — so Back can restore it exactly with no re-discovery) onto `nav_stack`; run the same `jsonb_contains` discover query against the clicked row's own table to build the next level's `defs`; loop back to `20`
+- `42`/`42a` — Back: pop `nav_stack` and loop back to `20` with the restored level; at the root (empty `nav_stack`), Back ends the run like Done
+- `50` `js_transform` — leaf detail: look up the clicked row's already-resolved fields from `full_rows_map` (no re-fetch)
+- `51` `js_transform` — same deterministic formatter as `get_entity` step 12, reused verbatim (identical `{ entity_name, entities: [{fields, children?}] }` input contract)
+- `52` `human_gate` (`confirm`) — shows the formatted leaf detail with `reveals`; "⬅ Back" → `step:42`, "Done" → `cancel`
 
 ---
 
