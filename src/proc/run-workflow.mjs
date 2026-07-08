@@ -561,6 +561,56 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   const itemActionMatch = stepRef.item_action?.action === userResponse && stepRef.item_action?.on_select
     ? stepRef.item_action
     : null;
+
+  // list_selection's Select button is now a single shared control (Sprint 7 Track D —
+  // markdown table + one text input, replacing one accessory button per row, which
+  // was throwing msg_blocks_too_long above ~8 rows). The click itself carries only
+  // the typed row id in responseData.inputValue, not a specific row's responseData —
+  // resolve it here against context_key's fully-resolved items (reusing buildDialog's
+  // own item_action application rather than re-implementing it) before the item_action
+  // advance logic below runs. An id that doesn't resolve to a selectable row re-renders
+  // the same gate in place with an error line, mirroring remove_item's stay-suspended
+  // pattern above — it never silently advances with an unresolved value.
+  if (itemActionMatch) {
+    // item.id is the record's own plain id (not a table-prefixed composite) so the
+    // user can type it directly — if a combined list spans multiple tables and two
+    // of them happen to share a numeric id, the first match wins. Acceptable for
+    // this app's scale; a genuine disambiguator would need a second typed field.
+    const typedId = responseData?.inputValue?.trim();
+    const dialogForLookup = buildDialog(stepRef, localState);
+    const matchedItem = typedId
+      ? dialogForLookup.fields.find(f => f.type === 'list')?.items?.find(
+          item => String(item.id) === typedId && item.secondaryAction
+        )
+      : null;
+
+    if (!matchedItem) {
+      dialogForLookup.fields.unshift({
+        type:  'typography',
+        value: typedId
+          ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
+          : '⚠️ Enter an ID before selecting.',
+      });
+      await enqueueCallback(run.callback, {
+        type:          'HUMAN_GATE',
+        workflowRunId: run.id,
+        gate_type:     gateType,
+        dialog:        dialogForLookup,
+        callback:      run.callback,
+        message_ts,
+        traceId,
+      });
+      console.info('run-workflow: list_selection — invalid id, gate re-rendered', {
+        workflowRunId: run.id, typedId, traceId,
+      });
+      return { action: 'list_selection_invalid' };
+    }
+
+    responseData = Object.prototype.hasOwnProperty.call(matchedItem, 'responseData')
+      ? matchedItem.responseData
+      : { tableName: matchedItem.id };
+  }
+
   const onSelect = (
     !hasModalInput && matchedOption?.on_modal_close !== undefined
       ? matchedOption.on_modal_close

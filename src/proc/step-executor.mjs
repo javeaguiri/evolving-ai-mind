@@ -279,8 +279,8 @@ export function buildDialog(step, localState) {
   // Gate-type-specific fields
   switch (step.gate_type) {
 
-    // list_selection — one row per item, each with an optional accessory button.
-    // A single gate_type for "render a list with a per-row action" regardless of
+    // list_selection — one markdown table row per item, selected by typing its id.
+    // A single gate_type for "render a list with a selection action" regardless of
     // what that action does — behavior (mutate-and-restay vs write-and-advance)
     // is entirely the calling workflow's concern, driven by item_action's own
     // config (see run-workflow.mjs's resumeGate), never by this gate_type name.
@@ -288,14 +288,14 @@ export function buildDialog(step, localState) {
     // back into one after review: rendering two ways for the same rendering
     // need is exactly the one-off duplication this project avoids elsewhere.)
     //
-    // context_key items are expected pre-formatted as { id, primary, secondary?,
-    // secondaryAction? } — the same shape design-domain.mjs's own hand-built
-    // review_tables gate already uses. Building that shape (a natural-language
-    // summary line, which items get an action at all, etc.) is a workflow-level
+    // context_key items are expected pre-formatted as { id, fields?, secondaryAction? }
+    // — fields is a plain object of column name -> value, rendered as one table
+    // column per distinct key across every item (sparse: an item missing a given
+    // key just gets a blank cell, no column is synthesized that isn't already
+    // present in some item's own data). Building that shape is a workflow-level
     // (js_transform) concern, not this generic renderer's job. An item may carry
-    // its own fully custom secondaryAction (e.g. design-domain.mjs omits it for
-    // parent tables that can't be removed); otherwise step.item_action applies
-    // uniformly to every item — the common case (e.g. "View" on every row).
+    // its own fully custom secondaryAction; otherwise step.item_action applies
+    // uniformly to every item — the common case (e.g. "Open" on every row).
     case 'list_selection': {
       const items = resolvePath(localState, step.context_key) ?? [];
       const resolvedItems = items.map(item => {
@@ -319,9 +319,8 @@ export function buildDialog(step, localState) {
           }
         }
         return {
-          id:        item.id,
-          primary:   item.primary,
-          secondary: item.secondary ?? null,
+          id:     item.id,
+          fields: item.fields ?? {},
           secondaryAction,
           // Optional per-row payload beyond the bare id — lets a workflow carry
           // structured context (e.g. { table, hasChildren }) through a row click
@@ -331,10 +330,12 @@ export function buildDialog(step, localState) {
         };
       });
 
+      // No `label` here — the typography field (pushed above from this same
+      // step.message_template) already renders this text once; repeating it
+      // as the list's own label duplicated every list_selection gate's message.
       fields.push({
         type:  'list',
         name:  (step.context_key ?? '').split('.').pop(),
-        label: step.message_template ? resolveTemplate(step.message_template, localState) : null,
         items: resolvedItems,
       });
       break;

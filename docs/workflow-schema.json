@@ -151,7 +151,7 @@
 
     "itemAction": {
       "type": "object",
-      "description": "Per-row action button for list_selection gates, applied uniformly to every item unless an item already carries its own secondaryAction. Rendering is always the same (one section block per row, one accessory button); what the action does is entirely up to the calling workflow, expressed here, not by a different gate_type.",
+      "description": "Selection action for list_selection gates, applied uniformly to every item unless an item already carries its own secondaryAction. Rendering is always the same (one markdown table for all rows, one shared ID-entry input, one Select button labeled/styled from this config); what the action does is entirely up to the calling workflow, expressed here, not by a different gate_type.",
       "required": ["action"],
       "additionalProperties": false,
       "properties": {
@@ -264,7 +264,7 @@
         "gate_type": {
           "type": "string",
           "enum": ["confirm", "list_selection", "text_input", "review_object", "choice", "followup_prompt"],
-          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: scrollable list, one row per context_key item (pre-formatted as { id, primary, secondary?, secondaryAction? }), each with an optional per-row accessory button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. What clicking that button does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: one markdown table of every context_key item (pre-formatted as { id, fields?, secondaryAction? } — fields is a plain object of column name -> value, rendered as one table column per distinct key across every item, sparse where an item lacks a given key), plus one shared ID-entry text input and one Select button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. The user types a row's id and clicks Select; resumeGate resolves the typed id back to that row. What selecting does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
         },
         "message_template": {
           "type": "string",
@@ -276,7 +276,7 @@
         },
         "context_key": {
           "type": "string",
-          "description": "Dot-path into local_state. Required for list_selection (must resolve to an array, pre-formatted as { id, primary, secondary?, secondaryAction? } — building that shape is a preceding js_transform's job, not this gate's) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
+          "description": "Dot-path into local_state. Required for list_selection (must resolve to an array, pre-formatted as { id, fields?, secondaryAction? } — building that shape is a preceding js_transform's job, not this gate's) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
         },
         "item_primary_key":    { "type": "string", "description": "review_object array mode: fallback single-field label. Defaults to 'tableName'." },
         "item_secondary_key":  { "type": "string", "description": "review_object array mode: value field. Defaults to 'columns'." },

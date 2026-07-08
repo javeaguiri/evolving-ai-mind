@@ -216,24 +216,34 @@ jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the ru
 
 ###### `list_selection` gate_type
 
-Renders one Slack `section` block per `context_key` item, each with its own
-optional `accessory` button — no wall of buttons at the bottom, one click-target
-per row. **This gate_type is only concerned with rendering.** What clicking a
-row's button *does* is entirely the calling workflow's concern, expressed
+Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
+one column per distinct field key across every item), plus one shared
+ID-entry text input and one Select button (labeled/styled from `item_action`)
+below it — one block for the whole list regardless of row count, no per-row
+block cost. **This gate_type is only concerned with rendering.** What
+selecting a row *does* is entirely the calling workflow's concern, expressed
 through `item_action`'s own config — never a different gate_type for a
 different action semantic (Sprint 7 Track D2: this merges what were briefly
-two separate gate types, `edit_list`/`row_list`, back into one — rendering the
-same thing two ways for two action semantics was exactly the one-off
+two separate gate types, `edit_list`/`row_list`, back into one — rendering
+the same thing two ways for two action semantics was exactly the one-off
 duplication this project avoids elsewhere).
 
-`context_key` items must arrive **pre-formatted** as `{ id, primary, secondary?,
-secondaryAction?, responseData? }` — building that shape (a natural-language
-summary line, whether a given row gets an action at all) is a workflow-level
-(`js_transform`) concern, matching `design-domain.mjs`'s own hand-built
-review-tables gate, which uses this exact shape. An item may carry its own
-fully custom `secondaryAction` (e.g. omitted for a referenced parent table
-that can't be removed) that overrides `step.item_action` entirely for that
-one row.
+`context_key` items must arrive **pre-formatted** as `{ id, fields?,
+secondaryAction?, responseData? }` — `fields` is a plain object of column
+name -> value (the record's own cleaned fields, passed through as-is; no
+forced Name/Title synthesis) rendered as one table column per distinct key
+across every item. Column headers are formatted purely from the key itself —
+no workflow-level naming is needed: snake_case is title-cased (`ease_factor`
+-> `Ease Factor`), and a key ending in `_id` whose values are no longer
+numeric (the workflow already resolved that FK to its label, keeping the
+original column name — this is `callback.mjs`'s call to make, not the
+workflow's) drops the suffix and reads as `<Prefix> Name` (`deck_id` ->
+`Deck Name`). An `_id` column still holding raw numeric ids is left as a
+plain title-cased `Deck Id`. Building the `fields` shape itself is a
+workflow-level (`js_transform`)
+concern. An item may carry its own fully custom `secondaryAction` (e.g.
+omitted for a referenced parent table that can't be removed) that overrides
+`step.item_action` entirely for that one row.
 
 **`responseData` (optional, per item)** — lets a row carry a structured
 payload beyond the bare id (e.g. `{ table: 'PGD_SomeTable', id: 7, hasChildren: true }`)
@@ -246,8 +256,9 @@ it belongs to and whether it can be drilled into further, not just its id.
 
 **Two behaviors, both driven by `item_action`, never by gate_type:**
 
-*Mutate-and-restay* (`action: "remove_item"`) — `resumeGate` filters the clicked
-item out of `context_key`, re-renders this same gate in place, stays suspended:
+*Mutate-and-restay* (`action: "remove_item"`) — `resumeGate` filters the
+selected item out of `context_key`, re-renders this same gate in place, stays
+suspended:
 
 ```json
 {
@@ -255,7 +266,7 @@ item out of `context_key`, re-renders this same gate in place, stays suspended:
   "gate_type":        "list_selection",
   "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
   "context_key":      "table_review_items",
-  "item_action":       { "action": "remove_item", "confirm_template": "Remove {{item.primary}}?" },
+  "item_action":       { "action": "remove_item" },
   "options": [
     { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
     { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
@@ -265,11 +276,17 @@ item out of `context_key`, re-renders this same gate in place, stays suspended:
   "on_else": "cancel"
 }
 ```
+
+`item_action.confirm_template` (per-item confirm text, resolved against
+`{...localState, item}`) is still computed by `buildDialog` but has no
+current renderer — the single shared Select button has no specific row bound
+to it until after submission, so there's no click surface left to attach a
+native Slack confirm popup to. Not currently used by any live workflow.
 (`item_action.label`/`.style` default to `"Remove"`/`"danger"` when omitted —
 matching this gate_type's original, still-live default.)
 
 *Advance* (any other action name, with `item_action.on_select` set) — writes the
-clicked row's id to `output_key`, pops the gate frame, routes elsewhere (e.g.
+selected row's id to `output_key`, pops the gate frame, routes elsewhere (e.g.
 drill-down into a back-edge step that fetches and displays that one record):
 
 ```json
@@ -292,28 +309,30 @@ drill-down into a back-edge step that fetches and displays that one record):
 **`item_action.on_select` is resolved directly — never via a matching `options[]`
 entry.** Every `options[]` entry also renders as its own real, visible bottom
 button; since every row shares the same `item_action.action` (e.g. `view_record`),
-putting it in `options[]` too would render a redundant duplicate button below the
-per-row ones. `options[]` should only ever list buttons meant to be genuinely
-visible at the bottom (here, just "Done"). Note `style: "default"` is set
-explicitly here — the shared default is `"danger"` (matching the remove-item
-case above), which would render a "View" button as a destructive-looking red
-button if left unset. Slack itself has no `"default"` style value; the harness
-omits the field entirely rather than sending the literal string.
+putting it in `options[]` too would render a redundant duplicate Select button.
+`options[]` should only ever list buttons meant to be genuinely visible at the
+bottom (here, just "Done"). Note `style: "default"` is set explicitly here —
+the shared default is `"danger"` (matching the remove-item case above), which
+would render the Select button as a destructive-looking red button if left
+unset. Slack itself has no `"default"` style value; the harness omits the
+field entirely rather than sending the literal string.
 
-On click, `run-workflow.mjs`'s `resumeGate` writes the clicked row's payload to
-`output_key`, then routes via `item_action.on_select`. When the row never set
-its own `responseData`, this is the legacy bare scalar (`responseData.tableName`
-— same field name `callback.mjs`'s `'list'` field type sends by default for any
-row-level `secondaryAction`). When the row set a `responseData` object without
-a `tableName` key (the recursive drill-down case above), the whole object is
-written through instead — see `list_entity`'s navigation loop in
-`docs/arch-workflow-patterns.md` §6.17 for the live example (a shared loop
-entry step reads `{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.hasChildren}}`
+**Identifying the selected row:** the table has no per-row click target — the
+user types a row's `id` into the shared input and clicks Select. `callback.mjs`
+sends only `{ workflowRunId, action }` on that click; `run-workflow.mjs`'s
+`resumeGate` resolves the typed id against `context_key`'s fully-resolved items
+(via `buildDialog`, so the id-to-row mapping is computed in exactly one place)
+before writing to `output_key` and routing via `item_action.on_select`. A typed
+id that doesn't match a selectable row re-renders the same gate in place with
+an error line — the gate never advances on an unresolved value. When the
+matched row never set its own `responseData`, the legacy bare scalar
+(`responseData.tableName`) is written, matching every pre-existing consumer.
+When the row set a `responseData` object without a `tableName` key (the
+recursive drill-down case above), the whole object is written through instead
+— see `list_entity`'s navigation loop in `docs/arch-workflow-patterns.md`
+§6.17 for the live example (a shared loop entry step reads
+`{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.hasChildren}}`
 off exactly this payload).
-
-Every row also renders with a trailing Slack `divider` block, separating it
-from the next row (and from the bottom `options[]` buttons) without a wall of
-buttons collapsing together visually.
 
 ###### `reveal` / `reveals` (optional, all gate types)
 

@@ -691,6 +691,69 @@ function summarizeObjectForReview(v) {
   return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
 }
 
+// formatColumnHeader — pure presentation, no domain knowledge: title-cases a
+// snake_case field name (ease_factor -> Ease Factor, front -> Front). A key
+// ending in _id whose values no longer look like raw ids (the workflow already
+// resolved the FK to its label, keeping the original column name) drops the
+// _id suffix and reads as "<Prefix> Name" (deck_id -> Deck Name) instead —
+// judged from the data itself, so an _id column still holding raw numeric ids
+// (never resolved) is left as a plain title-cased "Deck Id".
+function formatColumnHeader(key, values) {
+  if (key === 'ID') return 'ID';
+  const isFkColumn    = /_id$/i.test(key);
+  const looksResolved = isFkColumn && values.some(v => v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)));
+  const base  = looksResolved ? key.slice(0, -3) : key;
+  const words = base.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1));
+  return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
+}
+
+// buildListTable — markdown table for a list_selection field's rows. Replaces
+// the former one-section-plus-accessory-button-plus-divider-per-row rendering,
+// which cost 2 Block Kit blocks per row and started throwing msg_blocks_too_long
+// above ~8 rows (Sprint 7 Track D). A table is one markdown block regardless of
+// row count, and — per the user's own observation — Slack renders long markdown
+// tables with native scroll, so nothing is lost for larger lists.
+//
+// Columns are entirely data-driven: ID first, then the union of every item's
+// own `fields` keys, in first-seen order — no synthesized Name/Detail columns.
+// A combined list spanning multiple tables (e.g. sub-decks and cards at the
+// same drill-down level) naturally renders as one sparse table: a column only
+// a subset of items have is blank on the rest, which is also how the reader
+// tells the row types apart without a separate synthetic Type column.
+//
+// A field present on every item with the exact same value carries no per-row
+// information at all (e.g. every row at one drill-down level shares the same
+// parent) — repeating it in every row is pure noise, so it's hoisted above the
+// table as its own heading line instead of becoming a column.
+function buildListTable(items) {
+  const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const columns = ['ID'];
+  const seen = new Set(columns);
+  for (const item of items) {
+    for (const key of Object.keys(item.fields ?? {})) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    }
+  }
+
+  const constantColumns = items.length > 1 ? columns.filter(col => {
+    if (col === 'ID') return false;
+    if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
+    const first = items[0].fields[col];
+    return items.every(item => item.fields[col] === first);
+  }) : [];
+  const headings = constantColumns.map(col => `# ${items[0].fields[col]}`);
+  const tableColumns = columns.filter(col => !constantColumns.includes(col));
+
+  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
+  const header = `| ${headerLabels.join(' | ')} |`;
+  const sep    = `|${tableColumns.map(() => '---').join('|')}|`;
+  const rows   = items.map(item => {
+    const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
+    return `| ${cells.map(escapeCell).join(' | ')} |`;
+  });
+  return [...headings, header, sep, ...rows].join('\n');
+}
+
 function dialogToBlocks(dialog, workflowRunId) {
   const blocks = [];
 
@@ -726,47 +789,41 @@ function dialogToBlocks(dialog, workflowRunId) {
             text: { type: 'mrkdwn', text: `*${field.label}*` },
           });
         }
-        for (const [idx, item] of (field.items ?? []).entries()) {
-          const sectionBlock = {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*${item.primary}*${item.secondary ? `\n${item.secondary}` : ''}`,
+        const items = field.items ?? [];
+        if (items.length > 0) {
+          blocks.push(...markdownToBlocks(buildListTable(items)));
+        }
+        // One shared ID-entry input + button replaces the former per-row accessory
+        // button. list_selection's item_action is uniform across every row, so a
+        // single button (labeled from the first selectable row's own action) covers
+        // the whole list; run-workflow.mjs's resumeGate resolves the typed id back
+        // to that row's responseData before advancing, exactly as a direct row click
+        // used to. Rows with no secondaryAction (item_action condition false, or the
+        // item explicitly opts out) stay visible in the table but aren't selectable —
+        // same as before, when they simply rendered with no accessory button.
+        const selectable = items.find(item => item.secondaryAction);
+        if (selectable) {
+          const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
+          blocks.push({
+            type:     'input',
+            block_id: `list_select_input_${workflowRunId}`,
+            element:  {
+              type:        'plain_text_input',
+              action_id:   'list_select_value',
+              placeholder: { type: 'plain_text', text: `e.g. ${selectable.id}` },
             },
-          };
-          if (item.secondaryAction) {
-            // Slack's button style enum is 'primary' | 'danger' only — there is no
-            // 'default' value. The default (no-emphasis) look comes from omitting
-            // the field entirely, not from sending style: 'default' (which Slack's
-            // API rejects outright as invalid_blocks). row_list gates commonly want
-            // the default look (e.g. "View"), unlike edit_list's hardcoded 'danger'.
-            const validStyle = item.secondaryAction.style === 'danger' || item.secondaryAction.style === 'primary';
-            sectionBlock.accessory = {
+            label: { type: 'plain_text', text: 'Enter the ID to select' },
+          });
+          blocks.push({
+            type:     'actions',
+            elements: [{
               type: 'button',
-              ...(validStyle ? { style: item.secondaryAction.style } : {}),
-              text:      { type: 'plain_text', text: item.secondaryAction.label },
-              action_id: `workflow_action_${item.id || idx}_${idx}`,
-              value:     JSON.stringify({
-                workflowRunId,
-                action:       item.secondaryAction.action,
-                // A row can carry its own structured responseData (set by the
-                // workflow, e.g. { table, id, hasChildren } for recursive drill-down);
-                // otherwise fall back to the legacy bare-id shape every existing
-                // list_selection consumer already expects.
-                responseData: item.responseData !== undefined ? item.responseData : { tableName: item.id },
-              }),
-              ...(item.secondaryAction.confirm ? {
-                confirm: {
-                  title:   { type: 'plain_text', text: 'Are you sure?' },
-                  text:    { type: 'plain_text', text: item.secondaryAction.confirm },
-                  confirm: { type: 'plain_text', text: 'Remove' },
-                  deny:    { type: 'plain_text', text: 'Cancel' },
-                },
-              } : {}),
-            };
-          }
-          blocks.push(sectionBlock);
-          blocks.push({ type: 'divider' });
+              ...(validStyle ? { style: selectable.secondaryAction.style } : {}),
+              text:      { type: 'plain_text', text: selectable.secondaryAction.label },
+              action_id: `list_select_${selectable.secondaryAction.action}`,
+              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action }),
+            }],
+          });
         }
         break;
       }
