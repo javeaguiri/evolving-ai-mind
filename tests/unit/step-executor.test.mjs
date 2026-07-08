@@ -620,6 +620,125 @@ describe('list_entity step 23 — row_build (fetch → resolved row_items + full
   });
 });
 
+// Sprint 7 Track D12 (refined) — "does anything reference this table" was too
+// broad a signal for isDeck: a table can have an incidental FK pointing at it
+// (e.g. an audit-log-style table) without that relationship being something a
+// user would ever want to navigate into. isDeck now requires either a
+// self-reference or a relationship create_domain already curated into some
+// entity's own `joins` — driven entirely by domain_schemas (loaded once at
+// step 1) and discovered table names, never a hardcoded table name, so this
+// must behave identically for any domain, not just the one these fixtures
+// happen to resemble.
+describe('list_entity step 25a — isDeck requires self-reference or a curated domain_schemas join', () => {
+  const DOMAIN_SCHEMAS = [
+    {
+      entity_name: 'Widget',
+      root_table:  'PGD_Parent',
+      joins:       [{ table: 'PGD_Child', alias: 'children', on: 'children.parent_id = r.id' }],
+    },
+  ];
+
+  it('self-reference is always a deck, even with no domain_schemas entry for it', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: [],
+      distinct_child_tables: ['PGD_Parent'],
+      isdeck_discover_results: [[{ table_name: 'PGD_Parent' }]], // parent references itself
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Parent, true);
+  });
+
+  it('a table curated as a join child of the parent in domain_schemas is a deck', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: DOMAIN_SCHEMAS,
+      distinct_child_tables: ['PGD_Parent'],
+      isdeck_discover_results: [[{ table_name: 'PGD_Child' }]],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Parent, true);
+  });
+
+  it('a table with an incidental FK but no curated relationship is NOT a deck', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: DOMAIN_SCHEMAS,
+      distinct_child_tables: ['PGD_Child'],
+      isdeck_discover_results: [[{ table_name: 'PGD_Log' }]], // references PGD_Child, but not curated anywhere
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Child, false, 'PGD_Log referencing PGD_Child does not make PGD_Child a deck — it is attached detail data');
+  });
+});
+
+describe('list_entity step 41b — next-level defs filtered to curated children only', () => {
+  it('excludes a discovered table that is not curated as a join child of the clicked row\'s table', () => {
+    const step = getStep('list_entity', '41b');
+    const localState = {
+      domain_schemas: [{ root_table: 'PGD_Parent', joins: [{ table: 'PGD_Child' }] }],
+      selected_row: { table: 'PGD_Parent', id: 3 },
+      clicked_referencing_tables: [
+        { table_name: 'PGD_Child', foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+        { table_name: 'PGD_Log',   foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+      ],
+      nav_stack_pushed: [],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.deepEqual(result.defs.map(d => d.table), ['PGD_Child']);
+    assert.equal(result.parent_id, 3);
+  });
+
+  it('includes a self-referencing table (sub-decks) even though it is not in any joins list', () => {
+    const step = getStep('list_entity', '41b');
+    const localState = {
+      domain_schemas: [],
+      selected_row: { table: 'PGD_Parent', id: 3 },
+      clicked_referencing_tables: [
+        { table_name: 'PGD_Parent', foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+      ],
+      nav_stack_pushed: [],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.deepEqual(result.defs.map(d => d.table), ['PGD_Parent']);
+  });
+});
+
+describe('list_entity steps 50/50a/50b — leaf detail children (non-curated attached data)', () => {
+  it('step 50 reuses cached (non-curated) discovery from the level this row was listed on, no new schema query', () => {
+    const step = getStep('list_entity', '50');
+    const localState = {
+      selected_row: { table: 'PGD_Child', id: 20 },
+      distinct_child_tables: ['PGD_Child'],
+      isdeck_discover_results: [[
+        { table_name: 'PGD_Log', foreign_keys: [{ column: 'child_id', references: { table: 'PGD_Child', column: 'id' } }] },
+      ]],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].table, 'PGD_Log');
+    assert.equal(result[0].fkColumn, 'child_id');
+    assert.equal(result[0].foreign_keys[0].column, 'child_id');
+  });
+
+  it('step 50b attaches fetched detail-child rows as entity.children, keyed by table name', () => {
+    const step = getStep('list_entity', '50b');
+    const localState = {
+      selected_row: { table: 'PGD_Child', id: 20 },
+      leaf_child_defs: [{ table: 'PGD_Log', fkColumn: 'child_id', foreign_keys: [] }],
+      leaf_child_rows_by_def: [[
+        { id: 1, child_id: 20, result: 'pass', created_at: '2026' },
+      ]],
+      row_build: { full_rows_map: { 'PGD_Child:20': { id: 20, front: 'hola' } } },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.entities[0].fields.front, 'hola');
+    assert.equal(result.entities[0].children.PGD_Log.length, 1);
+    assert.equal(result.entities[0].children.PGD_Log[0].result, 'pass');
+    assert.equal(result.entities[0].children.PGD_Log[0].created_at, undefined, 'system column suppressed on detail children too');
+  });
+});
+
 describe('list_entity step 26 — isDeck tagging', () => {
   it('tags each row true/false from isdeck_map keyed by its own table', () => {
     const step = getStep('list_entity', '26');

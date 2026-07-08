@@ -2665,11 +2665,11 @@
       {
         "step": "25a",
         "type": "js_transform",
-        "description": "Build the { table: hasChildren } map from the discover results.",
+        "description": "Build the { table: isDeck } map from the discover results — not every table with an incoming FK is a 'deck' worth another row_selection. A table only counts as further-navigable when the reference is a self-reference (sub-decks under a deck) or a relationship create_domain already curated into some entity's own joins (e.g. Decks -> Cards). Anything else (e.g. a Card's ReviewLog rows) is incidental/attached data, not a navigable child — it surfaces as a reveal on the leaf's own detail view instead (steps 50-50b). Driven entirely by domain_schemas (already loaded at step 1) and the discovered table names — no domain-specific table names appear here, this must work identically for every domain.",
         "output_key": "isdeck_map",
         "on_success": "26",
         "on_else": "26",
-        "expression": "(function(){ var tables = local_state.distinct_child_tables || []; var results = local_state.isdeck_discover_results || []; var map = {}; tables.forEach(function(t, i){ var r = results[i] || []; map[t] = Array.isArray(r) && r.length > 0; }); return map; })()"
+        "expression": "(function(){ var tables = local_state.distinct_child_tables || []; var results = local_state.isdeck_discover_results || []; var ds = local_state.domain_schemas; var schemas = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); function isCuratedChild(childTable, parentTable){ if (childTable === parentTable) return true; return schemas.some(function(e){ return e.root_table === parentTable && (e.joins || []).some(function(j){ return j.table === childTable; }); }); } var map = {}; tables.forEach(function(t, i){ var r = results[i] || []; map[t] = r.some(function(row){ return isCuratedChild(row.table_name, t); }); }); return map; })()"
       },
       {
         "step": "26",
@@ -2736,11 +2736,11 @@
       {
         "step": "41b",
         "type": "js_transform",
-        "description": "Build the next level's defs from the discovered referencing tables, filtered to children of the clicked row specifically, then loop back to the shared fetch step.",
+        "description": "Build the next level's defs from the discovered referencing tables, filtered to (a) children of the clicked row specifically and (b) curated children only — same self-reference-or-domain_schemas-join rule as step 25a's isDeck decision, kept in sync so a table this row was drilled into for is always one it was actually flagged isDeck for. Then loop back to the shared fetch step.",
         "output_key": "loop_state",
         "on_success": "20",
         "on_else": "cancel",
-        "expression": "(function(){ var rows = local_state.clicked_referencing_tables || []; var clickedTable = local_state.selected_row.table; var clickedId = local_state.selected_row.id; var defs = rows.map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === clickedTable; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks, filters: [{ column: match.column, op: 'eq', value: clickedId }] }; }).filter(Boolean); return { defs: defs, parent_id: clickedId, nav_stack: local_state.nav_stack_pushed }; })()"
+        "expression": "(function(){ var rows = local_state.clicked_referencing_tables || []; var clickedTable = local_state.selected_row.table; var clickedId = local_state.selected_row.id; var ds = local_state.domain_schemas; var schemas = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); function isCuratedChild(childTable, parentTable){ if (childTable === parentTable) return true; return schemas.some(function(e){ return e.root_table === parentTable && (e.joins || []).some(function(j){ return j.table === childTable; }); }); } var defs = rows.filter(function(r){ return isCuratedChild(r.table_name, clickedTable); }).map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === clickedTable; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks, filters: [{ column: match.column, op: 'eq', value: clickedId }] }; }).filter(Boolean); return { defs: defs, parent_id: clickedId, nav_stack: local_state.nav_stack_pushed }; })()"
       },
       {
         "step": "42",
@@ -2762,11 +2762,45 @@
       {
         "step": "50",
         "type": "js_transform",
-        "description": "Leaf detail: the clicked row's fields were already resolved and cached in full_rows_map when this level's list was built — no re-fetch needed.",
+        "description": "Leaf detail, part 1: this row's own table was already discovered as non-curated at the level it was listed on (isDeck false means every referencing table found there failed the curated-child test) — reuse that cached discovery instead of a fresh PGC_Schema query. These become the leaf's 'detail children': attached data (e.g. a card's review history) that never gets its own row_selection, only a reveal on this record's own view.",
+        "output_key": "leaf_child_defs",
+        "on_success": "50a",
+        "on_else": "cancel",
+        "expression": "(function(){ var table = local_state.selected_row.table; var idx = (local_state.distinct_child_tables || []).indexOf(table); var referencingRows = idx >= 0 ? (local_state.isdeck_discover_results[idx] || []) : []; return referencingRows.map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === table; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks }; }).filter(Boolean); })()"
+      },
+      {
+        "step": "50a",
+        "type": "iterator",
+        "description": "Leaf detail, part 2: fetch each detail-child table's rows for this specific record — the one query this leaf view needs, run only now that the record has actually been opened.",
+        "items_key": "leaf_child_defs",
+        "item_step": {
+          "type": "serv_query",
+          "input": {
+            "tableName": "{{item.table}}",
+            "filters": [
+              {
+                "column": "{{item.fkColumn}}",
+                "op": "eq",
+                "value": "{{selected_row.id}}"
+              }
+            ],
+            "limit": 20
+          },
+          "on_else": "cancel"
+        },
+        "execution_mode": "sequential",
+        "output_key": "leaf_child_rows_by_def",
+        "on_complete": "50b",
+        "on_else": "50b"
+      },
+      {
+        "step": "50b",
+        "type": "js_transform",
+        "description": "Leaf detail, part 3: the clicked row's own fields were already resolved and cached in full_rows_map when this level's list was built — no re-fetch needed for those. Attach the fetched detail-child rows (system/embedding/null-stripped) as entity.children, keyed by table name — the deterministic formatter (step 51) already knows how to render a children collection inline or behind a reveal depending on size.",
         "output_key": "entity_display_data",
         "on_success": "51",
         "on_else": "cancel",
-        "expression": "(function(){ var map = (local_state.row_build && local_state.row_build.full_rows_map) || {}; var key = local_state.selected_row.table + ':' + local_state.selected_row.id; var fields = map[key] || {}; return { entity_name: local_state.selected_row.table, entities: [ { fields: fields } ] }; })()"
+        "expression": "(function(){ var SYS = new Set(['created_at','updated_at']); var isEmbedding = function(k){ return /_embedding$/.test(k); }; function cleanScalar(row, fks){ var out = {}; Object.keys(row).forEach(function(k){ if (SYS.has(k) || isEmbedding(k) || Array.isArray(row[k])) return; var val = row[k]; if (val !== null && val !== undefined) out[k] = val; }); return out; } var defs = local_state.leaf_child_defs || []; var fetched = local_state.leaf_child_rows_by_def || []; var children = {}; defs.forEach(function(def, i){ var rows = fetched[i] || []; children[def.table] = rows.map(function(row){ return cleanScalar(row, def.foreign_keys || []); }); }); var map = (local_state.row_build && local_state.row_build.full_rows_map) || {}; var key = local_state.selected_row.table + ':' + local_state.selected_row.id; var fields = map[key] || {}; return { entity_name: local_state.selected_row.table, entities: [ { fields: fields, children: children } ] }; })()"
       },
       {
         "step": "51",

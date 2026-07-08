@@ -113,9 +113,13 @@ async function processRecord(record) {
 
   } catch (error) {
     console.error('callback: Slack post error', {
-      type:    message.type,
-      traceId: message.traceId,
-      error:   error.message,
+      type:     message.type,
+      traceId:  message.traceId,
+      error:    error.message,
+      // @slack/web-api errors carry the full API response body here (e.g. which
+      // block/field triggered a validation error) — error.message alone is often
+      // just the bare error code with no positional detail.
+      slackData: error.data,
     });
     return false; // return to queue for retry
   }
