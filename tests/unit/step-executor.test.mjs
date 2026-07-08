@@ -141,7 +141,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     // two gate types (edit_list/row_list) into one: same 'list' field rendering
     // regardless of what the button does. item_action's label/style/action/
     // on_select are all caller-configurable; context_key items are expected
-    // pre-formatted as { id, primary, secondary? }.
+    // pre-formatted as { id, fields?, secondaryAction? }.
     const step = {
       step:         '9c',
       type:         'human_gate',
@@ -153,8 +153,8 @@ describe('buildDialog — modal descriptor passthrough', () => {
     };
     const localState = {
       row_items: [
-        { id: 3, primary: 'Nov 20, 2024 (id: 3)', secondary: 'card_count=2' },
-        { id: 4, primary: 'Spanish Grammer (id: 4)', secondary: null },
+        { id: 3, fields: { title: 'Nov 20, 2024', card_count: 2 } },
+        { id: 4, fields: { title: 'Spanish Grammer' } },
       ],
     };
 
@@ -163,8 +163,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     assert.ok(listField, 'list field must be present');
     assert.equal(listField.items.length, 2);
     assert.equal(listField.items[0].id, 3);
-    assert.equal(listField.items[0].primary, 'Nov 20, 2024 (id: 3)');
-    assert.equal(listField.items[0].secondary, 'card_count=2');
+    assert.deepEqual(listField.items[0].fields, { title: 'Nov 20, 2024', card_count: 2 });
     assert.equal(listField.items[0].secondaryAction.action, 'view_record');
     assert.equal(listField.items[0].secondaryAction.label, 'View');
     assert.equal(listField.items[0].secondaryAction.style, 'default');
@@ -184,7 +183,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
       item_action: { action: 'remove_item' },
       options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
     };
-    const localState = { row_items: [{ id: 1, primary: 'Row 1', secondary: null }] };
+    const localState = { row_items: [{ id: 1, fields: { title: 'Row 1' } }] };
 
     const dialog = buildDialog(step, localState);
     const listField = dialog.fields.find(f => f.type === 'list');
@@ -204,8 +203,8 @@ describe('buildDialog — modal descriptor passthrough', () => {
     };
     const localState = {
       row_items: [
-        { id: 1, primary: 'Child', secondary: null, secondaryAction: { label: 'Remove', action: 'remove_item', style: 'danger' } },
-        { id: 2, primary: 'Parent (referenced)', secondary: null, secondaryAction: null },
+        { id: 1, fields: { title: 'Child' }, secondaryAction: { label: 'Remove', action: 'remove_item', style: 'danger' } },
+        { id: 2, fields: { title: 'Parent (referenced)' }, secondaryAction: null },
       ],
     };
 
@@ -606,6 +605,9 @@ describe('list_entity step 23 — row_build (fetch → resolved row_items + full
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.equal(result.row_items.length, 2);
     const parentRow = result.row_items.find(r => r.responseData.table === 'PGD_Parent');
+    assert.equal(parentRow.id, 7, 'item.id is the record\'s own plain id, not a table-prefixed composite');
+    assert.equal(parentRow.fields.id, undefined, 'id is not duplicated inside fields — it is already the top-level item.id');
+    assert.equal(parentRow.fields.title, 'Nested Parent A', 'no forced label synthesis — the record\'s own field name/value passes through as-is');
     assert.equal(parentRow.responseData.id, 7);
     assert.equal(parentRow.responseData.hasChildren, false, 'hasChildren starts false — tagged later by step 26');
     assert.equal(result.full_rows_map['PGD_Parent:7'].created_at, undefined, 'system column suppressed');
@@ -746,8 +748,8 @@ describe('list_entity step 26 — hasChildren tagging', () => {
       has_children_map: { PGD_Parent: true, PGD_Child: false },
       row_build: {
         row_items: [
-          { id: 'PGD_Parent:7', primary: 'Nested Parent A', responseData: { table: 'PGD_Parent', id: 7, hasChildren: false } },
-          { id: 'PGD_Child:20', primary: 'hola', responseData: { table: 'PGD_Child', id: 20, hasChildren: false } },
+          { id: 7, fields: { title: 'Nested Parent A' }, responseData: { table: 'PGD_Parent', id: 7, hasChildren: false } },
+          { id: 20, fields: { title: 'hola' }, responseData: { table: 'PGD_Child', id: 20, hasChildren: false } },
         ],
       },
     };
@@ -764,23 +766,20 @@ describe('list_entity step 26 — hasChildren tagging', () => {
     assert.match(result.message, /No related records/);
   });
 
-  // Regression: run 668 hit Slack's msg_blocks_too_long — two defs each capped
-  // at 20 rows (their own serv_query limit) combined into 40 uncapped row_items,
-  // and each row now costs 2 blocks (section + trailing divider from Track D10)
-  // plus an interactive accessory button. The cap was first set to 20 (still
-  // under Slack's documented 50-block limit by hand-count) but a live 20-row
-  // payload was rejected anyway with no further detail in Slack's error
-  // response to pin the exact threshold — recapped to 8 for a real safety
-  // margin instead of continuing to guess at the precise number.
-  it('caps combined row_items at 8 across all defs and reports the truncated count', () => {
+  // Regression: run 668 hit Slack's msg_blocks_too_long under the old one-Block-
+  // Kit-block-pair-per-row rendering (a row cap was the workaround at the time).
+  // The row list now renders as a single markdown table regardless of row count
+  // (Sprint 7 Track D, follow-up), so no combined-row cap is needed here — the
+  // per-def serv_query limit (step 20's iterator, 20 rows) is the only bound left.
+  it('does not cap combined row_items — the table renders as one block regardless of row count', () => {
     const step = getStep('list_entity', '26');
     const many = Array.from({ length: 40 }, (_, i) => ({
-      id: `PGD_Child:${i}`, primary: `item${i}`, responseData: { table: 'PGD_Child', id: i, hasChildren: false },
+      id: i, fields: { title: `item${i}` }, responseData: { table: 'PGD_Child', id: i, hasChildren: false },
     }));
     const localState = { has_children_map: { PGD_Child: false }, row_build: { row_items: many } };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.equal(result.row_items.length, 8, 'must cap at 8 regardless of how many defs contributed rows');
-    assert.match(result.message, /Found 40 record.*showing the first 8/);
+    assert.equal(result.row_items.length, 40, 'all combined rows must pass through uncapped');
+    assert.match(result.message, /Found 40 record/);
   });
 });
 

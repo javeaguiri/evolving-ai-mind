@@ -193,6 +193,48 @@ function summarizeObjectForReview(v) {
   return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
 }
 
+// ── Faithful copy of formatColumnHeader from callback.mjs ───────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:formatColumnHeader
+function formatColumnHeader(key, values) {
+  if (key === 'ID') return 'ID';
+  const isFkColumn    = /_id$/i.test(key);
+  const looksResolved = isFkColumn && values.some(v => v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)));
+  const base  = looksResolved ? key.slice(0, -3) : key;
+  const words = base.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1));
+  return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
+}
+
+// ── Faithful copy of buildListTable from callback.mjs ────────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
+function buildListTable(items) {
+  const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const columns = ['ID'];
+  const seen = new Set(columns);
+  for (const item of items) {
+    for (const key of Object.keys(item.fields ?? {})) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    }
+  }
+
+  const constantColumns = items.length > 1 ? columns.filter(col => {
+    if (col === 'ID') return false;
+    if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
+    const first = items[0].fields[col];
+    return items.every(item => item.fields[col] === first);
+  }) : [];
+  const headings = constantColumns.map(col => `# ${items[0].fields[col]}`);
+  const tableColumns = columns.filter(col => !constantColumns.includes(col));
+
+  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
+  const header = `| ${headerLabels.join(' | ')} |`;
+  const sep    = `|${tableColumns.map(() => '---').join('|')}|`;
+  const rows   = items.map(item => {
+    const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
+    return `| ${cells.map(escapeCell).join(' | ')} |`;
+  });
+  return [...headings, header, sep, ...rows].join('\n');
+}
+
 // ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:dialogToBlocks
 function dialogToBlocks(dialog, workflowRunId) {
@@ -228,38 +270,33 @@ function dialogToBlocks(dialog, workflowRunId) {
             text: { type: 'mrkdwn', text: `*${field.label}*` },
           });
         }
-        for (const [idx, item] of (field.items ?? []).entries()) {
-          const sectionBlock = {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `*${item.primary}*${item.secondary ? `\n${item.secondary}` : ''}`,
+        const items = field.items ?? [];
+        if (items.length > 0) {
+          blocks.push(...markdownToBlocks(buildListTable(items)));
+        }
+        const selectable = items.find(item => item.secondaryAction);
+        if (selectable) {
+          const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
+          blocks.push({
+            type:     'input',
+            block_id: `list_select_input_${workflowRunId}`,
+            element:  {
+              type:        'plain_text_input',
+              action_id:   'list_select_value',
+              placeholder: { type: 'plain_text', text: `e.g. ${selectable.id}` },
             },
-          };
-          if (item.secondaryAction) {
-            const validStyle = item.secondaryAction.style === 'danger' || item.secondaryAction.style === 'primary';
-            sectionBlock.accessory = {
+            label: { type: 'plain_text', text: 'Enter the ID to select' },
+          });
+          blocks.push({
+            type:     'actions',
+            elements: [{
               type: 'button',
-              ...(validStyle ? { style: item.secondaryAction.style } : {}),
-              text:      { type: 'plain_text', text: item.secondaryAction.label },
-              action_id: `workflow_action_${item.id || idx}_${idx}`,
-              value:     JSON.stringify({
-                workflowRunId,
-                action:       item.secondaryAction.action,
-                responseData: item.responseData !== undefined ? item.responseData : { tableName: item.id },
-              }),
-              ...(item.secondaryAction.confirm ? {
-                confirm: {
-                  title:   { type: 'plain_text', text: 'Are you sure?' },
-                  text:    { type: 'plain_text', text: item.secondaryAction.confirm },
-                  confirm: { type: 'plain_text', text: 'Remove' },
-                  deny:    { type: 'plain_text', text: 'Cancel' },
-                },
-              } : {}),
-            };
-          }
-          blocks.push(sectionBlock);
-          blocks.push({ type: 'divider' });
+              ...(validStyle ? { style: selectable.secondaryAction.style } : {}),
+              text:      { type: 'plain_text', text: selectable.secondaryAction.label },
+              action_id: `list_select_${selectable.secondaryAction.action}`,
+              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action }),
+            }],
+          });
         }
         break;
       }
@@ -597,7 +634,7 @@ describe('dialogToBlocks — list', () => {
     const field = {
       type: 'list',
       label: '3 tables',
-      items: [{ id: 'T1', primary: 'PGD_T1', secondary: 'col1, col2' }],
+      items: [{ id: 'T1', fields: { name: 'PGD_T1', columns: 'col1, col2' } }],
     };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
     assert.equal(blocks[0].text.text, '*3 tables*');
@@ -606,135 +643,218 @@ describe('dialogToBlocks — list', () => {
   it('omits label block when label absent', () => {
     const field = {
       type: 'list',
-      items: [{ id: 'T1', primary: 'PGD_T1' }],
+      items: [{ id: 'T1', fields: { name: 'PGD_T1' } }],
     };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
-    // The item section block plus its trailing divider — no label block
-    assert.equal(blocks.length, 2);
-    assert.ok(blocks[0].text.text.includes('PGD_T1'));
+    // Just the one markdown table block — no label, no selectable row so no input/actions.
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].type, 'markdown');
+    assert.ok(blocks[0].text.includes('PGD_T1'));
   });
 
-  it('pushes a divider block after every row', () => {
+  it('renders all rows as a single markdown table, not one block per row', () => {
     const field = {
       type:  'list',
-      items: [{ id: 'A', primary: 'A' }, { id: 'B', primary: 'B' }],
+      items: [{ id: 1, fields: { name: 'A' } }, { id: 2, fields: { name: 'B' } }],
     };
     const blocks = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(blocks.length, 4);
-    assert.equal(blocks[1].type, 'divider');
-    assert.equal(blocks[3].type, 'divider');
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].type, 'markdown');
+    assert.ok(blocks[0].text.includes('| A |'));
+    assert.ok(blocks[0].text.includes('| B |'));
   });
 
-  it('item-supplied responseData overrides the default { tableName } payload', () => {
+  it('item WITHOUT any selectable item still appears in the table but adds no input/actions block', () => {
+    const field = {
+      type:  'list',
+      items: [{ id: 'PGD_Parent', fields: { name: 'PGD_Parent', columns: 'id, name' } }],
+    };
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks.some(b => b.type === 'input'), false);
+    assert.equal(blocks.some(b => b.type === 'actions'), false);
+  });
+
+  it('at least one selectable item adds a shared ID-entry input and one Select button', () => {
     const field = {
       type:  'list',
       items: [{
-        id: 'PGD_Decks:7',
-        primary: 'Sub-deck A',
-        secondaryAction: { label: 'Open', action: 'select_row' },
-        responseData: { table: 'PGD_Decks', id: 7, isDeck: true },
+        id:     'PGD_Child',
+        fields: { name: 'PGD_Child', columns: 'parent_id, val' },
+        secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger' },
       }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    const value = JSON.parse(block.accessory.value);
-    assert.deepEqual(value.responseData, { table: 'PGD_Decks', id: 7, isDeck: true });
+    const blocks = dialogToBlocks({ fields: [field] }, 99);
+    const inputBlock   = blocks.find(b => b.type === 'input');
+    const actionsBlock = blocks.find(b => b.type === 'actions');
+    assert.ok(inputBlock, 'input block should be present');
+    assert.equal(inputBlock.element.type, 'plain_text_input');
+    assert.ok(actionsBlock, 'actions block should be present');
+    assert.equal(actionsBlock.elements[0].style, 'danger');
+    assert.equal(actionsBlock.elements[0].text.text, 'Remove');
   });
 
-  it('item WITHOUT secondaryAction has no accessory (parent table)', () => {
-    const field = {
-      type:  'list',
-      items: [{ id: 'PGD_Parent', primary: 'PGD_Parent', secondary: 'id, name' }],
-    };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(block.accessory, undefined);
-  });
-
-  it('item WITH secondaryAction renders accessory button', () => {
-    const field = {
-      type:  'list',
-      items: [{
-        id:      'PGD_Child',
-        primary: 'PGD_Child',
-        secondary: 'parent_id, val',
-        secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger', confirm: 'Really remove?' },
-      }],
-    };
-    const [block] = dialogToBlocks({ fields: [field] }, 99);
-    assert.ok(block.accessory, 'accessory should be present');
-    assert.equal(block.accessory.style, 'danger');
-    assert.equal(block.accessory.text.text, 'Remove');
-  });
-
-  it('secondaryAction with style "default" (or omitted) sends no style field at all — Slack rejects style: "default" as invalid_blocks', () => {
+  it('Select button style "default" (or omitted) sends no style field — Slack rejects style: "default" as invalid_blocks', () => {
     const field = {
       type: 'list',
       items: [
-        { id: 'A', primary: 'A', secondaryAction: { label: 'View', action: 'view_record', style: 'default' } },
-        { id: 'B', primary: 'B', secondaryAction: { label: 'View', action: 'view_record' } },
+        { id: 'A', fields: { name: 'A' }, secondaryAction: { label: 'View', action: 'view_record', style: 'default' } },
       ],
     };
-    const [blockA, , blockB] = dialogToBlocks({ fields: [field] }, 1); // index 1 is the divider after row A
-    assert.ok(!('style' in blockA.accessory), 'style: "default" must not be forwarded — Slack has no such enum value');
-    assert.ok(!('style' in blockB.accessory), 'omitted style must not default to sending style: "default"');
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    const button = blocks.find(b => b.type === 'actions').elements[0];
+    assert.ok(!('style' in button), 'style: "default" must not be forwarded — Slack has no such enum value');
   });
 
-  it('secondaryAction with style "danger" or "primary" still sends the style field', () => {
-    const field = {
-      type: 'list',
-      items: [{ id: 'A', primary: 'A', secondaryAction: { label: 'Go', action: 'go', style: 'primary' } }],
-    };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(block.accessory.style, 'primary');
-  });
-
-  it('secondaryAction button value encodes workflowRunId and tableName', () => {
+  it('Select button value encodes only workflowRunId and action — no per-row responseData', () => {
     const field = {
       type:  'list',
       items: [{
         id: 'PGD_Holdings',
-        primary: 'PGD_Holdings',
+        fields: { name: 'PGD_Holdings' },
         secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger' },
       }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 77);
-    const value = JSON.parse(block.accessory.value);
+    const blocks = dialogToBlocks({ fields: [field] }, 77);
+    const button = blocks.find(b => b.type === 'actions').elements[0];
+    const value  = JSON.parse(button.value);
     assert.equal(value.workflowRunId, 77);
     assert.equal(value.action, 'remove_table');
-    assert.equal(value.responseData.tableName, 'PGD_Holdings');
+    assert.equal(value.responseData, undefined);
   });
 
-  it('secondaryAction with confirm renders confirm dialog', () => {
+  it('the Select button reflects the first selectable row when rows have mixed actionability', () => {
     const field = {
-      type:  'list',
-      items: [{
-        id: 'T1', primary: 'T1',
-        secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger', confirm: 'Sure?' },
-      }],
+      type: 'list',
+      items: [
+        { id: 'A', fields: { name: 'A' } },
+        { id: 'B', fields: { name: 'B' }, secondaryAction: { label: 'Open', action: 'select_row' } },
+      ],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(block.accessory.confirm, 'confirm object should exist');
-    assert.equal(block.accessory.confirm.text.text, 'Sure?');
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    const button = blocks.find(b => b.type === 'actions').elements[0];
+    assert.equal(button.text.text, 'Open');
+    assert.equal(JSON.parse(button.value).action, 'select_row');
   });
 
-  it('secondaryAction without confirm has no confirm key', () => {
+  it('every distinct field key across items becomes its own table column', () => {
     const field = {
-      type:  'list',
-      items: [{
-        id: 'T1', primary: 'T1',
-        secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger' },
-      }],
+      type: 'list',
+      items: [{ id: 'T', fields: { name: 'PGD_T', columns: 'col1, col2' } }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(block.accessory.confirm, undefined);
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    assert.ok(blocks[0].text.includes('| Columns |'));
+    assert.ok(blocks[0].text.includes('col1, col2'));
+  });
+});
+
+describe('formatColumnHeader', () => {
+  it('title-cases a snake_case key', () => {
+    assert.equal(formatColumnHeader('ease_factor', [1.3, 2.5]), 'Ease Factor');
+    assert.equal(formatColumnHeader('front', ['hola', 'adios']), 'Front');
   });
 
-  it('secondary text included when item.secondary present', () => {
-    const field = {
-      type:  'list',
-      items: [{ id: 'T', primary: 'PGD_T', secondary: 'col1, col2' }],
-    };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(block.text.text.includes('col1, col2'));
+  it('leaves the ID column unchanged', () => {
+    assert.equal(formatColumnHeader('ID', [1, 2]), 'ID');
+  });
+
+  it('a resolved FK column (_id key, non-numeric values) drops the suffix and reads as "<Prefix> Name"', () => {
+    assert.equal(formatColumnHeader('deck_id', ['Spanish Grammar', 'French Basics']), 'Deck Name');
+  });
+
+  it('an unresolved FK column (_id key, still-numeric values) stays title-cased as-is', () => {
+    assert.equal(formatColumnHeader('deck_id', [3, 7]), 'Deck Id');
+  });
+
+  it('a single resolved value among the column is enough to treat the whole column as resolved', () => {
+    assert.equal(formatColumnHeader('category_id', [null, 'Groceries']), 'Category Name');
+  });
+});
+
+describe('buildListTable', () => {
+  it('column set is ID plus the union of every item\'s own field keys, first-seen order', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'A' } },
+      { id: 2, fields: { name: 'B', note: 'x' } },
+    ]);
+    assert.equal(table.split('\n')[0], '| ID | Name | Note |');
+    assert.equal(table.split('\n').length, 4); // header + sep + 2 rows
+  });
+
+  it('does not synthesize a column no item actually has', () => {
+    const table = buildListTable([{ id: 1, fields: { name: 'A' } }, { id: 2, fields: { name: 'B' } }]);
+    assert.ok(!table.includes('Note'));
+  });
+
+  it('a row missing a column present on another row renders a blank cell, not an error', () => {
+    const table = buildListTable([
+      { id: 1, fields: { title: 'Deck A' } },
+      { id: 2, fields: { front: 'hola', back: 'hello' } },
+    ]);
+    const rows = table.split('\n');
+    assert.equal(rows[0], '| ID | Title | Front | Back |');
+    assert.equal(rows[2], '| 1 | Deck A |  |  |');
+    assert.equal(rows[3], '| 2 |  | hola | hello |');
+  });
+
+  it('escapes pipe characters and strips newlines from cell values', () => {
+    const table = buildListTable([{ id: 1, fields: { name: 'A | B', note: 'line1\nline2' } }]);
+    assert.ok(table.includes('A \\| B'));
+    assert.ok(table.includes('line1 line2'));
+    assert.ok(!table.includes('line1\nline2'));
+  });
+
+  it('a resolved FK field renders as "<Prefix> Name" in the actual table header', () => {
+    const table = buildListTable([
+      { id: 1, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar', ease_factor: 2.5 } },
+    ]);
+    assert.equal(table.split('\n')[0], '| ID | Front | Back | Deck Name | Ease Factor |');
+  });
+
+  it('a field identical across every row is hoisted to a heading and dropped from the table', () => {
+    const table = buildListTable([
+      { id: 67, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar' } },
+      { id: 68, fields: { front: 'adios', back: 'goodbye', deck_id: 'Spanish Grammar' } },
+    ]);
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Spanish Grammar');
+    assert.equal(lines[1], '| ID | Front | Back |');
+    assert.ok(!table.includes('Deck Name'));
+  });
+
+  it('no column is hoisted when every field actually varies across rows', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'A', category: 'x' } },
+      { id: 2, fields: { name: 'B', category: 'y' } },
+    ]);
+    assert.ok(!table.startsWith('#'));
+    assert.equal(table.split('\n')[0], '| ID | Name | Category |');
+  });
+
+  it('a field missing from some rows is NOT hoisted even when identical on the rows that have it', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'A', shared: 'x' } },
+      { id: 2, fields: { name: 'B' } },
+    ]);
+    assert.ok(!table.startsWith('#'));
+    assert.ok(table.includes('Shared'));
+  });
+
+  it('a single-item list is never hoisted — nothing redundant to remove', () => {
+    const table = buildListTable([{ id: 1, fields: { deck_id: 'Spanish Grammar' } }]);
+    assert.ok(!table.startsWith('#'));
+    assert.equal(table.split('\n')[0], '| ID | Deck Name |');
+  });
+
+  it('multiple constant columns each get their own heading line', () => {
+    const table = buildListTable([
+      { id: 1, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'hola' } },
+      { id: 2, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'adios' } },
+    ]);
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Spanish Grammar');
+    assert.equal(lines[1], '# flashcards');
+    assert.equal(lines[2], '| ID | Front |');
   });
 });
 
@@ -1056,8 +1176,8 @@ describe('dialogToBlocks — mixed fields', () => {
           type:  'list',
           label: '2 table(s) proposed',
           items: [
-            { id: 'PGD_Recipes',     primary: 'PGD_Recipes',     secondary: 'name, description' },
-            { id: 'PGD_Ingredients', primary: 'PGD_Ingredients', secondary: 'recipe_id, name',
+            { id: 'PGD_Recipes',     fields: { name: 'PGD_Recipes',     columns: 'name, description' } },
+            { id: 'PGD_Ingredients', fields: { name: 'PGD_Ingredients', columns: 'recipe_id, name' },
               secondaryAction: { label: 'Remove', action: 'remove_table', style: 'danger', confirm: 'Remove PGD_Ingredients?' } },
           ],
         },
@@ -1073,20 +1193,20 @@ describe('dialogToBlocks — mixed fields', () => {
 
     const blocks = dialogToBlocks(dialog, 101);
 
-    // 1 typography + 1 label + 2 list items (each with a trailing divider) + 1 actions = 7 blocks
-    assert.equal(blocks.length, 7);
+    // 1 typography + 1 label + 1 markdown table + 1 input + 1 select-actions + 1 bottom actions = 6 blocks
+    assert.equal(blocks.length, 6);
     assert.equal(blocks[0].type, 'markdown');  // typography
-    assert.equal(blocks[1].type, 'section');  // label
-    assert.equal(blocks[2].type, 'section');  // PGD_Recipes — no accessory
-    assert.equal(blocks[2].accessory, undefined);
-    assert.equal(blocks[3].type, 'divider');
-    assert.equal(blocks[4].type, 'section');  // PGD_Ingredients — has accessory
-    assert.ok(blocks[4].accessory);
-    assert.equal(blocks[5].type, 'divider');
-    assert.equal(blocks[6].type, 'actions');
+    assert.equal(blocks[1].type, 'section');   // label
+    assert.equal(blocks[2].type, 'markdown');  // table — both rows in one block
+    assert.ok(blocks[2].text.includes('PGD_Recipes'));
+    assert.ok(blocks[2].text.includes('PGD_Ingredients'));
+    assert.equal(blocks[3].type, 'input');     // shared ID-entry input
+    assert.equal(blocks[4].type, 'actions');   // Select button (from item_action)
+    assert.equal(blocks[4].elements[0].text.text, 'Remove');
+    assert.equal(blocks[5].type, 'actions');   // bottom Looks good / Cancel
 
     // workflowRunId propagates to all button values
-    const confirmValue = JSON.parse(blocks[6].elements[0].value);
+    const confirmValue = JSON.parse(blocks[5].elements[0].value);
     assert.equal(confirmValue.workflowRunId, 101);
   });
 
