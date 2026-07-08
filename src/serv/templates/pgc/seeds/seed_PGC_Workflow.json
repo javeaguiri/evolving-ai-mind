@@ -2674,11 +2674,11 @@
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Apply the has_children_map to finalize row_items and build the gate's message text. Caps the COMBINED row count across every def at this level (not just each def's own query limit) — each row costs 2 Slack blocks (its section plus a trailing divider), so an uncapped multi-def level can exceed Slack's 50-block hard limit even though each individual fetch was already limited to 20 rows.",
+        "description": "Apply the has_children_map to finalize row_items and build the gate's message text. Caps the COMBINED row count across every def at this level (not just each def's own query limit) — each row costs 2 Slack blocks (its section plus a trailing divider) plus an interactive accessory button, so an uncapped multi-def level can exceed a Slack message size/block ceiling even though each individual fetch was already limited to 20 rows. Capped conservatively at 8 rather than computed precisely — a live 20-row/44-block payload was rejected by Slack's API with no further detail in the error response to pin the exact threshold, so this trades a tighter list for a real safety margin instead of continuing to guess at the exact number.",
         "output_key": "list_view",
         "on_success": "27",
         "on_else": "cancel",
-        "expression": "(function(){ var map = local_state.has_children_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { hasChildren: !!map[it.responseData.table] }) }); }); var maxRows = 20; var capped = tagged.slice(0, maxRows); var truncated = Math.max(0, tagged.length - maxRows); var text = capped.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s)' + (truncated > 0 ? ' — showing the first ' + maxRows : '') + '. Click Open for details.'); return { row_items: capped, message: text }; })()"
+        "expression": "(function(){ var map = local_state.has_children_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { hasChildren: !!map[it.responseData.table] }) }); }); var maxRows = 8; var capped = tagged.slice(0, maxRows); var truncated = Math.max(0, tagged.length - maxRows); var text = capped.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s)' + (truncated > 0 ? ' — showing the first ' + maxRows : '') + '. Click Open for details.'); return { row_items: capped, message: text }; })()"
       },
       {
         "step": "27",
