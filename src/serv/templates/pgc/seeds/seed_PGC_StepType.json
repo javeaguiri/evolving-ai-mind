@@ -194,13 +194,13 @@
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string }. content supports {{template}} substitution and standard markdown formatting (see markdown_formatting_syntax). Both button_label and content must be non-empty strings. Use reveals (array) instead when the number of panels is determined at runtime."
+        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string | array }. content supports {{template}} substitution. A string or array of strings renders via basic mrkdwn formatting (bold, italic, links) \u2014 NOT markdown table syntax, which the underlying block cannot render. An array of plain record objects (e.g. [{title, count}, ...], no syntax/verb/command field) automatically renders as a real Slack table, one column per distinct key across the array \u2014 do not hand-format pipe-delimited text to fake a table. Both button_label and content must be non-empty. Use reveals (array) instead when the number of panels is determined at runtime."
       },
       {
         "type": "array_or_string",
         "field": "reveals",
         "required": false,
-        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string }; content supports standard markdown formatting. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
+        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
       }
     ],
     "output_contract": null,
@@ -877,13 +877,13 @@
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional collapsible panel attached below the message content \u2014 e.g. a large child-record list on an entity display notify. Shape: { button_label: string, content: string }. content supports {{template}} substitution, standard markdown formatting, and may resolve to an array (rendered as a bulleted list). Use reveals (array) instead when the number of panels is determined at runtime."
+        "description": "Optional collapsible panel attached below the message content \u2014 e.g. a large child-record list on an entity display notify. Shape: { button_label: string, content: string | array }. content supports {{template}} substitution. A string or array of strings renders via basic mrkdwn formatting (bold, italic, links) \u2014 NOT markdown table syntax, which the underlying block cannot render. An array of plain record objects (e.g. [{title, count}, ...], no syntax/verb/command field) automatically renders as a real Slack table, one column per distinct key \u2014 do not hand-format pipe-delimited text to fake a table. Use reveals (array) instead when the number of panels is determined at runtime."
       },
       {
         "type": "array_or_string",
         "field": "reveals",
         "required": false,
-        "description": "Array version of reveal \u2014 renders one panel per entry. Each entry is { button_label: string, content: string }; content supports standard markdown formatting. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects."
+        "description": "Array version of reveal \u2014 renders one panel per entry. Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects."
       }
     ],
     "output_contract": null,

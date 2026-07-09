@@ -656,30 +656,90 @@ async function postHumanGate(message) {
 // text_input branch, which builds its blocks independently of dialogToBlocks.
 const REVEAL_SECTION_CHAR_LIMIT = 2800;
 const REVEAL_MAX_CHILD_BLOCKS   = 10;
+const TABLE_MAX_ROWS            = 100;   // Slack `table` block hard limit, including the header row
+const TABLE_MAX_COLUMNS         = 20;    // Slack `table` block hard limit
+const TABLE_MAX_CHARS           = 10000; // Slack `table` block hard limit — aggregate cell text
 
-function buildRevealBlock(field) {
-  const text = Array.isArray(field.content)
-    ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)}`).join('\n')
-    : String(field.content ?? '');
-
-  const lines = text ? text.split('\n') : [];
-  const chunks = [];
-  let chunk = '';
-  for (const line of lines) {
-    const candidate = chunk ? `${chunk}\n${line}` : line;
-    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
-      chunks.push(chunk);
-      chunk = line;
-    } else {
-      chunk = candidate;
+// buildRevealTable — native Slack `table` block (rows of { type: 'raw_text' }
+// cells, not markdown syntax) for reveal content shaped as an array of plain
+// records. container.child_blocks explicitly excludes the `markdown` block type
+// (verified against Slack's own docs — see docs/slack-block-kit.md), so a
+// markdown pipe-table can never render inside a reveal; `table` is the only
+// real grid-rendering option available there. Columns are the union of every
+// item's own keys, first-seen order, labeled via the same formatColumnHeader()
+// used elsewhere — same data-driven, no-domain-knowledge approach as
+// buildListTable/buildObjectArrayTable.
+function buildRevealTable(items) {
+  const columns = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
     }
   }
-  if (chunk) chunks.push(chunk);
+  const tableColumns = columns.slice(0, TABLE_MAX_COLUMNS);
+  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const cell = v => ({ type: 'raw_text', text: String(v ?? '').replace(/\r?\n/g, ' ') });
 
-  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
-  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
-  if (truncatedCount > 0 && kept.length > 0) {
-    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  const rows = [headerLabels.map(cell)];
+  let charCount = headerLabels.reduce((sum, h) => sum + h.length, 0);
+  let truncated = 0;
+  for (const item of items) {
+    const rowCells = tableColumns.map(col => cell(item[col]));
+    const rowChars = rowCells.reduce((sum, c) => sum + c.text.length, 0);
+    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
+      truncated++;
+      continue;
+    }
+    rows.push(rowCells);
+    charCount += rowChars;
+  }
+
+  return { table: { type: 'table', rows }, truncated };
+}
+
+function buildRevealBlock(field) {
+  // An array of plain records with no recognized single-field shape renders as
+  // a real table (see buildRevealTable) — everything else (a string, an array
+  // of strings, or an array uniformly shaped with syntax/verb/command) keeps
+  // the original bulleted-mrkdwn rendering.
+  const isRecordArray = Array.isArray(field.content) && field.content.length > 0
+    && field.content.every(v => v !== null && typeof v === 'object')
+    && !field.content.every(v => v.syntax || v.verb || v.command);
+
+  const childBlocks = [];
+
+  if (isRecordArray) {
+    const { table, truncated } = buildRevealTable(field.content);
+    childBlocks.push(table);
+    if (truncated > 0) {
+      childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
+    }
+  } else {
+    const text = Array.isArray(field.content)
+      ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n')
+      : String(field.content ?? '');
+
+    const lines = text ? text.split('\n') : [];
+    const chunks = [];
+    let chunk = '';
+    for (const line of lines) {
+      const candidate = chunk ? `${chunk}\n${line}` : line;
+      if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+        chunks.push(chunk);
+        chunk = line;
+      } else {
+        chunk = candidate;
+      }
+    }
+    if (chunk) chunks.push(chunk);
+
+    const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+    const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+    if (truncatedCount > 0 && kept.length > 0) {
+      kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+    }
+    childBlocks.push(...kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })));
   }
 
   return {
@@ -688,7 +748,7 @@ function buildRevealBlock(field) {
     title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
     is_collapsible:     true,
     default_collapsed:  true,
-    child_blocks:       kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })),
+    child_blocks:       childBlocks,
   };
 }
 

@@ -1019,11 +1019,72 @@ prose/markdown content instead.
 }
 ```
 
-**`buildRevealBlock()` behavior:** a plain string becomes the section's text directly; an array
-of items becomes one `• ` bullet per line in a single `mrkdwn` string. Content is chunked into
-additional `section` blocks past ~2800 characters (Slack's per-`section` text limit is 3000),
-capped at the 10-`child_blocks` ceiling — any remainder past that is summarized as
-`_...and N more chunk(s)_` on the last kept block.
+**`buildRevealBlock()` behavior:** `content` is a plain string → the section's text directly; an
+array of strings, or an array of objects uniformly shaped with `syntax`/`verb`/`command` → one
+`• ` bullet per line in a single `mrkdwn` string, chunked into additional `section` blocks past
+~2800 characters (Slack's per-`section` text limit is 3000), capped at the 10-`child_blocks`
+ceiling, with any remainder summarized as `_...and N more chunk(s)_` on the last kept block; an
+array of plain record objects (any other shape) → a native `table` block instead — see `table`
+below, since neither `mrkdwn` nor `container.child_blocks` can render markdown table syntax.
+
+**Not yet independently live-verified in evolving-mind-ai** — implemented from the official
+reference; same "verify live before fully trusting" caveat this doc applies to `carousel`.
+
+### `table`
+
+A native grid/table block — source: `https://docs.slack.dev/reference/block-kit/blocks/table-block/`
+(fetched 2026-07-09). Renders real tabular data as rows of cell objects — not markdown pipe-table
+syntax, which neither `mrkdwn` nor `container.child_blocks` can render (see `container` above,
+"Allowed `child_blocks` types"). `table` is the *only* way to render a real grid inside a
+`container` — the top-level `markdown` block type, which does support markdown tables, is
+explicitly excluded from `container.child_blocks`.
+
+**Usage in evolving-mind-ai:** `buildRevealBlock()` (`callback.mjs`) renders a `reveal`/`reveals`
+field's `content` as a `table` block via `buildRevealTable()` whenever `content` is an array of
+plain record objects (no `syntax`/`verb`/`command` field — that shape still renders as bullets).
+Columns are the union of every item's own keys, first-seen order, labeled via the same
+`formatColumnHeader()` used by `list_selection`'s markdown table (see "list gate rendering"
+below) — same data-driven, no-domain-knowledge approach, just a different Block Kit primitive
+because the surrounding block type differs.
+
+#### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `"table"` | Yes | Block type discriminator |
+| `rows` | array of arrays of cell objects | Yes | Max **100** rows (including header row), max **20** cells per row |
+| `column_settings` | array | No | Max 20 entries — `{ align: "left" \| "center" \| "right", is_wrapped: boolean }` per column |
+| `block_id` | string | No | Max 255 characters |
+
+**Cell types:** `raw_text` (`{ type: "raw_text", text }`), `raw_number`, or `rich_text` (full
+rich-text formatting — bold, emoji, mentions, links). `buildRevealTable()` uses `raw_text` only —
+reveal data is plain values, no rich formatting requirement.
+
+**Limits:** 100 rows, 20 columns, and an aggregate **10,000 characters** across all cell text in
+one table. `buildRevealTable()` enforces the row and character limits (whichever is hit first),
+truncating with a trailing `_...and N more row(s)_` `section` block; columns beyond 20 are
+silently dropped.
+
+#### Example — reveal panel rendered as a table (evolving-mind-ai usage)
+
+```json
+{
+  "type": "container",
+  "block_id": "reveal_bb9cb0c7-bf08-4eed-9e44-3ee71ef021a6",
+  "title": { "type": "plain_text", "text": "Child Decks" },
+  "is_collapsible": true,
+  "default_collapsed": true,
+  "child_blocks": [
+    {
+      "type": "table",
+      "rows": [
+        [ { "type": "raw_text", "text": "Title" }, { "type": "raw_text", "text": "Card Count" }, { "type": "raw_text", "text": "Due Count" } ],
+        [ { "type": "raw_text", "text": "Spanish Vocabulary" }, { "type": "raw_text", "text": "42" }, { "type": "raw_text", "text": "5" } ]
+      ]
+    }
+  ]
+}
+```
 
 **Not yet independently live-verified in evolving-mind-ai** — implemented from the official
 reference; same "verify live before fully trusting" caveat this doc applies to `carousel`.
@@ -1172,10 +1233,12 @@ Use explicit `block_id` values so the key is predictable.
 
 `callback.mjs` renders every `reveal`/`reveals` field as a `container` block (see `container`
 above) — replaces the earlier `task_card` implementation, which could never interpret markdown.
-`buildRevealBlock()` builds the content as one or more `section`/`mrkdwn` child blocks: a plain
-string becomes the block's text directly; an array of items becomes one `• ` bullet per line in
-a single `mrkdwn` string, chunked into additional `section` blocks past ~2800 characters and
-capped at the container's 10-`child_blocks` limit.
+`buildRevealBlock()` picks one of two rendering paths for the content: a plain string or an
+array of strings (or `syntax`/`verb`/`command`-shaped objects) becomes one or more
+`section`/`mrkdwn` child blocks, chunked past ~2800 characters and capped at the container's
+10-`child_blocks` limit; an array of plain record objects becomes a single native `table` block
+(see `table` above) — the only way to render a real grid inside a `container`, since neither
+`mrkdwn` nor `container.child_blocks` support markdown table syntax.
 
 Set `title` from `button_label`, `is_collapsible: true`, `default_collapsed: true` — reveals are
 progressive disclosure, collapsed until the user expands them. Renders inline in the same
