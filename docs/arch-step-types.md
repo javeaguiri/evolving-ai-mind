@@ -336,8 +336,9 @@ off exactly this payload).
 
 ###### `reveal` / `reveals` (optional, all gate types)
 
-Renders one or more inline `task_card` blocks above the gate buttons. Cards are
-always visible — no click required. The gate remains suspended; cards are read-only.
+Renders one or more collapsible `container` blocks above the gate buttons. Panels are
+always visible (collapsed by default) — no click required to know they exist, only
+to expand them. The gate remains suspended; panels are read-only.
 
 **`reveal`** — single panel (object):
 
@@ -355,7 +356,7 @@ always visible — no click required. The gate remains suspended; cards are read
 ```
 
 `reveals` resolves to an array of `{ button_label, content }` objects at runtime —
-one `task_card` panel per array entry. Use `reveals` when the number of panels is
+one `container` panel per array entry. Use `reveals` when the number of panels is
 driven by data.
 
 **`content` rendering** — resolved via `resolveInput` before the HUMAN_GATE SQS
@@ -363,13 +364,14 @@ message is built:
 
 | Resolved type | Rendered as |
 |---|---|
-| string | `task_card.output` — `rich_text_section` (plain text) |
-| array of strings | `task_card.details` — `rich_text_list` with `style: "bullet"` (one bullet per element) |
+| string | the container's `section`/`mrkdwn` child block text, directly |
+| array of strings | the same child block text, one `• ` bullet per line |
 
-`button_label` becomes the `task_card` title. Both fields are required and must be
+`button_label` becomes the container's `title`. Both fields are required and must be
 non-empty — L1 validation rejects steps where either is missing. `callback.mjs`
-renders each block with `randomUUID()` for `task_id` and `status: "complete"`,
-posted directly in the gate message.
+renders each panel with `randomUUID()` in `block_id`, `is_collapsible: true`,
+`default_collapsed: true`, posted directly in the gate message. See
+`docs/slack-block-kit.md`'s `container` reference for the full field/limit details.
 
 **Example — accordion hierarchy** (parent categories with bulleted child items):
 

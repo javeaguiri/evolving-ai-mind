@@ -154,35 +154,42 @@ function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
 
 // ── Faithful copy of buildRevealBlock from callback.mjs ─────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
+const REVEAL_SECTION_CHAR_LIMIT = 2800;
+const REVEAL_MAX_CHILD_BLOCKS   = 10;
+
 function buildRevealBlock(field) {
-  const revealBlock = {
-    type:    'task_card',
-    task_id: 'test-task-id',
-    title:   field.button_label,
-    status:  'complete',
-  };
-  if (Array.isArray(field.content)) {
-    revealBlock.details = {
-      type:     'rich_text',
-      elements: [{
-        type:     'rich_text_list',
-        style:    'bullet',
-        elements: field.content.map(item => ({
-          type:     'rich_text_section',
-          elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
-        })),
-      }],
-    };
-  } else if (field.content) {
-    revealBlock.output = {
-      type:     'rich_text',
-      elements: [{
-        type:     'rich_text_section',
-        elements: [{ type: 'text', text: field.content }],
-      }],
-    };
+  const text = Array.isArray(field.content)
+    ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)}`).join('\n')
+    : String(field.content ?? '');
+
+  const lines = text ? text.split('\n') : [];
+  const chunks = [];
+  let chunk = '';
+  for (const line of lines) {
+    const candidate = chunk ? `${chunk}\n${line}` : line;
+    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+      chunks.push(chunk);
+      chunk = line;
+    } else {
+      chunk = candidate;
+    }
   }
-  return revealBlock;
+  if (chunk) chunks.push(chunk);
+
+  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+  if (truncatedCount > 0 && kept.length > 0) {
+    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  }
+
+  return {
+    type:               'container',
+    block_id:           `reveal_test-id`,
+    title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
+    is_collapsible:     true,
+    default_collapsed:  true,
+    child_blocks:       kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })),
+  };
 }
 
 // ── Faithful copy of summarizeObjectForReview from callback.mjs ─────────────
@@ -859,11 +866,11 @@ describe('buildListTable', () => {
 });
 
 describe('dialogToBlocks — reveal', () => {
-  it('array of strings renders each item as plain text in the bullet list', () => {
+  it('array of strings renders each item as a bullet line in the section text', () => {
     const field = { type: 'reveal', button_label: 'Details', content: ['Dining Out', 'Subscriptions'] };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
-    const items = block.details.elements[0].elements.map(e => e.elements[0].text);
-    assert.deepEqual(items, ['Dining Out', 'Subscriptions']);
+    assert.equal(block.type, 'container');
+    assert.equal(block.child_blocks[0].text.text, '• Dining Out\n• Subscriptions');
   });
 
   it('array of objects JSON-stringifies each item instead of [object Object]', () => {
@@ -873,18 +880,15 @@ describe('dialogToBlocks — reveal', () => {
       content: [{ category_id: 1, planned_amount: 3300 }, { category_id: 2, planned_amount: 450 }],
     };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
-    const items = block.details.elements[0].elements.map(e => e.elements[0].text);
-    assert.ok(items.every(t => !t.includes('[object Object]')));
-    assert.deepEqual(items, [
-      '{"category_id":1,"planned_amount":3300}',
-      '{"category_id":2,"planned_amount":450}',
-    ]);
+    const text = block.child_blocks[0].text.text;
+    assert.ok(!text.includes('[object Object]'));
+    assert.equal(text, '• {"category_id":1,"planned_amount":3300}\n• {"category_id":2,"planned_amount":450}');
   });
 
-  it('plain string content renders as output rich_text, not details', () => {
+  it('plain string content renders directly as the container section text', () => {
     const field = { type: 'reveal', button_label: 'Info', content: 'Just a note' };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(block.output.elements[0].elements[0].text, 'Just a note');
+    assert.equal(block.child_blocks[0].text.text, 'Just a note');
   });
 });
 
@@ -900,8 +904,8 @@ describe('postHumanGate text_input branch — reveal fields', () => {
   // Regression test: text_input gates build their blocks independently of
   // dialogToBlocks (a separate early-return branch in postHumanGate), so a
   // reveal field attached by buildDialog (step-executor.mjs) was silently
-  // dropped instead of rendered as a task_card. Sprint 7 Track G3, run 632.
-  it('renders reveal fields as task_card blocks between the message and the input block', () => {
+  // dropped instead of rendered as a container. Sprint 7 Track G3, run 632.
+  it('renders reveal fields as container blocks between the message and the input block', () => {
     const dialog = {
       fields: [
         { type: 'typography', value: 'Any special instructions?' },
@@ -913,20 +917,20 @@ describe('postHumanGate text_input branch — reveal fields', () => {
     };
     const blocks = textInputGateBlocks(dialog, 632, '2d');
 
-    const taskCards = blocks.filter(b => b.type === 'task_card');
-    assert.equal(taskCards.length, 2);
-    assert.equal(taskCards[0].title, 'PGD_Budgets');
-    assert.equal(taskCards[1].title, 'PGD_SpendingCategories');
+    const containers = blocks.filter(b => b.type === 'container');
+    assert.equal(containers.length, 2);
+    assert.equal(containers[0].title.text, 'PGD_Budgets');
+    assert.equal(containers[1].title.text, 'PGD_SpendingCategories');
 
     const inputIndex = blocks.findIndex(b => b.type === 'input');
     assert.ok(inputIndex > 0, 'input block must be present');
     assert.ok(
-      taskCards.every(card => blocks.indexOf(card) < inputIndex),
-      'reveal task_cards must render before the input block',
+      containers.every(card => blocks.indexOf(card) < inputIndex),
+      'reveal containers must render before the input block',
     );
   });
 
-  it('produces no task_card blocks when no reveal field is present', () => {
+  it('produces no container blocks when no reveal field is present', () => {
     const dialog = {
       fields: [
         { type: 'typography', value: 'Anything else?' },
@@ -934,7 +938,7 @@ describe('postHumanGate text_input branch — reveal fields', () => {
       ],
     };
     const blocks = textInputGateBlocks(dialog, 9, '9');
-    assert.equal(blocks.filter(b => b.type === 'task_card').length, 0);
+    assert.equal(blocks.filter(b => b.type === 'container').length, 0);
   });
 });
 

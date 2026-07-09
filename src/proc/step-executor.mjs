@@ -502,7 +502,7 @@ export function buildDialog(step, localState) {
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
 
-  // reveal — optional on any gate type. Single task_card above the gate buttons.
+  // reveal — optional on any gate type. Single collapsible container above the gate buttons.
   // content is resolved via resolveInput so a pure {{var}} reference that points
   // to an array passes through as an array (rendered as a bulleted list by callback).
   if (step.reveal) {
@@ -513,7 +513,7 @@ export function buildDialog(step, localState) {
     });
   }
 
-  // reveals — array of task_cards, one per entry (e.g. one per table).
+  // reveals — array of containers, one per entry (e.g. one per table).
   // Supports an inline array or a {{template}} reference to localState.
   const revealsArray = typeof step.reveals === 'string'
     ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])

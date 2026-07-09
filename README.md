@@ -300,7 +300,7 @@ evolving-mind-ai/
 | Human gate — choice | ✅ Working | Single-select with `reveal` inline card support; iterator option expansion |
 | Human gate — text_input | ✅ Working | Modal text input; result written to `output_key` |
 | Human gate — edit_list | ✅ Working | Table removal with in-place chat.update re-render |
-| Block Kit dialog rendering | ✅ Working | `dialogToBlocks()` in callback.mjs — all gate types including reveal/task_card |
+| Block Kit dialog rendering | ✅ Working | `dialogToBlocks()` in callback.mjs — all gate types including reveal/container |
 | Condition step | ✅ Working | Expression evaluation, branching via bare step keys |
 | Routing matrix + smoke test | ✅ Working | Post-L1 simulation: BFS reachability + iterative terminal check + js_transform expression execution. Replaces broken L2 path execution. |
 | Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
@@ -316,7 +316,7 @@ evolving-mind-ai/
 |---|---|---|
 | `llm_call` | ✅ Implemented | Loads prompt from PGC_Prompt, calls LLM, runs review-output validation with 2-attempt correction loop |
 | `js_transform` | ✅ Implemented | Generic sandboxed JS via `new Function()` — executes arbitrary expressions against `local_state`; items wired from `input_key` |
-| `human_gate` | ✅ Implemented | Gate types: `choice`, `text_input`, `confirm`, `review_object`; `reveal` field renders inline `task_card` above buttons |
+| `human_gate` | ✅ Implemented | Gate types: `choice`, `text_input`, `confirm`, `review_object`; `reveal` field renders an inline collapsible `container` above buttons |
 | `condition` | ✅ Implemented | Evaluates `{{expression}}`; routes via `on_truthy`/`on_falsy` bare step keys |
 | `iterator` | ✅ Implemented | Sequential only — one SQS hop per item; inline sequential and gate-suspending item bodies both supported |
 | `serv_schema` | ✅ Implemented | createTable via SERV |
