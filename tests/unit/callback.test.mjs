@@ -192,13 +192,9 @@ function buildRevealBlock(field) {
   };
 }
 
-// ── Faithful copy of summarizeObjectForReview from callback.mjs ─────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:summarizeObjectForReview
-function summarizeObjectForReview(v) {
-  const stringEntries = Object.entries(v).filter(([, val]) => typeof val === 'string' && val.length > 0);
-  if (stringEntries.length === 0) return JSON.stringify(v);
-  return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
-}
+// ── Faithful copy of escapeCell from callback.mjs ────────────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:escapeCell
+const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 // ── Faithful copy of formatColumnHeader from callback.mjs ───────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:formatColumnHeader
@@ -214,7 +210,6 @@ function formatColumnHeader(key, values) {
 // ── Faithful copy of buildListTable from callback.mjs ────────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
 function buildListTable(items) {
-  const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -240,6 +235,23 @@ function buildListTable(items) {
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
   return [...headings, header, sep, ...rows].join('\n');
+}
+
+// ── Faithful copy of buildObjectArrayTable from callback.mjs ────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildObjectArrayTable
+function buildObjectArrayTable(items) {
+  const columns = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    }
+  }
+  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const header = `| ${headerLabels.join(' | ')} |`;
+  const sep    = `|${columns.map(() => '---').join('|')}|`;
+  const rows   = items.map(item => `| ${columns.map(col => escapeCell(item[col])).join(' | ')} |`);
+  return [header, sep, ...rows].join('\n');
 }
 
 // ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
@@ -322,14 +334,31 @@ function dialogToBlocks(dialog, workflowRunId) {
           let valueText;
           if (Array.isArray(item.value)) {
             if (item.value.length === 0) {
-              valueText = '(none)';
+              continue;
             } else if (typeof item.value[0] === 'object') {
-              valueText = '\n' + item.value
-                .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? summarizeObjectForReview(v)}`)
-                .join('\n');
+              const allEmpty = item.value.every(v => Object.keys(v).length === 0);
+              if (allEmpty) {
+                valueText = `${item.value.length} entries _(metadata auto-assigned by DB)_`;
+              } else {
+                const first = JSON.stringify(item.value[0]);
+                const allSame = item.value.every(v => JSON.stringify(v) === first);
+                if (allSame && item.value.length > 3) {
+                  valueText = `${item.value.length}\u00d7 ${first}`;
+                } else if (item.value.every(v => v.syntax || v.verb || v.command)) {
+                  valueText = '\n' + item.value
+                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command}`)
+                    .join('\n');
+                } else {
+                  blocks.push({ type: 'markdown', text: `*${item.key}:*` });
+                  blocks.push(...markdownToBlocks(buildObjectArrayTable(item.value)));
+                  continue;
+                }
+              }
             } else {
               valueText = item.value.join(', ');
             }
+          } else if (item.value !== null && typeof item.value === 'object') {
+            valueText = JSON.stringify(item.value, null, 2);
           } else {
             valueText = String(item.value ?? '');
           }
@@ -961,13 +990,13 @@ describe('dialogToBlocks — review_object', () => {
     assert.equal(block.text.text, '*aliases:* recipes, recipe, cooking');
   });
 
-  it('empty array renders as (none)', () => {
+  it('empty array is skipped entirely — no block produced', () => {
     const field = {
       type:  'review_object',
       items: [{ key: 'commands', value: [] }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.equal(block.text.text, '*commands:* (none)');
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(blocks.length, 0);
   });
 
   it('array of objects with syntax field renders bullet list', () => {
@@ -996,35 +1025,51 @@ describe('dialogToBlocks — review_object', () => {
     assert.ok(block.text.text.includes('run'));
   });
 
-  it('array of objects with neither syntax/verb/command falls back to a readable field summary, not raw JSON', () => {
+  it('array of objects with neither syntax/verb/command renders as a labeled table, not raw JSON', () => {
     // Regression (run 658): flashcard {front, back} pairs and ref-record
-    // proposals fell all the way to JSON.stringify. Now picks the first
-    // 1-2 string-valued fields instead of dumping the raw object.
+    // proposals fell all the way to JSON.stringify. Sprint 7 D-track first
+    // fixed this to an unlabeled "value — value" dash-join, which turned out
+    // to be its own bug (run 663/session 12): with no field labels, a reviewer
+    // has no way to tell which value landed in which field once a record has
+    // more than one field of the same type. Now renders as a real table.
     const field = {
       type:  'review_object',
       items: [{ key: 'steps', value: [{ description: 'Mix ingredients', order: 1 }] }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(block.text.text.includes('Mix ingredients'));
-    assert.ok(!block.text.text.includes('{"description"'), 'must not render raw JSON');
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    const allText = blocks.map(b => (typeof b.text === 'string' ? b.text : b.text?.text) ?? '').join('\n');
+    assert.ok(allText.includes('*steps:*'));
+    assert.ok(allText.includes('Description'));
+    assert.ok(allText.includes('Mix ingredients'));
+    assert.ok(!allText.includes('{"description"'), 'must not render raw JSON');
   });
 
-  it('array of objects with two string fields joins them with an em dash (flashcard front/back shape)', () => {
+  it('array of objects with two string fields renders as a table with labeled columns (flashcard front/back shape)', () => {
+    // Regression (session 12): the prior fix's unlabeled "gato — cat" dash-join
+    // looked backwards even when correctly parsed, because a reviewer cannot
+    // tell front from back without a label — only a table showing "Front"/"Back"
+    // as their own columns resolves the ambiguity.
     const field = {
       type:  'review_object',
       items: [{ key: 'cards', value: [{ front: 'gato', back: 'cat' }] }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(block.text.text.includes('gato — cat'));
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    const allText = blocks.map(b => (typeof b.text === 'string' ? b.text : b.text?.text) ?? '').join('\n');
+    assert.ok(allText.includes('| Front | Back |'));
+    assert.ok(allText.includes('| gato | cat |'));
+    assert.ok(!allText.includes('gato — cat'), 'must not render as an unlabeled dash-join');
   });
 
-  it('array of objects with no string fields at all falls back to JSON.stringify', () => {
+  it('array of objects with no string fields at all renders as a table, not JSON.stringify', () => {
     const field = {
       type:  'review_object',
       items: [{ key: 'stats', value: [{ order: 1, count: 2 }] }],
     };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    assert.ok(block.text.text.includes('{"order":1,"count":2}'));
+    const blocks = dialogToBlocks({ fields: [field] }, 1);
+    const allText = blocks.map(b => (typeof b.text === 'string' ? b.text : b.text?.text) ?? '').join('\n');
+    assert.ok(allText.includes('| Order | Count |'));
+    assert.ok(allText.includes('| 1 | 2 |'));
+    assert.ok(!allText.includes('{"order":1,"count":2}'));
   });
 
   it('plain object (non-array) value is stringified', () => {
