@@ -49,20 +49,19 @@ Unless the change is in **system code** (a genuine engine defect), bug fixes mus
 
 ### Experience Layer vs Procedure Layer Partitioning
 
-The boundary mirrors a REST API behind a React client: the backend decides *what*, the client decides *how* it's shown. There is no web frontend — Slack fills the client role.
+The boundary is about the backend (`/proc`) giving the experience layer sufficient information so content can be rendered in a suitable and pleasant way for the user. There is no web frontend today — Slack fills the experience-layer role — but `/proc` may work with a different experience layer in the future. `/ui/slack` must be given UI-agnostic instructions that it translates into Slack-specific rendering; a different experience layer could do the same from the same instructions.
 
 | Category | Examples |
 |----------|---------|
-| **Procedure layer** (`/proc`) | workflows, `step-executor.mjs`, human_gate step payloads |
+| **Procedure layer** (`/proc`) | workflows, `step-executor.mjs`, `js_transform` content formatting (`formatted_markdown`, report text) |
 | **Experience layer** (`/ui/slack`) | `callback.mjs`, `dialogToBlocks`, Block Kit rendering |
 
 Rules:
-- Procedure layer determines what decision the user must make and what data they need to make it — passed through in its native JSON shape (e.g. raw `serv_query` rows), never pre-formatted into display strings.
-- Experience layer determines how a decision is rendered: block types, text vs. buttons vs. collapsible reveals, layout.
-- **Never render inside a workflow step or prompt** — no choosing block/button/reveal layout, no formatting display strings. That belongs in `/ui/slack`.
-- **One structural difference from the REST/React model:** there is no independent client issuing requests on its own initiative, so `/proc` also owns the sequencing of what happens next.
-- **Exception — Novia:** talks to the user directly, outside the human_gate rendering path. Its own markdown formatting is acceptable procedure-layer output.
-- **Exception — generated reports:** a workflow built to produce a specific report for the user may format that report's content directly, presented via a human_gate.
+- Procedure layer determines what decision the user must make and what data they need. For system workflow artifacts (e.g. `list_entity`, `add_entity`), the domain/schema knowledge required — labels, enum-driven formatting, currency, length-based reveal/no-reveal thresholds — should be handled deterministically via `js_transform`.
+- For domain-specific workflows, formatted content is acceptable and encouraged (`formatted_markdown`, for example); raw data should not be left for the experience layer to interpret and format.
+- Experience layer determines Slack-specific rendering mechanics: which block type wraps a piece of content, button/list/modal assembly, layout, ordering.
+- **Never put domain vocabulary in `/ui/slack`.** If a rendering decision requires knowing what a field means or what a value implies, that decision belongs in a workflow step, not the shared renderer.
+- Novia's direct markdown output to the user, and workflow-generated reports formatted for a human_gate, are both instances of the rule above, not exceptions to it — the domain knowledge needed to format them lives in `/proc`.
 
 ### Fault Domain Triage
 
