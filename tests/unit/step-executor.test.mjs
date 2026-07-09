@@ -540,7 +540,7 @@ describe('get_entity step 12 — deterministic formatter (replaces format_entity
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.match(result.formatted_markdown, /Spanish Vocabulary \(id: 3\)/);
-    assert.match(result.formatted_markdown, /\*card_count:\* 2/);
+    assert.match(result.formatted_markdown, /\*Card Count:\* 2/);
     assert.equal(result.reveals.length, 0);
   });
 
@@ -568,7 +568,7 @@ describe('get_entity step 12 — deterministic formatter (replaces format_entity
       },
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
-    assert.match(result.formatted_markdown, /### cards/);
+    assert.match(result.formatted_markdown, /## cards/);
     assert.equal(result.reveals.length, 0);
   });
 });
@@ -794,7 +794,7 @@ describe('list_entity step 51 — deterministic leaf formatter (same contract as
     };
     const result = runSandboxedExpression(step.expression, null, localState, 'test');
     assert.match(result.formatted_markdown, /PGD_Child \(id: 20\)/, 'falls back to entity_name when the record has no title/name field');
-    assert.match(result.formatted_markdown, /\*front_text:\* hola/);
+    assert.match(result.formatted_markdown, /\*Front Text:\* hola/);
     assert.equal(result.reveals.length, 0);
   });
 });
