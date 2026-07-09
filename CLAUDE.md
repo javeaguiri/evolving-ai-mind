@@ -47,11 +47,22 @@ This principle extends to all system code boundaries: `step-executor.mjs`, `temp
 
 Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
 
-### Experience Layer vs Procedure Layer Partitioning 
+### Experience Layer vs Procedure Layer Partitioning
 
-The rendering of dialogue text, text fields, buttons, use of colapsible features whenever possible is to be performed in the experience layer, /ui/slack, code. The intended framework we are trying to emulate is like json rest services (the /proc layer) providing json frameworks like React to render a view, dialog, modals etc. 
-Obvious limitations exist since our current system is driven by workflows and /proc-based artifacts instead of the flow and request for data being driven by user interactions from the ui layer. However, as much as possible, how a dialog or human-gate is rendered needs to be deterministically driven by the experience layer. Proc layer should determine what decisions are needed by the user and the data the user needs to make this decision (and kept in the original json form from a serv_query, for example) and how the information is presented and manner in which the user is to enter or select options should be determined in the experience layer.
-However since /Novia is interacting directly with the user, it formatting using markdown is acceptable. As well if a workflows is being created to generate a particular report for the user, it should format the report using a appropriate human-gate. 
+The boundary mirrors a REST API behind a React client: the backend decides *what*, the client decides *how* it's shown. There is no web frontend — Slack fills the client role.
+
+| Category | Examples |
+|----------|---------|
+| **Procedure layer** (`/proc`) | workflows, `step-executor.mjs`, human_gate step payloads |
+| **Experience layer** (`/ui/slack`) | `callback.mjs`, `dialogToBlocks`, Block Kit rendering |
+
+Rules:
+- Procedure layer determines what decision the user must make and what data they need to make it — passed through in its native JSON shape (e.g. raw `serv_query` rows), never pre-formatted into display strings.
+- Experience layer determines how a decision is rendered: block types, text vs. buttons vs. collapsible reveals, layout.
+- **Never render inside a workflow step or prompt** — no choosing block/button/reveal layout, no formatting display strings. That belongs in `/ui/slack`.
+- **One structural difference from the REST/React model:** there is no independent client issuing requests on its own initiative, so `/proc` also owns the sequencing of what happens next.
+- **Exception — Novia:** talks to the user directly, outside the human_gate rendering path. Its own markdown formatting is acceptable procedure-layer output.
+- **Exception — generated reports:** a workflow built to produce a specific report for the user may format that report's content directly, presented via a human_gate.
 
 ### Fault Domain Triage
 
