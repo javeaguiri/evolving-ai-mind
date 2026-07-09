@@ -53,7 +53,7 @@
             },
             {
               "step_type": "human_gate",
-              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in the input field), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single reveal panel shown inline above the gate buttons — { button_label, content }. reveals: array version — one reveal panel per entry; supports inline array or {{template}} reference to local_state array.",
+              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in the input field), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single reveal panel shown inline above the gate buttons — { button_label, content }, content supports standard markdown formatting. reveals: array version — one reveal panel per entry; supports inline array or {{template}} reference to local_state array.",
               "input_contract": [
                 {
                   "type": "string",
@@ -113,13 +113,13 @@
                   "type": "object",
                   "field": "reveal",
                   "required": false,
-                  "description": "Optional single reveal panel shown inline above the gate buttons. Shape: { button_label: string, content: string }. Does NOT advance the workflow. content supports {{template}} substitution. Use reveals (array) when the number of panels is determined at runtime."
+                  "description": "Optional single reveal panel shown inline above the gate buttons. Shape: { button_label: string, content: string }. Does NOT advance the workflow. content supports {{template}} substitution and standard markdown formatting. Use reveals (array) when the number of panels is determined at runtime."
                 },
                 {
                   "type": "array_or_string",
                   "field": "reveals",
                   "required": false,
-                  "description": "Array version of reveal — one reveal panel per entry. Each entry: { button_label: string, content: string }. Supports inline array or {{template}} reference to a local_state array. Use when the number of panels is determined at runtime (e.g. one panel per table)."
+                  "description": "Array version of reveal — one reveal panel per entry. Each entry: { button_label: string, content: string }; content supports standard markdown formatting. Supports inline array or {{template}} reference to a local_state array. Use when the number of panels is determined at runtime (e.g. one panel per table)."
                 }
               ],
               "output_contract": null,
@@ -1317,6 +1317,6 @@
       "design_workflow_dialogs"
     ],
     "version": 5,
-    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n- [ ] task item / - [x] completed task item\n> blockquote\n```\ncode block\n```\n---  (horizontal rule -- use as a section divider)\n# Heading 1  ## Heading 2  ### Heading 3 (all heading levels render at the same visual size -- use bold text within or instead of a heading when visual size hierarchy matters, not for the heading syntax to \"work\")\n\nMarkdown tables are supported (standard `| col | col |` syntax) -- prefer them over manually-aligned plain-text columns for tabular data.\n\nThis list is not exhaustive and other standard markdown conventions apply. Always use double-asterisk **bold** (never single-asterisk *bold*). Images are not embedded -- avoid image markdown."
+    "content": "Any text intended for display to the user -- a notify step's message_template, a human_gate step's message_template / typography / description_list content, or an assistant's own reply -- should use standard markdown syntax:\n\n**bold**  _italic_  ~~strikethrough~~  `inline code`  **_bold italic_**\n[link text](url)\n- Bulleted list item\n1. Numbered list item\n- [ ] task item / - [x] completed task item\n> blockquote\n```\ncode block\n```\n---  (horizontal rule -- use as a section divider)\n# Heading 1  ## Heading 2  ### Heading 3 (all heading levels render at the same visual size -- use bold text within or instead of a heading when visual size hierarchy matters, not for the heading syntax to \"work\")\n\nMarkdown tables are supported (standard `| col | col |` syntax) -- prefer them over manually-aligned plain-text columns for tabular data.\n\nThis list is not exhaustive and other standard markdown conventions apply. Always use double-asterisk **bold** (never single-asterisk *bold*). Images are not embedded -- avoid image markdown.\n\nException -- a human_gate or notify step's reveal/reveals content renders via Slack's classic mrkdwn (not the markdown block type above), so its syntax differs: use SINGLE-asterisk *bold* (not double-asterisk), single-underscore _italic_, single-tilde ~strikethrough~, inline code, and <url|text> links. Tables, distinct heading sizes (#-######), and task-list checkboxes are NOT supported in reveal/reveals content -- keep it to short bold/italic emphasis and plain lines."
   }
 ]

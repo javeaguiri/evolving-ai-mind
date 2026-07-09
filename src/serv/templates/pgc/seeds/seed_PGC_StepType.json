@@ -128,7 +128,7 @@
   },
   {
     "step_type": "human_gate",
-    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button \u2014 output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in the input field \u2014 output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines \u2014 output_key written with selected value; when a choice option carries a modal descriptor, the typed modal text is written to the option's own output_key if declared, or to the step-level output_key if not), followup_prompt (shows a message with an \"Ask follow-up\" button that opens a free-text modal \u2014 no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only \u2014 never in description lists \u2014 and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to toggle content visibility within the same gate. Optional reveals field: array version of reveal \u2014 one reveal panel per entry (e.g. one per table). Each entry is { button_label, content }. Supports an inline array or a {{template}} reference to a local_state array.",
+    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button \u2014 output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in the input field \u2014 output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines \u2014 output_key written with selected value; when a choice option carries a modal descriptor, the typed modal text is written to the option's own output_key if declared, or to the step-level output_key if not), followup_prompt (shows a message with an \"Ask follow-up\" button that opens a free-text modal \u2014 no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only \u2014 never in description lists \u2014 and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to toggle content visibility within the same gate \u2014 content supports standard markdown formatting. Optional reveals field: array version of reveal \u2014 one reveal panel per entry (e.g. one per table). Each entry is { button_label, content }. Supports an inline array or a {{template}} reference to a local_state array.",
     "input_contract": [
       {
         "type": "string",
@@ -194,13 +194,13 @@
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string }. content supports {{template}} substitution. Both button_label and content must be non-empty strings. Use reveals (array) instead when the number of panels is determined at runtime."
+        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string }. content supports {{template}} substitution and standard markdown formatting (see markdown_formatting_syntax). Both button_label and content must be non-empty strings. Use reveals (array) instead when the number of panels is determined at runtime."
       },
       {
         "type": "array_or_string",
         "field": "reveals",
         "required": false,
-        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string }. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
+        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string }; content supports standard markdown formatting. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
       }
     ],
     "output_contract": null,
@@ -877,13 +877,13 @@
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional collapsible panel attached below the message content \u2014 e.g. a large child-record list on an entity display notify. Shape: { button_label: string, content: string }. content supports {{template}} substitution and may resolve to an array (rendered as a bulleted list). Use reveals (array) instead when the number of panels is determined at runtime."
+        "description": "Optional collapsible panel attached below the message content \u2014 e.g. a large child-record list on an entity display notify. Shape: { button_label: string, content: string }. content supports {{template}} substitution, standard markdown formatting, and may resolve to an array (rendered as a bulleted list). Use reveals (array) instead when the number of panels is determined at runtime."
       },
       {
         "type": "array_or_string",
         "field": "reveals",
         "required": false,
-        "description": "Array version of reveal \u2014 renders one panel per entry. Each entry is { button_label: string, content: string }. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects."
+        "description": "Array version of reveal \u2014 renders one panel per entry. Each entry is { button_label: string, content: string }; content supports standard markdown formatting. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects."
       }
     ],
     "output_contract": null,
