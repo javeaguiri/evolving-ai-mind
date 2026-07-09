@@ -160,6 +160,39 @@ const TABLE_MAX_ROWS            = 100;
 const TABLE_MAX_COLUMNS         = 20;
 const TABLE_MAX_CHARS           = 10000;
 
+// ── Faithful copy of buildTableBlock from callback.mjs ──────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildTableBlock
+function buildTableBlock(headerLabels, dataRows) {
+  const cols = headerLabels.slice(0, TABLE_MAX_COLUMNS);
+  const cell = (v, bold) => {
+    const text = String(v ?? '').replace(/\r?\n/g, ' ');
+    return {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_section',
+        elements: [{ type: 'text', text, ...(bold ? { style: { bold: true } } : {}) }],
+      }],
+    };
+  };
+  const cellText = c => c.elements[0].elements[0].text;
+
+  const rows = [cols.map(h => cell(h, true))];
+  let charCount = cols.reduce((sum, h) => sum + String(h ?? '').length, 0);
+  let truncated = 0;
+  for (const rowValues of dataRows) {
+    const rowCells = rowValues.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
+    const rowChars = rowCells.reduce((sum, c) => sum + cellText(c).length, 0);
+    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
+      truncated++;
+      continue;
+    }
+    rows.push(rowCells);
+    charCount += rowChars;
+  }
+
+  return { table: { type: 'table', rows }, truncated };
+}
+
 // ── Faithful copy of buildRevealTable from callback.mjs ─────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildRevealTable
 function buildRevealTable(items) {
@@ -170,25 +203,70 @@ function buildRevealTable(items) {
       if (!seen.has(key)) { seen.add(key); columns.push(key); }
     }
   }
-  const tableColumns = columns.slice(0, TABLE_MAX_COLUMNS);
-  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(it => it[col])));
-  const cell = v => ({ type: 'raw_text', text: String(v ?? '').replace(/\r?\n/g, ' ') });
+  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const dataRows = items.map(item => columns.map(col => item[col]));
+  return buildTableBlock(headerLabels, dataRows);
+}
 
-  const rows = [headerLabels.map(cell)];
-  let charCount = headerLabels.reduce((sum, h) => sum + h.length, 0);
-  let truncated = 0;
-  for (const item of items) {
-    const rowCells = tableColumns.map(col => cell(item[col]));
-    const rowChars = rowCells.reduce((sum, c) => sum + c.text.length, 0);
-    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
-      truncated++;
-      continue;
+// ── Faithful copy of splitMarkdownTableSegments from callback.mjs ───────────
+// Keep in sync with src/ui/slackbot/callback.mjs:splitMarkdownTableSegments
+function splitMarkdownTableSegments(text) {
+  const lines = text.split('\n');
+  const isRow       = l => /^\s*\|.*\|\s*$/.test(l);
+  const isSeparator = l => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(l);
+  const splitRow    = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+
+  const segments = [];
+  let textLines = [];
+  const flushText = () => {
+    if (textLines.length) segments.push({ type: 'text', text: textLines.join('\n') });
+    textLines = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    if (isRow(lines[i]) && isSeparator(lines[i + 1] ?? '')) {
+      flushText();
+      const header = splitRow(lines[i]);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && isRow(lines[i])) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      segments.push({ type: 'table', header, rows });
+    } else {
+      textLines.push(lines[i]);
+      i++;
     }
-    rows.push(rowCells);
-    charCount += rowChars;
   }
+  flushText();
+  return segments;
+}
 
-  return { table: { type: 'table', rows }, truncated };
+// ── Faithful copy of chunkTextBlocks from callback.mjs ──────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:chunkTextBlocks
+function chunkTextBlocks(text) {
+  const lines = text ? text.split('\n') : [];
+  const chunks = [];
+  let chunk = '';
+  for (const line of lines) {
+    const candidate = chunk ? `${chunk}\n${line}` : line;
+    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+      chunks.push(chunk);
+      chunk = line;
+    } else {
+      chunk = candidate;
+    }
+  }
+  if (chunk) chunks.push(chunk);
+
+  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+  if (truncatedCount > 0 && kept.length > 0) {
+    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  }
+  return kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } }));
 }
 
 function buildRevealBlock(field) {
@@ -204,31 +282,22 @@ function buildRevealBlock(field) {
     if (truncated > 0) {
       childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
     }
+  } else if (Array.isArray(field.content)) {
+    const text = field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n');
+    childBlocks.push(...chunkTextBlocks(text));
   } else {
-    const text = Array.isArray(field.content)
-      ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n')
-      : String(field.content ?? '');
-
-    const lines = text ? text.split('\n') : [];
-    const chunks = [];
-    let chunk = '';
-    for (const line of lines) {
-      const candidate = chunk ? `${chunk}\n${line}` : line;
-      if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
-        chunks.push(chunk);
-        chunk = line;
-      } else {
-        chunk = candidate;
+    const segments = splitMarkdownTableSegments(String(field.content ?? ''));
+    for (const seg of segments) {
+      if (seg.type === 'table') {
+        const { table, truncated } = buildTableBlock(seg.header, seg.rows);
+        childBlocks.push(table);
+        if (truncated > 0) {
+          childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
+        }
+      } else if (seg.text.trim()) {
+        childBlocks.push(...chunkTextBlocks(seg.text));
       }
     }
-    if (chunk) chunks.push(chunk);
-
-    const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
-    const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
-    if (truncatedCount > 0 && kept.length > 0) {
-      kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
-    }
-    childBlocks.push(...kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })));
   }
 
   return {
@@ -962,10 +1031,12 @@ describe('dialogToBlocks — reveal', () => {
     };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
     const table = block.child_blocks[0];
+    const cellText = c => c.elements[0].elements[0].text;
     assert.equal(table.type, 'table');
-    assert.equal(table.rows[0].map(c => c.text).join('|'), 'Category Id|Planned Amount');
-    assert.equal(table.rows[1].map(c => c.text).join('|'), '1|3300');
-    assert.equal(table.rows[2].map(c => c.text).join('|'), '2|450');
+    assert.equal(table.rows[0].map(cellText).join('|'), 'Category Id|Planned Amount');
+    assert.equal(table.rows[0][0].elements[0].elements[0].style.bold, true);
+    assert.equal(table.rows[1].map(cellText).join('|'), '1|3300');
+    assert.equal(table.rows[2].map(cellText).join('|'), '2|450');
   });
 
   it('array of objects uniformly shaped with syntax/verb/command still renders as bullets', () => {
@@ -993,6 +1064,47 @@ describe('dialogToBlocks — reveal', () => {
     const field = { type: 'reveal', button_label: 'Info', content: 'Just a note' };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
     assert.equal(block.child_blocks[0].text.text, 'Just a note');
+  });
+
+  it('a markdown pipe-table string (js_transform-built, no surrounding text) renders as a native table, not literal pipes', () => {
+    // Regression: flashcard_quiz_session step 2's js_transform builds deck_reveals
+    // content as a plain string ("| Deck | Cards | Due | Last Review |\n|---|...|\n| ... |"),
+    // not an array of records — the isRecordArray branch never saw it, so it fell
+    // through to the mrkdwn section path and rendered the pipe syntax literally.
+    const content = '| Deck | Cards | Due | Last Review |\n|------|-------|-----|-------------|\n| Colors | 12 | 3 | 2026-07-01 |\n| Animals | 8 | 0 | — |';
+    const field = { type: 'reveal', button_label: 'Basic Phrases', content };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const table = block.child_blocks[0];
+    const cellText = c => c.elements[0].elements[0].text;
+    assert.equal(table.type, 'table');
+    assert.equal(table.rows[0].map(cellText).join('|'), 'Deck|Cards|Due|Last Review');
+    assert.equal(table.rows[0][0].elements[0].elements[0].style.bold, true);
+    assert.equal(table.rows[1].map(cellText).join('|'), 'Colors|12|3|2026-07-01');
+    assert.equal(table.rows[2].map(cellText).join('|'), 'Animals|8|0|—');
+    assert.equal(block.child_blocks.length, 1);
+  });
+
+  it('a markdown string mixing prose and a pipe-table renders the prose as separate section text and the table as a native table block', () => {
+    const content = 'Here are the child decks:\n\n| Deck | Cards |\n|---|---|\n| Colors | 12 |\n\nTap a deck to begin.';
+    const field = { type: 'reveal', button_label: 'Child Decks', content };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.child_blocks.length, 3);
+    assert.equal(block.child_blocks[0].type, 'section');
+    assert.equal(block.child_blocks[0].text.text, 'Here are the child decks:\n');
+    assert.equal(block.child_blocks[1].type, 'table');
+    const cellText = c => c.elements[0].elements[0].text;
+    assert.equal(block.child_blocks[1].rows[0].map(cellText).join('|'), 'Deck|Cards');
+    assert.equal(block.child_blocks[1].rows[1].map(cellText).join('|'), 'Colors|12');
+    assert.equal(block.child_blocks[2].type, 'section');
+    assert.equal(block.child_blocks[2].text.text, 'Tap a deck to begin.');
+  });
+
+  it('string content with no pipe-table renders exactly as before (no false-positive table detection)', () => {
+    const field = { type: 'reveal', button_label: 'Info', content: '_No child decks_' };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.child_blocks.length, 1);
+    assert.equal(block.child_blocks[0].type, 'section');
+    assert.equal(block.child_blocks[0].text.text, '_No child decks_');
   });
 });
 
