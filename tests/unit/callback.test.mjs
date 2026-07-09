@@ -156,30 +156,79 @@ function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
 // Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
 const REVEAL_SECTION_CHAR_LIMIT = 2800;
 const REVEAL_MAX_CHILD_BLOCKS   = 10;
+const TABLE_MAX_ROWS            = 100;
+const TABLE_MAX_COLUMNS         = 20;
+const TABLE_MAX_CHARS           = 10000;
 
-function buildRevealBlock(field) {
-  const text = Array.isArray(field.content)
-    ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)}`).join('\n')
-    : String(field.content ?? '');
-
-  const lines = text ? text.split('\n') : [];
-  const chunks = [];
-  let chunk = '';
-  for (const line of lines) {
-    const candidate = chunk ? `${chunk}\n${line}` : line;
-    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
-      chunks.push(chunk);
-      chunk = line;
-    } else {
-      chunk = candidate;
+// ── Faithful copy of buildRevealTable from callback.mjs ─────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildRevealTable
+function buildRevealTable(items) {
+  const columns = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
     }
   }
-  if (chunk) chunks.push(chunk);
+  const tableColumns = columns.slice(0, TABLE_MAX_COLUMNS);
+  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const cell = v => ({ type: 'raw_text', text: String(v ?? '').replace(/\r?\n/g, ' ') });
 
-  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
-  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
-  if (truncatedCount > 0 && kept.length > 0) {
-    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  const rows = [headerLabels.map(cell)];
+  let charCount = headerLabels.reduce((sum, h) => sum + h.length, 0);
+  let truncated = 0;
+  for (const item of items) {
+    const rowCells = tableColumns.map(col => cell(item[col]));
+    const rowChars = rowCells.reduce((sum, c) => sum + c.text.length, 0);
+    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
+      truncated++;
+      continue;
+    }
+    rows.push(rowCells);
+    charCount += rowChars;
+  }
+
+  return { table: { type: 'table', rows }, truncated };
+}
+
+function buildRevealBlock(field) {
+  const isRecordArray = Array.isArray(field.content) && field.content.length > 0
+    && field.content.every(v => v !== null && typeof v === 'object')
+    && !field.content.every(v => v.syntax || v.verb || v.command);
+
+  const childBlocks = [];
+
+  if (isRecordArray) {
+    const { table, truncated } = buildRevealTable(field.content);
+    childBlocks.push(table);
+    if (truncated > 0) {
+      childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
+    }
+  } else {
+    const text = Array.isArray(field.content)
+      ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n')
+      : String(field.content ?? '');
+
+    const lines = text ? text.split('\n') : [];
+    const chunks = [];
+    let chunk = '';
+    for (const line of lines) {
+      const candidate = chunk ? `${chunk}\n${line}` : line;
+      if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+        chunks.push(chunk);
+        chunk = line;
+      } else {
+        chunk = candidate;
+      }
+    }
+    if (chunk) chunks.push(chunk);
+
+    const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+    const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+    if (truncatedCount > 0 && kept.length > 0) {
+      kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+    }
+    childBlocks.push(...kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })));
   }
 
   return {
@@ -188,7 +237,7 @@ function buildRevealBlock(field) {
     title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
     is_collapsible:     true,
     default_collapsed:  true,
-    child_blocks:       kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })),
+    child_blocks:       childBlocks,
   };
 }
 
@@ -902,16 +951,42 @@ describe('dialogToBlocks — reveal', () => {
     assert.equal(block.child_blocks[0].text.text, '• Dining Out\n• Subscriptions');
   });
 
-  it('array of objects JSON-stringifies each item instead of [object Object]', () => {
+  it('array of plain records renders as a native table block, not JSON-stringified bullets', () => {
+    // Regression (session 14/Novia session 979): container.child_blocks does not
+    // allow the markdown block type, so a markdown pipe-table can never render
+    // inside a reveal. A native Slack `table` block is the only real grid option.
     const field = {
       type: 'reveal',
       button_label: 'Sample records',
       content: [{ category_id: 1, planned_amount: 3300 }, { category_id: 2, planned_amount: 450 }],
     };
     const [block] = dialogToBlocks({ fields: [field] }, 1);
-    const text = block.child_blocks[0].text.text;
-    assert.ok(!text.includes('[object Object]'));
-    assert.equal(text, '• {"category_id":1,"planned_amount":3300}\n• {"category_id":2,"planned_amount":450}');
+    const table = block.child_blocks[0];
+    assert.equal(table.type, 'table');
+    assert.equal(table.rows[0].map(c => c.text).join('|'), 'Category Id|Planned Amount');
+    assert.equal(table.rows[1].map(c => c.text).join('|'), '1|3300');
+    assert.equal(table.rows[2].map(c => c.text).join('|'), '2|450');
+  });
+
+  it('array of objects uniformly shaped with syntax/verb/command still renders as bullets', () => {
+    const field = {
+      type: 'reveal',
+      button_label: 'Commands',
+      content: [{ syntax: '/m list recipes' }, { syntax: '/m add recipes' }],
+    };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.child_blocks[0].type, 'section');
+    assert.equal(block.child_blocks[0].text.text, '• /m list recipes\n• /m add recipes');
+  });
+
+  it('table row count beyond TABLE_MAX_ROWS is truncated with a trailing note', () => {
+    const content = Array.from({ length: 105 }, (_, i) => ({ id: i }));
+    const field = { type: 'reveal', button_label: 'Big', content };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    const table = block.child_blocks[0];
+    assert.equal(table.type, 'table');
+    assert.equal(table.rows.length, 100); // header + 99 data rows
+    assert.equal(block.child_blocks[1].text.text, '_...and 6 more row(s)_');
   });
 
   it('plain string content renders directly as the container section text', () => {

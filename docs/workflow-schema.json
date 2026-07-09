@@ -317,7 +317,7 @@
           "additionalProperties": false,
           "properties": {
             "button_label": { "type": "string", "description": "Title of the container." },
-            "content":      { "type": "string", "description": "Slack mrkdwn content. Supports {{key}} template substitution." }
+            "content":      { "type": "string", "description": "Template reference (e.g. {{key}}) resolving to a string, array of strings, or array of plain record objects. Strings render via basic mrkdwn; an array of plain records auto-renders as a real Slack table — see docs/slack-block-kit.md." }
           }
         },
         "reveals": {
@@ -649,7 +649,7 @@
           "additionalProperties": false,
           "properties": {
             "button_label": { "type": "string" },
-            "content":      { "type": "string", "description": "Supports {{key}} template substitution." }
+            "content":      { "type": "string", "description": "Template reference (e.g. {{key}}) resolving to a string, array of strings, or array of plain record objects. Strings render via basic mrkdwn; an array of plain records auto-renders as a real Slack table — see docs/slack-block-kit.md." }
           }
         },
         "reveals": {
