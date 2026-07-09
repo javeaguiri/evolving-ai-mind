@@ -47,6 +47,12 @@ This principle extends to all system code boundaries: `step-executor.mjs`, `temp
 
 Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
 
+### Experience Layer vs Procedure Layer Partitioning 
+
+The rendering of dialogue text, text fields, buttons, use of colapsible features whenever possible is to be performed in the experience layer, /ui/slack, code. The intended framework we are trying to emulate is like json rest services (the /proc layer) providing json frameworks like React to render a view, dialog, modals etc. 
+Obvious limitations exist since our current system is driven by workflows and /proc-based artifacts instead of the flow and request for data being driven by user interactions from the ui layer. However, as much as possible, how a dialog or human-gate is rendered needs to be deterministically driven by the experience layer. Proc layer should determine what decisions are needed by the user and the data the user needs to make this decision (and kept in the original json form from a serv_query, for example) and how the information is presented and manner in which the user is to enter or select options should be determined in the experience layer.
+However since /Novia is interacting directly with the user, it formatting using markdown is acceptable. As well if a workflows is being created to generate a particular report for the user, it should format the report using a appropriate human-gate. 
+
 ### Fault Domain Triage
 
 When a bug surfaces, identify the fault domain before reaching for a fix. Fix in that domain only — a fix applied to the wrong domain masks the root cause and creates new bugs.
