@@ -31,6 +31,24 @@ import { randomUUID }                    from 'crypto';
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
+// preservedContentBlocks — drops interactive/action-affordance blocks (buttons,
+// text inputs) from a message's blocks, keeping everything else (section,
+// markdown, context, task_card/reveal). Used on every gate response so
+// chat.update replaces only the stale controls, never the original content —
+// Slack's chat.update has no partial-edit primitive, so preserving anything
+// means resending it explicitly (Sprint 7 Track D4).
+function preservedContentBlocks(blocks) {
+  return (blocks ?? []).filter(b => b.type !== 'actions' && b.type !== 'input');
+}
+
+// buildPrivateMetadata — JSON-encodes private_metadata, keeping contentBlocks
+// only if the result fits Slack's 3000-char private_metadata limit; drops it
+// rather than risk views.open failing outright on an otherwise-normal modal.
+function buildPrivateMetadata(base, contentBlocks) {
+  const withContent = JSON.stringify({ ...base, contentBlocks });
+  return withContent.length <= 3000 ? withContent : JSON.stringify(base);
+}
+
 export async function handle(req) {
   if (req.method !== 'POST') {
     return err(405, 'Method not allowed — interactive expects POST', req.correlationId);
@@ -156,7 +174,10 @@ export async function handle(req) {
             type:             'modal',
             callback_id:      'text_input_gate',
             notify_on_close:  true,
-            private_metadata: JSON.stringify({ workflowRunId, userResponse, traceId, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } }),
+            private_metadata: buildPrivateMetadata(
+              { workflowRunId, userResponse, traceId, modalTitle: modal.title, callback: { provider: 'slack', channel, threadId } },
+              preservedContentBlocks(payload.message?.blocks),
+            ),
             title:   { type: 'plain_text', text: modal.title ?? 'Input' },
             submit:  { type: 'plain_text', text: 'Submit' },
             close:   { type: 'plain_text', text: 'Cancel' },
@@ -290,11 +311,14 @@ export async function handle(req) {
     return { statusCode: 200, body: '' };
   }
 
-  // Replace the gate message with a confirmation to clear stale buttons.
+  // Update the gate message to clear stale buttons, keeping the original content —
   // chat.update is used directly — response_url is null for most channel message
   // interactions in practice, and chat.update works for all non-input-block gate
   // types (confirm, choice). text_input gates are handled above and never reach here.
-  const confirmationBlocks = [{ type: 'section', text: { type: 'mrkdwn', text: confirmationText } }];
+  const confirmationBlocks = [
+    ...preservedContentBlocks(payload.message?.blocks),
+    { type: 'context', elements: [{ type: 'mrkdwn', text: confirmationText }] },
+  ];
   if (threadId && channel) {
     try {
       await slack.chat.update({
@@ -356,7 +380,10 @@ async function handleExplainFollowupButton(buttonValue, payload, correlationId) 
           type:             'modal',
           callback_id:      'explain_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId, source: 'followup', originalText: payload.message?.text ?? '' }),
+          private_metadata: buildPrivateMetadata(
+            { queryId, channel, threadTs, traceId, source: 'followup', originalText: payload.message?.text ?? '' },
+            preservedContentBlocks(payload.message?.blocks),
+          ),
           title:  { type: 'plain_text', text: 'Ask a follow-up' },
           submit: { type: 'plain_text', text: 'Ask' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -415,7 +442,10 @@ async function handleExplainStepSelectButton(buttonValue, payload, correlationId
           type:             'modal',
           callback_id:      'explain_followup_modal',
           notify_on_close:  false,
-          private_metadata: JSON.stringify({ queryId, channel, threadTs, traceId, source: 'stepSelect' }),
+          private_metadata: buildPrivateMetadata(
+            { queryId, channel, threadTs, traceId, source: 'stepSelect' },
+            preservedContentBlocks(payload.message?.blocks),
+          ),
           title:  { type: 'plain_text', text: 'Ask about this step' },
           submit: { type: 'plain_text', text: 'Ask' },
           close:  { type: 'plain_text', text: 'Cancel' },
@@ -519,7 +549,10 @@ async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
         channel,
         ts:     threadTs,
         text:   confirmText,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+        blocks: [
+          ...preservedContentBlocks(payload.message?.blocks),
+          { type: 'context', elements: [{ type: 'mrkdwn', text: confirmText }] },
+        ],
       });
     } catch (error) {
       console.warn('interactive: minds_eye_action_gate chat.update failed (non-fatal)', { error: error.message, traceId });
@@ -570,7 +603,10 @@ async function handleMindsEyeContinueGate(buttonValue, payload, correlationId) {
         channel,
         ts:     threadTs,
         text:   confirmText,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+        blocks: [
+          ...preservedContentBlocks(payload.message?.blocks),
+          { type: 'context', elements: [{ type: 'mrkdwn', text: confirmText }] },
+        ],
       });
     } catch (error) {
       console.warn('interactive: minds_eye_continue_gate chat.update failed (non-fatal)', { error: error.message, traceId });
@@ -751,7 +787,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(400, 'Invalid private_metadata', correlationId);
   }
 
-  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback } = meta;
+  const { workflowRunId, userResponse: modalUserResponse, traceId: metaTraceId, modalTitle, callback, contentBlocks } = meta;
   if (!workflowRunId || !callback) {
     console.warn('interactive: view_submission missing workflowRunId or callback', { meta, traceId });
     return err(400, 'view_submission private_metadata must contain workflowRunId and callback', correlationId);
@@ -793,7 +829,7 @@ async function handleViewSubmission(payload, correlationId) {
     return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
   }
 
-  // Replace the gate message with a confirmation to clear stale buttons.
+  // Update the gate message to clear stale buttons, keeping the original content.
   const confirmText = `📝 ${modalTitle ?? 'Input'} — submitted.`;
   if (callback.channel && callback.threadId) {
     try {
@@ -801,7 +837,10 @@ async function handleViewSubmission(payload, correlationId) {
         channel: callback.channel,
         ts:      callback.threadId,
         text:    confirmText,
-        blocks:  [{ type: 'section', text: { type: 'mrkdwn', text: confirmText } }],
+        blocks:  [
+          ...(contentBlocks ?? []),
+          { type: 'context', elements: [{ type: 'mrkdwn', text: confirmText }] },
+        ],
       });
     } catch (updateErr) {
       console.warn('interactive: view_submission chat.update failed (non-fatal)', { error: updateErr.message, traceId });
@@ -826,7 +865,7 @@ async function handleExplainViewSubmission(payload, traceId) {
     return err(400, 'Invalid private_metadata', traceId);
   }
 
-  const { queryId, channel, threadTs, source, originalText, traceId: metaTraceId } = meta;
+  const { queryId, channel, threadTs, source, originalText, traceId: metaTraceId, contentBlocks } = meta;
   if (!queryId || !channel) {
     console.warn('interactive: explain_followup_modal missing queryId or channel', { meta, traceId });
     return err(400, 'explain_followup_modal private_metadata must contain queryId and channel', traceId);
@@ -858,7 +897,10 @@ async function handleExplainViewSubmission(payload, traceId) {
         channel,
         ts:     threadTs,
         text:   disableText,
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: disableText } }],
+        blocks: [
+          ...(contentBlocks ?? []),
+          { type: 'context', elements: [{ type: 'mrkdwn', text: disableText }] },
+        ],
       });
     } catch (error) {
       console.warn('interactive: explain_followup_modal chat.update failed (non-fatal)', { error: error.message, traceId });
