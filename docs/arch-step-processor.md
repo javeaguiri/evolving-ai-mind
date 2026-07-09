@@ -333,7 +333,7 @@ Step Processor receives resume_gate
 | `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
 | `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
 | `text_input` | Type free text in an inline Slack input block, click Submit | Value written to `local_state[output_key]` on submit. Set `multiline: true` on the step for a multi-line text area. |
-| `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs |
+| `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs. An array value whose items are plain records with no recognized single-field shape (no `syntax`/`verb`/`command`) renders as a markdown table with one data-driven column per distinct record key, labeled via the same `formatColumnHeader` logic `list_selection` uses — not an unlabeled positional join |
 | `choice` | Read a question, view labelled options with descriptions, click A/B/C | Options carry `{ value, label, description, on_select }`. `value` written to `local_state[output_key]` on resolve. Mirrors HTML radio button semantics — `value` is submitted, `label` is the button text, `description` is the explanatory sentence shown above buttons |
 | `select_one` | Pick one item from a list | Backlog — `buildDialog` stub exists but `context_key` only accepts flat entity lists. Use `choice` for options with descriptions |
 | `select_many` | Pick zero or more items | Backlog |

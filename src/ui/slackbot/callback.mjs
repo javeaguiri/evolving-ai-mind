@@ -692,15 +692,9 @@ function buildRevealBlock(field) {
   };
 }
 
-// Deterministic one-line summary for an object inside a review_object array
-// value, used when the object doesn't match a known field shape. Picks the
-// first 1-2 string-valued properties rather than dumping raw JSON — no LLM
-// call, no domain knowledge, just "show something a human can read."
-function summarizeObjectForReview(v) {
-  const stringEntries = Object.entries(v).filter(([, val]) => typeof val === 'string' && val.length > 0);
-  if (stringEntries.length === 0) return JSON.stringify(v);
-  return stringEntries.slice(0, 2).map(([, val]) => val).join(' — ');
-}
+// escapeCell — shared markdown-table cell escaping (pipe/newline), used by
+// both buildListTable and buildObjectArrayTable.
+const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 // formatColumnHeader — pure presentation, no domain knowledge: title-cases a
 // snake_case field name (ease_factor -> Ease Factor, front -> Front). A key
@@ -737,7 +731,6 @@ function formatColumnHeader(key, values) {
 // parent) — repeating it in every row is pure noise, so it's hoisted above the
 // table as its own heading line instead of becoming a column.
 function buildListTable(items) {
-  const escapeCell = v => String(v ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -772,6 +765,30 @@ function buildListTable(items) {
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
   return [...headings, header, sep, ...rows].join('\n');
+}
+
+// buildObjectArrayTable — markdown table for a review_object array-of-records
+// value with no recognized single-field shape (e.g. add_entity's parsed child
+// rows — flashcard {front, back} pairs, recipe {description, order} steps).
+// Replaces an anonymous positional "value — value" join, which is unverifiable
+// once a record has more than one field of the same type: a user reviewing a
+// {front, back} pair has no way to tell which value landed in which field from
+// an unlabeled dash-join alone. Columns are the union of every item's own keys,
+// in first-seen order — same data-driven, no-domain-knowledge approach as
+// buildListTable.
+function buildObjectArrayTable(items) {
+  const columns = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    }
+  }
+  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const header = `| ${headerLabels.join(' | ')} |`;
+  const sep    = `|${columns.map(() => '---').join('|')}|`;
+  const rows   = items.map(item => `| ${columns.map(col => escapeCell(item[col])).join(' | ')} |`);
+  return [header, sep, ...rows].join('\n');
 }
 
 function dialogToBlocks(dialog, workflowRunId) {
@@ -876,10 +893,17 @@ function dialogToBlocks(dialog, workflowRunId) {
                 const allSame = item.value.every(v => JSON.stringify(v) === first);
                 if (allSame && item.value.length > 3) {
                   valueText = `${item.value.length}\u00d7 ${first}`;
-                } else {
+                } else if (item.value.every(v => v.syntax || v.verb || v.command)) {
                   valueText = '\n' + item.value
-                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command ?? summarizeObjectForReview(v)}`)
+                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command}`)
                     .join('\n');
+                } else {
+                  // No recognized single-field shape (e.g. add_entity's parsed
+                  // child records) \u2014 render as a labeled table instead of an
+                  // anonymous positional value list. See buildObjectArrayTable.
+                  blocks.push({ type: 'markdown', text: `*${item.key}:*` });
+                  blocks.push(...markdownToBlocks(buildObjectArrayTable(item.value)));
+                  continue;
                 }
               }
             } else {
