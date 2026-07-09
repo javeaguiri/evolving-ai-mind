@@ -735,12 +735,21 @@ function buildListTable(items) {
     }
   }
 
-  const constantColumns = items.length > 1 ? columns.filter(col => {
+  let constantColumns = items.length > 1 ? columns.filter(col => {
     if (col === 'ID') return false;
     if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
     const first = items[0].fields[col];
     return items.every(item => item.fields[col] === first);
   }) : [];
+  // Hoist at most one column into the heading — stacking every incidentally-constant
+  // column as its own '# ' line (e.g. a coincidentally-shared data value alongside the
+  // parent name) reads as a broken multi-line title. Prefer the FK-resolved column
+  // (the parent/context this list belongs to); anything else stays a normal column.
+  if (constantColumns.length > 1) {
+    const fkResolved = constantColumns.find(col => /_id$/i.test(col)
+      && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
+    constantColumns = [fkResolved ?? constantColumns[0]];
+  }
   const headings = constantColumns.map(col => `# ${items[0].fields[col]}`);
   const tableColumns = columns.filter(col => !constantColumns.includes(col));
 
