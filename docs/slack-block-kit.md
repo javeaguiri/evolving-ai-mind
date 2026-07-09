@@ -1039,13 +1039,22 @@ syntax, which neither `mrkdwn` nor `container.child_blocks` can render (see `con
 `container` — the top-level `markdown` block type, which does support markdown tables, is
 explicitly excluded from `container.child_blocks`.
 
-**Usage in evolving-mind-ai:** `buildRevealBlock()` (`callback.mjs`) renders a `reveal`/`reveals`
-field's `content` as a `table` block via `buildRevealTable()` whenever `content` is an array of
-plain record objects (no `syntax`/`verb`/`command` field — that shape still renders as bullets).
-Columns are the union of every item's own keys, first-seen order, labeled via the same
-`formatColumnHeader()` used by `list_selection`'s markdown table (see "list gate rendering"
-below) — same data-driven, no-domain-knowledge approach, just a different Block Kit primitive
-because the surrounding block type differs.
+**Usage in evolving-mind-ai:** `buildRevealBlock()` (`callback.mjs`) renders a `table` block via
+`buildTableBlock()` for two distinct `reveal`/`reveals` `content` shapes:
+- an array of plain record objects (no `syntax`/`verb`/`command` field — that shape still renders
+  as bullets) — via `buildRevealTable()`, columns are the union of every item's own keys,
+  first-seen order, labeled via the same `formatColumnHeader()` used by `list_selection`'s
+  markdown table (see "list gate rendering" below);
+- a **string** containing a markdown pipe-table (e.g. a js_transform building
+  `"| Deck | Cards |\n|---|---|\n| ... |"` directly, common before this capability existed) — via
+  `splitMarkdownTableSegments()`, which parses the string into alternating text/table segments so
+  the table renders natively while any surrounding prose stays as ordinary `section`/`mrkdwn`
+  blocks, chunked by `chunkTextBlocks()`. This split is specific to reveal panels — markdown
+  tables in a top-level `markdown` block (`list_selection`, prose responses) already render
+  correctly as-is and need no such parsing.
+
+Both paths share `buildTableBlock()` for the actual `table` block construction, just a different
+Block Kit primitive because the surrounding block type differs from other markdown contexts.
 
 #### Fields
 
@@ -1057,8 +1066,10 @@ because the surrounding block type differs.
 | `block_id` | string | No | Max 255 characters |
 
 **Cell types:** `raw_text` (`{ type: "raw_text", text }`), `raw_number`, or `rich_text` (full
-rich-text formatting — bold, emoji, mentions, links). `buildRevealTable()` uses `raw_text` only —
-reveal data is plain values, no rich formatting requirement.
+rich-text formatting — bold, emoji, mentions, links). **`raw_text` cells do not render as a grid
+— confirmed live 2026-07-09: Slack falls back to a flattened, pipe-joined text representation.**
+`buildRevealTable()` uses `rich_text` cells (one `rich_text_section` wrapping one `text` element),
+with `style: { bold: true }` on header-row cells.
 
 **Limits:** 100 rows, 20 columns, and an aggregate **10,000 characters** across all cell text in
 one table. `buildRevealTable()` enforces the row and character limits (whichever is hit first),
@@ -1078,16 +1089,25 @@ silently dropped.
     {
       "type": "table",
       "rows": [
-        [ { "type": "raw_text", "text": "Title" }, { "type": "raw_text", "text": "Card Count" }, { "type": "raw_text", "text": "Due Count" } ],
-        [ { "type": "raw_text", "text": "Spanish Vocabulary" }, { "type": "raw_text", "text": "42" }, { "type": "raw_text", "text": "5" } ]
+        [
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Title", "style": { "bold": true } }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Card Count", "style": { "bold": true } }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Due Count", "style": { "bold": true } }] }] }
+        ],
+        [
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "Spanish Vocabulary" }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "42" }] }] },
+          { "type": "rich_text", "elements": [{ "type": "rich_text_section", "elements": [{ "type": "text", "text": "5" }] }] }
+        ]
       ]
     }
   ]
 }
 ```
 
-**Not yet independently live-verified in evolving-mind-ai** — implemented from the official
-reference; same "verify live before fully trusting" caveat this doc applies to `carousel`.
+**Live-verified in evolving-mind-ai (2026-07-09)** — the `raw_text` cell variant tried first did
+not render as a grid (fell back to flattened pipe-joined text); `rich_text` cells confirmed
+working against a real Slack workspace.
 
 ### `carousel`
 

@@ -660,33 +660,36 @@ const TABLE_MAX_ROWS            = 100;   // Slack `table` block hard limit, incl
 const TABLE_MAX_COLUMNS         = 20;    // Slack `table` block hard limit
 const TABLE_MAX_CHARS           = 10000; // Slack `table` block hard limit — aggregate cell text
 
-// buildRevealTable — native Slack `table` block (rows of { type: 'raw_text' }
-// cells, not markdown syntax) for reveal content shaped as an array of plain
-// records. container.child_blocks explicitly excludes the `markdown` block type
-// (verified against Slack's own docs — see docs/slack-block-kit.md), so a
-// markdown pipe-table can never render inside a reveal; `table` is the only
-// real grid-rendering option available there. Columns are the union of every
-// item's own keys, first-seen order, labeled via the same formatColumnHeader()
-// used elsewhere — same data-driven, no-domain-knowledge approach as
-// buildListTable/buildObjectArrayTable.
-function buildRevealTable(items) {
-  const columns = [];
-  const seen = new Set();
-  for (const item of items) {
-    for (const key of Object.keys(item)) {
-      if (!seen.has(key)) { seen.add(key); columns.push(key); }
-    }
-  }
-  const tableColumns = columns.slice(0, TABLE_MAX_COLUMNS);
-  const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(it => it[col])));
-  const cell = v => ({ type: 'raw_text', text: String(v ?? '').replace(/\r?\n/g, ' ') });
+// buildTableBlock — native Slack `table` block (rows of { type: 'rich_text' }
+// cells, not markdown syntax) shared by buildRevealTable (array-of-records
+// content) and the markdown-pipe-table segments found by
+// splitMarkdownTableSegments (string content). container.child_blocks
+// explicitly excludes the `markdown` block type (verified against Slack's own
+// docs — see docs/slack-block-kit.md), so a markdown pipe-table can never
+// render inside a reveal; `table` is the only real grid-rendering option
+// available there. `raw_text` cells were tried first and render as a
+// flattened pipe-joined fallback instead of a grid (confirmed live
+// 2026-07-09) — `rich_text` cells are required.
+function buildTableBlock(headerLabels, dataRows) {
+  const cols = headerLabels.slice(0, TABLE_MAX_COLUMNS);
+  const cell = (v, bold) => {
+    const text = String(v ?? '').replace(/\r?\n/g, ' ');
+    return {
+      type:     'rich_text',
+      elements: [{
+        type:     'rich_text_section',
+        elements: [{ type: 'text', text, ...(bold ? { style: { bold: true } } : {}) }],
+      }],
+    };
+  };
+  const cellText = c => c.elements[0].elements[0].text;
 
-  const rows = [headerLabels.map(cell)];
-  let charCount = headerLabels.reduce((sum, h) => sum + h.length, 0);
+  const rows = [cols.map(h => cell(h, true))];
+  let charCount = cols.reduce((sum, h) => sum + String(h ?? '').length, 0);
   let truncated = 0;
-  for (const item of items) {
-    const rowCells = tableColumns.map(col => cell(item[col]));
-    const rowChars = rowCells.reduce((sum, c) => sum + c.text.length, 0);
+  for (const rowValues of dataRows) {
+    const rowCells = rowValues.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
+    const rowChars = rowCells.reduce((sum, c) => sum + cellText(c).length, 0);
     if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
       truncated++;
       continue;
@@ -696,6 +699,93 @@ function buildRevealTable(items) {
   }
 
   return { table: { type: 'table', rows }, truncated };
+}
+
+// buildRevealTable — builds a buildTableBlock() from an array of plain record
+// objects. Columns are the union of every item's own keys, first-seen order,
+// labeled via the same formatColumnHeader() used elsewhere — same
+// data-driven, no-domain-knowledge approach as buildListTable/
+// buildObjectArrayTable.
+function buildRevealTable(items) {
+  const columns = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const key of Object.keys(item)) {
+      if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    }
+  }
+  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
+  const dataRows = items.map(item => columns.map(col => item[col]));
+  return buildTableBlock(headerLabels, dataRows);
+}
+
+// splitMarkdownTableSegments — parses a reveal string into alternating text
+// and table segments, so a pipe-table embedded in otherwise-prose markdown
+// (e.g. a js_transform building "intro text\n\n| Deck | Cards |\n|---|---|\n| ... |")
+// renders the table natively (via buildTableBlock) while surrounding text
+// keeps rendering as plain markdown — instead of the whole string collapsing
+// into one mrkdwn block where the pipe syntax shows up literally. Standard
+// GFM table detection: a `| ... |` row immediately followed by a
+// `|---|---|`-style separator row starts a table; consecutive row lines after
+// that are its body.
+function splitMarkdownTableSegments(text) {
+  const lines = text.split('\n');
+  const isRow       = l => /^\s*\|.*\|\s*$/.test(l);
+  const isSeparator = l => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(l);
+  const splitRow    = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+
+  const segments = [];
+  let textLines = [];
+  const flushText = () => {
+    if (textLines.length) segments.push({ type: 'text', text: textLines.join('\n') });
+    textLines = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    if (isRow(lines[i]) && isSeparator(lines[i + 1] ?? '')) {
+      flushText();
+      const header = splitRow(lines[i]);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && isRow(lines[i])) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      segments.push({ type: 'table', header, rows });
+    } else {
+      textLines.push(lines[i]);
+      i++;
+    }
+  }
+  flushText();
+  return segments;
+}
+
+// chunkTextBlocks — splits reveal prose into REVEAL_SECTION_CHAR_LIMIT-sized
+// `section`/`mrkdwn` blocks, capped at REVEAL_MAX_CHILD_BLOCKS with a trailing
+// truncation note merged into the last kept chunk.
+function chunkTextBlocks(text) {
+  const lines = text ? text.split('\n') : [];
+  const chunks = [];
+  let chunk = '';
+  for (const line of lines) {
+    const candidate = chunk ? `${chunk}\n${line}` : line;
+    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+      chunks.push(chunk);
+      chunk = line;
+    } else {
+      chunk = candidate;
+    }
+  }
+  if (chunk) chunks.push(chunk);
+
+  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+  if (truncatedCount > 0 && kept.length > 0) {
+    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  }
+  return kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } }));
 }
 
 function buildRevealBlock(field) {
@@ -715,31 +805,24 @@ function buildRevealBlock(field) {
     if (truncated > 0) {
       childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
     }
+  } else if (Array.isArray(field.content)) {
+    const text = field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n');
+    childBlocks.push(...chunkTextBlocks(text));
   } else {
-    const text = Array.isArray(field.content)
-      ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n')
-      : String(field.content ?? '');
-
-    const lines = text ? text.split('\n') : [];
-    const chunks = [];
-    let chunk = '';
-    for (const line of lines) {
-      const candidate = chunk ? `${chunk}\n${line}` : line;
-      if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
-        chunks.push(chunk);
-        chunk = line;
-      } else {
-        chunk = candidate;
+    // String content may mix prose with an embedded pipe-table — split so the
+    // table renders natively and surrounding text is unaffected.
+    const segments = splitMarkdownTableSegments(String(field.content ?? ''));
+    for (const seg of segments) {
+      if (seg.type === 'table') {
+        const { table, truncated } = buildTableBlock(seg.header, seg.rows);
+        childBlocks.push(table);
+        if (truncated > 0) {
+          childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
+        }
+      } else if (seg.text.trim()) {
+        childBlocks.push(...chunkTextBlocks(seg.text));
       }
     }
-    if (chunk) chunks.push(chunk);
-
-    const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
-    const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
-    if (truncatedCount > 0 && kept.length > 0) {
-      kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
-    }
-    childBlocks.push(...kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })));
   }
 
   return {
