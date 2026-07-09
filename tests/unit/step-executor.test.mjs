@@ -215,7 +215,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
   });
 
   it('create_domain step 12 is a choice gate with per-table reveals and inline modal', () => {
-    // Step 12 is the schema review gate — per-table task_card reveals, modal for Request changes.
+    // Step 12 is the schema review gate — per-table reveal panels, modal for Request changes.
     const step = getStep('create_domain', '12');
     assert.equal(step.gate_type, 'choice', 'step 12 must be a choice gate');
     assert.ok(step.reveals, 'step 12 must have a reveals field for per-table schema cards');

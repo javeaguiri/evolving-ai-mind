@@ -829,10 +829,11 @@ An inline accordion that renders a collapsible task result — title, optional d
 output — directly in a message or thread without opening a modal. Designed for streaming
 AI "thinking steps" but usable for any reveal-style content.
 
-**Usage in evolving-mind-ai:** the `reveal` gate field. When the user clicks "Show
-Definition" on a `human_gate`, `handlePeekReveal` in `interactive.mjs` posts a `task_card`
-block as a thread reply via `chat.postMessage`. The gate stays suspended; the card is
-read-only and does not advance the workflow. `trigger_id` is not needed.
+**Not currently used in evolving-mind-ai** — the `reveal`/`reveals` gate field rendered
+inline panels with this block type through Sprint 7, superseded by `container` (see below),
+which finally supports markdown content. Kept here as reference for `task_card`'s original
+"streaming AI thinking steps" use case (a live `status: "in_progress"` spinner), which
+`container` cannot replicate.
 
 #### Fields
 
@@ -962,6 +963,70 @@ can mix `text`, `link`, and `emoji` inline — the full rich_text inline element
 - `details` is the correct field for any list content. `output` is plain prose only.
 - Post via `chat.postMessage`, not `views.open` — no `trigger_id` required.
 - `rich_text_list` supports `style: "bullet"` or `style: "ordered"` and optional `indent` (0-based nesting depth).
+
+---
+
+## Standard block types
+
+Blocks documented on Slack's main Block Kit reference (`docs.slack.dev/reference/block-kit/blocks/`) —
+distinct from the `Partner block types` above, which come from the separate partner API reference.
+
+### `container`
+
+A collapsible card block — source: `https://docs.slack.dev/reference/block-kit/blocks/container-block/`
+(fetched 2026-07-09). Renders a titled panel that can collapse to just its title, expanding to
+reveal a list of nested `child_blocks`.
+
+**Usage in evolving-mind-ai:** the `reveal`/`reveals` gate field. `buildRevealBlock()`
+(`callback.mjs`) renders every reveal as a `container` — replaces `task_card` (above), which
+could never interpret markdown. A container's child blocks are ordinary `section`/`mrkdwn`
+blocks, so reveal content finally supports real markdown formatting.
+
+#### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `"container"` | Yes | Block type discriminator |
+| `title` | text object (`plain_text`) | Yes | Max 150 characters |
+| `child_blocks` | array | Yes | Max **10** blocks |
+| `block_id` | string | No | Auto-generated if omitted |
+| `subtitle` | text object (`plain_text` or `mrkdwn`) | No | Max 150 characters |
+| `icon` | image element | No | Max 3000 characters |
+| `width` | `"narrow"` \| `"standard"` \| `"wide"` | No | Default `"standard"` |
+| `is_collapsible` | boolean | No | Default `false` |
+| `default_collapsed` | boolean | No | Only takes effect when `is_collapsible: true` |
+
+**Allowed `child_blocks` types (max 10):** `actions`, `context`, `divider`, `file`, `header`,
+`image`, `input`, `rich_text`, `section`, `table`, `video`. **The top-level `markdown` block
+type is not on this list** — inside a container, use `section` with `mrkdwn` text for
+prose/markdown content instead.
+
+#### Example — reveal panel (evolving-mind-ai usage)
+
+```json
+{
+  "type": "container",
+  "block_id": "reveal_bb9cb0c7-bf08-4eed-9e44-3ee71ef021a6",
+  "title": { "type": "plain_text", "text": "PGD_ReviewLog (7)" },
+  "is_collapsible": true,
+  "default_collapsed": true,
+  "child_blocks": [
+    {
+      "type": "section",
+      "text": { "type": "mrkdwn", "text": "• *Grade:* 4 · *Review Date:* Jun 28, 2026\n• *Grade:* 2 · *Review Date:* Jul 3, 2026" }
+    }
+  ]
+}
+```
+
+**`buildRevealBlock()` behavior:** a plain string becomes the section's text directly; an array
+of items becomes one `• ` bullet per line in a single `mrkdwn` string. Content is chunked into
+additional `section` blocks past ~2800 characters (Slack's per-`section` text limit is 3000),
+capped at the 10-`child_blocks` ceiling — any remainder past that is summarized as
+`_...and N more chunk(s)_` on the last kept block.
+
+**Not yet independently live-verified in evolving-mind-ai** — implemented from the official
+reference; same "verify live before fully trusting" caveat this doc applies to `carousel`.
 
 ### `carousel`
 
@@ -1105,26 +1170,17 @@ Use explicit `block_id` values so the key is predictable.
 
 ### reveal gate rendering
 
-`callback.mjs` renders every `reveal` field as a `task_card` block. Current implementation
-uses the `output` section (plain text only). The correct field depends on content type:
+`callback.mjs` renders every `reveal`/`reveals` field as a `container` block (see `container`
+above) — replaces the earlier `task_card` implementation, which could never interpret markdown.
+`buildRevealBlock()` builds the content as one or more `section`/`mrkdwn` child blocks: a plain
+string becomes the block's text directly; an array of items becomes one `• ` bullet per line in
+a single `mrkdwn` string, chunked into additional `section` blocks past ~2800 characters and
+capped at the container's 10-`child_blocks` limit.
 
-| Content type | `task_card` field | Supports |
-|---|---|---|
-| Plain prose / single value | `output` | `rich_text_section` — flat text and links |
-| List of items / tree children | `details` | `rich_text_list` — bullet/ordered lists, inline rich elements |
-
-**Current gap:** `callback.mjs` always writes to `output` regardless of content shape. The
-`reveals` (plural) pattern for one-level-deep hierarchies requires `details` + `rich_text_list`
-so each parent panel shows its children as a bullet list. `callback.mjs` needs to be updated
-to detect list content and route to `details` instead of `output`.
-
-**Required `callback.mjs` change:** when the resolved `reveal.content` is an array of strings,
-build `details.rich_text_list` (one `rich_text_section` per item). When it is a plain string,
-keep the current `output.rich_text_section` path. This extends the harness to accept both
-forms naturally — no workflow-level pre-formatting required.
-
-Set `status: "complete"`, `title` from `button_label`. Post via `chat.postMessage` — no
-`trigger_id` needed.
+Set `title` from `button_label`, `is_collapsible: true`, `default_collapsed: true` — reveals are
+progressive disclosure, collapsed until the user expands them. Renders inline in the same
+message, same as `task_card` did — no `trigger_id` needed, no click required to see the panel
+exists (only to expand it).
 
 ### trigger_id window
 `trigger_id` from a button click expires after 3 seconds. If opening a modal in response

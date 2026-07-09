@@ -33,7 +33,7 @@ const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 // preservedContentBlocks — drops interactive/action-affordance blocks (buttons,
 // text inputs) from a message's blocks, keeping everything else (section,
-// markdown, context, task_card/reveal). Used on every gate response so
+// markdown, context, container/reveal). Used on every gate response so
 // chat.update replaces only the stale controls, never the original content —
 // Slack's chat.update has no partial-edit primitive, so preserving anything
 // means resending it explicitly (Sprint 7 Track D4).
@@ -137,12 +137,6 @@ export async function handle(req) {
   // Opens a modal for the user to type a question; gate buttons remain until modal is submitted.
   if (buttonValue.action === 'minds_eye_continue_followup') {
     return handleMindsEyeContinueFollowupButton(buttonValue, payload, req.correlationId);
-  }
-
-  // peek_reveal — reveal button on a human_gate. Opens a read-only modal showing
-  // the resolved content. Does NOT advance or resume the gate.
-  if (buttonValue.action === 'peek_reveal') {
-    return handlePeekReveal(buttonValue, payload, req.correlationId);
   }
 
   const { workflowRunId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
@@ -1010,45 +1004,6 @@ async function handleMindsEyeViewSubmission(payload, traceId) {
   } catch (error) {
     console.error('interactive: minds_eye_followup_modal SQS enqueue failed', { error: error.message, traceId });
     return err(500, `SQS enqueue failed: ${error.message}`, traceId);
-  }
-
-  return { statusCode: 200, body: '' };
-}
-
-// ---------------------------------------------------------------------------
-// handlePeekReveal — reveal button clicked on a human_gate.
-// Posts a task_card block in the thread showing the resolved content.
-// Never enqueues resume_gate.
-// ---------------------------------------------------------------------------
-
-async function handlePeekReveal(buttonValue, payload, correlationId) {
-  const { content, button_label } = buttonValue;
-  const channel  = payload.channel?.id;
-  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
-  const traceId  = correlationId || randomUUID();
-
-  try {
-    await slack.chat.postMessage({
-      channel,
-      thread_ts: threadTs,
-      text:      content ?? '(no content)',
-      blocks: [{
-        type:    'task_card',
-        task_id: randomUUID(),
-        title:   button_label ?? 'Definition',
-        status:  'complete',
-        output: {
-          type:     'rich_text',
-          elements: [{
-            type:     'rich_text_section',
-            elements: [{ type: 'text', text: content ?? '(no content)' }],
-          }],
-        },
-      }],
-    });
-    console.info('interactive: peek_reveal task_card posted', { traceId });
-  } catch (error) {
-    console.error('interactive: peek_reveal task_card failed', { error: error.message, traceId });
   }
 
   return { statusCode: 200, body: '' };

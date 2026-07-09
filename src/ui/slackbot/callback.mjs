@@ -646,39 +646,50 @@ async function postHumanGate(message) {
 // @returns {Array}                 Slack Block Kit blocks array
 // ---------------------------------------------------------------------------
 
-// buildRevealBlock — task_card Block Kit element for a reveal/reveals field.
-// content is a string → plain text in output; array of strings → bulleted list in details.
+// buildRevealBlock — collapsible `container` Block Kit element for a
+// reveal/reveals field (Sprint 7 Track D4/G3 follow-up — replaces the earlier
+// `task_card` implementation, which could never interpret markdown; a
+// container's child blocks are ordinary `section`/`mrkdwn`, so reveal content
+// finally supports real markdown). content is a string → the block's own
+// text; array of strings → one '• ' bullet per line in the same text.
 // Shared by dialogToBlocks (all non-text_input gate types) and postHumanGate's
 // text_input branch, which builds its blocks independently of dialogToBlocks.
+const REVEAL_SECTION_CHAR_LIMIT = 2800;
+const REVEAL_MAX_CHILD_BLOCKS   = 10;
+
 function buildRevealBlock(field) {
-  const revealBlock = {
-    type:    'task_card',
-    task_id: randomUUID(),
-    title:   field.button_label,
-    status:  'complete',
-  };
-  if (Array.isArray(field.content)) {
-    revealBlock.details = {
-      type:     'rich_text',
-      elements: [{
-        type:     'rich_text_list',
-        style:    'bullet',
-        elements: field.content.map(item => ({
-          type:     'rich_text_section',
-          elements: [{ type: 'text', text: (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item) }],
-        })),
-      }],
-    };
-  } else if (field.content) {
-    revealBlock.output = {
-      type:     'rich_text',
-      elements: [{
-        type:     'rich_text_section',
-        elements: [{ type: 'text', text: field.content }],
-      }],
-    };
+  const text = Array.isArray(field.content)
+    ? field.content.map(item => `• ${(item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)}`).join('\n')
+    : String(field.content ?? '');
+
+  const lines = text ? text.split('\n') : [];
+  const chunks = [];
+  let chunk = '';
+  for (const line of lines) {
+    const candidate = chunk ? `${chunk}\n${line}` : line;
+    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
+      chunks.push(chunk);
+      chunk = line;
+    } else {
+      chunk = candidate;
+    }
   }
-  return revealBlock;
+  if (chunk) chunks.push(chunk);
+
+  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
+  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
+  if (truncatedCount > 0 && kept.length > 0) {
+    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
+  }
+
+  return {
+    type:               'container',
+    block_id:           `reveal_${randomUUID()}`,
+    title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
+    is_collapsible:     true,
+    default_collapsed:  true,
+    child_blocks:       kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } })),
+  };
 }
 
 // Deterministic one-line summary for an object inside a review_object array
@@ -912,7 +923,7 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'reveal': {
-        // Inline task_card shown above the gate buttons — no click required.
+        // Inline collapsible container shown above the gate buttons — no click required.
         blocks.push(buildRevealBlock(field));
         break;
       }

@@ -312,16 +312,16 @@
         },
         "reveal": {
           "type": "object",
-          "description": "Optional single task_card block shown above the gate buttons. Does NOT advance or resume the gate.",
+          "description": "Optional single collapsible container block shown above the gate buttons. Does NOT advance or resume the gate.",
           "required": ["button_label", "content"],
           "additionalProperties": false,
           "properties": {
-            "button_label": { "type": "string", "description": "Title of the task_card." },
+            "button_label": { "type": "string", "description": "Title of the container." },
             "content":      { "type": "string", "description": "Slack mrkdwn content. Supports {{key}} template substitution." }
           }
         },
         "reveals": {
-          "description": "Array version of reveal — renders one task_card per entry (e.g. one per table). Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
+          "description": "Array version of reveal — renders one collapsible container per entry (e.g. one per table). Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
           "oneOf": [
             {
               "type": "array",

@@ -53,7 +53,7 @@
             },
             {
               "step_type": "human_gate",
-              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in the input field), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single task_card shown inline above the gate buttons — { button_label, content }. reveals: array version — one task_card per entry; supports inline array or {{template}} reference to local_state array.",
+              "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button), edit_list (review and remove items), text_input (type free text in the input field), review_object (review key/value summary), choice (single-select with lettered buttons and per-option descriptions — output_key written with selected value; if button has modal descriptor, typed modal text written to option's own output_key if declared, or step-level output_key if not). Each option has its own on_select routing token. special_buttons appear as action buttons only, never in description lists, and support modal descriptors. reveal: optional single reveal panel shown inline above the gate buttons — { button_label, content }. reveals: array version — one reveal panel per entry; supports inline array or {{template}} reference to local_state array.",
               "input_contract": [
                 {
                   "type": "string",
@@ -113,13 +113,13 @@
                   "type": "object",
                   "field": "reveal",
                   "required": false,
-                  "description": "Optional single task_card shown inline above the gate buttons. Shape: { button_label: string, content: string }. Does NOT advance the workflow. content supports {{template}} substitution. Use reveals (array) when the number of cards is determined at runtime."
+                  "description": "Optional single reveal panel shown inline above the gate buttons. Shape: { button_label: string, content: string }. Does NOT advance the workflow. content supports {{template}} substitution. Use reveals (array) when the number of panels is determined at runtime."
                 },
                 {
                   "type": "array_or_string",
                   "field": "reveals",
                   "required": false,
-                  "description": "Array version of reveal — one task_card per entry. Each entry: { button_label: string, content: string }. Supports inline array or {{template}} reference to a local_state array. Use when the number of cards is determined at runtime (e.g. one card per table)."
+                  "description": "Array version of reveal — one reveal panel per entry. Each entry: { button_label: string, content: string }. Supports inline array or {{template}} reference to a local_state array. Use when the number of panels is determined at runtime (e.g. one panel per table)."
                 }
               ],
               "output_contract": null,
