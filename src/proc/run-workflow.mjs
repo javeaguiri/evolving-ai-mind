@@ -373,12 +373,21 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 
   // ── Handle human_gate suspension ───────────────────────────────────────
   if (result.nextAction === 'suspend' && result.gatePayload) {
+    // step.options may be a {{template}} string (e.g. a level-dependent button set) —
+    // resolve it once here, before persisting step_ref, so resume_gate can always
+    // assume options is a live array. Same treatment as the iterator item_step suspend
+    // path below (executeIteratorInline) for a nested human_gate's options.
+    const rawOptions = step.options;
+    const resolvedOptions = (typeof rawOptions === 'string' && rawOptions.startsWith('{{'))
+      ? (resolvePath(frame.local_state, rawOptions.replace(/^\{\{|\}\}$/g, '')) ?? [])
+      : (rawOptions ?? []);
+    const resolvedStepRef = { ...step, options: resolvedOptions };
     const gateFrame = {
       frame_id:      randomUUID(),
       type:          'human_gate',
       status:        'awaiting',
       gate_type:     step.gate_type,
-      step_ref:      step,
+      step_ref:      resolvedStepRef,
       step_number:   frame.current_step,
       workflow_name: run.workflow_name,
       local_state:   frame.local_state,
@@ -562,6 +571,9 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
 
   // ── confirm (or any option that advances) ─────────────────────────────
   // choice gate uses option.value (HTML radio semantics); all others use option.action.
+  // stepRef.options is always a resolved array by this point — a {{template}} options
+  // field is resolved once when the gate frame is pushed (see the two suspend sites),
+  // never lazily here.
   const isChoice      = gateType === 'choice';
   const allOptions    = [...(stepRef.options ?? []), ...(stepRef.special_buttons ?? [])];
   const matchedOption = allOptions.find(o =>
