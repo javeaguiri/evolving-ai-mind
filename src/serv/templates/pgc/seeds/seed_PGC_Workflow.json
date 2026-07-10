@@ -2444,7 +2444,7 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 6,
+    "version": 7,
     "steps": [
       {
         "step": "1",
@@ -2674,11 +2674,11 @@
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Apply the has_children_map to finalize row_items and build the gate's message text. No row cap — the combined list now renders as a single markdown table (one block regardless of row count) rather than one Block Kit block pair per row, so the per-def fetch limit (step 20's iterator, 20 rows) is the only bound left. Also computes parent_heading — this level's parent identity (the same for every def/table at this level, since they're all children of one clicked row), so the renderer shows it once instead of re-deriving it per table. Reuses fk_label_map (already resolved at step 22a from this level's own rows' outgoing FKs, which always include the link back to the parent) rather than a fresh lookup; falls back to a humanized parent_table name when the parent row has neither title nor name.",
+        "description": "Apply the has_children_map to finalize row_items and build the gate's message text. No row cap — the combined list now renders as a single markdown table (one block regardless of row count) rather than one Block Kit block pair per row, so the per-def fetch limit (step 20's iterator, 20 rows) is the only bound left. Also computes parent_heading — this level's parent identity (the same for every def/table at this level, since they're all children of one clicked row), so the renderer shows it once instead of re-deriving it per table. Reuses fk_label_map (already resolved at step 22a from this level's own rows' outgoing FKs, which always include the link back to the parent) rather than a fresh lookup; falls back to a humanized parent_table name when the parent row has neither title nor name. gate_options omits Back at the root level (empty nav_stack) — there is nothing to go back to there, Done is the only exit.",
         "output_key": "list_view",
         "on_success": "27",
         "on_else": "cancel",
-        "expression": "(function(){ var map = local_state.has_children_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { hasChildren: !!map[it.responseData.table] }) }); }); var text = tagged.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s). Enter an ID below to open it.'); var parentTable = local_state.loop_state && local_state.loop_state.parent_table; var parentId = local_state.loop_state && local_state.loop_state.parent_id; var fkMap = local_state.fk_label_map || {}; var humanizedTable = parentTable ? parentTable.replace(/^PGD_/i, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() : null; var parentHeading = parentTable ? (fkMap[parentTable + ':' + parentId] || humanizedTable) : null; return { row_items: tagged, message: text, parent_heading: parentHeading }; })()"
+        "expression": "(function(){ var map = local_state.has_children_map || {}; var items = (local_state.row_build && local_state.row_build.row_items) || []; var tagged = items.map(function(it){ return Object.assign({}, it, { responseData: Object.assign({}, it.responseData, { hasChildren: !!map[it.responseData.table] }) }); }); var text = tagged.length === 0 ? 'No related records found.' : ('Found ' + tagged.length + ' record(s). Enter an ID below to open it.'); var parentTable = local_state.loop_state && local_state.loop_state.parent_table; var parentId = local_state.loop_state && local_state.loop_state.parent_id; var fkMap = local_state.fk_label_map || {}; var humanizedTable = parentTable ? parentTable.replace(/^PGD_/i, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() : null; var parentHeading = parentTable ? (fkMap[parentTable + ':' + parentId] || humanizedTable) : null; var hasBack = !!(local_state.loop_state && local_state.loop_state.nav_stack && local_state.loop_state.nav_stack.length > 0); var doneOption = { label: 'Done', action: 'cancel', on_select: 'cancel' }; var gateOptions = hasBack ? [{ label: '⬅ Back', action: 'go_back', on_select: 'step:42' }, doneOption] : [doneOption]; return { row_items: tagged, message: text, parent_heading: parentHeading, gate_options: gateOptions }; })()"
       },
       {
         "step": "27",
@@ -2689,10 +2689,7 @@
         "context_key": "list_view.row_items",
         "item_action": { "action": "select_row", "label": "Open", "style": "default", "on_select": "step:40" },
         "output_key": "selected_row",
-        "options": [
-          { "label": "⬅ Back", "action": "go_back", "on_select": "step:42" },
-          { "label": "Done", "action": "cancel", "on_select": "cancel" }
-        ],
+        "options": "{{list_view.gate_options}}",
         "on_success": "next",
         "on_else": "cancel",
         "on_cancel": "cancel"

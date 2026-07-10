@@ -415,6 +415,26 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     });
   }
 
+  // ── Handle cancel ──────────────────────────────────────────────────────
+  // A regular step (e.g. a condition's on_else) can route to 'cancel', same
+  // control token human_gate options already use — mirrors resumeGate's
+  // inline cancel handling below rather than the standalone SQS 'cancel'
+  // dispatch (cancelRun), which has no run to notify a callback against yet.
+  if (result.nextAction === 'cancel') {
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
+    );
+    if (run.callback) {
+      await enqueueCallback(run.callback, {
+        type: 'HUMAN_NOTIFICATION', workflowRunId: run.id,
+        message: 'Workflow cancelled.', traceId,
+      });
+    }
+    console.info('run-workflow: cancelled', { workflowRunId: run.id, traceId });
+    return { action: 'cancelled' };
+  }
+
   // ── Handle end ─────────────────────────────────────────────────────────
   if (result.nextAction === 'end' || step.type === 'end') {
     await updateRows('PGC_WorkflowRun',
