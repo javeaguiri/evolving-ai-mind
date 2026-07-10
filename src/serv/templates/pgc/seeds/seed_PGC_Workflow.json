@@ -2444,7 +2444,7 @@
     ],
     "state_strategy": "sequential",
     "model_used": null,
-    "version": 5,
+    "version": 6,
     "steps": [
       {
         "step": "1",
@@ -2699,20 +2699,20 @@
       },
       {
         "step": "40",
-        "type": "condition",
-        "description": "Route the clicked row: further drill-down if it can have children, leaf detail otherwise.",
-        "expression": "local_state.selected_row&&local_state.selected_row.hasChildren===true",
-        "on_success": "41",
-        "on_else": "50"
-      },
-      {
-        "step": "41",
         "type": "js_transform",
-        "description": "Push the current level (its defs + parent_id + parent_table, not just an id) onto nav_stack so Back can restore it exactly without re-discovering anything.",
+        "description": "Push the current level (its defs + parent_id + parent_table, not just an id) onto nav_stack — runs unconditionally for every row click, drill-down or leaf, so Back always restores exactly the level the row was opened from without re-discovering anything.",
         "output_key": "nav_stack_pushed",
-        "on_success": "41a",
+        "on_success": "40a",
         "on_else": "cancel",
         "expression": "(function(){ var stack = (local_state.loop_state && local_state.loop_state.nav_stack) || []; var entry = { defs: local_state.loop_state.defs, parent_id: local_state.loop_state.parent_id, parent_table: local_state.loop_state.parent_table }; return stack.concat([entry]); })()"
+      },
+      {
+        "step": "40a",
+        "type": "condition",
+        "description": "Route the clicked row: further drill-down if it can have children, leaf detail otherwise. The current level was already pushed onto nav_stack above.",
+        "expression": "local_state.selected_row&&local_state.selected_row.hasChildren===true",
+        "on_success": "41a",
+        "on_else": "41c"
       },
       {
         "step": "41a",
@@ -2741,6 +2741,15 @@
         "on_success": "20",
         "on_else": "cancel",
         "expression": "(function(){ var rows = local_state.clicked_referencing_tables || []; var clickedTable = local_state.selected_row.table; var clickedId = local_state.selected_row.id; var ds = local_state.domain_schemas; var schemas = Array.isArray(ds) ? ds : (ds && ds.rows ? ds.rows : []); function isCuratedChild(childTable, parentTable){ if (childTable === parentTable) return true; return schemas.some(function(e){ return e.root_table === parentTable && (e.joins || []).some(function(j){ return j.table === childTable; }); }); } var defs = rows.filter(function(r){ return isCuratedChild(r.table_name, clickedTable); }).map(function(r){ var fks = r.foreign_keys || []; var match = fks.find(function(fk){ return fk.references && fk.references.table === clickedTable; }); if (!match) return null; return { table: r.table_name, fkColumn: match.column, foreign_keys: fks, filters: [{ column: match.column, op: 'eq', value: clickedId }] }; }).filter(Boolean); return { defs: defs, parent_id: clickedId, parent_table: clickedTable, nav_stack: local_state.nav_stack_pushed }; })()"
+      },
+      {
+        "step": "41c",
+        "type": "js_transform",
+        "description": "Leaf path: the current level was already pushed onto nav_stack at step 40. Fold that into loop_state — defs/parent_id/parent_table stay this level's own (the list just shown), only nav_stack updates — so Back (steps 42/42a) restores this same level instead of skipping it.",
+        "output_key": "loop_state",
+        "on_success": "50",
+        "on_else": "cancel",
+        "expression": "(function(){ var ls = local_state.loop_state || {}; return { defs: ls.defs, parent_id: ls.parent_id, parent_table: ls.parent_table, nav_stack: local_state.nav_stack_pushed }; })()"
       },
       {
         "step": "42",
