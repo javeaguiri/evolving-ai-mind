@@ -332,9 +332,9 @@ function formatTableName(tableName) {
   return base.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() || String(tableName ?? '');
 }
 
-// ── Faithful copy of buildOneListTable from callback.mjs ────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildOneListTable
-function buildOneListTable(items, tableName) {
+// ── Faithful copy of buildTableBody from callback.mjs ────────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildTableBody
+function buildTableBody(items, excludeColumn) {
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -342,18 +342,7 @@ function buildOneListTable(items, tableName) {
       if (!seen.has(key)) { seen.add(key); columns.push(key); }
     }
   }
-
-  const constantColumns = items.length > 1 ? columns.filter(col => {
-    if (col === 'ID') return false;
-    if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
-    const first = items[0].fields[col];
-    return items.every(item => item.fields[col] === first);
-  }) : [];
-  const fkResolved = constantColumns.find(col => /_id$/i.test(col)
-    && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
-
-  const heading = fkResolved ? `# ${items[0].fields[fkResolved]}` : `# ${formatTableName(tableName)}`;
-  const tableColumns = columns.filter(col => col !== fkResolved);
+  const tableColumns = columns.filter(col => col !== excludeColumn);
 
   const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
   const header = `| ${headerLabels.join(' | ')} |`;
@@ -362,19 +351,31 @@ function buildOneListTable(items, tableName) {
     const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
-  return [heading, header, sep, ...rows].join('\n');
+  return [header, sep, ...rows].join('\n');
 }
 
 // ── Faithful copy of buildListTable from callback.mjs ────────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
-function buildListTable(items) {
+function buildListTable(items, parentHeading) {
   const groups = new Map();
   for (const item of items) {
     const table = item.responseData?.table;
     if (!groups.has(table)) groups.set(table, []);
     groups.get(table).push(item);
   }
-  return [...groups.entries()].map(([table, groupItems]) => buildOneListTable(groupItems, table)).join('\n\n');
+  const entries = [...groups.entries()];
+
+  if (!parentHeading) {
+    return entries
+      .map(([table, groupItems]) => [`# ${formatTableName(table)}`, buildTableBody(groupItems)].join('\n'))
+      .join('\n\n');
+  }
+
+  const sections = entries.map(([table, groupItems]) => {
+    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
+    return [`## ${formatTableName(table)}`, buildTableBody(groupItems, excludeColumn)].join('\n');
+  });
+  return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
 // ── Faithful copy of buildObjectArrayTable from callback.mjs ────────────────
@@ -431,7 +432,7 @@ function dialogToBlocks(dialog, workflowRunId) {
         }
         const items = field.items ?? [];
         if (items.length > 0) {
-          blocks.push(...markdownToBlocks(buildListTable(items)));
+          blocks.push(...markdownToBlocks(buildListTable(items, field.parentHeading)));
         }
         const selectable = items.find(item => item.secondaryAction);
         if (selectable) {
@@ -1006,17 +1007,6 @@ describe('buildListTable', () => {
     assert.equal(table.split('\n')[1], '| ID | Front | Back | Deck Name | Ease Factor |');
   });
 
-  it('a field identical across every row is hoisted to a heading and dropped from the table', () => {
-    const table = buildListTable([
-      { id: 67, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
-      { id: 68, fields: { front: 'adios', back: 'goodbye', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
-    ]);
-    const lines = table.split('\n');
-    assert.equal(lines[0], '# Spanish Grammar');
-    assert.equal(lines[1], '| ID | Front | Back |');
-    assert.ok(!table.includes('Deck Name'));
-  });
-
   it('falls back to the table name as heading when no column represents real parent context', () => {
     const table = buildListTable([
       { id: 1, fields: { name: 'A', category: 'x' }, responseData: { table: 'PGD_Widgets' } },
@@ -1027,17 +1017,7 @@ describe('buildListTable', () => {
     assert.equal(lines[1], '| ID | Name | Category |');
   });
 
-  it('a field missing from some rows is not treated as constant even if identical where present', () => {
-    const table = buildListTable([
-      { id: 1, fields: { name: 'A', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
-      { id: 2, fields: { name: 'B' }, responseData: { table: 'PGD_Cards' } },
-    ]);
-    const lines = table.split('\n');
-    assert.equal(lines[0], '# Cards'); // not hoisted — deck_id isn't present on every row
-    assert.ok(table.includes('Deck Name'));
-  });
-
-  it('a single-item list still gets a table-name heading — nothing to hoist from one row, but every list is headed', () => {
+  it('a single-item list still gets a table-name heading — every list is headed, even with just one row', () => {
     const table = buildListTable([
       { id: 1, fields: { deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
     ]);
@@ -1046,14 +1026,46 @@ describe('buildListTable', () => {
     assert.equal(lines[1], '| ID | Deck Name |');
   });
 
-  it('only the FK-resolved column is hoisted — other constant columns stay as normal columns', () => {
+  it('with a parentHeading, it renders once as the H1 and the table gets its own H2 — even for a single child table', () => {
     const table = buildListTable([
-      { id: 1, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'hola' }, responseData: { table: 'PGD_Cards' } },
-      { id: 2, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'adios' }, responseData: { table: 'PGD_Cards' } },
-    ]);
-    const lines = table.split('\n');
-    assert.equal(lines[0], '# Spanish Grammar');
-    assert.equal(lines[1], '| ID | Domain | Front |');
+      { id: 1, fields: { front: 'hola', back: 'hello' }, responseData: { table: 'PGD_Cards', fkColumn: 'deck_id' } },
+    ], 'Spanish Grammar');
+    const sections = table.split('\n\n');
+    assert.equal(sections[0], '# Spanish Grammar');
+    const tableLines = sections[1].split('\n');
+    assert.equal(tableLines[0], '## Cards');
+    assert.equal(tableLines[1], '| ID | Front | Back |');
+  });
+
+  it('with two child tables, the shared parentHeading is shown once, not repeated per table', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'Flour', quantity: '2 cups' }, responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' } },
+      { id: 2, fields: { name: 'Sugar', quantity: '1 cup' }, responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' } },
+      { id: 10, fields: { order: 1, description: 'Preheat oven' }, responseData: { table: 'PGD_RecipeSteps', fkColumn: 'recipe_id' } },
+    ], 'Spaghetti Carbonara');
+    const sections = table.split('\n\n');
+    assert.equal(sections.length, 3); // shared H1 + one section per table
+    assert.equal(sections[0], '# Spaghetti Carbonara');
+    assert.equal(sections[1].split('\n')[0], '## Ingredients');
+    assert.equal(sections[2].split('\n')[0], '## Recipe Steps');
+    assert.equal((table.match(/Spaghetti Carbonara/g) || []).length, 1);
+  });
+
+  it("each table's own fkColumn is excluded from its body when a parentHeading is shown, not just relabeled", () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'Flour', recipe_id: 'Spaghetti Carbonara' }, responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' } },
+    ], 'Spaghetti Carbonara');
+    assert.ok(!table.includes('Recipe Name'));
+    const sections = table.split('\n\n');
+    assert.equal(sections[1].split('\n')[1], '| ID | Name |');
+  });
+
+  it('a table with no fkColumn tagged keeps all its own columns in the body', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'Flour' }, responseData: { table: 'PGD_Ingredients' } },
+    ], 'Spaghetti Carbonara');
+    const sections = table.split('\n\n');
+    assert.equal(sections[1].split('\n')[1], '| ID | Name |');
   });
 
   it('root-level list (no shared parent) is headed by the table name, not a coincidentally-uniform data value', () => {

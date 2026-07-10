@@ -298,6 +298,12 @@ export function buildDialog(step, localState) {
     // uniformly to every item — the common case (e.g. "Open" on every row).
     case 'list_selection': {
       const items = resolvePath(localState, step.context_key) ?? [];
+      // parent_heading lives alongside the items array (e.g. list_view.row_items ->
+      // list_view.parent_heading) — the workflow computes it once per level (the
+      // clicked row's own title/name, or its table name as fallback) so the
+      // renderer shows it once instead of re-deriving it per child table.
+      const basePath      = (step.context_key ?? '').replace(/\.[^.]+$/, '');
+      const parentHeading = basePath ? resolvePath(localState, `${basePath}.parent_heading`) : undefined;
       const resolvedItems = items.map(item => {
         // Distinguish "item explicitly sets secondaryAction: null" (respect it —
         // this item deliberately has no action) from "item never mentions the
@@ -337,6 +343,7 @@ export function buildDialog(step, localState) {
         type:  'list',
         name:  (step.context_key ?? '').split('.').pop(),
         items: resolvedItems,
+        ...(parentHeading ? { parentHeading } : {}),
       });
       break;
     }
