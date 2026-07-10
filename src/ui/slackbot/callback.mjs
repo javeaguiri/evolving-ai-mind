@@ -865,21 +865,15 @@ function formatTableName(tableName) {
   return base.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() || String(tableName ?? '');
 }
 
-// buildOneListTable — markdown heading + table for one table's worth of rows.
-// Columns are entirely data-driven: ID first, then the union of every item's
-// own `fields` keys, in first-seen order — no synthesized Name/Detail columns.
-//
-// A field present on every item with the exact same value *could* carry no
-// per-row information (e.g. every row at a drill-down level shares the same
-// parent) — but only when that value is a genuinely FK-resolved reference is
-// it real parent context; hoist only that. A column that merely happens to be
-// uniform across whatever rows are currently on screen (a root-level list's
-// difficulty column, a counter that's 0 for every row) is coincidence, not
-// context, and must stay a normal column. When no FK-resolved column exists —
-// always true for a root-level list, which has no parent — the table's own
-// name is the heading instead, so every list is headed by *something*
-// (root and drill-down alike) rather than an arbitrary data value.
-function buildOneListTable(items, tableName) {
+// buildTableBody — markdown header/sep/rows for one table's worth of rows,
+// no heading line (buildListTable decides headings — see below). Columns are
+// entirely data-driven: ID first, then the union of every item's own `fields`
+// keys, in first-seen order — no synthesized Name/Detail columns. excludeColumn
+// (a def's own link back to this level's parent, tagged onto every item's
+// responseData.fkColumn by list_entity) is dropped from the body when present,
+// since a parent heading already conveys it — showing it again as a column
+// would just repeat the same value on every row.
+function buildTableBody(items, excludeColumn) {
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -887,18 +881,7 @@ function buildOneListTable(items, tableName) {
       if (!seen.has(key)) { seen.add(key); columns.push(key); }
     }
   }
-
-  const constantColumns = items.length > 1 ? columns.filter(col => {
-    if (col === 'ID') return false;
-    if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
-    const first = items[0].fields[col];
-    return items.every(item => item.fields[col] === first);
-  }) : [];
-  const fkResolved = constantColumns.find(col => /_id$/i.test(col)
-    && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
-
-  const heading = fkResolved ? `# ${items[0].fields[fkResolved]}` : `# ${formatTableName(tableName)}`;
-  const tableColumns = columns.filter(col => col !== fkResolved);
+  const tableColumns = columns.filter(col => col !== excludeColumn);
 
   const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
   const header = `| ${headerLabels.join(' | ')} |`;
@@ -907,7 +890,7 @@ function buildOneListTable(items, tableName) {
     const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
-  return [heading, header, sep, ...rows].join('\n');
+  return [header, sep, ...rows].join('\n');
 }
 
 // buildListTable — markdown table(s) for a list_selection field's rows.
@@ -924,14 +907,36 @@ function buildOneListTable(items, tableName) {
 // one table per group, rather than merging every row into one sparse table
 // over the union of all columns, keeps differently-shaped record types
 // visually separate instead of producing a mostly-blank combined grid.
-function buildListTable(items) {
+//
+// parentHeading (optional) is computed once by list_entity per drill-down
+// level — the clicked row's own title/name, or its table name as fallback —
+// never re-derived here from per-row data, so it can't be shown more than
+// once even when several child tables share it, and the table-name fallback
+// is always correct rather than guessed from a child's own FK column. When
+// present, it renders once as the level's own '#' heading and every table
+// group gets its own '##' heading instead; when absent (root level — no
+// parent), each table group is simply its own '#' heading, matching how a
+// single-table level has always rendered.
+function buildListTable(items, parentHeading) {
   const groups = new Map();
   for (const item of items) {
     const table = item.responseData?.table;
     if (!groups.has(table)) groups.set(table, []);
     groups.get(table).push(item);
   }
-  return [...groups.entries()].map(([table, groupItems]) => buildOneListTable(groupItems, table)).join('\n\n');
+  const entries = [...groups.entries()];
+
+  if (!parentHeading) {
+    return entries
+      .map(([table, groupItems]) => [`# ${formatTableName(table)}`, buildTableBody(groupItems)].join('\n'))
+      .join('\n\n');
+  }
+
+  const sections = entries.map(([table, groupItems]) => {
+    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
+    return [`## ${formatTableName(table)}`, buildTableBody(groupItems, excludeColumn)].join('\n');
+  });
+  return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
 // buildObjectArrayTable — markdown table for a review_object array-of-records
@@ -995,7 +1000,7 @@ function dialogToBlocks(dialog, workflowRunId) {
         }
         const items = field.items ?? [];
         if (items.length > 0) {
-          blocks.push(...markdownToBlocks(buildListTable(items)));
+          blocks.push(...markdownToBlocks(buildListTable(items, field.parentHeading)));
         }
         // One shared ID-entry input + button replaces the former per-row accessory
         // button. list_selection's item_action is uniform across every row, so a
