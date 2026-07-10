@@ -1565,10 +1565,9 @@ function executeCondition({ step, localState, traceId }) {
     });
   }
 
-  const rawNext  = isTruthy ? step.on_success : step.on_else;
-  const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
+  const rawNext = isTruthy ? step.on_success : step.on_else;
 
-  return { outputValue: null, nextAction: `step:${bareNext}` };
+  return { outputValue: null, nextAction: resolveNextAction(rawNext, null) };
 }
 
 async function executeNotify({ step, localState, traceId }) {

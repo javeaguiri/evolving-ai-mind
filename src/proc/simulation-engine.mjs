@@ -235,8 +235,14 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
     // options are dialog-layer content added after routing topology is validated.
     if (s.type === 'human_gate') {
       if (!skeleton) {
+        // options/special_buttons may be a {{template}} reference resolved at
+        // runtime from local_state (e.g. a level-dependent button set) — static
+        // analysis can't inspect its eventual contents, so the cancel-option
+        // check is skipped for either field once dynamic; on_cancel (checked
+        // unconditionally below) still guarantees a cancel path exists.
+        const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
         const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
-        const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
+        const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
         if (!hasCancel) {
           issues.push({
             check:         'missing_cancel_option',
