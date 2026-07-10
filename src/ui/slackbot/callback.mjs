@@ -855,25 +855,31 @@ function formatColumnHeader(key, values) {
   return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
 }
 
-// buildListTable — markdown table for a list_selection field's rows. Replaces
-// the former one-section-plus-accessory-button-plus-divider-per-row rendering,
-// which cost 2 Block Kit blocks per row and started throwing msg_blocks_too_long
-// above ~8 rows (Sprint 7 Track D). A table is one markdown block regardless of
-// row count, and — per the user's own observation — Slack renders long markdown
-// tables with native scroll, so nothing is lost for larger lists.
-//
+// formatTableName — pure presentation, no domain knowledge: strips the PGD_
+// prefix and splits PascalCase into words (PGD_RecipeSteps -> Recipe Steps).
+// Used as a list-group heading when no parent-context column applies (see
+// buildOneListTable below) — every table gets a stable, deterministic name
+// regardless of what data happens to be in its rows.
+function formatTableName(tableName) {
+  const base = String(tableName ?? '').replace(/^PGD_/i, '');
+  return base.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() || String(tableName ?? '');
+}
+
+// buildOneListTable — markdown heading + table for one table's worth of rows.
 // Columns are entirely data-driven: ID first, then the union of every item's
 // own `fields` keys, in first-seen order — no synthesized Name/Detail columns.
-// A combined list spanning multiple tables (e.g. sub-decks and cards at the
-// same drill-down level) naturally renders as one sparse table: a column only
-// a subset of items have is blank on the rest, which is also how the reader
-// tells the row types apart without a separate synthetic Type column.
 //
-// A field present on every item with the exact same value carries no per-row
-// information at all (e.g. every row at one drill-down level shares the same
-// parent) — repeating it in every row is pure noise, so it's hoisted above the
-// table as its own heading line instead of becoming a column.
-function buildListTable(items) {
+// A field present on every item with the exact same value *could* carry no
+// per-row information (e.g. every row at a drill-down level shares the same
+// parent) — but only when that value is a genuinely FK-resolved reference is
+// it real parent context; hoist only that. A column that merely happens to be
+// uniform across whatever rows are currently on screen (a root-level list's
+// difficulty column, a counter that's 0 for every row) is coincidence, not
+// context, and must stay a normal column. When no FK-resolved column exists —
+// always true for a root-level list, which has no parent — the table's own
+// name is the heading instead, so every list is headed by *something*
+// (root and drill-down alike) rather than an arbitrary data value.
+function buildOneListTable(items, tableName) {
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -882,23 +888,17 @@ function buildListTable(items) {
     }
   }
 
-  let constantColumns = items.length > 1 ? columns.filter(col => {
+  const constantColumns = items.length > 1 ? columns.filter(col => {
     if (col === 'ID') return false;
     if (!items.every(item => Object.prototype.hasOwnProperty.call(item.fields ?? {}, col))) return false;
     const first = items[0].fields[col];
     return items.every(item => item.fields[col] === first);
   }) : [];
-  // Hoist at most one column into the heading — stacking every incidentally-constant
-  // column as its own '# ' line (e.g. a coincidentally-shared data value alongside the
-  // parent name) reads as a broken multi-line title. Prefer the FK-resolved column
-  // (the parent/context this list belongs to); anything else stays a normal column.
-  if (constantColumns.length > 1) {
-    const fkResolved = constantColumns.find(col => /_id$/i.test(col)
-      && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
-    constantColumns = [fkResolved ?? constantColumns[0]];
-  }
-  const headings = constantColumns.map(col => `# ${items[0].fields[col]}`);
-  const tableColumns = columns.filter(col => !constantColumns.includes(col));
+  const fkResolved = constantColumns.find(col => /_id$/i.test(col)
+    && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
+
+  const heading = fkResolved ? `# ${items[0].fields[fkResolved]}` : `# ${formatTableName(tableName)}`;
+  const tableColumns = columns.filter(col => col !== fkResolved);
 
   const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
   const header = `| ${headerLabels.join(' | ')} |`;
@@ -907,7 +907,31 @@ function buildListTable(items) {
     const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
-  return [...headings, header, sep, ...rows].join('\n');
+  return [heading, header, sep, ...rows].join('\n');
+}
+
+// buildListTable — markdown table(s) for a list_selection field's rows.
+// Replaces the former one-section-plus-accessory-button-plus-divider-per-row
+// rendering, which cost 2 Block Kit blocks per row and started throwing
+// msg_blocks_too_long above ~8 rows (Sprint 7 Track D). A table is one
+// markdown block regardless of row count, and — per the user's own
+// observation — Slack renders long markdown tables with native scroll, so
+// nothing is lost for larger lists.
+//
+// A single drill-down level can span more than one source table (e.g. a
+// recipe's own children are both its ingredients and its steps) — grouping
+// by responseData.table (already set per row by list_entity) and rendering
+// one table per group, rather than merging every row into one sparse table
+// over the union of all columns, keeps differently-shaped record types
+// visually separate instead of producing a mostly-blank combined grid.
+function buildListTable(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const table = item.responseData?.table;
+    if (!groups.has(table)) groups.set(table, []);
+    groups.get(table).push(item);
+  }
+  return [...groups.entries()].map(([table, groupItems]) => buildOneListTable(groupItems, table)).join('\n\n');
 }
 
 // buildObjectArrayTable — markdown table for a review_object array-of-records

@@ -325,9 +325,16 @@ function formatColumnHeader(key, values) {
   return looksResolved ? `${words.join(' ')} Name` : words.join(' ');
 }
 
-// ── Faithful copy of buildListTable from callback.mjs ────────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
-function buildListTable(items) {
+// ── Faithful copy of formatTableName from callback.mjs ──────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:formatTableName
+function formatTableName(tableName) {
+  const base = String(tableName ?? '').replace(/^PGD_/i, '');
+  return base.replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim() || String(tableName ?? '');
+}
+
+// ── Faithful copy of buildOneListTable from callback.mjs ────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildOneListTable
+function buildOneListTable(items, tableName) {
   const columns = ['ID'];
   const seen = new Set(columns);
   for (const item of items) {
@@ -342,8 +349,11 @@ function buildListTable(items) {
     const first = items[0].fields[col];
     return items.every(item => item.fields[col] === first);
   }) : [];
-  const headings = constantColumns.map(col => `# ${items[0].fields[col]}`);
-  const tableColumns = columns.filter(col => !constantColumns.includes(col));
+  const fkResolved = constantColumns.find(col => /_id$/i.test(col)
+    && items.some(item => { const v = item.fields[col]; return v !== undefined && v !== null && v !== '' && Number.isNaN(Number(v)); }));
+
+  const heading = fkResolved ? `# ${items[0].fields[fkResolved]}` : `# ${formatTableName(tableName)}`;
+  const tableColumns = columns.filter(col => col !== fkResolved);
 
   const headerLabels = tableColumns.map(col => formatColumnHeader(col, items.map(item => item.fields?.[col])));
   const header = `| ${headerLabels.join(' | ')} |`;
@@ -352,7 +362,19 @@ function buildListTable(items) {
     const cells = tableColumns.map(col => (col === 'ID' ? item.id : item.fields?.[col]));
     return `| ${cells.map(escapeCell).join(' | ')} |`;
   });
-  return [...headings, header, sep, ...rows].join('\n');
+  return [heading, header, sep, ...rows].join('\n');
+}
+
+// ── Faithful copy of buildListTable from callback.mjs ────────────────────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildListTable
+function buildListTable(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const table = item.responseData?.table;
+    if (!groups.has(table)) groups.set(table, []);
+    groups.get(table).push(item);
+  }
+  return [...groups.entries()].map(([table, groupItems]) => buildOneListTable(groupItems, table)).join('\n\n');
 }
 
 // ── Faithful copy of buildObjectArrayTable from callback.mjs ────────────────
@@ -925,34 +947,53 @@ describe('formatColumnHeader', () => {
   });
 });
 
+describe('formatTableName', () => {
+  it('strips the PGD_ prefix and splits PascalCase into words', () => {
+    assert.equal(formatTableName('PGD_Recipes'), 'Recipes');
+    assert.equal(formatTableName('PGD_RecipeSteps'), 'Recipe Steps');
+  });
+
+  it('is case-insensitive on the prefix', () => {
+    assert.equal(formatTableName('pgd_Ingredients'), 'Ingredients');
+  });
+});
+
 describe('buildListTable', () => {
   it('column set is ID plus the union of every item\'s own field keys, first-seen order', () => {
     const table = buildListTable([
-      { id: 1, fields: { name: 'A' } },
-      { id: 2, fields: { name: 'B', note: 'x' } },
+      { id: 1, fields: { name: 'A' }, responseData: { table: 'PGD_Widgets' } },
+      { id: 2, fields: { name: 'B', note: 'x' }, responseData: { table: 'PGD_Widgets' } },
     ]);
-    assert.equal(table.split('\n')[0], '| ID | Name | Note |');
-    assert.equal(table.split('\n').length, 4); // header + sep + 2 rows
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Widgets');
+    assert.equal(lines[1], '| ID | Name | Note |');
+    assert.equal(lines.length, 5); // heading + header + sep + 2 rows
   });
 
   it('does not synthesize a column no item actually has', () => {
-    const table = buildListTable([{ id: 1, fields: { name: 'A' } }, { id: 2, fields: { name: 'B' } }]);
+    const table = buildListTable([
+      { id: 1, fields: { name: 'A' }, responseData: { table: 'PGD_Widgets' } },
+      { id: 2, fields: { name: 'B' }, responseData: { table: 'PGD_Widgets' } },
+    ]);
     assert.ok(!table.includes('Note'));
   });
 
   it('a row missing a column present on another row renders a blank cell, not an error', () => {
     const table = buildListTable([
-      { id: 1, fields: { title: 'Deck A' } },
-      { id: 2, fields: { front: 'hola', back: 'hello' } },
+      { id: 1, fields: { title: 'Deck A' }, responseData: { table: 'PGD_Decks' } },
+      { id: 2, fields: { front: 'hola', back: 'hello' }, responseData: { table: 'PGD_Decks' } },
     ]);
     const rows = table.split('\n');
-    assert.equal(rows[0], '| ID | Title | Front | Back |');
-    assert.equal(rows[2], '| 1 | Deck A |  |  |');
-    assert.equal(rows[3], '| 2 |  | hola | hello |');
+    assert.equal(rows[0], '# Decks');
+    assert.equal(rows[1], '| ID | Title | Front | Back |');
+    assert.equal(rows[3], '| 1 | Deck A |  |  |');
+    assert.equal(rows[4], '| 2 |  | hola | hello |');
   });
 
   it('escapes pipe characters and strips newlines from cell values', () => {
-    const table = buildListTable([{ id: 1, fields: { name: 'A | B', note: 'line1\nline2' } }]);
+    const table = buildListTable([
+      { id: 1, fields: { name: 'A | B', note: 'line1\nline2' }, responseData: { table: 'PGD_Widgets' } },
+    ]);
     assert.ok(table.includes('A \\| B'));
     assert.ok(table.includes('line1 line2'));
     assert.ok(!table.includes('line1\nline2'));
@@ -960,15 +1001,15 @@ describe('buildListTable', () => {
 
   it('a resolved FK field renders as "<Prefix> Name" in the actual table header', () => {
     const table = buildListTable([
-      { id: 1, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar', ease_factor: 2.5 } },
+      { id: 1, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar', ease_factor: 2.5 }, responseData: { table: 'PGD_Cards' } },
     ]);
-    assert.equal(table.split('\n')[0], '| ID | Front | Back | Deck Name | Ease Factor |');
+    assert.equal(table.split('\n')[1], '| ID | Front | Back | Deck Name | Ease Factor |');
   });
 
   it('a field identical across every row is hoisted to a heading and dropped from the table', () => {
     const table = buildListTable([
-      { id: 67, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar' } },
-      { id: 68, fields: { front: 'adios', back: 'goodbye', deck_id: 'Spanish Grammar' } },
+      { id: 67, fields: { front: 'hola', back: 'hello', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
+      { id: 68, fields: { front: 'adios', back: 'goodbye', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
     ]);
     const lines = table.split('\n');
     assert.equal(lines[0], '# Spanish Grammar');
@@ -976,39 +1017,65 @@ describe('buildListTable', () => {
     assert.ok(!table.includes('Deck Name'));
   });
 
-  it('no column is hoisted when every field actually varies across rows', () => {
+  it('falls back to the table name as heading when no column represents real parent context', () => {
     const table = buildListTable([
-      { id: 1, fields: { name: 'A', category: 'x' } },
-      { id: 2, fields: { name: 'B', category: 'y' } },
+      { id: 1, fields: { name: 'A', category: 'x' }, responseData: { table: 'PGD_Widgets' } },
+      { id: 2, fields: { name: 'B', category: 'y' }, responseData: { table: 'PGD_Widgets' } },
     ]);
-    assert.ok(!table.startsWith('#'));
-    assert.equal(table.split('\n')[0], '| ID | Name | Category |');
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Widgets');
+    assert.equal(lines[1], '| ID | Name | Category |');
   });
 
-  it('a field missing from some rows is NOT hoisted even when identical on the rows that have it', () => {
+  it('a field missing from some rows is not treated as constant even if identical where present', () => {
     const table = buildListTable([
-      { id: 1, fields: { name: 'A', shared: 'x' } },
-      { id: 2, fields: { name: 'B' } },
+      { id: 1, fields: { name: 'A', deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
+      { id: 2, fields: { name: 'B' }, responseData: { table: 'PGD_Cards' } },
     ]);
-    assert.ok(!table.startsWith('#'));
-    assert.ok(table.includes('Shared'));
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Cards'); // not hoisted — deck_id isn't present on every row
+    assert.ok(table.includes('Deck Name'));
   });
 
-  it('a single-item list is never hoisted — nothing redundant to remove', () => {
-    const table = buildListTable([{ id: 1, fields: { deck_id: 'Spanish Grammar' } }]);
-    assert.ok(!table.startsWith('#'));
-    assert.equal(table.split('\n')[0], '| ID | Deck Name |');
-  });
-
-  it('multiple constant columns each get their own heading line', () => {
+  it('a single-item list still gets a table-name heading — nothing to hoist from one row, but every list is headed', () => {
     const table = buildListTable([
-      { id: 1, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'hola' } },
-      { id: 2, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'adios' } },
+      { id: 1, fields: { deck_id: 'Spanish Grammar' }, responseData: { table: 'PGD_Cards' } },
+    ]);
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Cards');
+    assert.equal(lines[1], '| ID | Deck Name |');
+  });
+
+  it('only the FK-resolved column is hoisted — other constant columns stay as normal columns', () => {
+    const table = buildListTable([
+      { id: 1, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'hola' }, responseData: { table: 'PGD_Cards' } },
+      { id: 2, fields: { deck_id: 'Spanish Grammar', domain: 'flashcards', front: 'adios' }, responseData: { table: 'PGD_Cards' } },
     ]);
     const lines = table.split('\n');
     assert.equal(lines[0], '# Spanish Grammar');
-    assert.equal(lines[1], '# flashcards');
-    assert.equal(lines[2], '| ID | Front |');
+    assert.equal(lines[1], '| ID | Domain | Front |');
+  });
+
+  it('root-level list (no shared parent) is headed by the table name, not a coincidentally-uniform data value', () => {
+    const table = buildListTable([
+      { id: 1, fields: { title: 'Carbonara', difficulty: 'easy' }, responseData: { table: 'PGD_Recipes' } },
+      { id: 2, fields: { title: 'Bolognese', difficulty: 'easy' }, responseData: { table: 'PGD_Recipes' } },
+    ]);
+    const lines = table.split('\n');
+    assert.equal(lines[0], '# Recipes');
+    assert.ok(table.includes('Difficulty')); // stays a normal column, not misread as parent context
+  });
+
+  it('rows from more than one table render as separate headed tables, not one merged sparse table', () => {
+    const table = buildListTable([
+      { id: 1, fields: { name: 'Flour', quantity: '2 cups' }, responseData: { table: 'PGD_Ingredients' } },
+      { id: 2, fields: { name: 'Sugar', quantity: '1 cup' }, responseData: { table: 'PGD_Ingredients' } },
+      { id: 10, fields: { order: 1, description: 'Preheat oven' }, responseData: { table: 'PGD_RecipeSteps' } },
+    ]);
+    const sections = table.split('\n\n');
+    assert.equal(sections.length, 2);
+    assert.equal(sections[0].split('\n')[0], '# Ingredients');
+    assert.equal(sections[1].split('\n')[0], '# Recipe Steps');
   });
 });
 
