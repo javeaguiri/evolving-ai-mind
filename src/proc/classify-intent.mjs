@@ -659,6 +659,58 @@ function toEntityName(domain) {
 // Table CRUD execution — Groups 3 and 4
 // ---------------------------------------------------------------------------
 
+// Row ceiling for the direct `/m list <table>` path. Well under SERV's own 1000
+// hard cap (table.mjs), and the listing is projected to two columns, so even at
+// this ceiling the payload stays small.
+const CRUD_LIST_LIMIT = 500;
+
+/**
+ * Choose the column to label rows by, from a PGC_Schema `columns` array.
+ *
+ * Schema-driven, not data-driven: picking from whichever key happened to come
+ * first in row[0] means the same list can relabel itself depending on which rows
+ * came back. Returns null when a table offers nothing readable, in which case the
+ * listing shows ids alone.
+ *
+ * @param {Array<{name: string, type: string}>} columns
+ * @returns {string|null}  Column name to display alongside id
+ */
+function pickLabelColumn(columns = []) {
+  const byName = new Set(columns.map(c => c.name));
+  if (byName.has('name'))  return 'name';
+  if (byName.has('title')) return 'title';
+
+  // Otherwise the first column that can actually read as a label: not a system
+  // column, not an embedding, and not a structured/vector type that would dump
+  // an unreadable blob into the message.
+  const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
+  const UNREADABLE     = new Set(['jsonb', 'json', 'vector', 'bytea']);
+  const candidate = columns.find(c =>
+    !SYSTEM_COLUMNS.has(c.name)
+    && !/embedding/i.test(c.name)
+    && !UNREADABLE.has(String(c.type).toLowerCase())
+  );
+  return candidate?.name ?? null;
+}
+
+/**
+ * Look up a table's label column via PGC_Schema.
+ *
+ * @param {string} tableName
+ * @returns {Promise<string|null>}
+ */
+async function resolveLabelColumn(tableName) {
+  const resp = await getRows(
+    'PGC_Schema',
+    [{ column: 'table_name', op: 'eq', value: tableName }],
+    undefined,
+    1,
+    undefined,
+    ['table_name', 'columns'],
+  );
+  return pickLabelColumn(resp.rows?.[0]?.columns ?? []);
+}
+
 /**
  * Execute an ad_hoc_step built by the pre-pass table-prefix path.
  * Calls SERV directly via serv-client helpers. No WorkflowRun lifecycle.
@@ -670,9 +722,25 @@ async function executeCrudStep(result, callback, traceId) {
   console.info('classify-intent: executeCrudStep', { stepType: step.type, tableName, traceId });
 
   let output;
+  let labelColumn = null;
   try {
     if (step.type === 'serv_query') {
-      const resp = await getRows(tableName, step.input?.filters ?? []);
+      // Explicit projection, ordering and limit — all three were previously
+      // omitted, so this silently inherited SERV's default 100-row cap with no
+      // deterministic ordering (same silent-truncation class as retrieveMemories),
+      // and scanned whole rows. arch-data.md requires an explicit `columns` list
+      // for any multi-row scan: unprojected, a table carrying large jsonb
+      // (PGC_Workflow.steps, PGC_WorkflowRun.stack) can exceed the 6MB Lambda
+      // response limit or exhaust memory. Two columns keeps the payload flat.
+      labelColumn = await resolveLabelColumn(tableName);
+      const resp = await getRows(
+        tableName,
+        step.input?.filters ?? [],
+        { column: 'id', direction: 'asc' },
+        CRUD_LIST_LIMIT,
+        undefined,
+        labelColumn ? ['id', labelColumn] : ['id'],
+      );
       if (!resp.success) throw new Error(resp.error ?? 'getRows failed');
       output = resp.rows ?? [];
     } else if (step.type === 'serv_insert') {
@@ -702,7 +770,7 @@ async function executeCrudStep(result, callback, traceId) {
     return;
   }
 
-  const message = formatTableCrudResult(step.type, tableName, output, step.input?.row);
+  const message = formatTableCrudResult(step.type, tableName, output, step.input?.row, labelColumn);
   await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
 }
 
@@ -711,19 +779,28 @@ async function executeCrudStep(result, callback, traceId) {
  * Table name is shown explicitly — this is an admin/debug path, not a
  * domain-friendly workflow result.
  */
-function formatTableCrudResult(stepType, tableName, output, insertedRow = {}) {
+function formatTableCrudResult(stepType, tableName, output, insertedRow = {}, labelColumn = null) {
   if (stepType === 'serv_query') {
     const rows = Array.isArray(output) ? output : [];
     if (rows.length === 0) return `No rows found in \`${tableName}\`.`;
-    const SYSTEM_FIELDS = new Set(['created_at', 'updated_at']);
-    const labelField = Object.keys(rows[0]).find(k => k === 'name')
-                    ?? Object.keys(rows[0]).find(k => !SYSTEM_FIELDS.has(k))
-                    ?? 'id';
-    const preview = rows.slice(0, 10)
-      .map((r, i) => `${i + 1}. ${r[labelField] ?? r.id} (id: ${r.id})`)
+
+    // Every row is listed. The previous 10-row slice discarded the rest of what it
+    // had already fetched. Rendered as a plain list rather than a markdown table
+    // because HUMAN_NOTIFICATION goes through callback.mjs's textToBlocks, which
+    // emits section/mrkdwn blocks — classic mrkdwn cannot render table syntax and
+    // would show the pipes literally. textToBlocks already chunks long text across
+    // multiple blocks, so a long listing is safe.
+    const listing = rows
+      .map((r, i) => `${i + 1}. ${(labelColumn ? r[labelColumn] : null) ?? r.id} (id: ${r.id})`)
       .join('\n');
-    const suffix = rows.length > 10 ? `\n…and ${rows.length - 10} more.` : '';
-    return `Found ${rows.length} row${rows.length !== 1 ? 's' : ''} in \`${tableName}\`:\n${preview}${suffix}`;
+
+    // At the ceiling the table may hold more — say so rather than reporting the
+    // truncated count as if it were the total.
+    const heading = rows.length >= CRUD_LIST_LIMIT
+      ? `Showing the first ${CRUD_LIST_LIMIT} rows in \`${tableName}\` — there may be more. Add a filter to narrow the list.`
+      : `Found ${rows.length} row${rows.length !== 1 ? 's' : ''} in \`${tableName}\`:`;
+
+    return `${heading}\n${listing}`;
   }
 
   if (stepType === 'serv_insert') {
