@@ -4,100 +4,49 @@
 // tests/unit/classify-intent-crud.test.mjs
 //
 // Unit tests for the direct table-CRUD listing path in src/proc/classify-intent.mjs
-// (`/m list <table>`). Those helpers are module-private — classify-intent.mjs
-// exports only handle() — so this file keeps faithful copies, the same convention
-// callback.test.mjs uses for dialogToBlocks and friends. Keep them in sync.
+// (`/m list <table>`). Imports the real functions — no local copies. classify-intent.mjs
+// has no module-level side effects, so importing it is safe, same as
+// classify-intent-tiers.test.mjs does for its sibling module.
 //
 // Run: node --test tests/unit/classify-intent-crud.test.mjs
 
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-// ── Faithful copy of CRUD_LIST_LIMIT from classify-intent.mjs ────────────────
-// Keep in sync with src/proc/classify-intent.mjs:CRUD_LIST_LIMIT
+import { formatTableCrudResult } from '../../src/proc/classify-intent.mjs';
+
+// Mirrors CRUD_LIST_LIMIT in classify-intent.mjs. Not exported — it is an internal
+// tuning value, not part of any contract — so the ceiling behaviour is asserted by
+// driving the formatter with exactly this many rows.
 const CRUD_LIST_LIMIT = 500;
 
-// ── Faithful copy of pickLabelColumn from classify-intent.mjs ───────────────
-// Keep in sync with src/proc/classify-intent.mjs:pickLabelColumn
-function pickLabelColumn(columns = []) {
-  const byName = new Set(columns.map(c => c.name));
-  if (byName.has('name'))  return 'name';
-  if (byName.has('title')) return 'title';
+const listing = (tableName, rows, labelColumn) =>
+  formatTableCrudResult('serv_query', tableName, rows, {}, labelColumn);
 
-  const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
-  const UNREADABLE     = new Set(['jsonb', 'json', 'vector', 'bytea']);
-  const candidate = columns.find(c =>
-    !SYSTEM_COLUMNS.has(c.name)
-    && !/embedding/i.test(c.name)
-    && !UNREADABLE.has(String(c.type).toLowerCase())
-  );
-  return candidate?.name ?? null;
-}
-
-// ── Faithful copy of formatTableCrudResult's serv_query branch ──────────────
-// Keep in sync with src/proc/classify-intent.mjs:formatTableCrudResult
-function formatQueryResult(tableName, output, labelColumn = null) {
-  const rows = Array.isArray(output) ? output : [];
-  if (rows.length === 0) return `No rows found in \`${tableName}\`.`;
-
-  const listing = rows
-    .map((r, i) => `${i + 1}. ${(labelColumn ? r[labelColumn] : null) ?? r.id} (id: ${r.id})`)
-    .join('\n');
-
-  const heading = rows.length >= CRUD_LIST_LIMIT
-    ? `Showing the first ${CRUD_LIST_LIMIT} rows in \`${tableName}\` — there may be more. Add a filter to narrow the list.`
-    : `Found ${rows.length} row${rows.length !== 1 ? 's' : ''} in \`${tableName}\`:`;
-
-  return `${heading}\n${listing}`;
-}
-
-describe('pickLabelColumn', () => {
-  it('prefers name, then title', () => {
-    assert.equal(pickLabelColumn([{ name: 'title', type: 'text' }, { name: 'name', type: 'text' }]), 'name');
-    assert.equal(pickLabelColumn([{ name: 'description', type: 'text' }, { name: 'title', type: 'text' }]), 'title');
-  });
-
-  it('skips system columns, embeddings, and unreadable types', () => {
-    const columns = [
-      { name: 'id',              type: 'serial' },
-      { name: 'created_at',      type: 'timestamptz' },
-      { name: 'intent_embedding', type: 'vector' },
-      { name: 'steps',           type: 'jsonb' },
-      { name: 'table_name',      type: 'text' },
-    ];
-    assert.equal(pickLabelColumn(columns), 'table_name',
-      'a jsonb/vector/system column must never be chosen as a display label');
-  });
-
-  it('returns null when nothing is readable — the listing falls back to ids', () => {
-    assert.equal(pickLabelColumn([{ name: 'id', type: 'serial' }, { name: 'payload', type: 'jsonb' }]), null);
-    assert.equal(pickLabelColumn([]), null);
-  });
-});
+// The label column itself is chosen by pickLabelColumn — see schema-utils.test.mjs.
 
 describe('formatTableCrudResult — serv_query listing', () => {
   const rows = n => Array.from({ length: n }, (_, i) => ({ id: i + 1, name: `row ${i + 1}` }));
 
   it('lists every row — the former 10-row slice is gone', () => {
-    const out = formatQueryResult('PGC_Workflow', rows(14), 'name');
+    const out = listing('PGC_Workflow', rows(14), 'name');
     assert.ok(out.includes('Found 14 rows'));
     assert.ok(out.includes('14. row 14 (id: 14)'), 'the 14th row must be listed, not discarded');
-    assert.ok(!out.includes('and 4 more'), 'no truncation notice below the ceiling');
+    assert.ok(!out.includes('more.'), 'no truncation notice below the ceiling');
   });
 
-  it('reports honestly when the 500-row ceiling is reached', () => {
-    const out = formatQueryResult('PGC_SessionEntry', rows(CRUD_LIST_LIMIT), 'name');
+  it('reports honestly when the row ceiling is reached', () => {
+    const out = listing('PGC_SessionEntry', rows(CRUD_LIST_LIMIT), 'name');
     assert.ok(out.includes(`Showing the first ${CRUD_LIST_LIMIT} rows`),
       'must not report a truncated count as if it were the total');
     assert.ok(out.includes('there may be more'));
   });
 
-  it('falls back to the id when the row has no label column', () => {
-    const out = formatQueryResult('PGC_Thing', [{ id: 7 }], null);
-    assert.ok(out.includes('1. 7 (id: 7)'));
+  it('falls back to the id when there is no label column', () => {
+    assert.ok(listing('PGC_Thing', [{ id: 7 }], null).includes('1. 7 (id: 7)'));
   });
 
   it('reports an empty table plainly', () => {
-    assert.equal(formatQueryResult('PGD_Empty', [], 'name'), 'No rows found in `PGD_Empty`.');
+    assert.equal(listing('PGD_Empty', [], 'name'), 'No rows found in `PGD_Empty`.');
   });
 });

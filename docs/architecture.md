@@ -49,6 +49,7 @@ For authoritative detail follow the section references in each row.
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
 | `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
 | `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm`, `callLlmWithCorrection` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
+| `src/shared/schema-utils.mjs` | Shared | Pure interpretation of a `PGC_Schema.columns` array — `pickLabelColumn` (which column stands in for a row as its readable value; returns null when none does) | Used by `classify-intent.mjs` (display label for `/m list <table>`) and `step-executor.mjs` (natural key for reference-table FK resolution) — the two differ only in preference order |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
 | `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
 | `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; `dropConstraint`; auto-infers `embed_source` for `X_embedding` vector columns. See Section 5.1 | Changes affect table creation and schema registration |
@@ -355,6 +356,7 @@ src/
     sqs-callback.mjs   enqueueCallback, enqueueWorkflow — ONLY @aws-sdk/client-sqs location in PROC
     llm-client.mjs     callLlm, callLlmWithCorrection — Perplexity gateway
     serv-client.mjs    getRows, insertRow, updateRows, deleteRows — all PROC→SERV HTTP calls
+    schema-utils.mjs   pickLabelColumn — reads a PGC_Schema columns array, no I/O
 dev_scripts/          Manual tooling only — never imported by Lambda code
 tests/unit/           node:test unit tests — run with `node --test tests/unit/*.test.mjs`
 tests/integration/    Integration tests — require live env vars from .env.test.template
