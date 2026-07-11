@@ -208,6 +208,33 @@ entirely).
 
 Removed. Previously flagged data flow risks for skipped failure-path steps.
 
+## Skeleton drift — translation may not invent steps
+
+`checkSkeletonDrift()` runs inside Level 1 whenever the `simulate` step is given
+`input.locked_skeleton_key`.
+
+The routing skeleton is built from `process_design` and BFS-validated *before* any content
+is generated. From that moment the step set is **locked**: `generate_workflow_steps` emits
+exactly one step per design item and may not add its own. It is a translator, not a designer.
+
+It does not always obey. Run 702 shipped 20 steps from a 15-item design — five `js_transform`
+steps ("format X into a markdown display", "parse Y") invented at translation time. That is
+not cosmetic. Those steps were never in the graph the skeleton validated, and they arrive
+*after* the consolidation critic has reviewed the design — so they are invisible to both. A
+step nobody authorised and nobody reviewed is exactly where redundancy accumulates.
+
+The comparison is on the ordered sequence of step **types**, ignoring `end` steps: translation
+renumbers `step_label`s to numeric keys (so keys cannot be compared), and the skeleton builder
+appends its own `end` even when the design already declared one. Types are sufficient — an
+invented step always shows up as an extra type in the sequence.
+
+Deterministic, not heuristic: the design either authorised a step or it did not. A drift issue
+fails Level 1 and routes through `create_workflow`'s existing regeneration loop
+(25 → 26 → 27 → 22a → 23), naming the added types so the retry can act on them.
+
+The fix for a genuinely missing step belongs in `design_workflow_process` (its
+PREPARATION-STEP RULE), never in translation — that is the only stage permitted to add a step.
+
 ## Simulation result structure
 
 ```json

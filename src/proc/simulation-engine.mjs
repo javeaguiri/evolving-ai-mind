@@ -30,7 +30,7 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // @returns {SimulateWorkflowResponse}
 // ---------------------------------------------------------------------------
 
-export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, traceId }) {
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, lockedSkeleton = null, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
@@ -41,7 +41,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 
   // ── Level 1 — Static analysis ────────────────────────────────────────────
   const level1Result  = runLevel1StaticAnalysis(steps, { skeleton });
-  const staticIssues  = level1Result.issues;
+  const staticIssues  = [...level1Result.issues, ...checkSkeletonDrift(steps, lockedSkeleton)];
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
 
@@ -129,6 +129,65 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   });
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton drift — did translation invent steps the design never authorised?
+// ---------------------------------------------------------------------------
+
+/**
+ * The routing skeleton is built from process_design and L1-BFS-validated BEFORE any
+ * content is generated; from that point the step set is locked. Translation
+ * (generate_workflow_steps) must therefore emit exactly one step per design item —
+ * it is a translator, not a designer.
+ *
+ * It does not always obey. Run 702 shipped 20 steps from a 15-step design: five
+ * js_transform steps ("format X into a markdown display", "parse Y") invented at
+ * translation time. That is not a cosmetic problem. Those steps were never in the
+ * graph the skeleton validated, and they arrive after the consolidation critic has
+ * already reviewed the design — so they are invisible to both. A step nobody
+ * authorised and nobody reviewed is exactly where redundancy accumulates.
+ *
+ * The comparison is on the ordered sequence of step TYPES, ignoring `end` steps:
+ * translation renumbers step_labels to numeric keys, so keys cannot be compared, and
+ * the skeleton builder appends its own `end` even when the design already declared one.
+ * Types are enough — an invented step always shows up as an extra type in the sequence.
+ *
+ * Deterministic, not heuristic: the design either authorised a step or it did not.
+ *
+ * @param {Array}  steps           The generated step array
+ * @param {Array?} lockedSkeleton  The routing_skeleton the design locked, if supplied
+ * @returns {Array} issues
+ */
+function checkSkeletonDrift(steps, lockedSkeleton) {
+  if (!Array.isArray(lockedSkeleton) || lockedSkeleton.length === 0) return [];
+
+  const types = arr => arr.filter(s => s.type !== 'end').map(s => s.type);
+  const generated = types(steps);
+  const locked    = types(lockedSkeleton);
+
+  if (generated.length === locked.length && generated.every((t, i) => t === locked[i])) return [];
+
+  // Report what was added, per type — enough for the correction pass to act on.
+  const tally = list => list.reduce((acc, t) => ({ ...acc, [t]: (acc[t] ?? 0) + 1 }), {});
+  const genT  = tally(generated);
+  const lockT = tally(locked);
+  const added = Object.keys(genT)
+    .filter(t => (genT[t] ?? 0) > (lockT[t] ?? 0))
+    .map(t => `${genT[t] - (lockT[t] ?? 0)}× ${t}`);
+
+  return [{
+    check:         'skeleton_drift',
+    step:          null,
+    failure_class: 'skeleton_drift',
+    detail:
+      `Translation produced ${generated.length} steps but the locked routing skeleton has ${locked.length}. ` +
+      `The step set was fixed when the design was accepted — translation must emit exactly one step per ` +
+      `process_design item, never add its own. ` +
+      (added.length ? `Steps added that the design never authorised: ${added.join(', ')}. ` : '') +
+      `If a gate genuinely needs a preceding formatting or parsing step, that is a design defect: the step ` +
+      `belongs in process_design, not here. Re-emit one step per design item, in order.`,
+  }];
 }
 
 // ---------------------------------------------------------------------------

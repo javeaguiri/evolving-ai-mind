@@ -1514,14 +1514,19 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
   const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
+  // optional — path to the routing skeleton this step array was translated from. When
+  // present, L1 checks that translation emitted exactly one step per design item and
+  // invented none of its own (see checkSkeletonDrift).
+  const lockedSkeletonKey = step.input?.locked_skeleton_key;
 
   if (!stepsKey) {
     throw new Error('simulate step missing input.steps_key');
   }
 
-  const steps       = resolvePath(localState, stepsKey);
-  const mockOutputs = mockOutputsKey ? resolvePath(localState, mockOutputsKey) : null;
-  const simPaths    = pathsKey       ? resolvePath(localState, pathsKey)       : null;
+  const steps          = resolvePath(localState, stepsKey);
+  const mockOutputs    = mockOutputsKey    ? resolvePath(localState, mockOutputsKey)    : null;
+  const simPaths       = pathsKey          ? resolvePath(localState, pathsKey)          : null;
+  const lockedSkeleton = lockedSkeletonKey ? resolvePath(localState, lockedSkeletonKey) : null;
 
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error(`simulate: steps_key "${stepsKey}" did not resolve to a non-empty array`);
@@ -1533,6 +1538,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
     skeleton,
+    lockedSkeleton,
     traceId,
   });
 

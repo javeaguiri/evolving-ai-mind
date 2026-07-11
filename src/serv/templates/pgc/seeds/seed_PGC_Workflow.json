@@ -1545,7 +1545,8 @@
         "type": "simulate",
         "description": "Level 1 static analysis — routing, dead targets, missing templates, gate structure.",
         "input": {
-          "steps_key": "draft_workflow.steps"
+          "steps_key": "draft_workflow.steps",
+          "locked_skeleton_key": "routing_skeleton"
         },
         "output_key": "static_analysis_result",
         "on_success": "step:25a",

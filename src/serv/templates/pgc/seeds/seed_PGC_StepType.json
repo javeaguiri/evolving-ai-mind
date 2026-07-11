@@ -803,6 +803,12 @@
       },
       {
         "type": "string",
+        "field": "input.locked_skeleton_key",
+        "required": false,
+        "description": "Dot-path to the routing skeleton the step array was translated from. When present, Level 1 also checks that translation emitted exactly one step per design item and invented none of its own (skeleton_drift). The step set is locked once the skeleton is validated — only the design stage may add a step."
+      },
+      {
+        "type": "string",
         "field": "input.mock_outputs_key",
         "required": false,
         "description": "Dot-path to mock_outputs object \u2014 required for Level 2. If absent, runs Level 1 only."
