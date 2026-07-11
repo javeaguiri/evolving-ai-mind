@@ -540,9 +540,45 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // never lazily here.
   const isChoice      = gateType === 'choice';
   const allOptions    = [...(stepRef.options ?? []), ...(stepRef.special_buttons ?? [])];
+
+  // Past a handful of options, callback.mjs draws a choice gate as a dropdown plus a
+  // Select button rather than one button per option — a rendering decision, made there.
+  // The Select button therefore carries no option value of its own; the chosen option
+  // arrives in state.values as responseData.selectedValue. Resolve it back to the option
+  // before anything matches on userResponse, so the gate behaves identically either way.
+  // Guarded on 'cancel': a user who picks a month and then clicks Cancel means Cancel.
+  let choiceResponse = userResponse;
+  if (isChoice && userResponse !== 'cancel' && responseData?.selectedValue) {
+    choiceResponse = responseData.selectedValue;
+  }
+
   const matchedOption = allOptions.find(o =>
-    isChoice ? o.value === userResponse : o.action === userResponse
+    isChoice ? o.value === choiceResponse : o.action === choiceResponse
   );
+
+  // A choice gate must never advance on a value that matches no option — clicking Select
+  // with nothing chosen would otherwise fall through to the default 'next' route and skip
+  // the decision entirely. Re-render in place instead, the same stay-suspended pattern
+  // list_selection and form use.
+  if (isChoice && !matchedOption && choiceResponse !== 'cancel') {
+    const dialogForRetry = buildDialog(stepRef, localState);
+    dialogForRetry.fields.unshift({
+      type:  'typography',
+      value: '⚠️ Choose an option before selecting.',
+    });
+    await enqueueCallback(run.callback, {
+      type:          'HUMAN_GATE',
+      workflowRunId: run.id,
+      gate_type:     gateType,
+      dialog:        dialogForRetry,
+      callback:      run.callback,
+      traceId,
+    });
+    console.info('run-workflow: choice — no option selected, gate re-rendered', {
+      workflowRunId: run.id, userResponse, traceId,
+    });
+    return { action: 'choice_unselected' };
+  }
   // When the modal was dismissed without submitting (no inputValue), route via
   // on_modal_close if the option declares it — allows list_selection gates to loop
   // back to themselves rather than falling through to on_select (which would
@@ -703,7 +739,9 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // so the typed text — not the button name — is written to the state key.
   // confirm gate with context_key: write userResponse to output_key (dynamic domain selection).
   if (isChoice && stepRef.output_key) {
-    const selectionValue = responseData?.inputValue ?? userResponse;
+    // choiceResponse, not userResponse — under dropdown rendering the click carries the
+    // Select button's action, and the real answer is the option chosen in state.values.
+    const selectionValue = responseData?.inputValue ?? choiceResponse;
     setPath(localState, stepRef.output_key, selectionValue);
     frame.local_state = localState;
     console.info('run-workflow: choice gate — selection written to local_state', {

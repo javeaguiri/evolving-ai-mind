@@ -382,6 +382,7 @@ function buildListTable(items, parentHeading) {
 // Keep in sync with src/ui/slackbot/callback.mjs:buildListSelect
 const SELECT_OPTION_LIMIT = 100;
 const OPTION_TEXT_LIMIT   = 75;
+const CHOICE_DROPDOWN_THRESHOLD = 5;
 
 function truncateOption(text) {
   const s = String(text ?? '');
@@ -460,7 +461,7 @@ function buildObjectArrayTable(items) {
 
 // ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:dialogToBlocks
-function dialogToBlocks(dialog, workflowRunId) {
+function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
   for (const field of (dialog?.fields ?? [])) {
@@ -596,7 +597,48 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'actions': {
-        const elements = (field.buttons ?? []).map((btn, i) => ({
+        const allButtons = field.buttons ?? [];
+        const choices    = gateType === 'choice'
+          ? allButtons.filter(b => b.action !== 'cancel')
+          : [];
+
+        if (choices.length > CHOICE_DROPDOWN_THRESHOLD && choices.length <= SELECT_OPTION_LIMIT) {
+          blocks.push({
+            type:     'input',
+            block_id: `choice_select_${workflowRunId}`,
+            element:  {
+              type:        'static_select',
+              action_id:   'choice_value',
+              placeholder: { type: 'plain_text', text: 'Choose one' },
+              options: choices.map(btn => ({
+                text:  { type: 'plain_text', text: truncateOption(btn.label) },
+                value: String(btn.action),
+              })),
+            },
+            label: { type: 'plain_text', text: 'Select' },
+          });
+          blocks.push({
+            type:     'actions',
+            elements: [
+              {
+                type:      'button',
+                style:     'primary',
+                text:      { type: 'plain_text', text: 'Select' },
+                action_id: 'workflow_choice_submit',
+                value:     JSON.stringify({ workflowRunId, action: 'confirm', label: 'Select' }),
+              },
+              ...allButtons.filter(b => b.action === 'cancel').map((btn, i) => ({
+                type:      'button',
+                text:      { type: 'plain_text', text: btn.label },
+                action_id: `workflow_action_${btn.action || i}_${i}`,
+                value:     JSON.stringify({ workflowRunId, action: btn.action, label: btn.label }),
+              })),
+            ],
+          });
+          break;
+        }
+
+        const elements = allButtons.map((btn, i) => ({
           type:      'button',
           style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
           text:      { type: 'plain_text', text: btn.label },
@@ -1729,5 +1771,62 @@ describe('groupBlocksForSlack', () => {
 
   it('empty input produces no groups', () => {
     assert.deepEqual(groupBlocksForSlack([], 50), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// choice gate — buttons below the threshold, dropdown above it
+// ---------------------------------------------------------------------------
+
+describe('dialogToBlocks — choice gate rendering scales with option count', () => {
+  const choiceDialog = n => ({
+    fields: [
+      { type: 'typography', value: "Which month's budget would you like to edit?" },
+      {
+        type: 'actions',
+        buttons: [
+          ...Array.from({ length: n }, (_, i) => ({ label: `0${(i % 9) + 1}/2026`, action: `2026-0${(i % 9) + 1}` })),
+          { label: 'Cancel', action: 'cancel' },
+        ],
+      },
+    ],
+  });
+
+  it('keeps lettered buttons for a small choice — one click, no submit', () => {
+    const blocks = dialogToBlocks(choiceDialog(3), 42, 'choice');
+    assert.equal(blocks.filter(b => b.type === 'input').length, 0, 'no dropdown below the threshold');
+    const buttons = blocks.find(b => b.type === 'actions').elements;
+    assert.equal(buttons.length, 4, '3 choices + Cancel, all as buttons');
+  });
+
+  it('renders a dropdown once the buttons would become a wall (the live 12-month picker)', () => {
+    const blocks = dialogToBlocks(choiceDialog(12), 42, 'choice');
+    const input  = blocks.find(b => b.type === 'input');
+    assert.ok(input, 'past the threshold the options become a dropdown');
+    assert.equal(input.element.type, 'static_select');
+    assert.equal(input.element.options.length, 12, 'every month is an option');
+    assert.equal(input.element.options[0].value, '2026-01', 'option value is the routing value, not the label');
+  });
+
+  it('keeps Cancel as a real button — it is not one of the choices', () => {
+    const blocks  = dialogToBlocks(choiceDialog(12), 42, 'choice');
+    const buttons = blocks.find(b => b.type === 'actions').elements;
+    assert.deepEqual(buttons.map(b => b.text.text), ['Select', 'Cancel']);
+    assert.equal(JSON.parse(buttons[1].value).action, 'cancel');
+    const dropdownValues = blocks.find(b => b.type === 'input').element.options.map(o => o.value);
+    assert.ok(!dropdownValues.includes('cancel'), 'Cancel must never be buried in the dropdown');
+  });
+
+  it('the Select button carries no option value — the choice arrives in state.values', () => {
+    const blocks = dialogToBlocks(choiceDialog(12), 42, 'choice');
+    const submit = blocks.find(b => b.type === 'actions').elements[0];
+    assert.equal(JSON.parse(submit.value).action, 'confirm');
+    assert.equal(blocks.find(b => b.type === 'input').element.action_id, 'choice_value');
+  });
+
+  it('leaves non-choice gates alone, however many buttons they have', () => {
+    const blocks = dialogToBlocks(choiceDialog(12), 42, 'confirm');
+    assert.equal(blocks.filter(b => b.type === 'input').length, 0);
+    assert.equal(blocks.find(b => b.type === 'actions').elements.length, 13);
   });
 });
