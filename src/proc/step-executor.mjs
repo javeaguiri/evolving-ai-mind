@@ -278,6 +278,35 @@ export function buildDialog(step, localState) {
     value: resolveTemplate(step.message_template ?? '', localState),
   });
 
+  // Options are expanded and resolved ONCE, before the switch, because two things
+  // consume them: the choice gate's description_list (rendered above the buttons) and
+  // the actions block (the buttons themselves). Resolving them separately is what let
+  // the two drift apart — the buttons bound each iterator row correctly while the
+  // description text above them still showed raw {{label}} tokens.
+  //
+  // step.options may be a template string (e.g. "{{item.options}}") when the gate lives
+  // inside an iterator item_step — resolve that first.
+  const resolvedOptions = typeof step.options === 'string'
+    ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
+    : (step.options ?? []);
+
+  // An option carrying `iterator` becomes one option per row of localState[iterator],
+  // with label/value/description each resolved against localState merged with that row,
+  // so {{label}}, {{id}} and expressions over the row's own fields all bind to it.
+  const resolveOption = (option, state) => ({
+    ...option,
+    label: resolveTemplate(String(option.label ?? ''), state),
+    ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
+    ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
+    iterator: undefined,
+  });
+
+  const expandedOptions = resolvedOptions.flatMap(option => {
+    if (!option.iterator) return [resolveOption(option, localState)];
+    const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
+    return items.map(item => resolveOption(option, { ...localState, ...item }));
+  });
+
   // Gate-type-specific fields
   switch (step.gate_type) {
 
@@ -514,13 +543,15 @@ export function buildDialog(step, localState) {
     case 'choice': {
       // Single-select with question heading, per-option descriptions, and lettered buttons.
       // Mirrors HTML radio button semantics: label displays, value is submitted.
-      // Resolved options carry { value, label, description, on_select }.
       // description_list renders the explanation text above the buttons in the UI.
-      const rawChoiceOptions = typeof step.options === 'string'
-        ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
-        : (step.options ?? []);
-      const choiceItems = rawChoiceOptions
-        .map(o => ({ value: o.value, label: o.label, description: resolveTemplate(o.description ?? '', localState) }));
+      //
+      // Built from the SAME expandedOptions the buttons are (computed above): this list
+      // used to be derived from the raw step.options instead, so an iterator-driven
+      // option contributed one unexpanded row with its {{label}}/{{description}} tokens
+      // intact, while the buttons beneath it expanded correctly — the two had silently
+      // diverged. One list, resolved once, keeps them in step by construction.
+      const choiceItems = expandedOptions
+        .map(o => ({ value: o.value, label: o.label, description: o.description ?? '' }));
       if (choiceItems.length > 0 && choiceItems.some(item => item.description)) {
         fields.push({ type: 'description_list', items: choiceItems });
       }
@@ -564,30 +595,6 @@ export function buildDialog(step, localState) {
       content:      resolveInput(r.content ?? '', localState),
     });
   }
-
-  // actions — from step.options
-  // step.options may be a template string (e.g. "{{item.options}}") when the gate
-  // lives inside an iterator item_step — resolve it before mapping.
-  const resolvedOptions = typeof step.options === 'string'
-    ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
-    : (step.options ?? []);
-
-  // Expand options that carry an iterator field — one button per row in
-  // localState[o.iterator]. label and value are resolved against a merged
-  // state (localState + item) so {{name}}, {{id}} etc. bind to the row.
-  const expandedOptions = resolvedOptions.flatMap(o => {
-    if (!o.iterator) return [o];
-    const items = Array.isArray(localState[o.iterator]) ? localState[o.iterator] : [];
-    return items.map(item => {
-      const itemState = { ...localState, ...item };
-      return {
-        ...o,
-        label:    resolveTemplate(String(o.label  ?? ''), itemState),
-        value:    resolveTemplate(String(o.value  ?? ''), itemState),
-        iterator: undefined,
-      };
-    });
-  });
 
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
