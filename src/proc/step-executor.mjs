@@ -350,31 +350,45 @@ export function buildDialog(step, localState) {
       break;
     }
 
-    case 'select_one': {
-      const items = resolvePath(localState, step.context_key) ?? [];
-      fields.push({
-        type:    items.length <= 5 ? 'radio' : 'select',
-        name:    step.context_key ?? 'selection',
-        label:   resolveTemplate(step.message_template ?? '', localState),
-        options: items.map(item => ({
-          value: item[step.item_primary_key ?? 'id'] ?? String(item),
-          label: item[step.item_primary_key ?? 'id'] ?? String(item),
-        })),
-      });
-      break;
-    }
+    // form — collect any number of typed values in one gate. Replaces what would
+    // otherwise be a new gate_type per widget (select_one, select_many, date_input,
+    // …): a widget is a *field type*, not a gate type. The dialog carries UI-agnostic
+    // descriptors ('date', 'select'); the experience layer decides that means a
+    // datepicker and a dropdown, so a non-Slack front end could render the same form.
+    //
+    // Each field becomes one { type: 'input' } dialog field; reveals and the option
+    // buttons are appended by the shared tail below, same as every other gate type.
+    case 'form': {
+      for (const field of (step.fields ?? [])) {
+        // Options may be authored inline, or pulled from local_state so a dropdown's
+        // choices can be data the workflow just queried (the categories it loaded)
+        // rather than a hardcoded list — this is what lets a workflow offer a
+        // deterministic pick instead of parsing free text with an llm_call.
+        let options;
+        if (Array.isArray(field.options)) {
+          options = field.options.map(o => (o && typeof o === 'object')
+            ? { value: String(o.value), label: String(o.label ?? o.value) }
+            : { value: String(o), label: String(o) });
+        } else if (field.options_key) {
+          const rows = resolvePath(localState, field.options_key) ?? [];
+          const valueKey = field.option_value_key ?? 'id';
+          const labelKey = field.option_label_key ?? 'name';
+          options = (Array.isArray(rows) ? rows : []).map(row => (row && typeof row === 'object')
+            ? { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) }
+            : { value: String(row), label: String(row) });
+        }
 
-    case 'select_many': {
-      const items = resolvePath(localState, step.context_key) ?? [];
-      fields.push({
-        type:    'checkbox',
-        name:    step.context_key ?? 'selection',
-        label:   resolveTemplate(step.message_template ?? '', localState),
-        options: items.map(item => ({
-          value: item[step.item_primary_key ?? 'id'] ?? String(item),
-          label: item[step.item_primary_key ?? 'id'] ?? String(item),
-        })),
-      });
+        fields.push({
+          type:       'input',
+          name:       field.name,
+          input_type: field.type ?? 'text',
+          label:      resolveTemplate(String(field.label ?? field.name), localState),
+          optional:   field.optional === true,
+          ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+          ...(field.initial !== undefined ? { initial: field.initial } : {}),
+          ...(options ? { options } : {}),
+        });
+      }
       break;
     }
 

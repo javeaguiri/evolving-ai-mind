@@ -1258,6 +1258,44 @@ an `actions` block containing Submit/Cancel buttons. The `state.values` in the r
 `block_actions` payload contains the typed text at `state.values[block_id][action_id].value`.
 Use explicit `block_id` values so the key is predictable.
 
+### form gate rendering
+
+One Slack `input` block per declared field. `buildInputElement()` in `callback.mjs` is the
+**only** place a UI-agnostic field type becomes a Slack element — `/proc` says `date`, this
+decides that means a `datepicker`. Adding a widget is one row here and nothing in `/proc`.
+
+| Field type | Slack element |
+|---|---|
+| `text` / `textarea` | `plain_text_input` (`multiline` for textarea) |
+| `select` | `static_select` (≤100 options) |
+| `multi_select` | `multi_static_select` (≤100) |
+| `radio` | `radio_buttons` (≤10) |
+| `checkbox` | `checkboxes` (≤10) |
+| `date` | `datepicker` |
+| `time` | `timepicker` |
+| `datetime` | `datetimepicker` |
+
+Every one of these works in a **message**. `number_input`, `email_input`, `url_input` and
+`file_input` are **modal-only** and so are deliberately not offered as field types.
+
+Each block's `block_id` is `form_field_<runId>::<fieldName>`. The `::` separator matters —
+field names may contain underscores, so an underscore-delimited id could not be split back
+into a name reliably. `form-fields.mjs` owns both the prefix and the parser, shared by
+`callback.mjs` (which writes the id) and `interactive.mjs` (which reads it), so the two
+cannot drift.
+
+On submit, Slack returns every field at once in `state.values`; `collectFormValues()`
+rebuilds them into `{ fieldName: value }`. Each element reports its answer under a different
+key (`value`, `selected_option`, `selected_options`, `selected_date`, `selected_time`), which
+`extractFieldValue()` normalises.
+
+**Slack does not validate a message's inputs.** The `optional` flag is enforced only on
+*modal* submit — clicking Submit on a message posts whatever is there, gaps included. Required
+fields are therefore re-checked in `resumeGate`, which re-renders the gate rather than
+advancing. That re-render posts a **new** message rather than editing in place: `chat.update`
+is unreliable on messages carrying input blocks, and a silently-dropped edit would be
+indistinguishable from a hang.
+
 ### list_selection gate rendering
 
 `callback.mjs` renders the rows themselves as one `markdown` table (uncapped — Slack scrolls

@@ -333,6 +333,7 @@ Step Processor receives resume_gate
 | gate_type | User interaction | Data contract |
 |---|---|---|
 | `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
+| `form` | Collect any number of typed values in one gate | `fields[]` → one entry per value (`text`, `textarea`, `select`, `multi_select`, `radio`, `checkbox`, `date`, `time`, `datetime`). `output_key` receives one object keyed by field name. A widget is a field type, not a gate type — this is why `select_one`/`select_many`/`date_input` do not exist |
 | `list_selection` | View a table of records, pick one, advance | `context_key` → array of `{ id, fields }`; `item_action.on_select` (required) drives where selecting routes |
 | `text_input` | Type free text in an inline Slack input block, click Submit | Value written to `local_state[output_key]` on submit. Set `multiline: true` on the step for a multi-line text area. |
 | `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs. An array value whose items are plain records with no recognized single-field shape (no `syntax`/`verb`/`command`) renders as a markdown table with one data-driven column per distinct record key, labeled via the same `formatColumnHeader` logic `list_selection` uses — not an unlabeled positional join |

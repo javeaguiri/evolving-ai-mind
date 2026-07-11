@@ -628,6 +628,51 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
       : { tableName: matchedItem.id };
   }
 
+  // form gate — write the collected field map to output_key. Slack enforces a field's
+  // `optional` flag only on *modal* submit; a message's Submit button performs no
+  // validation at all, so required fields are checked here. A gap re-renders the gate
+  // rather than advancing with a hole in the data, mirroring list_selection's
+  // unresolved-selection path. Cancel skips validation — you can always back out.
+  if (gateType === 'form' && userResponse !== 'cancel') {
+    const values  = responseData?.formValues ?? {};
+    const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
+    const missing = (stepRef.fields ?? [])
+      .filter(f => f.optional !== true && isEmpty(values[f.name]))
+      .map(f => f.label ?? f.name);
+
+    if (missing.length > 0) {
+      const dialogForForm = buildDialog(stepRef, localState);
+      dialogForForm.fields.unshift({
+        type:  'typography',
+        value: `⚠️ Please complete: ${missing.join(', ')}.`,
+      });
+      // Deliberately no message_ts: the re-render posts a fresh gate rather than
+      // editing in place. Slack's chat.update is unreliable on a message carrying
+      // input blocks, and a silently-dropped edit would look identical to a hang.
+      await enqueueCallback(run.callback, {
+        type:          'HUMAN_GATE',
+        workflowRunId: run.id,
+        gate_type:     gateType,
+        dialog:        dialogForForm,
+        callback:      run.callback,
+        traceId,
+      });
+      console.info('run-workflow: form — required fields missing, gate re-rendered', {
+        workflowRunId: run.id, missing, traceId,
+      });
+      return { action: 'form_incomplete', missing };
+    }
+
+    if (stepRef.output_key) {
+      setPath(localState, stepRef.output_key, values);
+      frame.local_state = localState;
+      console.info('run-workflow: form values written to local_state', {
+        workflowRunId: run.id, output_key: stepRef.output_key,
+        fields: Object.keys(values), traceId,
+      });
+    }
+  }
+
   const onSelect = (
     !hasModalInput && matchedOption?.on_modal_close !== undefined
       ? matchedOption.on_modal_close

@@ -19,8 +19,9 @@
 //   1. Add a case to routeCallback() below.
 //   2. No new queue or Lambda needed for the common case.
 
-import { randomUUID }  from 'node:crypto';
-import { WebClient }   from '@slack/web-api';
+import { randomUUID }        from 'node:crypto';
+import { WebClient }         from '@slack/web-api';
+import { FORM_BLOCK_PREFIX } from './form-fields.mjs';
 
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -939,6 +940,74 @@ function buildListTable(items, parentHeading) {
   return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
+// buildInputElement — the one place a UI-agnostic form field type becomes a Slack
+// element. /proc never names a Slack widget; it says 'date' and this decides that
+// means a datepicker. A new widget is a new row here — never a new gate_type.
+//
+// Every element below works in a *message* (verified against Slack's element table:
+// number/email/url/file inputs are modal-only, so they are deliberately absent —
+// a workflow needing those should collect text and validate it in a js_transform).
+function buildInputElement(field) {
+  const action_id   = 'form_value';
+  const placeholder = field.placeholder
+    ? { placeholder: { type: 'plain_text', text: String(field.placeholder) } }
+    : {};
+  const options = (field.options ?? []).map(o => ({
+    text:  { type: 'plain_text', text: truncateOption(String(o.label)) },
+    value: String(o.value),
+  }));
+
+  switch (field.input_type) {
+    case 'text':
+    case 'textarea':
+      return {
+        type: 'plain_text_input',
+        action_id,
+        multiline: field.input_type === 'textarea',
+        ...placeholder,
+        ...(field.initial !== undefined ? { initial_value: String(field.initial) } : {}),
+      };
+
+    case 'select':
+      if (options.length === 0) return null;
+      return { type: 'static_select', action_id, options, ...placeholder };
+
+    case 'multi_select':
+      if (options.length === 0) return null;
+      return { type: 'multi_static_select', action_id, options, ...placeholder };
+
+    case 'radio':
+      if (options.length === 0) return null;
+      return { type: 'radio_buttons', action_id, options };
+
+    case 'checkbox':
+      if (options.length === 0) return null;
+      return { type: 'checkboxes', action_id, options };
+
+    case 'date':
+      return {
+        type: 'datepicker',
+        action_id,
+        ...placeholder,
+        ...(field.initial ? { initial_date: String(field.initial) } : {}),
+      };
+
+    case 'time':
+      return {
+        type: 'timepicker',
+        action_id,
+        ...placeholder,
+        ...(field.initial ? { initial_time: String(field.initial) } : {}),
+      };
+
+    case 'datetime':
+      return { type: 'datetimepicker', action_id };
+
+    default:
+      return null;
+  }
+}
+
 // Slack's static_select limits, from its block element reference: at most 100
 // options across all option groups, and option text capped at 75 characters.
 // A list longer than the option cap falls back to the shared text box (see the
@@ -1123,6 +1192,30 @@ function dialogToBlocks(dialog, workflowRunId) {
             }],
           });
         }
+        break;
+      }
+
+      case 'input': {
+        // form gate — one Slack input block per field. This is the only place the
+        // mapping from a UI-agnostic field type ('date') to a Slack element
+        // ('datepicker') lives: /proc says what it needs, /ui/slack decides how to
+        // draw it. Adding a widget means adding a row here, never a new gate_type.
+        //
+        // block_id encodes the field name so interactive.mjs can rebuild the answers
+        // as a map. '::' separates the run id from the name — names may contain
+        // underscores, so an underscore-delimited id could not be split back reliably.
+        const element = buildInputElement(field);
+        if (!element) break;   // unknown field type — nothing to render
+        blocks.push({
+          type:     'input',
+          block_id: `${FORM_BLOCK_PREFIX}${workflowRunId}::${field.name}`,
+          element,
+          label:    { type: 'plain_text', text: field.label || field.name },
+          // Slack enforces `optional` only on modal submit — a message's Submit
+          // button does not validate. run-workflow re-checks required fields on
+          // resume and re-renders the gate rather than advancing with a gap.
+          optional: field.optional === true,
+        });
         break;
       }
 
