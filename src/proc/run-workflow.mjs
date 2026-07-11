@@ -604,24 +604,46 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // the same gate in place with an error line, mirroring remove_item's stay-suspended
   // pattern above — it never silently advances with an unresolved value.
   if (itemActionMatch) {
-    // item.id is the record's own plain id (not a table-prefixed composite) so the
-    // user can type it directly — if a combined list spans multiple tables and two
-    // of them happen to share a numeric id, the first match wins. Acceptable for
-    // this app's scale; a genuine disambiguator would need a second typed field.
+    // The click carries one of two things, depending on which control callback.mjs
+    // rendered for this list. Normally it's a static_select's chosen option
+    // (responseData.selectedValue — a JSON {id, table} payload), which pins the row's
+    // source table alongside its id, so a level spanning more than one child table
+    // can't resolve a colliding id to the wrong table's row. Past Slack's 100-option
+    // cap the list falls back to a shared text box, and the click carries a bare typed
+    // id (responseData.inputValue) with no table — there, a collision still resolves
+    // first-hit, unchanged and acceptable at this app's scale.
+    let selected = null;
+    if (responseData?.selectedValue) {
+      try {
+        selected = JSON.parse(responseData.selectedValue);
+      } catch {
+        selected = null;
+      }
+    }
     const typedId = responseData?.inputValue?.trim();
+
     const dialogForLookup = buildDialog(stepRef, localState);
-    const matchedItem = typedId
-      ? dialogForLookup.fields.find(f => f.type === 'list')?.items?.find(
-          item => String(item.id) === typedId && item.secondaryAction
-        )
-      : null;
+    const listItems = dialogForLookup.fields.find(f => f.type === 'list')?.items ?? [];
+
+    let matchedItem = null;
+    if (selected) {
+      matchedItem = listItems.find(item =>
+        item.secondaryAction
+        && String(item.id) === String(selected.id)
+        && (item.responseData?.table ?? null) === (selected.table ?? null)
+      ) ?? null;
+    } else if (typedId) {
+      matchedItem = listItems.find(item => item.secondaryAction && String(item.id) === typedId) ?? null;
+    }
 
     if (!matchedItem) {
       dialogForLookup.fields.unshift({
         type:  'typography',
-        value: typedId
-          ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
-          : '⚠️ Enter an ID before selecting.',
+        value: selected
+          ? '⚠️ That selection no longer matches a row in this list — please try again.'
+          : typedId
+            ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
+            : '⚠️ Choose a record before selecting.',
       });
       await enqueueCallback(run.callback, {
         type:          'HUMAN_GATE',
@@ -632,8 +654,8 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
         message_ts,
         traceId,
       });
-      console.info('run-workflow: list_selection — invalid id, gate re-rendered', {
-        workflowRunId: run.id, typedId, traceId,
+      console.info('run-workflow: list_selection — unresolved selection, gate re-rendered', {
+        workflowRunId: run.id, selected, typedId, traceId,
       });
       return { action: 'list_selection_invalid' };
     }

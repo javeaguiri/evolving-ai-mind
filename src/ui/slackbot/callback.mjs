@@ -939,6 +939,89 @@ function buildListTable(items, parentHeading) {
   return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
+// Slack's static_select limits, from its block element reference: at most 100
+// options across all option groups, and option text capped at 75 characters.
+// A list longer than the option cap falls back to the shared text box (see the
+// 'list' case below) — the markdown table itself is uncapped either way, so a
+// long list is never truncated, only selected from differently.
+const SELECT_OPTION_LIMIT = 100;
+const OPTION_TEXT_LIMIT   = 75;
+
+function truncateOption(text) {
+  const s = String(text ?? '');
+  return s.length <= OPTION_TEXT_LIMIT ? s : `${s.slice(0, OPTION_TEXT_LIMIT - 1)}…`;
+}
+
+// buildSelectOptionText — a one-line identifier for a row in the dropdown,
+// data-driven and domain-free exactly as buildTableBody's columns are: the row's
+// id (the same ID column the table shows, so dropdown and table can be read
+// against each other) followed by its first non-empty field value in first-seen
+// key order, skipping the parent-link column. The table above already carries the
+// full labeled detail — an option only has to be enough to pick a row by.
+function buildSelectOptionText(item, excludeColumn) {
+  const entry = Object.entries(item.fields ?? {}).find(([col, value]) =>
+    col !== excludeColumn && value !== null && value !== undefined && String(value).trim() !== ''
+  );
+  const summary = entry ? String(entry[1]).trim() : '';
+  return truncateOption(summary ? `${item.id} — ${summary}` : String(item.id));
+}
+
+// buildListSelect — a static_select over a list_selection field's selectable rows,
+// replacing the shared "type the ID" text box. Each option's value carries the
+// row's source table alongside its id, so a level spanning more than one child
+// table (a recipe's ingredients and its steps) can no longer resolve a bare id
+// that collides across both to the wrong table's row — the tables become their own
+// labeled option_groups and the table travels with the selection, which removes
+// the ambiguity by construction rather than asking the user to disambiguate it.
+// Returns null when nothing is selectable, or when the list exceeds Slack's
+// 100-option cap — the caller then falls back to the text input.
+function buildListSelect(items, workflowRunId) {
+  const selectable = items.filter(item => item.secondaryAction);
+  if (selectable.length === 0 || selectable.length > SELECT_OPTION_LIMIT) return null;
+
+  const groups = new Map();
+  for (const item of selectable) {
+    const table = item.responseData?.table;
+    if (!groups.has(table)) groups.set(table, []);
+    groups.get(table).push(item);
+  }
+  const entries = [...groups.entries()];
+
+  const toOptions = groupItems => {
+    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
+    return groupItems.map(item => ({
+      text:  { type: 'plain_text', text: buildSelectOptionText(item, excludeColumn) },
+      value: JSON.stringify({
+        id: item.id,
+        ...(item.responseData?.table ? { table: item.responseData.table } : {}),
+      }),
+    }));
+  };
+
+  const element = {
+    type:        'static_select',
+    action_id:   'list_select_value',
+    placeholder: { type: 'plain_text', text: 'Choose a record' },
+  };
+  // Only group when the level genuinely spans more than one table — a single-table
+  // list gets a flat option list, with no redundant one-group header above it.
+  if (entries.length > 1) {
+    element.option_groups = entries.map(([table, groupItems]) => ({
+      label:   { type: 'plain_text', text: truncateOption(formatTableName(table)) },
+      options: toOptions(groupItems),
+    }));
+  } else {
+    element.options = toOptions(entries[0][1]);
+  }
+
+  return {
+    type:     'input',
+    block_id: `list_select_input_${workflowRunId}`,
+    element,
+    label:    { type: 'plain_text', text: 'Select a record' },
+  };
+}
+
 // buildObjectArrayTable — markdown table for a review_object array-of-records
 // value with no recognized single-field shape (e.g. add_entity's parsed child
 // rows — flashcard {front, back} pairs, recipe {description, order} steps).
@@ -1002,18 +1085,24 @@ function dialogToBlocks(dialog, workflowRunId) {
         if (items.length > 0) {
           blocks.push(...markdownToBlocks(buildListTable(items, field.parentHeading)));
         }
-        // One shared ID-entry input + button replaces the former per-row accessory
+        // One shared selection control + button replaces the former per-row accessory
         // button. list_selection's item_action is uniform across every row, so a
         // single button (labeled from the first selectable row's own action) covers
-        // the whole list; run-workflow.mjs's resumeGate resolves the typed id back
+        // the whole list; run-workflow.mjs's resumeGate resolves the selection back
         // to that row's responseData before advancing, exactly as a direct row click
         // used to. Rows with no secondaryAction (item_action condition false, or the
         // item explicitly opts out) stay visible in the table but aren't selectable —
         // same as before, when they simply rendered with no accessory button.
+        //
+        // The control is a static_select whose options carry each row's source table
+        // (see buildListSelect), so colliding ids across two child tables at one level
+        // resolve unambiguously. Past Slack's 100-option cap it falls back to the
+        // original shared text box, where a bare typed id is matched first-hit — the
+        // table stays uncapped and fully visible under either control.
         const selectable = items.find(item => item.secondaryAction);
         if (selectable) {
           const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
-          blocks.push({
+          blocks.push(buildListSelect(items, workflowRunId) ?? {
             type:     'input',
             block_id: `list_select_input_${workflowRunId}`,
             element:  {

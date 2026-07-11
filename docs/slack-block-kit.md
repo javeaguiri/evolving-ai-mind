@@ -231,6 +231,15 @@ reliably by key rather than by position.
 `static_select` inside an `input` block, with Submit/Cancel `actions` block.
 The selected value appears in `state.values` keyed by the auto-assigned `block_id`.
 
+**Limits:** at most **100 options** in total, and at most **100 `option_groups`**. An option's
+`text` is capped at **75 characters**, its `value` at **150**, and its optional `description` at
+**75**. Supply either `options` or `option_groups` — never both.
+
+**`option_groups`** replaces `options` with an array of `{ label, options }`, each group rendering
+under its own header inside the dropdown. This is the mechanism `list_selection` uses to keep two
+child tables' rows visually and semantically distinct within one control (see design notes below).
+On mobile Slack renders `static_select` as the native wheel picker.
+
 #### Code
 ```json
 {
@@ -1248,6 +1257,26 @@ Both patterns fire `block_actions`. The clicked button's `value` is the selected
 an `actions` block containing Submit/Cancel buttons. The `state.values` in the resulting
 `block_actions` payload contains the typed text at `state.values[block_id][action_id].value`.
 Use explicit `block_id` values so the key is predictable.
+
+### list_selection gate rendering
+
+`callback.mjs` renders the rows themselves as one `markdown` table (uncapped — Slack scrolls
+long tables natively), then one shared selection control plus one Select button below it.
+
+The control is a `static_select` built by `buildListSelect()`. Its options carry a JSON
+`{id, table}` value rather than a bare id, so when one drill-down level spans more than one
+child table (a recipe's ingredients *and* its steps), each table becomes its own labeled
+`option_groups` entry and an id that exists in both resolves unambiguously — the source table
+travels with the selection instead of being guessed at afterwards.
+
+The relevant Slack limits (see the element reference sections above): **100 options** across all
+groups, option `text` **75 characters**, option `value` **150 characters**. Past the option cap
+`buildListSelect()` returns `null` and the gate falls back to the original shared
+`plain_text_input`, where the user types a bare id and a cross-table collision resolves
+first-hit. The table is unaffected either way, so no row is ever hidden.
+
+Radio buttons (10 options), checkboxes (10) and the overflow menu (5) were all considered and
+are capped far too low for a record list of any real size.
 
 ### reveal gate rendering
 
