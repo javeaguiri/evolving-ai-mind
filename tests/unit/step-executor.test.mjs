@@ -176,34 +176,34 @@ describe('buildDialog — modal descriptor passthrough', () => {
     assert.equal(actionsField.buttons[0].action, 'cancel');
   });
 
-  it('list_selection gate defaults item_action to Remove/danger when label/style omitted (the original edit_list behavior, preserved)', () => {
+  it('list_selection gate defaults item_action label to Select, and sends no style when omitted', () => {
     const step = {
       step: '9c', type: 'human_gate', gate_type: 'list_selection',
       context_key: 'row_items',
-      item_action: { action: 'remove_item' },
+      item_action: { action: 'select_row', on_select: 'step:40' },
       options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
     };
     const localState = { row_items: [{ id: 1, fields: { title: 'Row 1' } }] };
 
     const dialog = buildDialog(step, localState);
     const listField = dialog.fields.find(f => f.type === 'list');
-    assert.equal(listField.items[0].secondaryAction.label, 'Remove');
-    assert.equal(listField.items[0].secondaryAction.style, 'danger');
+    assert.equal(listField.items[0].secondaryAction.label, 'Select');
+    assert.equal(listField.items[0].secondaryAction.style, undefined,
+      'no style default — Slack rejects style: "default", and callback.mjs forwards only danger/primary');
   });
 
   it('list_selection gate passes an item\'s own pre-built secondaryAction through untouched, ignoring step.item_action', () => {
-    // Matches design-domain.mjs's own pattern: some items (e.g. a referenced
-    // parent table) get no action at all, decided per-item upstream, not by
-    // this generic renderer.
+    // Some items (e.g. a referenced parent row) get no action at all, decided
+    // per-item upstream, not by this generic renderer.
     const step = {
       step: '9c', type: 'human_gate', gate_type: 'list_selection',
       context_key: 'row_items',
-      item_action: { action: 'remove_item' },
+      item_action: { action: 'select_row', on_select: 'step:40' },
       options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
     };
     const localState = {
       row_items: [
-        { id: 1, fields: { title: 'Child' }, secondaryAction: { label: 'Remove', action: 'remove_item', style: 'danger' } },
+        { id: 1, fields: { title: 'Child' }, secondaryAction: { label: 'Open', action: 'select_row' } },
         { id: 2, fields: { title: 'Parent (referenced)' }, secondaryAction: null },
       ],
     };

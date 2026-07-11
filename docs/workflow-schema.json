@@ -155,13 +155,13 @@
       "required": ["action"],
       "additionalProperties": false,
       "properties": {
-        "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy do not receive the action button." },
-        "action":           { "type": "string", "description": "Any caller-chosen action name (e.g. 'remove_item', 'view_record'). 'remove_item' is handled specially by resumeGate (mutates context_key, re-renders this same gate in place). Any other action name advances via on_select (below) once clicked." },
-        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName' (the historical name — carries whatever id/value the clicked row needs, regardless of action)." },
-        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in a confirmation dialog before the action fires. Supports {{item.field}} placeholders. Typically used with a destructive action like 'remove_item'." },
-        "label":            { "type": "string", "description": "Button label. Defaults to 'Remove'." },
-        "style":            { "type": "string", "enum": ["default", "primary", "danger"], "description": "Button style. Defaults to 'danger'. 'default' is never sent to Slack (no such enum value there) — omitted entirely so the button renders with no special emphasis." },
-        "on_select":        { "$ref": "#/definitions/routingToken", "description": "Routing target when any row's action button is clicked, for actions other than 'remove_item' (e.g. drill-down). Resolved directly — NOT via a matching entry in options[], since every options[] entry also renders as its own visible bottom button (which would duplicate the per-row button)." }
+        "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy are still listed but are not selectable." },
+        "action":           { "type": "string", "description": "Any caller-chosen action name (e.g. 'select_row', 'view_record'). Selecting a row writes it to the step's output_key and advances via on_select (below); the action name itself carries no special behaviour." },
+        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName' (the historical name — carries whatever id/value the selected row needs, regardless of action)." },
+        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in a confirmation dialog before the action fires. Supports {{item.field}} placeholders. Computed by buildDialog but currently has no renderer — the shared Select button has no row bound to it until after submission." },
+        "label":            { "type": "string", "description": "Button label. Defaults to 'Select'." },
+        "style":            { "type": "string", "enum": ["default", "primary", "danger"], "description": "Button style. No default. 'default' is never sent to Slack (no such enum value there) — omitted entirely so the button renders with no special emphasis." },
+        "on_select":        { "$ref": "#/definitions/routingToken", "description": "Required. Routing target when a row is selected (e.g. drill-down). Resolved directly — NOT via a matching entry in options[], since every options[] entry also renders as its own visible bottom button (which would duplicate it)." }
       }
     },
 

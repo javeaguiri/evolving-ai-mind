@@ -632,8 +632,8 @@ CREATE_WORKFLOW    → create-workflow.mjs
   "type":          "WORKFLOW_STEP",
   "workflowRunId": 42,
   "action":        "execute_top | resume_gate | cancel",
-  "userResponse":  "confirm | cancel | remove_item | ...",
-  "responseData":  { "tableName": "...", "inputValue": "..." },
+  "userResponse":  "confirm | cancel | <item_action.action> | ...",
+  "responseData":  { "selectedValue": "...", "inputValue": "..." },
   "traceId":       "uuid"
 }
 ```

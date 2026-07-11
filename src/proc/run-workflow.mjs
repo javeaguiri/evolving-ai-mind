@@ -517,42 +517,6 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     workflowRunId: run.id, gateType, userResponse, traceId,
   });
 
-  // ── remove_item — mutate, re-render, stay suspended ────────────────────
-  if (userResponse === 'remove_item') {
-    if (!responseData?.tableName) {
-      throw new Error('resume_gate remove_item: responseData.tableName is required');
-    }
-
-    const contextItems = resolvePath(localState, stepRef.context_key) ?? [];
-    const filtered     = contextItems.filter(
-      item => item[stepRef.item_primary_key] !== responseData.tableName
-    );
-    setPath(localState, stepRef.context_key, filtered);
-    frame.local_state = localState;
-
-    await updateRows('PGC_WorkflowRun',
-      [{ column: 'id', op: 'eq', value: run.id }],
-      { stack: run.stack }
-    );
-
-    const updatedDialog = buildDialog(stepRef, localState);
-    await enqueueCallback(run.callback, {
-      type:          'HUMAN_GATE',
-      workflowRunId: run.id,
-      gate_type:     gateType,
-      dialog:        updatedDialog,
-      callback:      run.callback,
-      message_ts,    // present on remove_item — signals callback.mjs to chat.update in-place
-      traceId,
-    });
-
-    console.info('run-workflow: remove_item — gate re-rendered', {
-      workflowRunId: run.id, removed: responseData.tableName,
-      remaining: filtered.length, traceId,
-    });
-    return { action: 'remove_item', remaining: filtered.length };
-  }
-
   // ── cancel ─────────────────────────────────────────────────────────────
   if (userResponse === 'cancel') {
     await updateRows('PGC_WorkflowRun',
@@ -594,15 +558,14 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     ? stepRef.item_action
     : null;
 
-  // list_selection's Select button is now a single shared control (Sprint 7 Track D —
-  // markdown table + one text input, replacing one accessory button per row, which
-  // was throwing msg_blocks_too_long above ~8 rows). The click itself carries only
-  // the typed row id in responseData.inputValue, not a specific row's responseData —
-  // resolve it here against context_key's fully-resolved items (reusing buildDialog's
-  // own item_action application rather than re-implementing it) before the item_action
-  // advance logic below runs. An id that doesn't resolve to a selectable row re-renders
-  // the same gate in place with an error line, mirroring remove_item's stay-suspended
-  // pattern above — it never silently advances with an unresolved value.
+  // list_selection's Select button is a single shared control (Sprint 7 Track D —
+  // markdown table + one picker, replacing one accessory button per row, which was
+  // throwing msg_blocks_too_long above ~8 rows). The click identifies no row by
+  // itself — the chosen row rides in Slack's state.values — so resolve it here
+  // against context_key's fully-resolved items (reusing buildDialog's own item_action
+  // application rather than re-implementing it) before the advance logic below runs.
+  // A selection that doesn't resolve to a selectable row re-renders the same gate in
+  // place with an error line — it never silently advances on an unresolved value.
   if (itemActionMatch) {
     // The click carries one of two things, depending on which control callback.mjs
     // rendered for this list. Normally it's a static_select's chosen option
@@ -734,14 +697,11 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
-  // A row's own accessory button was clicked and its item_action declares
-  // on_select — an "advance" action (e.g. drill-down), as opposed to remove_item's
-  // "mutate this list and stay suspended" behavior handled above. Every row
-  // shares the same item_action.action, so the clicked row is identified only
-  // by responseData.tableName (same field name callback.mjs's 'list' field type
-  // already sends for any row-level secondaryAction, regardless of what the
-  // action does). Write it to output_key before the generic matchedOption/
-  // on_select advance below routes to wherever item_action.on_select points.
+  // A row was selected and the gate's item_action declares on_select — an "advance"
+  // action (e.g. drill-down). responseData is the matched row's own payload, resolved
+  // just above from the shared picker. Write it to output_key before the generic
+  // matchedOption/on_select advance below routes to wherever item_action.on_select
+  // points.
   if (itemActionMatch && stepRef.output_key) {
     // Legacy rows never set their own responseData, so callback.mjs sends the
     // { tableName } shape by default — write the bare scalar, exactly as before.
