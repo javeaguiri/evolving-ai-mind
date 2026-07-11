@@ -19,6 +19,7 @@
 
 import { ok, err }                          from '../shared/lambda-utils.mjs';
 import { getRows, insertRow, updateRows, deleteRows } from '../shared/serv-client.mjs';
+import { pickLabelColumn }                  from '../shared/schema-utils.mjs';
 import { enqueueCallback, enqueueWorkflow } from '../shared/sqs-callback.mjs';
 import { callLlm }                          from '../shared/llm-client.mjs';
 import {
@@ -665,39 +666,10 @@ function toEntityName(domain) {
 const CRUD_LIST_LIMIT = 500;
 
 /**
- * Choose the column to label rows by, from a PGC_Schema `columns` array.
- *
- * Schema-driven, not data-driven: picking from whichever key happened to come
- * first in row[0] means the same list can relabel itself depending on which rows
- * came back. Returns null when a table offers nothing readable, in which case the
- * listing shows ids alone.
- *
- * @param {Array<{name: string, type: string}>} columns
- * @returns {string|null}  Column name to display alongside id
- */
-function pickLabelColumn(columns = []) {
-  const byName = new Set(columns.map(c => c.name));
-  if (byName.has('name'))  return 'name';
-  if (byName.has('title')) return 'title';
-
-  // Otherwise the first column that can actually read as a label: not a system
-  // column, not an embedding, and not a structured/vector type that would dump
-  // an unreadable blob into the message.
-  const SYSTEM_COLUMNS = new Set(['id', 'created_at', 'updated_at']);
-  const UNREADABLE     = new Set(['jsonb', 'json', 'vector', 'bytea']);
-  const candidate = columns.find(c =>
-    !SYSTEM_COLUMNS.has(c.name)
-    && !/embedding/i.test(c.name)
-    && !UNREADABLE.has(String(c.type).toLowerCase())
-  );
-  return candidate?.name ?? null;
-}
-
-/**
- * Look up a table's label column via PGC_Schema.
+ * Look up a table's display label column via PGC_Schema.
  *
  * @param {string} tableName
- * @returns {Promise<string|null>}
+ * @returns {Promise<string|null>}  null when nothing readable — the listing shows ids alone
  */
 async function resolveLabelColumn(tableName) {
   const resp = await getRows(
@@ -779,7 +751,7 @@ async function executeCrudStep(result, callback, traceId) {
  * Table name is shown explicitly — this is an admin/debug path, not a
  * domain-friendly workflow result.
  */
-function formatTableCrudResult(stepType, tableName, output, insertedRow = {}, labelColumn = null) {
+export function formatTableCrudResult(stepType, tableName, output, insertedRow = {}, labelColumn = null) {
   if (stepType === 'serv_query') {
     const rows = Array.isArray(output) ? output : [];
     if (rows.length === 0) return `No rows found in \`${tableName}\`.`;

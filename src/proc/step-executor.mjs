@@ -49,6 +49,7 @@ import {
   evalItemCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
+import { pickLabelColumn }              from '../shared/schema-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Public dispatch — routes to the correct handler by step.type
@@ -896,12 +897,21 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       }));
   }
 
-  // For a reference table, pick the best natural key column for name-matching.
-  // Prefers columns named name/label/code/title, then falls back to first non-system column.
+  // For a reference table, pick the natural key column to match a user-supplied
+  // string against. Shares pickLabelColumn with the direct-CRUD listing path — the
+  // question ("which column stands in for a row as its readable value?") is the same,
+  // only the preference order differs.
+  //
+  // Returns null when the table has no column a string could match: previously this
+  // fell through to the first non-system column of any type, so a reference table
+  // whose leading column was jsonb/vector/an embedding would hand that column to
+  // resolveRefTableId as a lookup key — a filter that can never match. Callers now
+  // drop the FK instead (see rootRefFkCols/refFkCols below); a null must never reach
+  // resolveRefTableId, which builds it straight into a SQL filter.
   function getLookupColumn(tableName) {
-    const PREFERRED = new Set(['name', 'label', 'code', 'title']);
-    const cols = (schemaByTable[tableName] ?? []).filter(c => !SYSTEM.has(c.name));
-    return (cols.find(c => PREFERRED.has(c.name)) ?? cols[0])?.name ?? 'name';
+    return pickLabelColumn(schemaByTable[tableName] ?? [], {
+      preferred: ['name', 'label', 'code', 'title'],
+    });
   }
 
   // Returns names of all non-system text columns for a ref table.
@@ -942,7 +952,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       lookup_column:  getLookupColumn(fk.references.table),
       create_with:    refTextColumns(fk.references.table),
       allowed_values: refCheckAllowedValues(fk.references.table),
-    }));
+    }))
+    // No column a name could match on — omit the FK rather than resolve against a
+    // column that cannot match (a null lookup_column would reach resolveRefTableId
+    // and build a malformed SQL filter).
+    .filter(fk => fk.lookup_column !== null);
 
   // table → alias lookup — used to resolve FK references to parent aliases
   const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
@@ -980,14 +994,19 @@ async function executeServEntitySchema({ step, localState, traceId }) {
         parent = tableToAlias[fk.references];
         regularFkColumns.push({ column: fk.column, parent });
       } else {
-        // FK targets a table not in joins — treat as reference table
-        refFkCols.push({
-          column:         fk.column,
-          ref_table:      fk.references,
-          lookup_column:  getLookupColumn(fk.references),
-          create_with:    refTextColumns(fk.references),
-          allowed_values: refCheckAllowedValues(fk.references),
-        });
+        // FK targets a table not in joins — treat as reference table. A null lookup
+        // column means nothing a name could match on, so the FK is omitted rather
+        // than resolved against a column that cannot match (see getLookupColumn).
+        const lookupColumn = getLookupColumn(fk.references);
+        if (lookupColumn !== null) {
+          refFkCols.push({
+            column:         fk.column,
+            ref_table:      fk.references,
+            lookup_column:  lookupColumn,
+            create_with:    refTextColumns(fk.references),
+            allowed_values: refCheckAllowedValues(fk.references),
+          });
+        }
       }
     }
 
