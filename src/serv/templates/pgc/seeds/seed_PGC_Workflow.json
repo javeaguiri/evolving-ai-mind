@@ -1246,6 +1246,50 @@
         "on_else": "cancel"
       },
       {
+        "step": "21r",
+        "type": "llm_call",
+        "description": "Consolidation review: a fresh reviewer looks for steps that can be removed from the design. Findings only — it never authors a design, so process_design keeps exactly one author (step 21).",
+        "input": {
+          "prompt": "review_workflow_redundancy",
+          "process_design": "{{process_spec.process_design}}",
+          "state_map": "{{process_spec.state_map}}",
+          "userInput": "{{input.userInput}}"
+        },
+        "output_key": "redundancy_review",
+        "on_success": "next",
+        "on_else": "step:21a"
+      },
+      {
+        "step": "21s",
+        "type": "condition",
+        "description": "Nothing removable — straight on to the routing skeleton. Otherwise take exactly one consolidation pass: 21t runs at most once, so there is no loop to exit.",
+        "expression": "((local_state.redundancy_review || {}).findings || []).length > 0",
+        "on_success": "21t",
+        "on_else": "21a"
+      },
+      {
+        "step": "21t",
+        "type": "llm_call",
+        "description": "Consolidation pass: design_workflow_process re-emits its own design with the findings applied. The prompt that authored the design owns the rewrite — the reviewer only reported, so there is never a second author of process_design.",
+        "input": {
+          "prompt": "design_workflow_process",
+          "userInput": "{{input.userInput}}",
+          "domain": "{{input.domain}}",
+          "domain_schema": "{{domain_schema}}",
+          "gap_analysis": "{{gap_analysis}}",
+          "right_brain_research": "{{right_brain_research}}",
+          "user_preferences": "{{user_preferences}}",
+          "user_design_notes": "{{user_design_notes}}",
+          "special_instructions_message": "{{special_instructions_message}}",
+          "user_mode_instructions": "{{user_mode_instructions}}",
+          "user_workflow_feedback": "{{user_workflow_feedback}}",
+          "redundancy_findings": "{{redundancy_review.findings}}"
+        },
+        "output_key": "process_spec",
+        "on_success": "step:21a",
+        "on_else": "step:21a"
+      },
+      {
         "step": "21a",
         "type": "js_transform",
         "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation.",
