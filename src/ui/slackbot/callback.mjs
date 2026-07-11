@@ -616,7 +616,7 @@ async function postHumanGate(message) {
     ?? 'Workflow gate \u2014 please review and respond.';
 
   if (message_ts) {
-    // remove_item re-render — update the existing message in-place
+    // Re-render of a gate that stayed suspended — update the existing message in-place
     await slack.chat.update({
       channel: callback.channel,
       ts:      message_ts,

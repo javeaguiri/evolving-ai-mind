@@ -318,7 +318,7 @@ SlackbotFunction enqueues:
   │
 Step Processor receives resume_gate
   ├── Validates: top frame is human_gate, run status is awaiting_human_gate
-  ├── Applies mutation (remove_item, text_input value write, etc.)
+  ├── Applies mutation (text_input value write, list_selection row resolution, etc.)
   ├── Pops gate frame
   ├── Resolves on_select → next step key
   ├── Advances parent frame.current_step
@@ -348,20 +348,19 @@ workflow definitions containing gate steps.
 {
   "step":             "3",
   "type":             "human_gate",
-  "gate_type":        "confirm | edit_list | text_input | review_object | choice | select_one | select_many",
+  "gate_type":        "confirm | list_selection | text_input | review_object | choice | followup_prompt",
   "description":      "Human-readable — for workflow authors and right-brain only",
 
   "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
 
   "context_key":      "dot.path.into.local_state",
-  "item_primary_key": "field name — used as row label in edit_list",
-  "item_secondary_key": "field name — used as secondary text in edit_list",
+  "item_primary_key": "field name — used as an item's value where a gate needs one",
 
   "item_action": {
-    "condition":        "item.foreignKeys && item.foreignKeys.length > 0",
-    "action":           "remove_item",
-    "action_data_key":  "tableName",
-    "confirm_template": "Remove {{item.tableName}} from this domain?"
+    "condition":  "item.foreignKeys && item.foreignKeys.length > 0",
+    "action":     "select_row",
+    "label":      "Open",
+    "on_select":  "step:40"
   },
 
   "options": [
@@ -396,18 +395,20 @@ workflow definitions containing gate steps.
 not at step definition time. Template variables are read from `local_state` at the
 moment the gate suspends.
 
-**`context_key`** — dot-path into `local_state`. For `edit_list`, must resolve to
+**`context_key`** — dot-path into `local_state`. For `list_selection`, must resolve to
 an array. For `review_object`, resolves to an object or array — arrays are rendered
 as a table-name / column-list display. Optional for `confirm`.
 
-**`item_action`** — `edit_list` only. Defines a per-row action button. `condition`
-is evaluated against each item — items where the condition is falsy do not get the
-button. Only `remove_item` is currently implemented; others are Backlog.
+**`item_action`** — `list_selection` only. Defines what selecting a row does.
+`condition` is evaluated against each item — items where the condition is falsy are
+still listed but are not selectable. `on_select` is required and drives the routing;
+see `docs/arch-step-types.md` for the full field reference.
 
 **`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
 routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
-cancels the run. Must include at least one option with `action: "cancel"` (confirm/edit_list)
-or `value: "cancel"` (choice) — this may be in `special_buttons` instead of `options`.
+cancels the run. Must include at least one option with `action: "cancel"`
+(confirm/list_selection) or `value: "cancel"` (choice) — this may be in
+`special_buttons` instead of `options`.
 
 Two option shapes — determined by `gate_type`:
 - `confirm`, `edit_list`, `review_object` use `{ label, action, on_select }`
@@ -473,8 +474,9 @@ translates it to Slack Block Kit. Adding a new UI is one new renderer in
 }
 ```
 
-`message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
-to use `chat.update` (in-place edit) instead of posting a new message.
+`message_ts` is present when a gate re-renders while staying suspended (e.g. a
+`list_selection` selection that resolved to no row) — signals `callback.mjs` to use
+`chat.update` (in-place edit) instead of posting a new message.
 
 #### WORKFLOW_ERROR message shape
 
@@ -506,17 +508,14 @@ in the workflow definition itself. LLM response failures and schema validation
 failures (`llm_call validation failed`) are prompt quality issues that
 `TROUBLESHOOT_WORKFLOW` cannot fix — they are excluded from the repair chain.
 
-#### Mutation during gate suspension
+#### Re-rendering while a gate stays suspended
 
-`edit_list` gates support `remove_item` — the user can remove items from the
-list while the gate is still open. Each click sends `userResponse: 'remove_item'`
-with `responseData.tableName`. The Step Processor:
-1. Filters the item from `local_state[context_key]`
-2. Persists the updated `local_state`
-3. Re-renders the gate via `chat.update` (in-place edit of the Slack message)
-
-The stack remains suspended throughout. The gate stays open until the user clicks
-Confirm or Cancel.
+A gate can be re-rendered without advancing. `list_selection` does this when a
+submitted selection resolves to no selectable row: the Step Processor re-enqueues
+the `HUMAN_GATE` payload with the original `message_ts` and an added error line, so
+`callback.mjs` edits the existing Slack message in place (`chat.update`) rather than
+posting a new one. The stack remains suspended throughout — the gate never advances
+on an unresolved value.
 
 #### Routing from gates — on_select
 

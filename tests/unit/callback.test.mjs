@@ -1617,7 +1617,7 @@ describe('dialogToBlocks — actions', () => {
 });
 
 describe('dialogToBlocks — mixed fields', () => {
-  it('renders a complete edit_list dialog correctly', () => {
+  it('renders a complete list_selection dialog correctly', () => {
     // Mirrors the create_domain review_tables HUMAN_GATE output
     const dialog = {
       fields: [

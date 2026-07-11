@@ -257,40 +257,22 @@ expects — this is additive, not a breaking change to older workflows. See
 §6.17) for the pattern this exists to support: a row needs to say which table
 it belongs to and whether it can be drilled into further, not just its id.
 
-**Two behaviors, both driven by `item_action`, never by gate_type:**
-
-*Mutate-and-restay* (`action: "remove_item"`) — `resumeGate` filters the
-selected item out of `context_key`, re-renders this same gate in place, stays
-suspended:
-
-```json
-{
-  "step": "3", "type": "human_gate",
-  "gate_type":        "list_selection",
-  "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
-  "context_key":      "table_review_items",
-  "item_action":       { "action": "remove_item" },
-  "options": [
-    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
-    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
-    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
-  ],
-  "on_success": "next",
-  "on_else": "cancel"
-}
-```
+**Behavior is driven by `item_action`, never by gate_type.** Selecting a row writes
+that row to `output_key` and routes via `item_action.on_select` — what selecting
+*means* is expressed through where `on_select` points, never through a different
+gate_type for a different action semantic.
 
 `item_action.confirm_template` (per-item confirm text, resolved against
 `{...localState, item}`) is still computed by `buildDialog` but has no
 current renderer — the single shared Select button has no specific row bound
 to it until after submission, so there's no click surface left to attach a
 native Slack confirm popup to. Not currently used by any live workflow.
-(`item_action.label`/`.style` default to `"Remove"`/`"danger"` when omitted —
-matching this gate_type's original, still-live default.)
+`item_action.label` defaults to `"Select"`; `.style` has no default (Slack rejects
+`style: "default"`, and only `danger`/`primary` are forwarded).
 
-*Advance* (any other action name, with `item_action.on_select` set) — writes the
-selected row's id to `output_key`, pops the gate frame, routes elsewhere (e.g.
-drill-down into a back-edge step that fetches and displays that one record):
+*Advance* (`item_action.on_select` set) — writes the selected row to `output_key`,
+pops the gate frame, routes elsewhere (e.g. drill-down into a back-edge step that
+fetches and displays that one record):
 
 ```json
 {

@@ -261,7 +261,8 @@ async function executeHumanGate({ step, localState, run, traceId }) {
 
 /**
  * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
- * Called by executeHumanGate and by resume_gate when re-rendering after remove_item.
+ * Called by executeHumanGate, and by resume_gate both to resolve a list_selection
+ * click back to its row and to re-render a gate that stays suspended.
  *
  * @param {object} step        human_gate step definition
  * @param {object} localState  Current local_state (all template vars sourced here)
@@ -316,8 +317,8 @@ export function buildDialog(step, localState) {
           if (show) {
             secondaryAction = {
               action: step.item_action.action,
-              label:  step.item_action.label ?? 'Remove',
-              style:  step.item_action.style ?? 'danger',
+              label:  step.item_action.label ?? 'Select',
+              style:  step.item_action.style,
               ...(step.item_action.confirm_template ? {
                 confirm: resolveTemplate(step.item_action.confirm_template, { ...localState, item }),
               } : {}),

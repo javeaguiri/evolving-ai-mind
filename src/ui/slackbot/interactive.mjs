@@ -17,8 +17,10 @@
 //
 // Button value encoding: JSON.stringify({ workflowRunId, action, responseData? })
 // e.g. '{"workflowRunId":42,"action":"confirm"}'
-//      '{"workflowRunId":42,"action":"remove_item","responseData":{"tableName":"PGD_Holdings"}}'
 // responseData is forwarded to the Step Processor for actions that carry item-specific data.
+// A list_selection gate's Select button carries no row identity of its own — the chosen
+// row arrives in state.values and is merged in below as selectedValue (dropdown) or
+// inputValue (the >100-option text-box fallback).
 //
 // Security: signature verified by handler.mjs before this function is called.
 // Experience tier — WebClient used only to disable buttons via chat.update.
@@ -260,8 +262,6 @@ export async function handle(req) {
   const gateContext    = gateText ? `\n> _${gateText}_` : '';
   const confirmationText = userResponse === 'confirm'
     ? `✅ Confirmed.${gateContext}`
-    : userResponse === 'remove_item'
-    ? '🗑️ Removing — updating...'
     : userResponse === 'cancel'
     ? `❌ Cancelled.${gateContext}`
     : `✅ ${buttonLabel ?? userResponse}.${gateContext}`;
@@ -269,40 +269,34 @@ export async function handle(req) {
   // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up.
   // Do this before returning so the workflow resumes even if the response body
   // is somehow not processed by Slack.
-  if (userResponse !== 'remove_item') {
-    try {
-      await sqs.send(new SendMessageCommand({
-        QueueUrl:    process.env.SQS_WORKFLOW_URL,
-        MessageBody: JSON.stringify({
-          type:          'WORKFLOW_STEP',
-          action:        'resume_gate',
-          workflowRunId,
-          userResponse,
-          ...(mergedResponseData && { responseData: mergedResponseData }),
-          // message_ts is the ts of the gate message being interacted with.
-          // Forwarded so run-workflow can pass it to the re-render HUMAN_GATE
-          // payload, enabling callback.mjs to chat.update in-place on remove_item.
-          message_ts:    threadId,
-          slackUserId,
-          callback: {
-            provider: 'slack',
-            channel,
-            threadId,
-          },
-          traceId,
-          enqueuedAt: new Date().toISOString(),
-        }),
-      }));
-    } catch (error) {
-      console.error('interactive: SQS enqueue failed', { error: error.message, traceId });
-      return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
-    }
-  }
-
-  if (userResponse === 'remove_item') {
-    // Keep gate open — Step Processor re-enqueues updated HUMAN_GATE. Return
-    // empty body so Slack leaves the message as-is.
-    return { statusCode: 200, body: '' };
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:          'WORKFLOW_STEP',
+        action:        'resume_gate',
+        workflowRunId,
+        userResponse,
+        ...(mergedResponseData && { responseData: mergedResponseData }),
+        // message_ts is the ts of the gate message being interacted with.
+        // Forwarded so run-workflow can pass it to a re-render HUMAN_GATE payload,
+        // enabling callback.mjs to chat.update in-place rather than posting a new
+        // message — used when a list_selection gate stays suspended (unresolved
+        // selection) instead of advancing.
+        message_ts:    threadId,
+        slackUserId,
+        callback: {
+          provider: 'slack',
+          channel,
+          threadId,
+        },
+        traceId,
+        enqueuedAt: new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, req.correlationId);
   }
 
   // Update the gate message to clear stale buttons, keeping the original content —
