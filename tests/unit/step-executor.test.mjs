@@ -77,6 +77,68 @@ const SCAFFOLD = {
 };
 
 // ---------------------------------------------------------------------------
+// buildDialog — choice gate, iterator-driven options
+// ---------------------------------------------------------------------------
+
+describe('buildDialog — choice gate with iterator-expanded options', () => {
+  // Reproduces the live edit_budget (workflow 352) defect: the buttons expanded the
+  // iterator and bound each row correctly, but the description_list rendered above them
+  // was built from the RAW step.options — so the user saw one row reading literally
+  // "{{label}} — {{is_placeholder ? '(New month)' : ''}}" instead of one row per month.
+  const monthStep = {
+    step: '3', type: 'human_gate', gate_type: 'choice',
+    message_template: "Which month's budget would you like to edit?",
+    options: [
+      {
+        label: '{{label}}', value: '{{id}}', iterator: 'selectable_months',
+        on_select: 'next',
+        description: "{{is_placeholder ? '(New month)' : ''}}",
+      },
+      { label: 'Cancel', value: 'cancel', on_select: 'cancel', description: 'Stop workflow' },
+    ],
+    output_key: 'selected_month_id',
+  };
+  // Exactly the shape workflow 352's step-2 js_transform emits.
+  const localState = {
+    selectable_months: [
+      { id: '2026-07', label: '07/2026', is_placeholder: true  },
+      { id: '2026-06', label: '06/2026', is_placeholder: false },
+    ],
+  };
+
+  it('expands the iterator into one description row per item, with tokens resolved', () => {
+    const dialog = buildDialog(monthStep, localState);
+    const list   = dialog.fields.find(f => f.type === 'description_list');
+
+    assert.equal(list.items.length, 3, 'two months plus Cancel — not one unexpanded row');
+    assert.deepEqual(list.items.map(i => i.label), ['07/2026', '06/2026', 'Cancel']);
+    assert.deepEqual(list.items.map(i => i.value), ['2026-07', '2026-06', 'cancel']);
+    assert.ok(!JSON.stringify(list.items).includes('{{'),
+      'no raw template token may survive into the rendered list');
+  });
+
+  it('evaluates a per-row expression in a description against that row', () => {
+    const list = buildDialog(monthStep, localState).fields.find(f => f.type === 'description_list');
+    assert.equal(list.items[0].description, '(New month)', 'is_placeholder true → the label');
+    assert.equal(list.items[1].description, '',            'is_placeholder false → empty');
+    assert.equal(list.items[2].description, 'Stop workflow', 'non-iterator option unaffected');
+  });
+
+  it('keeps the buttons and the description list in step with each other', () => {
+    const dialog  = buildDialog(monthStep, localState);
+    const list    = dialog.fields.find(f => f.type === 'description_list');
+    const buttons = dialog.fields.find(f => f.type === 'actions').buttons;
+    assert.deepEqual(buttons.map(b => b.label), list.items.map(i => i.label),
+      'both are built from one expanded option list, so they cannot diverge');
+  });
+
+  it('an iterator naming a missing/empty array contributes no rows', () => {
+    const list = buildDialog(monthStep, {}).fields.find(f => f.type === 'description_list');
+    assert.deepEqual(list.items.map(i => i.label), ['Cancel']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildDialog — modal descriptor passthrough (the regression)
 // ---------------------------------------------------------------------------
 
