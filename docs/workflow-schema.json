@@ -104,7 +104,7 @@
 
     "confirmOption": {
       "type": "object",
-      "description": "Option shape for confirm, edit_list, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
+      "description": "Option shape for confirm, list_selection, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
       "required": ["label", "action", "on_select"],
       "additionalProperties": false,
       "properties": {
@@ -134,7 +134,7 @@
 
     "specialButton": {
       "type": "object",
-      "description": "Button appended AFTER options in the Slack actions block. Never appears in description_list or other content fields. Use for: Cancel (so it does not appear in the option description list), Other/Skip buttons, modal triggers. Field convention: use 'value' for choice gates; use 'action' for all other gate types (confirm, text_input, edit_list, review_object).",
+      "description": "Button appended AFTER options in the Slack actions block. Never appears in description_list or other content fields. Use for: Cancel (so it does not appear in the option description list), Other/Skip buttons, modal triggers. Field convention: use 'value' for choice gates; use 'action' for all other gate types (confirm, text_input, list_selection, review_object).",
       "required": ["label", "on_select"],
       "additionalProperties": false,
       "properties": {

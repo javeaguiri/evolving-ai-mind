@@ -230,16 +230,18 @@ Step 2 — js_transform
   output_key: "proposed_scaffold.tables"   writes local_state.proposed_scaffold.tables
   → each table object now has a columnSummary field
 
-Step 3 — human_gate (edit_list)
-  context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
+Step 3 — human_gate (list_selection)
+  context_key: "table_review_items"        binds  local_state.table_review_items
   message_template: "Plan for {{proposed_scaffold.domain}}"
                                            reads  local_state.proposed_scaffold.domain
-  User removes PGD_Transactions
-  → local_state.proposed_scaffold.tables now has 3 items instead of 4
+  output_key:  "selected_table"
+  User picks PGD_Transactions to inspect
+  → local_state["selected_table"] = { id: 3, table: "PGD_Transactions" }
+  (a gate both reads — via context_key — and writes — via output_key)
 
 Step 3d — human_gate (review_object)
   context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
-  → user sees all 3 tables with their column details before DDL
+  → user sees all 4 tables with their column details before DDL
 
 Step 5 — iterator
   items_key: "proposed_scaffold.tables"    reads  local_state.proposed_scaffold.tables
@@ -331,7 +333,7 @@ Step Processor receives resume_gate
 | gate_type | User interaction | Data contract |
 |---|---|---|
 | `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
-| `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
+| `list_selection` | View a table of records, pick one, advance | `context_key` → array of `{ id, fields }`; `item_action.on_select` (required) drives where selecting routes |
 | `text_input` | Type free text in an inline Slack input block, click Submit | Value written to `local_state[output_key]` on submit. Set `multiline: true` on the step for a multi-line text area. |
 | `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs. An array value whose items are plain records with no recognized single-field shape (no `syntax`/`verb`/`command`) renders as a markdown table with one data-driven column per distinct record key, labeled via the same `formatColumnHeader` logic `list_selection` uses — not an unlabeled positional join |
 | `choice` | Read a question, view labelled options with descriptions, click A/B/C | Options carry `{ value, label, description, on_select }`. `value` written to `local_state[output_key]` on resolve. Mirrors HTML radio button semantics — `value` is submitted, `label` is the button text, `description` is the explanatory sentence shown above buttons |
@@ -411,7 +413,7 @@ cancels the run. Must include at least one option with `action: "cancel"`
 `special_buttons` instead of `options`.
 
 Two option shapes — determined by `gate_type`:
-- `confirm`, `edit_list`, `review_object` use `{ label, action, on_select }`
+- `confirm`, `list_selection`, `review_object` use `{ label, action, on_select }`
 - `choice` uses `{ value, label, description, on_select }` — HTML radio button semantics:
   `value` is the machine identifier written to `output_key` and matched by `resume_gate`;
   `label` is the short button text (e.g. `"A"`, `"B"`);

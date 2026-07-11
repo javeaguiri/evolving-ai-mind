@@ -136,7 +136,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
-  it('list_selection gate renders one row per item with a caller-configured action button (not the edit_list defaults)', () => {
+  it('list_selection gate renders one row per item with a caller-configured action button (not the defaults)', () => {
     // Sprint 7 Track D2 drill-down — list_selection unifies what were briefly
     // two gate types (edit_list/row_list) into one: same 'list' field rendering
     // regardless of what the button does. item_action's label/style/action/
