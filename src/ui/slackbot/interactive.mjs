@@ -266,7 +266,18 @@ export async function handle(req) {
     traceId,
   });
 
-  const gateContext    = gateText ? `\n> _${gateText}_` : '';
+  // The confirmation exists to say WHICH gate was answered, so it needs one line, not the
+  // gate's whole body. A gate's text can be an entire markdown table (the budget pickers
+  // are), and quoting all of it back turned every click into a second, plain-text copy of
+  // the message directly above it. Take the first line of real prose — skipping markdown
+  // table rows and separators — and cap it.
+  const gateSummary = gateText
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line && !line.startsWith('|') && !/^[-:|\s]+$/.test(line)) ?? '';
+  const gateContext = gateSummary
+    ? `\n> _${gateSummary.length > 120 ? `${gateSummary.slice(0, 119)}…` : gateSummary}_`
+    : '';
   const confirmationText = userResponse === 'confirm'
     ? `✅ Confirmed.${gateContext}`
     : userResponse === 'cancel'

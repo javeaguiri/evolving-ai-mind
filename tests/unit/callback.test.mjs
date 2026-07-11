@@ -1888,3 +1888,33 @@ describe('dialogToBlocks — choice dropdown suppresses the duplicate descriptio
       'below the threshold the descriptions still belong beside the buttons');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gate confirmation text — one line, not the whole gate body
+// ---------------------------------------------------------------------------
+
+describe('gate confirmation summary', () => {
+  // Faithful copy of the gateSummary derivation in interactive.mjs.
+  // Keep in sync with src/ui/slackbot/interactive.mjs.
+  const gateSummary = gateText => gateText
+    .split('\n')
+    .map(line => line.trim())
+    .find(line => line && !line.startsWith('|') && !/^[-:|\s]+$/.test(line)) ?? '';
+
+  it('skips markdown table rows — the click must not echo the table back', () => {
+    const table = '| Month | Net |\n|---|---|\n| 07/2026 | 250 |\n| 06/2026 | -80 |';
+    assert.equal(gateSummary(table), '', 'a message that is only a table yields no quote');
+  });
+
+  it('takes the first line of real prose, past any table', () => {
+    const msg = '**Review updated budget for July**\n\n| Cat | Amt |\n|---|---|\n| Food | 100 |';
+    assert.equal(gateSummary(msg), '**Review updated budget for July**');
+  });
+
+  it('caps a long line rather than quoting it whole', () => {
+    const long = 'x'.repeat(400);
+    const s = gateSummary(long);
+    const capped = s.length > 120 ? `${s.slice(0, 119)}…` : s;
+    assert.equal(capped.length, 120);
+  });
+});
