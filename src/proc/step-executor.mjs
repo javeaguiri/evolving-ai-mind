@@ -261,6 +261,47 @@ async function executeHumanGate({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve a human_gate's options into the list the user actually sees.
+ *
+ * `step.options` may be a {{template}} string (when the gate lives inside an iterator
+ * item_step), and any option may carry an `iterator` naming a local_state array — that
+ * option becomes one option per row, with label/value/description resolved against
+ * local_state merged with that row, so {{label}}, {{id}} and expressions over the row's
+ * own fields all bind to it.
+ *
+ * Exported because TWO places must agree on this list: buildDialog, which renders it,
+ * and resumeGate, which matches the user's answer back to an option. resumeGate used to
+ * match against step.options RAW — so an iterator-driven option, whose value is still
+ * "{{year}}-{{month}}" at that point, could never match the "2026-07" that came back. It
+ * silently fell through to the default 'next' route, which happened to be correct for
+ * these gates, so the bug stayed hidden until a gate needed a real routing decision.
+ * One resolver, one list, no divergence.
+ *
+ * @param {object} step        human_gate step definition
+ * @param {object} localState
+ * @returns {Array}            Fully resolved options, iterator entries expanded
+ */
+export function resolveGateOptions(step, localState) {
+  const resolvedOptions = typeof step.options === 'string'
+    ? (resolvePath(localState, step.options.replace(/^\{\{|\}\}$/g, '')) ?? [])
+    : (step.options ?? []);
+
+  const resolveOption = (option, state) => ({
+    ...option,
+    label: resolveTemplate(String(option.label ?? ''), state),
+    ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
+    ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
+    iterator: undefined,
+  });
+
+  return resolvedOptions.flatMap(option => {
+    if (!option.iterator) return [resolveOption(option, localState)];
+    const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
+    return items.map(item => resolveOption(option, { ...localState, ...item }));
+  });
+}
+
+/**
  * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
  * Called by executeHumanGate, and by resume_gate both to resolve a list_selection
  * click back to its row and to re-render a gate that stays suspended.
@@ -278,34 +319,7 @@ export function buildDialog(step, localState) {
     value: resolveTemplate(step.message_template ?? '', localState),
   });
 
-  // Options are expanded and resolved ONCE, before the switch, because two things
-  // consume them: the choice gate's description_list (rendered above the buttons) and
-  // the actions block (the buttons themselves). Resolving them separately is what let
-  // the two drift apart — the buttons bound each iterator row correctly while the
-  // description text above them still showed raw {{label}} tokens.
-  //
-  // step.options may be a template string (e.g. "{{item.options}}") when the gate lives
-  // inside an iterator item_step — resolve that first.
-  const resolvedOptions = typeof step.options === 'string'
-    ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
-    : (step.options ?? []);
-
-  // An option carrying `iterator` becomes one option per row of localState[iterator],
-  // with label/value/description each resolved against localState merged with that row,
-  // so {{label}}, {{id}} and expressions over the row's own fields all bind to it.
-  const resolveOption = (option, state) => ({
-    ...option,
-    label: resolveTemplate(String(option.label ?? ''), state),
-    ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
-    ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
-    iterator: undefined,
-  });
-
-  const expandedOptions = resolvedOptions.flatMap(option => {
-    if (!option.iterator) return [resolveOption(option, localState)];
-    const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
-    return items.map(item => resolveOption(option, { ...localState, ...item }));
-  });
+  const expandedOptions = resolveGateOptions(step, localState);
 
   // Gate-type-specific fields
   switch (step.gate_type) {
@@ -609,6 +623,10 @@ export function buildDialog(step, localState) {
       action: isChoice ? (o.value ?? o.action) : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
+      // Carried so the experience layer can attach it to a dropdown option when it
+      // renders the choices as a select rather than as buttons — the description then
+      // sits on the option itself instead of in a separate list beneath the message.
+      ...(o.description ? { description: o.description } : {}),
       ...(o.modal ? { modal: o.modal } : {}),
     })),
   });

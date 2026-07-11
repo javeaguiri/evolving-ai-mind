@@ -35,7 +35,7 @@ import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
 import { getRows, insertRow, updateRows }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog }
+import { executeStep, buildDialog, resolveGateOptions }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
@@ -539,7 +539,12 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // field is resolved once when the gate frame is pushed (see the two suspend sites),
   // never lazily here.
   const isChoice      = gateType === 'choice';
-  const allOptions    = [...(stepRef.options ?? []), ...(stepRef.special_buttons ?? [])];
+  // resolveGateOptions, not stepRef.options — an option carrying `iterator` is one
+  // option per data row, and its value is still "{{year}}-{{month}}" until resolved.
+  // Matching the raw list could never match the "2026-07" the user actually picked.
+  // This is the same list buildDialog rendered, from the same resolver, so what the
+  // user saw and what we match against cannot disagree.
+  const allOptions    = [...resolveGateOptions(stepRef, localState), ...(stepRef.special_buttons ?? [])];
 
   // Past a handful of options, callback.mjs draws a choice gate as a dropdown plus a
   // Select button rather than one button per option — a rendering decision, made there.

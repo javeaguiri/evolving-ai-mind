@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
@@ -1842,5 +1842,58 @@ describe('L1 static analysis — arithmetic expression and bracket-notation fals
     const issues = result.static_analysis.issues.filter(i => i.failure_class === 'unresolved_template_variable');
     assert.strictEqual(issues.length, 1);
     assert.match(issues[0].detail, /missing_key/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveGateOptions — one resolver for rendering AND for matching the answer back
+// ---------------------------------------------------------------------------
+
+describe('resolveGateOptions', () => {
+  // Live workflow 353 (edit_budget) step 5. resumeGate used to match the user's answer
+  // against step.options RAW, where the value is still "{{year}}-{{month}}" — so it could
+  // never match the "2026-07" that came back, and silently fell through to 'next'.
+  const step = {
+    step: '5', type: 'human_gate', gate_type: 'choice',
+    options: [
+      { label: '{{label}}', value: '{{year}}-{{month}}', iterator: 'month_summary',
+        on_select: 'next', description: 'Net: {{net_cash_flow}}' },
+      { label: 'Cancel', value: 'cancel', on_select: 'cancel', description: 'Exit' },
+    ],
+  };
+  const localState = {
+    month_summary: [
+      { year: '2026', month: '07', label: '07/2026', net_cash_flow: 250 },
+      { year: '2026', month: '06', label: '06/2026', net_cash_flow: -80 },
+    ],
+  };
+
+  it('expands an iterator option into one resolved option per row', () => {
+    const opts = resolveGateOptions(step, localState);
+    assert.equal(opts.length, 3, 'two months plus Cancel');
+    assert.deepEqual(opts.map(o => o.value), ['2026-07', '2026-06', 'cancel']);
+    assert.deepEqual(opts.map(o => o.label), ['07/2026', '06/2026', 'Cancel']);
+  });
+
+  it('resolves the value the user actually picks — so resumeGate can match it', () => {
+    const opts = resolveGateOptions(step, localState);
+    const picked = opts.find(o => o.value === '2026-07');
+    assert.ok(picked, 'the answer coming back from Slack must find its option');
+    assert.equal(picked.on_select, 'next', 'and carry that option\'s routing');
+  });
+
+  it('resolves per-row tokens in a description', () => {
+    const opts = resolveGateOptions(step, localState);
+    assert.equal(opts[0].description, 'Net: 250');
+    assert.equal(opts[1].description, 'Net: -80');
+  });
+
+  it('leaves a plain options array alone', () => {
+    const plain = { options: [{ label: 'Yes', action: 'confirm', on_select: 'next' }] };
+    assert.deepEqual(resolveGateOptions(plain, {}).map(o => o.action), ['confirm']);
+  });
+
+  it('an iterator naming a missing array contributes nothing', () => {
+    assert.deepEqual(resolveGateOptions(step, {}).map(o => o.value), ['cancel']);
   });
 });

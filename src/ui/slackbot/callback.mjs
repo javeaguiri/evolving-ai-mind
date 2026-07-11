@@ -1122,6 +1122,17 @@ function buildObjectArrayTable(items) {
 function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
+  // Decided once, up front, because two cases below depend on it: a choice gate with
+  // more options than buttons can carry renders them as a dropdown, and its per-option
+  // descriptions then belong ON the options rather than in a separate list beneath the
+  // message. Left in the list they read as a plain-text restatement of whatever the
+  // message already shows — a second, worse copy of the table above it.
+  const choiceButtons  = gateType === 'choice'
+    ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
+    : [];
+  const choiceAsDropdown =
+    choiceButtons.length > CHOICE_DROPDOWN_THRESHOLD && choiceButtons.length <= SELECT_OPTION_LIMIT;
+
   for (const field of (dialog?.fields ?? [])) {
     switch (field.type) {
 
@@ -1135,6 +1146,11 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
       case 'description_list': {
         // Renders choice gate options as a formatted list above the action buttons.
         // One line per option: **A** — label: description
+        //
+        // Skipped when the choices render as a dropdown: each description travels on its
+        // own option there, so repeating them here produces a plain-text restatement of
+        // the same rows underneath the message that already presents them.
+        if (choiceAsDropdown) break;
         const lines = (field.items ?? []).map(item =>
           `**${item.label}** \u2014 ${item.description || item.label}`
         );
@@ -1322,11 +1338,9 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         // Control buttons (Cancel and friends) stay as buttons — they are not choices, and
         // burying Cancel inside a dropdown of months would be absurd.
         const allButtons = field.buttons ?? [];
-        const choices    = gateType === 'choice'
-          ? allButtons.filter(b => b.action !== 'cancel')
-          : [];
 
-        if (choices.length > CHOICE_DROPDOWN_THRESHOLD && choices.length <= SELECT_OPTION_LIMIT) {
+        if (choiceAsDropdown) {
+          const choices = allButtons.filter(b => b.action !== 'cancel');
           blocks.push({
             type:     'input',
             block_id: `choice_select_${workflowRunId}`,
@@ -1337,6 +1351,11 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
               options: choices.map(btn => ({
                 text:  { type: 'plain_text', text: truncateOption(btn.label) },
                 value: String(btn.action),
+                // The option's own description — shown beneath it in the dropdown, which
+                // is where it belongs once the choices are no longer buttons.
+                ...(btn.description
+                  ? { description: { type: 'plain_text', text: truncateOption(btn.description) } }
+                  : {}),
               })),
             },
             label: { type: 'plain_text', text: 'Select' },
