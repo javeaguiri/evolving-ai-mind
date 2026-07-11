@@ -103,6 +103,43 @@ describe('buildDialog — form gate', () => {
     );
     assert.equal(inputs(dialog)[0].label, 'Month for budgets');
   });
+
+  it('carries `default` through as the dialog\'s initial value', () => {
+    // `default` is the standard name for a pre-filled value (JSON Schema, HTML forms)
+    // and what an LLM emits unprompted — run 695 was rejected for using it. The dialog
+    // calls it `initial` only because that is Slack's name for it.
+    const dialog = buildDialog(
+      formStep([{ name: 'amount', type: 'text', default: '250.00' }]),
+      {},
+    );
+    assert.equal(inputs(dialog)[0].initial, '250.00');
+  });
+
+  it('accepts `fields` as a {{template}} reference to a js_transform-built array', () => {
+    // A form with one field per data row: the field list cannot be known at design time,
+    // so a preceding js_transform builds it. Same shape `options`/`reveals` already accept.
+    const dialog = buildDialog(
+      formStep('{{budget_edit_fields}}'),
+      {
+        budget_edit_fields: [
+          { name: 'cat_3_amount', type: 'text',   label: 'Groceries — Amount', default: '400' },
+          { name: 'cat_7_amount', type: 'text',   label: 'Utilities — Amount', default: '120' },
+          { name: 'cat_3_type',   type: 'select', label: 'Groceries — Type',
+            options: ['income', 'savings'], default: 'savings' },
+        ],
+      },
+    );
+    const fields = inputs(dialog);
+    assert.equal(fields.length, 3, 'one input per row built by the transform');
+    assert.deepEqual(fields.map(f => f.name), ['cat_3_amount', 'cat_7_amount', 'cat_3_type']);
+    assert.equal(fields[0].initial, '400');
+    assert.equal(fields[2].options[1].value, 'savings');
+  });
+
+  it('an unresolvable fields reference yields no inputs rather than throwing', () => {
+    const dialog = buildDialog(formStep('{{never_built}}'), {});
+    assert.equal(inputs(dialog).length, 0);
+  });
 });
 
 describe('form-fields — reading Slack answers back', () => {

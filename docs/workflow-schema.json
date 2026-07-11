@@ -164,7 +164,7 @@
         "label":       { "type": "string", "description": "Shown above the input. Supports {{template}} substitution. Defaults to `name`." },
         "placeholder": { "type": "string", "description": "Hint shown inside an empty input." },
         "optional":    { "type": "boolean", "default": false, "description": "True lets the user submit without answering — the field arrives as null. Required fields are enforced on submit; a gap re-renders the gate rather than advancing." },
-        "initial":     { "description": "Pre-filled value. For date, an ISO 'YYYY-MM-DD' string." },
+        "default":     { "description": "Pre-filled value, shown in the input before the user edits it. For date, an ISO 'YYYY-MM-DD' string; for select/radio, the `value` of the option to pre-select. Use it to let a user amend an existing record rather than retype it." },
         "options": {
           "type": "array",
           "description": "select/multi_select/radio/checkbox: a fixed option list, authored inline. Each entry is { value, label } or a bare string. Use options_key instead when the choices are data.",
@@ -323,10 +323,11 @@
         "item_label_template": { "type": "string", "description": "review_object array mode: template for the row label, e.g. 'step {{step}} — {{field}}'. Resolved against each array item's own properties." },
         "item_action":         { "$ref": "#/definitions/itemAction" },
         "fields": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "$ref": "#/definitions/formField" },
-          "description": "form only, and required for it. One entry per value to collect. The whole form is answered in a single gate and written to output_key as one object keyed by field name, e.g. { period: '2026-07-01', category_id: '3' }. Prefer a form over a text_input followed by an llm_call whenever the values are enumerable, a date, or otherwise structured — a picker is deterministic, free-text parsing is not."
+          "oneOf": [
+            { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/formField" } },
+            { "type": "string", "pattern": "^\\{\\{.+\\}\\}$" }
+          ],
+          "description": "form only, and required for it. One entry per value to collect. The whole form is answered in one gate and written to output_key as a single object keyed by field name, e.g. { period: '2026-07-01', category_id: '3' }. Collect enumerable values, dates and structured input here rather than gathering free text and parsing it with an llm_call — a picker is deterministic, parsing prose is not. May instead be a {{state_key}} reference to an array a preceding js_transform built, exactly as `options` and `reveals` may be: that is how a form carries one field per data row (an amount box and a type dropdown for each budget category, say), which a fixed field list cannot express."
         },
         "input_label": {
           "type": "string",

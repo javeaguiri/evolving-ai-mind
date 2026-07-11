@@ -359,7 +359,16 @@ export function buildDialog(step, localState) {
     // Each field becomes one { type: 'input' } dialog field; reveals and the option
     // buttons are appended by the shared tail below, same as every other gate type.
     case 'form': {
-      for (const field of (step.fields ?? [])) {
+      // fields may be authored inline, or given as a {{template}} reference to an
+      // array a preceding js_transform built — the same shape `options` and `reveals`
+      // already accept. That is what lets a form carry one field per data row (an
+      // amount box and a type dropdown for each budget category, say), which a fixed
+      // field list cannot express.
+      const formFields = typeof step.fields === 'string'
+        ? (resolvePath(localState, step.fields.replace(/^\{\{|\}\}$/g, '')) ?? [])
+        : (step.fields ?? []);
+
+      for (const field of (Array.isArray(formFields) ? formFields : [])) {
         // Options may be authored inline, or pulled from local_state so a dropdown's
         // choices can be data the workflow just queried (the categories it loaded)
         // rather than a hardcoded list — this is what lets a workflow offer a
@@ -385,7 +394,10 @@ export function buildDialog(step, localState) {
           label:      resolveTemplate(String(field.label ?? field.name), localState),
           optional:   field.optional === true,
           ...(field.placeholder ? { placeholder: field.placeholder } : {}),
-          ...(field.initial !== undefined ? { initial: field.initial } : {}),
+          // `default` — the standard name for a pre-filled value (JSON Schema, HTML
+          // forms), and what an LLM naturally emits. Carried through to the dialog as
+          // `initial` only because that is what Slack's elements call it.
+          ...(field.default !== undefined ? { initial: field.default } : {}),
           ...(options ? { options } : {}),
         });
       }
