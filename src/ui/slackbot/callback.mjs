@@ -607,7 +607,7 @@ async function postHumanGate(message) {
     return;
   }
 
-  const blocks = dialogToBlocks(dialog, workflowRunId);
+  const blocks = dialogToBlocks(dialog, workflowRunId, gateType);
   // Always the last block — a true footer. Previously spliced before a
   // trailing actions block, which put it above the buttons; list_selection
   // now renders two actions blocks in sequence (Select, then Back/Done), so
@@ -1016,6 +1016,10 @@ function buildInputElement(field) {
 const SELECT_OPTION_LIMIT = 100;
 const OPTION_TEXT_LIMIT   = 75;
 
+// Above this many real choices, a choice gate's lettered buttons become a dropdown.
+// Below it, buttons are the friendlier control — one click, no submit.
+const CHOICE_DROPDOWN_THRESHOLD = 5;
+
 function truncateOption(text) {
   const s = String(text ?? '');
   return s.length <= OPTION_TEXT_LIMIT ? s : `${s.slice(0, OPTION_TEXT_LIMIT - 1)}…`;
@@ -1115,7 +1119,7 @@ function buildObjectArrayTable(items) {
   return [header, sep, ...rows].join('\n');
 }
 
-function dialogToBlocks(dialog, workflowRunId) {
+function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
   for (const field of (dialog?.fields ?? [])) {
@@ -1307,6 +1311,59 @@ function dialogToBlocks(dialog, workflowRunId) {
       }
 
       case 'actions': {
+        // A choice gate is "pick one value, and the click routes". Up to a handful of
+        // options, lettered buttons read well. Past that they wrap into an unusable wall —
+        // a 12-month picker rendered 13 buttons. Slack's static_select is the same
+        // interaction drawn better, so past the threshold the options become a dropdown
+        // with a Select button. The gate's BEHAVIOUR is untouched (on_select still routes);
+        // only how the options are drawn changes, which is this layer's call. Existing
+        // choice gates with a few options are unaffected.
+        //
+        // Control buttons (Cancel and friends) stay as buttons — they are not choices, and
+        // burying Cancel inside a dropdown of months would be absurd.
+        const allButtons = field.buttons ?? [];
+        const choices    = gateType === 'choice'
+          ? allButtons.filter(b => b.action !== 'cancel')
+          : [];
+
+        if (choices.length > CHOICE_DROPDOWN_THRESHOLD && choices.length <= SELECT_OPTION_LIMIT) {
+          blocks.push({
+            type:     'input',
+            block_id: `choice_select_${workflowRunId}`,
+            element:  {
+              type:        'static_select',
+              action_id:   'choice_value',
+              placeholder: { type: 'plain_text', text: 'Choose one' },
+              options: choices.map(btn => ({
+                text:  { type: 'plain_text', text: truncateOption(btn.label) },
+                value: String(btn.action),
+              })),
+            },
+            label: { type: 'plain_text', text: 'Select' },
+          });
+          blocks.push({
+            type:     'actions',
+            elements: [
+              {
+                type:      'button',
+                style:     'primary',
+                text:      { type: 'plain_text', text: 'Select' },
+                action_id: 'workflow_choice_submit',
+                // Carries no option value of its own — the chosen option arrives in
+                // state.values, and resumeGate resolves it back to the option.
+                value:     JSON.stringify({ workflowRunId, action: 'confirm', label: 'Select' }),
+              },
+              ...allButtons.filter(b => b.action === 'cancel').map((btn, i) => ({
+                type:      'button',
+                text:      { type: 'plain_text', text: btn.label },
+                action_id: `workflow_action_${btn.action || i}_${i}`,
+                value:     JSON.stringify({ workflowRunId, action: btn.action, label: btn.label }),
+              })),
+            ],
+          });
+          break;
+        }
+
         // btn.modal is an optional descriptor for buttons that require a text input modal.
         // action_id must be unique within a message — append button index so that blank
         // or duplicate btn.action values never produce colliding action_ids.
