@@ -470,7 +470,7 @@ async function postHumanGate(message) {
           ...(btn.style === 'primary' || btn.style === 'danger' ? { style: btn.style } : {}),
           text:      { type: 'plain_text', text: btn.label },
           action_id: `workflow_action_${btn.action || i}_${i}`,
-          value:     JSON.stringify({ workflowRunId, action: btn.action }),
+          value:     JSON.stringify({ workflowRunId, action: btn.action, label: btn.label }),
         }))
       : [
           {
@@ -480,13 +480,13 @@ async function postHumanGate(message) {
             action_id: 'workflow_text_submit',
             // gateType included so interactive.mjs can use delete+reply instead of
             // chat.update — Slack silently ignores chat.update on messages with input blocks.
-            value:     JSON.stringify({ workflowRunId, action: 'confirm', gateType: 'text_input' }),
+            value:     JSON.stringify({ workflowRunId, action: 'confirm', label: 'Submit', gateType: 'text_input' }),
           },
           {
             type:      'button',
             text:      { type: 'plain_text', text: 'Cancel' },
             action_id: 'workflow_text_cancel',
-            value:     JSON.stringify({ workflowRunId, action: 'cancel', gateType: 'text_input' }),
+            value:     JSON.stringify({ workflowRunId, action: 'cancel', label: 'Cancel', gateType: 'text_input' }),
           },
         ];
     // reveal fields (e.g. per-table column reference) — text_input builds its own
@@ -1208,7 +1208,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
               ...(validStyle ? { style: selectable.secondaryAction.style } : {}),
               text:      { type: 'plain_text', text: selectable.secondaryAction.label },
               action_id: `list_select_${selectable.secondaryAction.action}`,
-              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action }),
+              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action, label: selectable.secondaryAction.label }),
             }],
           });
         }
