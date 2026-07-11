@@ -1246,6 +1246,14 @@
         "on_else": "cancel"
       },
       {
+        "step": "21q",
+        "type": "condition",
+        "description": "Run the consolidation critic at most ONCE per create_workflow run. Step 21 has two back-edges into it — 21c (skeleton L1 failed) and 24 (user regenerates, possibly with explicit feedback). Reviewing again on those is wrong twice over: the critic never sees user_workflow_feedback, so it could propose removing the very step the user just asked for; and if a consolidation is what broke the routing, redesigning and re-consolidating reproduces the same break on every lap. local_state persists across a back-edge, so the presence of redundancy_review is itself the already-reviewed flag — no extra state needed.",
+        "expression": "local_state.redundancy_review === undefined",
+        "on_success": "21r",
+        "on_else": "21a"
+      },
+      {
         "step": "21r",
         "type": "llm_call",
         "description": "Consolidation review: a fresh reviewer looks for steps that can be removed from the design. Findings only — it never authors a design, so process_design keeps exactly one author (step 21).",
