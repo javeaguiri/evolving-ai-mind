@@ -149,6 +149,46 @@
       }
     },
 
+    "formField": {
+      "type": "object",
+      "description": "One value collected by a form gate. `type` states WHAT is being collected, never which widget draws it — the experience layer maps 'date' to a Slack datepicker, 'select' to a dropdown, and so on. A new widget is therefore never a new gate_type.",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name":  { "type": "string", "description": "Key this field's answer takes in the object written to output_key." },
+        "type": {
+          "type": "string",
+          "enum": ["text", "textarea", "select", "multi_select", "radio", "checkbox", "date", "time", "datetime"],
+          "description": "What to collect. select/radio hold one value; multi_select/checkbox write an ARRAY. date yields 'YYYY-MM-DD', time 'HH:mm'. radio and checkbox are capped at 10 options by Slack; select and multi_select at 100 — above that, collect the value another way. (number/email/url/file are deliberately absent: Slack supports them only in modals, so collect text and validate in a js_transform.)"
+        },
+        "label":       { "type": "string", "description": "Shown above the input. Supports {{template}} substitution. Defaults to `name`." },
+        "placeholder": { "type": "string", "description": "Hint shown inside an empty input." },
+        "optional":    { "type": "boolean", "default": false, "description": "True lets the user submit without answering — the field arrives as null. Required fields are enforced on submit; a gap re-renders the gate rather than advancing." },
+        "initial":     { "description": "Pre-filled value. For date, an ISO 'YYYY-MM-DD' string." },
+        "options": {
+          "type": "array",
+          "description": "select/multi_select/radio/checkbox: a fixed option list, authored inline. Each entry is { value, label } or a bare string. Use options_key instead when the choices are data.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["value"],
+                "additionalProperties": false,
+                "properties": {
+                  "value": { "type": ["string", "number"] },
+                  "label": { "type": "string" }
+                }
+              }
+            ]
+          }
+        },
+        "options_key":      { "type": "string", "description": "Dot-path into local_state holding the option rows — lets a dropdown offer data the workflow just queried (e.g. the categories it loaded) instead of a hardcoded list. This is what makes a deterministic pick possible where free text would otherwise need an llm_call to parse." },
+        "option_value_key": { "type": "string", "default": "id",   "description": "Field on each options_key row supplying the option's value." },
+        "option_label_key": { "type": "string", "default": "name", "description": "Field on each options_key row supplying the option's visible label." }
+      }
+    },
+
     "itemAction": {
       "type": "object",
       "description": "Selection action for list_selection gates, applied uniformly to every item unless an item already carries its own secondaryAction. Rendering is always the same (one markdown table for all rows, one shared selection control, one Select button labeled/styled from this config); what the action does is entirely up to the calling workflow, expressed here, not by a different gate_type.",
@@ -263,8 +303,8 @@
         "description": { "type": "string" },
         "gate_type": {
           "type": "string",
-          "enum": ["confirm", "list_selection", "text_input", "review_object", "choice", "followup_prompt"],
-          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: one markdown table of every context_key item (pre-formatted as { id, fields?, secondaryAction? } — fields is a plain object of column name -> value, rendered as one table column per distinct key across every item, sparse where an item lacks a given key), plus one shared selection control and one Select button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. The selection control is a dropdown of every selectable row — grouped by source table when a level spans more than one — falling back to a plain id text box past Slack's 100-option cap; the user picks a row and clicks Select, and resumeGate resolves the selection back to that row. What selecting does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
+          "enum": ["confirm", "form", "list_selection", "text_input", "review_object", "choice", "followup_prompt"],
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: one markdown table of every context_key item (pre-formatted as { id, fields?, secondaryAction? } — fields is a plain object of column name -> value, rendered as one table column per distinct key across every item, sparse where an item lacks a given key), plus one shared selection control and one Select button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. The selection control is a dropdown of every selectable row — grouped by source table when a level spans more than one — falling back to a plain id text box past Slack's 100-option cap; the user picks a row and clicks Select, and resumeGate resolves the selection back to that row. What selecting does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. form: collects any number of typed values in ONE gate — see `fields`. Each field declares WHAT it collects (text, select, multi_select, radio, checkbox, date, time, datetime) and the experience layer picks the widget, so a new input type never needs a new gate_type. The answers are written to output_key as one object keyed by field name. Reach for a form whenever the values are enumerable, a date, or otherwise structured: a picker is deterministic, whereas a text_input followed by an llm_call to parse the free text is not, and can misread the user. text_input: inline Slack input block — a single free-text answer, for genuinely unstructured prose only. review_object: key/value display. choice: lettered buttons with descriptions; the click itself routes (each option has its own on_select), so use it for a branch decision, not to capture data. followup_prompt: notification with Ask follow-up modal button."
         },
         "message_template": {
           "type": "string",
@@ -282,6 +322,12 @@
         "item_secondary_key":  { "type": "string", "description": "review_object array mode: value field. Defaults to 'columns'." },
         "item_label_template": { "type": "string", "description": "review_object array mode: template for the row label, e.g. 'step {{step}} — {{field}}'. Resolved against each array item's own properties." },
         "item_action":         { "$ref": "#/definitions/itemAction" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/formField" },
+          "description": "form only, and required for it. One entry per value to collect. The whole form is answered in a single gate and written to output_key as one object keyed by field name, e.g. { period: '2026-07-01', category_id: '3' }. Prefer a form over a text_input followed by an llm_call whenever the values are enumerable, a date, or otherwise structured — a picker is deterministic, free-text parsing is not."
+        },
         "input_label": {
           "type": "string",
           "description": "text_input only. Short label shown above the Slack input element. Defaults to 'Your input'. Full instructions go in message_template."

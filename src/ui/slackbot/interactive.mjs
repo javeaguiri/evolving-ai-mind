@@ -29,6 +29,7 @@ import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
 import { ok, err }                       from '../../shared/lambda-utils.mjs';
 import { randomUUID }                    from 'crypto';
+import { FORM_BLOCK_PREFIX, collectFormValues } from './form-fields.mjs';
 
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -208,21 +209,27 @@ export async function handle(req) {
     return { statusCode: 200, body: '' };
   }
 
-  // Extract any plain_text_input value typed by the user.
-  // Slack puts these in payload.state.values keyed by block_id → action_id → value.
-  // We flatten all values and take the first non-empty one — text_input gates
-  // have exactly one input element per dialog.
-  let inputValue    = null;
-  let selectedValue = null;  // for radio_buttons / static_select elements
+  // Slack puts submitted input values in payload.state.values, keyed by
+  // block_id → action_id → value.
   const stateValues = payload.state?.values ?? {};
-  for (const blockValues of Object.values(stateValues)) {
+
+  // A form gate has many fields, so its answers are collected as a map keyed by
+  // field name (parsed from each block_id) rather than collapsed to a single value.
+  const formValues = collectFormValues(stateValues);
+
+  // Single-input gates (text_input's box, list_selection's picker) still report one
+  // value. Form blocks are skipped here — their answers are already in formValues, and
+  // folding a form's first text field into inputValue would make it look to
+  // run-workflow like a text_input submission.
+  let inputValue    = null;
+  let selectedValue = null;  // radio_buttons / static_select
+  for (const [blockId, blockValues] of Object.entries(stateValues)) {
+    if (blockId.startsWith(FORM_BLOCK_PREFIX)) continue;
     for (const actionValue of Object.values(blockValues)) {
-      // plain_text_input
       const text = actionValue?.value?.trim();
       if (text && !inputValue) {
         inputValue = text;
       }
-      // radio_buttons and static_select — selected option value
       const sel = actionValue?.selected_option?.value;
       if (sel && !selectedValue) {
         selectedValue = sel;
@@ -230,12 +237,12 @@ export async function handle(req) {
     }
   }
 
-  // Merge inputValue and selectedValue into responseData so run-workflow
-  // can write them to local_state as needed.
+  // Merged into responseData so run-workflow can write them to local_state as needed.
   const mergedResponseData = {
     ...(responseData ?? {}),
     ...(inputValue    ? { inputValue }    : {}),
     ...(selectedValue ? { selectedValue } : {}),
+    ...(formValues    ? { formValues }    : {}),
   };
 
   const slackUserId   = payload.user?.id;

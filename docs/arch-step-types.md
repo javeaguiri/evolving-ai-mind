@@ -214,6 +214,72 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
+###### `form` gate_type
+
+Collects any number of typed values in **one** gate and writes them to `output_key`
+as a single object keyed by field name.
+
+**This is the gate type that stops gate types multiplying.** A widget is a *field
+type*, not a gate type — so `select_one`, `select_many`, `date_input`,
+`number_input` and every future picker are `fields[].type` values, not new entries
+in the `gate_type` enum. Adding a widget means adding one row to
+`buildInputElement()` in `callback.mjs`. It never means touching the procedure layer.
+
+A field's `type` states **what is being collected**, never which widget draws it:
+
+| `type` | Collects | Slack element (chosen by `/ui/slack`) | Limit |
+|---|---|---|---|
+| `text` / `textarea` | A string | `plain_text_input` | — |
+| `select` | One value | `static_select` | 100 options |
+| `multi_select` | An **array** | `multi_static_select` | 100 options |
+| `radio` | One value | `radio_buttons` | 10 options |
+| `checkbox` | An **array** | `checkboxes` | 10 options |
+| `date` | `"YYYY-MM-DD"` | `datepicker` | — |
+| `time` | `"HH:mm"` | `timepicker` | — |
+| `datetime` | Epoch seconds | `datetimepicker` | — |
+
+`number`, `email`, `url` and `file` are deliberately absent — Slack supports those
+elements only in modals. Collect `text` and validate in a `js_transform`.
+
+Options for `select`/`multi_select`/`radio`/`checkbox` come from either `options`
+(a fixed list) or **`options_key`** (a dot-path into `local_state`), the latter
+letting a dropdown offer rows the workflow has already queried:
+
+```json
+{
+  "step": "1", "type": "human_gate",
+  "gate_type":        "form",
+  "message_template": "Which month do you want to edit?",
+  "fields": [
+    { "name": "period",      "type": "date",   "label": "Budget month" },
+    { "name": "category_id", "type": "select", "label": "Category",
+      "options_key": "categories", "option_value_key": "id", "option_label_key": "name" },
+    { "name": "notes",       "type": "textarea", "label": "Notes", "optional": true }
+  ],
+  "output_key": "budget_target",
+  "options": [
+    { "label": "Submit", "action": "confirm", "on_select": "next"   },
+    { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+  ],
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+→ `local_state.budget_target = { period: "2026-07-01", category_id: "3", notes: null }`
+
+**The rule this exists to enforce:** never collect a date, or a value from an
+enumerable set, as free text and then add an `llm_call` to parse it. A picker is
+deterministic; parsing prose costs a model call and can misread the user. `text_input`
+is for genuinely open-ended prose only.
+
+**Required fields are enforced on resume, not by Slack.** Slack honours a field's
+`optional` flag only on *modal* submit — a message's Submit button performs no
+validation. `resumeGate` re-checks required fields and re-renders the gate with a
+"Please complete: …" line rather than advancing with a hole in the data. An
+unanswered optional field arrives as `null`, never missing, so a workflow always
+sees every field it asked for.
+
 ###### `list_selection` gate_type
 
 Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
