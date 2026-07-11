@@ -518,7 +518,21 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   });
 
   // ── cancel ─────────────────────────────────────────────────────────────
-  if (userResponse === 'cancel') {
+  // An option's ROUTING comes from its on_select, never from its action name. A gate must
+  // carry an option with action "cancel" (the routing rules require one), but a workflow is
+  // free to point that option somewhere other than the exit — live edit_budget labels it
+  // "Edit More" and routes it back to the category picker with on_select "11". Cancelling
+  // the run on the action name alone ignored that and killed the workflow instead of going
+  // back, which is the same "the action name carries behaviour" mistake removed from
+  // item_action. So: only cancel when the matched option actually routes to cancel, or when
+  // nothing matched (a bare Cancel click with no option behind it).
+  const cancelOption = userResponse === 'cancel'
+    ? [...resolveGateOptions(stepRef, localState), ...(stepRef.special_buttons ?? [])]
+        .find(o => o.action === 'cancel')
+    : null;
+  const cancelRoutesAway = cancelOption?.on_select && cancelOption.on_select !== 'cancel';
+
+  if (userResponse === 'cancel' && !cancelRoutesAway) {
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
       { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }

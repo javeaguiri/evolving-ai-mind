@@ -1897,3 +1897,41 @@ describe('resolveGateOptions', () => {
     assert.deepEqual(resolveGateOptions(step, {}).map(o => o.value), ['cancel']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A cancel-action option that routes elsewhere must NOT cancel the run
+// ---------------------------------------------------------------------------
+
+describe('cancel option routing — on_select wins over the action name', () => {
+  // Live workflow 353 (edit_budget) step 16. The routing rules require every gate to carry
+  // an option with action "cancel", but nothing says that option must exit: this one is
+  // labelled "Edit More" and routes back to the category picker. resumeGate used to cancel
+  // the run on the action name alone, so "Edit More" killed the workflow.
+  //
+  // resumeGate is not exported (SQS handler module), so this pins the decision resumeGate
+  // makes — the same expression, over the real option shape.
+  const options = [
+    { label: 'Save Budget', action: 'confirm', on_select: 'next' },
+    { label: 'Edit More',   action: 'cancel',  on_select: '11'   },
+  ];
+  const routesAway = opts => {
+    const cancelOption = opts.find(o => o.action === 'cancel');
+    return !!(cancelOption?.on_select && cancelOption.on_select !== 'cancel');
+  };
+
+  it('a cancel-action option pointing at a step routes there instead of cancelling', () => {
+    assert.equal(routesAway(options), true);
+    assert.equal(options.find(o => o.action === 'cancel').on_select, '11');
+  });
+
+  it('an ordinary Cancel option still cancels', () => {
+    assert.equal(routesAway([
+      { label: 'Save',   action: 'confirm', on_select: 'next'   },
+      { label: 'Cancel', action: 'cancel',  on_select: 'cancel' },
+    ]), false);
+  });
+
+  it('a cancel option with no on_select still cancels', () => {
+    assert.equal(routesAway([{ label: 'Cancel', action: 'cancel' }]), false);
+  });
+});
