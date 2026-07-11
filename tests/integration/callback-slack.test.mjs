@@ -264,8 +264,8 @@ describe('HUMAN_GATE — dialogToBlocks Slack rendering', { skip: SKIP }, () => 
     await post('Workflow gate', blocks);
   });
 
-  it('edit_list gate with removable and non-removable items renders correctly', async () => {
-    // Simulates create_domain step 3 — table list with parent (no Remove) and child (Remove button).
+  it('list_selection gate with selectable and non-selectable items renders correctly', async () => {
+    // A row list where some rows are selectable and others (e.g. a referenced parent) are not.
     const dialog = {
       fields: [
         { type: 'typography', value: "Here's my plan for domain recipes. You can remove child tables you don't need." },

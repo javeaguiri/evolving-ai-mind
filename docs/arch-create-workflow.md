@@ -181,7 +181,7 @@ The v3 `dialog_designs` options array required `action` on all options because
 correctly omitted `action` from choice options, causing `required` violations.
 
 In v4, `design_workflow_dialogs` prompt specifies options shape per gate_type:
-- `confirm` / `edit_list` / `review_object` gates: `{ label, action, on_select }`
+- `confirm` / `list_selection` / `review_object` gates: `{ label, action, on_select }`
 - `choice` gates: `{ label, value, description, on_select }`
 - `text_input` gates: no options array required
 

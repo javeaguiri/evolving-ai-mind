@@ -159,7 +159,7 @@ function evalExpression(token, localState) {
 /**
  * Evaluate a simple boolean condition expression against an item object.
  * Safe evaluator — only property access, .length, comparison operators.
- * Used by edit_list gate to determine which items get action buttons.
+ * Used by the list_selection gate to determine which items are selectable.
  *
  * Supported syntax:
  *   item.foreignKeys.length > 0
@@ -177,7 +177,7 @@ export function evalItemCondition(condition, item) {
   // Track D2: evaluating `(${undefined})` silently returned false, so any
   // item_action with no condition set never rendered its button at all. Never
   // surfaced before because this function's only caller (step-executor.mjs's
-  // list_selection/edit_list case) had no live workflow exercising it until now.
+  // list_selection case) had no live workflow exercising it until now.
   if (!condition) return true;
   try {
     return Boolean(vm.runInNewContext(`(${condition})`, { item }, { timeout: 200 }));
