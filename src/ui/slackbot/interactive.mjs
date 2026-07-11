@@ -278,11 +278,14 @@ export async function handle(req) {
   const gateContext = gateSummary
     ? `\n> _${gateSummary.length > 120 ? `${gateSummary.slice(0, 119)}…` : gateSummary}_`
     : '';
-  const confirmationText = userResponse === 'confirm'
-    ? `✅ Confirmed.${gateContext}`
-    : userResponse === 'cancel'
-    ? `❌ Cancelled.${gateContext}`
-    : `✅ ${buttonLabel ?? userResponse}.${gateContext}`;
+  // Acknowledge WHICH BUTTON was clicked — never what it did. This layer cannot know the
+  // outcome: an option's routing lives in its on_select, not in its action name, and a
+  // workflow may point a cancel-action option somewhere other than the exit (live
+  // edit_budget labels one "Edit More" and routes it back to the category picker). Saying
+  // "Cancelled" because the action happened to be named `cancel` announced an outcome that
+  // did not occur, while the run carried on. The outcome belongs to /proc, which already
+  // posts "Workflow cancelled." when a run actually cancels.
+  const confirmationText = `✅ ${buttonLabel ?? userResponse}.${gateContext}`;
 
   // Enqueue resume_gate to WorkflowQueue — Step Processor picks this up.
   // Do this before returning so the workflow resumes even if the response body

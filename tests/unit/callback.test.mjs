@@ -654,6 +654,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
           value:     JSON.stringify({
             workflowRunId,
             action: btn.action,
+            label:  btn.label,
             ...(btn.modal ? { modal: btn.modal } : {}),
           }),
         }));
@@ -1916,5 +1917,57 @@ describe('gate confirmation summary', () => {
     const s = gateSummary(long);
     const capped = s.length > 120 ? `${s.slice(0, 119)}…` : s;
     assert.equal(capped.length, 120);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Click acknowledgment names the BUTTON, never the outcome
+// ---------------------------------------------------------------------------
+
+describe('gate click acknowledgment', () => {
+  // Faithful copy of the confirmationText derivation in interactive.mjs.
+  // Keep in sync with src/ui/slackbot/interactive.mjs.
+  const acknowledge = (buttonLabel, userResponse) => `✅ ${buttonLabel ?? userResponse}.`;
+
+  it('names the button that was clicked, not what the action is called', () => {
+    // Live edit_budget step 16: { label: "Edit More", action: "cancel", on_select: "11" }.
+    // The old code said "❌ Cancelled." purely because the action was named `cancel`,
+    // while /proc correctly routed to step 11 and the run carried on.
+    assert.equal(acknowledge('Edit More', 'cancel'), '✅ Edit More.');
+  });
+
+  it('acknowledges a real Cancel by its label too — the outcome is /proc\'s to report', () => {
+    assert.equal(acknowledge('Cancel', 'cancel'), '✅ Cancel.');
+  });
+
+  it('falls back to the action only when a button carries no label', () => {
+    assert.equal(acknowledge(undefined, 'confirm'), '✅ confirm.');
+  });
+});
+
+describe('every button payload carries its label', () => {
+  // The acknowledgment reads the label out of the clicked button's value, so a button
+  // that omits it degrades to showing the raw action name.
+  it('choice-dropdown Select and Cancel both carry labels', () => {
+    const dialog = {
+      fields: [{
+        type: 'actions',
+        buttons: [
+          ...Array.from({ length: 9 }, (_, i) => ({ label: `0${i + 1}/2026`, action: `2026-0${i + 1}` })),
+          { label: 'Cancel', action: 'cancel' },
+        ],
+      }],
+    };
+    const buttons = dialogToBlocks(dialog, 42, 'choice').find(b => b.type === 'actions').elements;
+    assert.equal(JSON.parse(buttons[0].value).label, 'Select');
+    assert.equal(JSON.parse(buttons[1].value).label, 'Cancel');
+  });
+
+  it('ordinary gate buttons carry labels', () => {
+    const dialog = {
+      fields: [{ type: 'actions', buttons: [{ label: 'Save Budget', action: 'confirm' }] }],
+    };
+    const button = dialogToBlocks(dialog, 42, 'confirm').find(b => b.type === 'actions').elements[0];
+    assert.equal(JSON.parse(button.value).label, 'Save Budget');
   });
 });
