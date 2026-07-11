@@ -464,6 +464,12 @@ function buildObjectArrayTable(items) {
 function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
+  const choiceButtons  = gateType === 'choice'
+    ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
+    : [];
+  const choiceAsDropdown =
+    choiceButtons.length > CHOICE_DROPDOWN_THRESHOLD && choiceButtons.length <= SELECT_OPTION_LIMIT;
+
   for (const field of (dialog?.fields ?? [])) {
     switch (field.type) {
 
@@ -475,6 +481,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         break;
 
       case 'description_list': {
+        if (choiceAsDropdown) break;
         const lines = (field.items ?? []).map(item =>
           `**${item.label}** \u2014 ${item.description || item.label}`
         );
@@ -598,11 +605,9 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
 
       case 'actions': {
         const allButtons = field.buttons ?? [];
-        const choices    = gateType === 'choice'
-          ? allButtons.filter(b => b.action !== 'cancel')
-          : [];
 
-        if (choices.length > CHOICE_DROPDOWN_THRESHOLD && choices.length <= SELECT_OPTION_LIMIT) {
+        if (choiceAsDropdown) {
+          const choices = allButtons.filter(b => b.action !== 'cancel');
           blocks.push({
             type:     'input',
             block_id: `choice_select_${workflowRunId}`,
@@ -613,6 +618,9 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
               options: choices.map(btn => ({
                 text:  { type: 'plain_text', text: truncateOption(btn.label) },
                 value: String(btn.action),
+                ...(btn.description
+                  ? { description: { type: 'plain_text', text: truncateOption(btn.description) } }
+                  : {}),
               })),
             },
             label: { type: 'plain_text', text: 'Select' },
@@ -1828,5 +1836,55 @@ describe('dialogToBlocks — choice gate rendering scales with option count', ()
     const blocks = dialogToBlocks(choiceDialog(12), 42, 'confirm');
     assert.equal(blocks.filter(b => b.type === 'input').length, 0);
     assert.equal(blocks.find(b => b.type === 'actions').elements.length, 13);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// choice dropdown — descriptions move onto the options, not a list below
+// ---------------------------------------------------------------------------
+
+describe('dialogToBlocks — choice dropdown suppresses the duplicate description list', () => {
+  // Live workflow 353 (edit_budget) step 5: each month option's description is
+  // "Income: … | Discretionary: … | Net: …" — the same data the message_template's
+  // markdown table already shows. Rendered as a description_list beneath it, it read as
+  // a plain-text second copy of the table.
+  const monthDialog = n => ({
+    fields: [
+      { type: 'typography', value: '| Month | Net |\n|---|---|\n| 07/2026 | 100 |' },
+      {
+        type: 'description_list',
+        items: Array.from({ length: n }, (_, i) => ({
+          value: `2026-0${i + 1}`, label: `0${i + 1}/2026`, description: `Income: 100 | Net: 50`,
+        })),
+      },
+      {
+        type: 'actions',
+        buttons: [
+          ...Array.from({ length: n }, (_, i) => ({
+            label: `0${i + 1}/2026`, action: `2026-0${i + 1}`, description: 'Income: 100 | Net: 50',
+          })),
+          { label: 'Cancel', action: 'cancel', description: 'Exit without editing' },
+        ],
+      },
+    ],
+  });
+
+  it('drops the description list when the choices become a dropdown', () => {
+    const blocks = dialogToBlocks(monthDialog(9), 42, 'choice');
+    const markdown = blocks.filter(b => b.type === 'markdown').map(b => b.text);
+    assert.equal(markdown.length, 1, 'only the message survives — no restatement of the rows');
+    assert.ok(markdown[0].includes('| Month | Net |'), 'the real table is untouched');
+  });
+
+  it('moves each description onto its own dropdown option', () => {
+    const select = dialogToBlocks(monthDialog(9), 42, 'choice').find(b => b.type === 'input').element;
+    assert.equal(select.options[0].description.text, 'Income: 100 | Net: 50');
+    assert.equal(select.options[0].value, '2026-01');
+  });
+
+  it('keeps the description list when the choices stay as buttons', () => {
+    const blocks = dialogToBlocks(monthDialog(3), 42, 'choice');
+    assert.equal(blocks.filter(b => b.type === 'markdown').length, 2,
+      'below the threshold the descriptions still belong beside the buttons');
   });
 });
