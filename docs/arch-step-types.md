@@ -241,6 +241,24 @@ A field's `type` states **what is being collected**, never which widget draws it
 `number`, `email`, `url` and `file` are deliberately absent — Slack supports those
 elements only in modals. Collect `text` and validate in a `js_transform`.
 
+`default` pre-fills a field, so a user amends an existing record rather than retyping
+it (`"YYYY-MM-DD"` for `date`; the option's `value` for `select`/`radio`). It is named
+`default` — the standard term in JSON Schema and HTML forms — because that is what an
+LLM emits unprompted; run 695 was rejected for using it against a schema that had
+invented `initial` instead. The dialog still carries it to Slack as `initial`, which is
+Slack's own name for the same thing.
+
+**Data-driven field lists.** `fields` may be a `{{state_key}}` reference to an array a
+preceding `js_transform` built, exactly as `options` and `reveals` may be. That is how a
+form carries **one field per data row** — an amount box and a type dropdown for *each*
+budget category, each pre-filled via `default` — which a fixed field list cannot express.
+The transform must be a real step in `process_design`: it cannot be introduced at
+translation time, because the routing skeleton is already locked by then.
+
+Size is a real constraint: every field is one Slack input block and a message holds at
+most 50. For a long or unbounded row list, use `list_selection` to pick one row and then
+a small form to edit it, rather than one giant form over every row.
+
 Options for `select`/`multi_select`/`radio`/`checkbox` come from either `options`
 (a fixed list) or **`options_key`** (a dot-path into `local_state`), the latter
 letting a dropdown offer rows the workflow has already queried:
