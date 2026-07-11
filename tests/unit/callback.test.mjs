@@ -378,6 +378,69 @@ function buildListTable(items, parentHeading) {
   return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
+// ── Faithful copy of the static_select builders from callback.mjs ───────────
+// Keep in sync with src/ui/slackbot/callback.mjs:buildListSelect
+const SELECT_OPTION_LIMIT = 100;
+const OPTION_TEXT_LIMIT   = 75;
+
+function truncateOption(text) {
+  const s = String(text ?? '');
+  return s.length <= OPTION_TEXT_LIMIT ? s : `${s.slice(0, OPTION_TEXT_LIMIT - 1)}…`;
+}
+
+function buildSelectOptionText(item, excludeColumn) {
+  const entry = Object.entries(item.fields ?? {}).find(([col, value]) =>
+    col !== excludeColumn && value !== null && value !== undefined && String(value).trim() !== ''
+  );
+  const summary = entry ? String(entry[1]).trim() : '';
+  return truncateOption(summary ? `${item.id} — ${summary}` : String(item.id));
+}
+
+function buildListSelect(items, workflowRunId) {
+  const selectable = items.filter(item => item.secondaryAction);
+  if (selectable.length === 0 || selectable.length > SELECT_OPTION_LIMIT) return null;
+
+  const groups = new Map();
+  for (const item of selectable) {
+    const table = item.responseData?.table;
+    if (!groups.has(table)) groups.set(table, []);
+    groups.get(table).push(item);
+  }
+  const entries = [...groups.entries()];
+
+  const toOptions = groupItems => {
+    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
+    return groupItems.map(item => ({
+      text:  { type: 'plain_text', text: buildSelectOptionText(item, excludeColumn) },
+      value: JSON.stringify({
+        id: item.id,
+        ...(item.responseData?.table ? { table: item.responseData.table } : {}),
+      }),
+    }));
+  };
+
+  const element = {
+    type:        'static_select',
+    action_id:   'list_select_value',
+    placeholder: { type: 'plain_text', text: 'Choose a record' },
+  };
+  if (entries.length > 1) {
+    element.option_groups = entries.map(([table, groupItems]) => ({
+      label:   { type: 'plain_text', text: truncateOption(formatTableName(table)) },
+      options: toOptions(groupItems),
+    }));
+  } else {
+    element.options = toOptions(entries[0][1]);
+  }
+
+  return {
+    type:     'input',
+    block_id: `list_select_input_${workflowRunId}`,
+    element,
+    label:    { type: 'plain_text', text: 'Select a record' },
+  };
+}
+
 // ── Faithful copy of buildObjectArrayTable from callback.mjs ────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:buildObjectArrayTable
 function buildObjectArrayTable(items) {
@@ -437,7 +500,7 @@ function dialogToBlocks(dialog, workflowRunId) {
         const selectable = items.find(item => item.secondaryAction);
         if (selectable) {
           const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
-          blocks.push({
+          blocks.push(buildListSelect(items, workflowRunId) ?? {
             type:     'input',
             block_id: `list_select_input_${workflowRunId}`,
             element:  {
@@ -852,7 +915,7 @@ describe('dialogToBlocks — list', () => {
     assert.equal(blocks.some(b => b.type === 'actions'), false);
   });
 
-  it('at least one selectable item adds a shared ID-entry input and one Select button', () => {
+  it('at least one selectable item adds a shared select input and one Select button', () => {
     const field = {
       type:  'list',
       items: [{
@@ -865,10 +928,82 @@ describe('dialogToBlocks — list', () => {
     const inputBlock   = blocks.find(b => b.type === 'input');
     const actionsBlock = blocks.find(b => b.type === 'actions');
     assert.ok(inputBlock, 'input block should be present');
-    assert.equal(inputBlock.element.type, 'plain_text_input');
+    assert.equal(inputBlock.element.type, 'static_select');
     assert.ok(actionsBlock, 'actions block should be present');
     assert.equal(actionsBlock.elements[0].style, 'danger');
     assert.equal(actionsBlock.elements[0].text.text, 'Remove');
+  });
+
+  it('a level spanning two child tables renders one option_group per table, each option carrying its own table', () => {
+    const field = {
+      type:          'list',
+      parentHeading: 'Paella',
+      items: [
+        { id: 1, fields: { name: 'Rice' },  responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' }, secondaryAction: { label: 'Open', action: 'open_row' } },
+        { id: 1, fields: { text: 'Simmer' }, responseData: { table: 'PGD_RecipeSteps', fkColumn: 'recipe_id' }, secondaryAction: { label: 'Open', action: 'open_row' } },
+      ],
+    };
+    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
+    assert.equal(select.type, 'static_select');
+    assert.equal(select.option_groups.length, 2, 'one group per source table');
+    assert.equal(select.option_groups[0].label.text, 'Ingredients');
+    assert.equal(select.option_groups[1].label.text, 'Recipe Steps');
+    // The colliding id (1 in both tables) is disambiguated by the option value itself.
+    assert.deepEqual(JSON.parse(select.option_groups[0].options[0].value), { id: 1, table: 'PGD_Ingredients' });
+    assert.deepEqual(JSON.parse(select.option_groups[1].options[0].value), { id: 1, table: 'PGD_RecipeSteps' });
+  });
+
+  it('option text is the row id plus its first non-empty field, skipping the parent-link column', () => {
+    const field = {
+      type:  'list',
+      items: [
+        { id: 42, fields: { recipe_id: 9, name: 'Olive oil' }, responseData: { table: 'PGD_Ingredients', fkColumn: 'recipe_id' }, secondaryAction: { label: 'Open', action: 'open_row' } },
+      ],
+    };
+    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
+    assert.ok(!select.option_groups, 'a single-table level gets a flat option list, not a one-group header');
+    assert.equal(select.options[0].text.text, '42 — Olive oil');
+  });
+
+  it('option text is truncated to Slack’s 75-character limit', () => {
+    const field = {
+      type:  'list',
+      items: [
+        { id: 1, fields: { note: 'x'.repeat(200) }, secondaryAction: { label: 'Open', action: 'open_row' } },
+      ],
+    };
+    const select = dialogToBlocks({ fields: [field] }, 7).find(b => b.type === 'input').element;
+    assert.equal(select.options[0].text.text.length, OPTION_TEXT_LIMIT);
+  });
+
+  it('a list beyond Slack’s 100-option cap falls back to the shared text input', () => {
+    const items = Array.from({ length: SELECT_OPTION_LIMIT + 1 }, (_, i) => ({
+      id: i + 1,
+      fields: { name: `row ${i + 1}` },
+      secondaryAction: { label: 'Open', action: 'open_row' },
+    }));
+    const blocks = dialogToBlocks({ fields: [{ type: 'list', items }] }, 7);
+    const inputBlock = blocks.find(b => b.type === 'input');
+    assert.equal(inputBlock.element.type, 'plain_text_input', 'past the cap the text box returns');
+    assert.equal(inputBlock.element.action_id, 'list_select_value', 'same action_id either way');
+    // The table itself stays uncapped — every row is still displayed.
+    const table = blocks.find(b => b.type === 'markdown').text;
+    assert.ok(table.includes(`| ${SELECT_OPTION_LIMIT + 1} |`), 'all rows remain visible in the table');
+  });
+
+  it('non-selectable rows are excluded from the options but stay in the table', () => {
+    const field = {
+      type:  'list',
+      items: [
+        { id: 1, fields: { name: 'Pickable' },     secondaryAction: { label: 'Open', action: 'open_row' } },
+        { id: 2, fields: { name: 'Not pickable' }, secondaryAction: null },
+      ],
+    };
+    const blocks = dialogToBlocks({ fields: [field] }, 7);
+    const select = blocks.find(b => b.type === 'input').element;
+    assert.equal(select.options.length, 1);
+    assert.equal(JSON.parse(select.options[0].value).id, 1);
+    assert.ok(blocks.find(b => b.type === 'markdown').text.includes('Not pickable'), 'still listed');
   });
 
   it('Select button style "default" (or omitted) sends no style field — Slack rejects style: "default" as invalid_blocks', () => {

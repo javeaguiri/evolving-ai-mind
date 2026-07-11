@@ -218,9 +218,12 @@ jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the ru
 
 Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
 one column per distinct field key across every item), plus one shared
-ID-entry text input and one Select button (labeled/styled from `item_action`)
+selection control and one Select button (labeled/styled from `item_action`)
 below it — one block for the whole list regardless of row count, no per-row
-block cost. **This gate_type is only concerned with rendering.** What
+block cost. The selection control is a `static_select` dropdown of every
+selectable row, grouped into one `option_group` per source table when a level
+spans more than one; past Slack's 100-option cap it falls back to a plain
+id text box. The table itself is uncapped under either control. **This gate_type is only concerned with rendering.** What
 selecting a row *does* is entirely the calling workflow's concern, expressed
 through `item_action`'s own config — never a different gate_type for a
 different action semantic (Sprint 7 Track D2: this merges what were briefly
@@ -318,15 +321,24 @@ unset. Slack itself has no `"default"` style value; the harness omits the
 field entirely rather than sending the literal string.
 
 **Identifying the selected row:** the table has no per-row click target — the
-user types a row's `id` into the shared input and clicks Select. `callback.mjs`
-sends only `{ workflowRunId, action }` on that click; `run-workflow.mjs`'s
-`resumeGate` resolves the typed id against `context_key`'s fully-resolved items
-(via `buildDialog`, so the id-to-row mapping is computed in exactly one place)
-before writing to `output_key` and routing via `item_action.on_select`. A typed
-id that doesn't match a selectable row re-renders the same gate in place with
-an error line — the gate never advances on an unresolved value. When the
-matched row never set its own `responseData`, the legacy bare scalar
-(`responseData.tableName`) is written, matching every pre-existing consumer.
+user picks a row in the shared selection control and clicks Select.
+`callback.mjs` sends only `{ workflowRunId, action }` on the button itself; the
+row identity rides in Slack's `state.values` (harvested by `interactive.mjs`).
+From the dropdown that is `responseData.selectedValue`, a JSON `{id, table}`
+payload built from the chosen option — the source table travels with the id, so
+a level spanning more than one child table cannot resolve an id that collides
+across both to the wrong table's row. On the text-box fallback it is
+`responseData.inputValue`, a bare id with no table, where a collision still
+resolves first-hit.
+
+`run-workflow.mjs`'s `resumeGate` resolves either form against `context_key`'s
+fully-resolved items (via `buildDialog`, so the id-to-row mapping is computed in
+exactly one place) before writing to `output_key` and routing via
+`item_action.on_select`. A selection that doesn't match a selectable row
+re-renders the same gate in place with an error line — the gate never advances
+on an unresolved value. When the matched row never set its own `responseData`,
+the legacy bare scalar (`responseData.tableName`) is written, matching every
+pre-existing consumer.
 When the row set a `responseData` object without a `tableName` key (the
 recursive drill-down case above), the whole object is written through instead
 — see `list_entity`'s navigation loop in `docs/arch-workflow-patterns.md`
