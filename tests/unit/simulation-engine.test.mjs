@@ -247,3 +247,75 @@ describe('L2b data-flow trace — iterator.items_key is a soft warning', () => {
     assert.equal(result.smoke_test.passed, true, 'a warning-only issue must not fail the smoke test');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Skeleton drift — translation must not invent steps (the A8 lock)
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — skeleton drift', () => {
+  // Run 702's real shape: a 15-item design (5 js_transform) translated into 20 steps
+  // (10 js_transform). The five extra "format X for display" transforms were invented
+  // at translation time, so they were never in the graph the skeleton validated and
+  // never seen by the consolidation critic.
+  const skeleton = [
+    { step: 'load_rows',    type: 'serv_query'   },
+    { step: 'build_view',   type: 'js_transform' },
+    { step: 'show_gate',    type: 'human_gate'   },
+    { step: 'end',          type: 'end'          },
+  ];
+
+  it('flags steps translation invented, naming what was added', () => {
+    const drifted = [
+      { step: '1', type: 'serv_query',   on_success: 'next' },
+      { step: '2', type: 'js_transform', on_success: 'next' },
+      { step: '3', type: 'js_transform', on_success: 'next' },   // invented — "format for display"
+      { step: '4', type: 'human_gate',   on_success: 'next',
+        options: [{ label: 'OK', action: 'confirm', on_select: 'next' },
+                  { label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+        on_cancel: 'cancel', message_template: 'x' },
+      { step: '5', type: 'end' },
+    ];
+    const result = runSimulation({ steps: drifted, lockedSkeleton: skeleton, traceId: 't' });
+
+    assert.equal(result.passed, false);
+    const drift = result.static_analysis.issues.find(i => i.check === 'skeleton_drift');
+    assert.ok(drift, 'an invented step must be caught');
+    assert.match(drift.detail, /1× js_transform/, 'names what was added, so the retry can act on it');
+  });
+
+  it('passes an honest 1:1 translation', () => {
+    const faithful = [
+      { step: '1', type: 'serv_query',   on_success: 'next' },
+      { step: '2', type: 'js_transform', on_success: 'next' },
+      { step: '3', type: 'human_gate',   on_success: 'next',
+        options: [{ label: 'OK', action: 'confirm', on_select: 'next' },
+                  { label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+        on_cancel: 'cancel', message_template: 'x' },
+      { step: '4', type: 'end' },
+    ];
+    const result = runSimulation({ steps: faithful, lockedSkeleton: skeleton, traceId: 't' });
+    assert.equal(result.static_analysis.issues.filter(i => i.check === 'skeleton_drift').length, 0);
+  });
+
+  it('tolerates the skeleton builder appending its own end step', () => {
+    // 21a pushes an `end` even when the design already declared one — so end steps are
+    // ignored in the comparison. Without that, every honest translation would false-positive.
+    const doubleEnd = [...skeleton, { step: 'end', type: 'end' }];
+    const faithful  = [
+      { step: '1', type: 'serv_query',   on_success: 'next' },
+      { step: '2', type: 'js_transform', on_success: 'next' },
+      { step: '3', type: 'human_gate',   on_success: 'next',
+        options: [{ label: 'OK', action: 'confirm', on_select: 'next' },
+                  { label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+        on_cancel: 'cancel', message_template: 'x' },
+      { step: '4', type: 'end' },
+    ];
+    const result = runSimulation({ steps: faithful, lockedSkeleton: doubleEnd, traceId: 't' });
+    assert.equal(result.static_analysis.issues.filter(i => i.check === 'skeleton_drift').length, 0);
+  });
+
+  it('is inert when no skeleton is supplied', () => {
+    const result = runSimulation({ steps: [{ step: '1', type: 'end' }], traceId: 't' });
+    assert.equal(result.static_analysis.issues.filter(i => i.check === 'skeleton_drift').length, 0);
+  });
+});

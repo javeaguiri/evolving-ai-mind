@@ -743,7 +743,8 @@
             "steps_key":        { "type": "string", "description": "Dot-path to the draft workflow steps array in local_state." },
             "mock_outputs_key": { "type": "string", "description": "Optional. Dot-path to mock output map. If absent, only Level 1 static analysis runs." },
             "paths_key":        { "type": "string", "description": "Optional. Dot-path to simulation paths array. If absent, only Level 1 static analysis runs." },
-            "skeleton":         { "type": "boolean", "description": "Optional. Set to true when simulating a routing skeleton. Skips serv_step_missing_required_input — content fields are not yet present. All routing topology checks still run." }
+            "skeleton":         { "type": "boolean", "description": "Optional. Set to true when simulating a routing skeleton. Skips serv_step_missing_required_input — content fields are not yet present. All routing topology checks still run." },
+            "locked_skeleton_key": { "type": "string", "description": "Optional. Dot-path to the routing skeleton this step array was translated from. When present, L1 checks that translation emitted exactly one step per design item and invented none of its own (skeleton_drift). The step set is locked once the skeleton is validated; only the design stage may add a step." }
           }
         },
         "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },
