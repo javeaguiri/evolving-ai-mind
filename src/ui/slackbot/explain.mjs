@@ -4,10 +4,13 @@
 // src/ui/slackbot/explain.mjs
 // Handles POST /api/v1/ui/slack/explain
 //
-// Accepts: /explain <query_id> <prompt>
-// Opens a diagnostic or chat follow-up conversation anchored to an existing PGC_Session.
-// ACKs immediately; enqueues EXPLAIN_QUERY to ProcFunction for async LLM call.
-// ProcFunction loads the existing session entries and continues the conversation.
+// Accepts: /explain <run_id>
+// run_id (PGC_WorkflowRun.id) is always resolved to a step-selection button list
+// (one per llm_call step in that run, even when there's only one) — a query_id
+// is never typed by the user. Picking a step opens a modal to collect the
+// question, then enqueues EXPLAIN_QUERY with the resolved query_id internally.
+// ACKs immediately; enqueues EXPLAIN_QUERY (runId only) to ProcFunction for async
+// step resolution.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
@@ -26,8 +29,8 @@ function slackErr(message) {
 const sqs   = new SQSClient({});
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-// query_id must be a valid UUID v4
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// run_id is a plain PGC_WorkflowRun.id integer
+const RUN_ID_RE = /^\d+$/;
 
 export async function handle(req) {
   if (req.method !== 'POST') {
@@ -39,25 +42,17 @@ export async function handle(req) {
   const slackChannel = req.body?.channel_id || 'unknown';
   const traceId      = req.correlationId;
 
-  // Parse: first token is query_id, remainder is the prompt
-  const spaceIdx = text.indexOf(' ');
-  const queryId  = spaceIdx === -1 ? text : text.slice(0, spaceIdx);
-  const prompt   = spaceIdx === -1 ? '' : text.slice(spaceIdx + 1).trim();
-
-  if (!UUID_RE.test(queryId)) {
-    return slackErr('Usage: /explain <query_id> <your question>  (query_id must be a UUID)');
-  }
-  if (!prompt) {
-    return slackErr('Usage: /explain <query_id> <your question>');
+  if (!RUN_ID_RE.test(text)) {
+    return slackErr('Usage: /explain <run_id>');
   }
 
-  console.info('slackbot/explain: received', { traceId, queryId, slackUser, slackChannel });
+  console.info('slackbot/explain: received', { traceId, runId: text, slackUser, slackChannel });
 
   let ackTs;
   try {
     const ack = await slack.chat.postMessage({
       channel: slackChannel,
-      text:    `❓ ${prompt}`,
+      text:    `🔍 Looking up LLM steps for run ${text}...`,
     });
     ackTs = ack.ts;
   } catch (error) {
@@ -71,8 +66,7 @@ export async function handle(req) {
       MessageBody: JSON.stringify({
         type:      'EXPLAIN_QUERY',
         traceId,
-        queryId,
-        prompt,
+        runId:     Number(text),
         slackUser,
         callback: {
           provider: 'slack',

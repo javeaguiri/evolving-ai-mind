@@ -1,7 +1,7 @@
 # create_workflow Workflow Design
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-workflow-patterns.md` §6.9, `docs/arch-prompt-rules.md` (prompt rule placement guide).
+> Part of the evolving-mind-ai architecture docs. Main overview: `docs/architecture.md` §6.9. See also: `docs/arch-step-types.md` (step type reference), `docs/arch-step-processor.md` (execution engine), `docs/arch-simulation-engine.md` (`simulate` step validation levels), `docs/arch-intent.md` (`PGC_IntentMap` schema, `matchIntentMap`), `docs/arch-prompt-rules.md` (prompt rule placement guide).
 
 `create_workflow` is the workflow that makes the brain self-extending. When a user
 says `/m create a workflow Spanish vocabulary quiz`, the brain researches the domain,
@@ -25,9 +25,9 @@ because `output_key: "foo"` on step 3 is referenced as `{{bar}}` on step 6.
 This is a referential integrity problem, not a structural one. Ajv cannot catch it.
 
 Two mechanisms close this gap: **semantic validation rules** (static analysis on
-the step array — see Section 6.5.6 Level 1) and **simulation** (execution-time
-data flow validation — see Section 6.5.6 Levels 2 and 3). Both run before the
-workflow is registered.
+the step array — Level 1) and **simulation** (execution-time data flow
+validation — Levels 2a/2b/2c). Both run before the workflow is registered. See
+`docs/arch-simulation-engine.md` for the full validation-level breakdown.
 
 But there is a deeper problem than validation. A single LLM call asked to
 simultaneously understand the domain, research best practices, resolve design
@@ -181,12 +181,41 @@ The v3 `dialog_designs` options array required `action` on all options because
 correctly omitted `action` from choice options, causing `required` violations.
 
 In v4, `design_workflow_dialogs` prompt specifies options shape per gate_type:
-- `confirm` / `edit_list` / `review_object` gates: `{ label, action, on_select }`
+- `confirm` / `list_selection` / `review_object` gates: `{ label, action, on_select }`
 - `choice` gates: `{ label, value, description, on_select }`
 - `text_input` gates: no options array required
 
 The output schema mirrors this distinction. The LLM receives an unambiguous
 specification and the schema validates the correct shape for each gate type.
+
+---
+
+## Decision: skeleton mode skips content-completeness checks
+
+The `serv_step_missing_required_input` L1 check is a **content completeness**
+check — it verifies that a fully-formed step declares `tableName`, `row`,
+`filters`, and `updates`. The routing skeleton built at step 21a (see Six-phase
+step structure below) is intentionally content-free — those fields are filled
+in later by `generate_workflow_steps`. Running this check against a skeleton
+produced false positives on every `serv_*` step.
+
+Fix: a `skeleton: boolean` flag on the `simulate` step's input, threaded through
+`runSimulation` → `runLevel1StaticAnalysis`. When `skeleton: true`,
+`serv_step_missing_required_input` is skipped — all routing topology checks
+(dead targets, missing `on_cancel`, unresolved templates, condition keys) still
+run, since those apply equally to skeletons. Step 21b sets `input.skeleton: true`;
+the final pre-write simulate at step 25 does not. L1/L2 level definitions
+themselves are unchanged — see `docs/arch-simulation-engine.md`.
+
+## Decision: `on_cancel` is required on every human_gate step
+
+`PGC_StepType`'s `human_gate` contract originally marked `on_cancel` as
+`required: false`, which LLMs correctly read as optional — causing persistent
+`missing_on_cancel` and `missing_cancel_option` L1 failures on both skeleton and
+full steps. Fixed by making `on_cancel` explicitly `required: true` in the
+`human_gate` `input_contract` (`seed_PGC_StepType.json`), with a description
+that makes the coupling to the cancel option explicit. Seed/context change only
+— no system code change.
 
 ---
 
@@ -245,14 +274,14 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 23h | `js_transform` — Apply all decisions to `draft_workflow.steps`: strip `prompt_draft / prompt_category / prompt_model / output_schema` from reuse/create steps; rewrite convert steps as `js_transform` using `d.js_expression`. `input_key: draft_workflow`. `output_key: draft_workflow`. `on_success: next`. | **`draft_workflow`**, **`capability_decisions`** | **`draft_workflow`** ←Updated (draft fields stripped; convert steps rewritten) |
 | **PHASE 5 — VALIDATION** | | | |
 | 24 | `human_gate review_object` — User reviews the proposed step array before simulation. `context_key: draft_workflow.steps`. `item_label_template: "Step {{step}} ({{type}}): {{description}}"`. Options: "Looks good" → step:25; "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:25`. Placed before mocks/paths so a rejected draft avoids unnecessary LLM calls. | **`draft_workflow.steps`**, **`draft_workflow.name`** | `…`, `draft_workflow`<br>**`user_workflow_feedback`** ←Added (via modal; only written when feedback option is selected) |
-| 25 | `simulate` Level 1 — Static analysis: routing integrity, dead step targets, missing template keys, gate structure. Input: `steps_key: draft_workflow.steps`. `on_success: step:25a`. `on_else: step:26`. Mocks and paths are not generated until Level 1 passes — saves 2 LLM calls per L1 failure cycle. | **`draft_workflow.steps`** | `…`, `user_workflow_feedback`<br>**`static_analysis_result`** ←Added |
+| 25 | `simulate` "L1 gate" — first simulate call, `mock_outputs_key`/`paths_key` not yet available (mocks/paths generate at steps 28/29). Input: `steps_key: draft_workflow.steps`. `on_success: step:25a`. `on_else: step:26`. Mocks and paths are not generated until this gate passes — saves 2 LLM calls per failure cycle. **Note:** despite the "L1" label, `result.passed` here is actually L1 (static analysis) + L2a (routing matrix) + L2b (data-flow trace) — see `docs/arch-simulation-engine.md`. Step 26 only formats `static_analysis_result.static_analysis.issues[]` into the failure message — an L2a/L2b-caused failure at this gate would show an empty/misleading summary to the user. | **`draft_workflow.steps`** | `…`, `user_workflow_feedback`<br>**`static_analysis_result`** ←Added |
 | 25a | `js_transform` — **L1 success path.** Map over `draft_workflow.steps`; embed `level1_applied: true, level1_issue: ''` on every step. `output_key: draft_workflow`. `on_success: step:28` | **`draft_workflow.steps`** | **`draft_workflow`** ←Updated (steps carry correction state) |
 | 26 | `js_transform` — Format Level 1 static analysis issues into a readable summary (max 6 issues) for the human gate message. Reads `static_analysis_result.static_analysis.issues[]`. `output_key: simulation_error_summary`. `on_success: step:26a` | **`static_analysis_result`** | `…`, `static_analysis_result`<br>**`simulation_error_summary`** ←Added |
 | 26a | `js_transform` — **L1 failure path.** Map over `draft_workflow.steps`; embed `level1_applied: false, level1_issue: <detail>` for steps in `static_analysis.issues[]`; `level1_applied: true` for all others. `output_key: draft_workflow`. `on_success: step:27` | **`static_analysis_result`**, **`draft_workflow.steps`** | **`draft_workflow`** ←Updated (steps carry correction state) |
 | 27 | `human_gate confirm` — Notify user that Level 1 simulation failed; offer to regenerate or cancel. Message: `{{simulation_error_summary}}`. Options: "Regenerate with feedback" (modal, `output_key: user_workflow_feedback`) → step:23; "Regenerate automatically" → step:23; Cancel → cancel. `on_success: step:23`. Step 23 receives `static_analysis_result` and `previous_draft_steps` (with correction state embedded) for phased correction. | **`simulation_error_summary`** | `user_workflow_feedback` ←Updated (via modal) |
 | 28 | `llm_call generate_workflow_mocks` (Sonnet) — Generate representative mock outputs for each step. Input: `{ steps: "{{draft_workflow.steps}}" }`. Output: `mock_outputs { mock_outputs: { [step_key]: value } }`. Only runs after Level 1 passes; regenerates on every correction loop iteration that clears Level 1. | **`draft_workflow.steps`** | `…`, `static_analysis_result`<br>**`mock_outputs`** ←Added (←Updated on retry) |
 | 29 | `llm_call generate_workflow_paths` (Sonnet) — Generate named simulation paths (happy path, cancel path, failure path). Input: `{ steps: "{{draft_workflow.steps}}", mock_outputs: "{{mock_outputs}}" }`. Output: `simulation_paths { simulation_paths: [{ path_name, decisions[] }] }`. Paths are deduplicated by `path_name` in `runSimulation` before Level 2 execution. | **`draft_workflow.steps`**, **`mock_outputs`** | `…`, `mock_outputs`<br>**`simulation_paths`** ←Added (←Updated on retry) |
-| 30 | `simulate` Level 2 + Level 3 — Full path execution with mocks; Level 3 skip-path analysis (advisory). Input: `steps_key: draft_workflow.steps`, `mock_outputs_key: mock_outputs.mock_outputs`, `paths_key: simulation_paths.simulation_paths`. `on_success: step:30a`. `on_else: step:31` | **`draft_workflow.steps`**, **`mock_outputs.mock_outputs`**, **`simulation_paths.simulation_paths`** | `…`, `simulation_paths`<br>**`simulation_result`** ←Added |
+| 30 | `simulate` "L2 gate" — second simulate call, now with mocks and named paths supplied so Level 2c (legacy path execution) also runs and its `path_results` are captured for the failure summary at step 31. Input: `steps_key: draft_workflow.steps`, `mock_outputs_key: mock_outputs.mock_outputs`, `paths_key: simulation_paths.simulation_paths`. `on_success: step:30a`. `on_else: step:31`. **Note:** `result.passed` (which drives this routing) is still only L1 + L2a + L2b — Level 2c is informational and never gates `passed` (see `docs/arch-simulation-engine.md`). Since `draft_workflow.steps` content is unchanged between step 25 and step 30 (only inert `level1_applied`/`level1_issue` metadata is added at step 25a), L1/L2a/L2b are deterministic and will already have passed here whenever step 25 passed — meaning `on_else: step:31` (the entire steps 31→31a→32→33→33a "path simulation failed" branch) is not reachable under current engine semantics unless `simulation_result.path_results` failures are surfaced through some other route. Worth confirming before relying on this branch. | **`draft_workflow.steps`**, **`mock_outputs.mock_outputs`**, **`simulation_paths.simulation_paths`** | `…`, `simulation_paths`<br>**`simulation_result`** ←Added |
 | 30a | `js_transform` — **L2 success path.** Map over `draft_workflow.steps`; embed `level2_applied: true, level2_issue: ''` on every step. `output_key: draft_workflow`. `on_success: step:34` | **`draft_workflow.steps`** | **`draft_workflow`** ←Updated (steps carry correction state) |
 | 31 | `js_transform` — Format Level 2 path simulation failures into a readable summary (max 6 failed paths) for the human gate message. Reads `simulation_result.path_results[]` and `simulation_paths` (accessed directly in expression as `local_state.simulation_paths`). `output_key: path_error_summary`. `on_success: step:31a` | **`simulation_result`**, `simulation_paths` | `…`, `simulation_result`<br>**`path_error_summary`** ←Added |
 | 31a | `js_transform` — **L2 failure path.** Map over `draft_workflow.steps`; embed `level2_applied: false, level2_issue: <reason>` for steps identified by `path_results[].failure_step`; `level2_applied: true` for all others. `output_key: draft_workflow`. `on_success: step:32` | **`simulation_result`**, **`draft_workflow.steps`** | **`draft_workflow`** ←Updated (steps carry correction state) |
@@ -263,10 +292,10 @@ set by `create-workflow.mjs` at `PGC_WorkflowRun` creation via `matchDomainAlias
 | 34 | `human_gate confirm` — Show simulation results; ask user to confirm registration. Message: "Simulation passed `{{simulation_result.paths_passed}}` of `{{simulation_result.paths_run}}` paths. Ready to register `{{draft_workflow.name}}`?" Options: Register → next; Cancel → cancel | **`simulation_result.paths_passed`**, **`simulation_result.paths_run`**, **`draft_workflow.name`** | (no new keys) |
 | 34a | `js_transform` — Strip correction state fields (`level1_applied`, `level1_issue`, `level2_applied`, `level2_issue`) from `draft_workflow.steps` before registration. `input_key: draft_workflow`. `output_key: draft_workflow`. `on_success: next` | **`draft_workflow`** | **`draft_workflow`** ←Updated (steps cleaned) |
 | 35 | `serv_insert PGC_Workflow` — Write the new workflow. Row: `{ name, domain, description, intent_keywords, steps, version: 1, state_strategy: "sequential_with_confirmation" }`. Routes to `step:35a` (phrasing gate) on success. | **`draft_workflow.name`**, **`input.domain`**, **`draft_workflow.description`**, **`draft_workflow.intent_keywords`**, **`draft_workflow.steps`** | `…`, `path_error_summary`<br>**`registered_workflow`** ←Added |
-| **PHRASING GATE (Sprint 4 — Track I)** | | | |
+| **PHRASING GATE (Sprint 4 — Track I; one-row-per-phrase — Sprint 7 Track F1)** | | | |
 | 35a | `human_gate text_input` — Ask the user for the phrases they will use to invoke this workflow from Slack. Message: "How will you invoke `{{draft_workflow.name}}` from Slack? Enter one or more phrases separated by commas." Options: Submit → next; Skip → next (fallback to workflow name); Cancel → cancel. `output_key: invocation_phrases`. The value is null when the user skips. | **`draft_workflow.name`** | `…`, `registered_workflow`<br>**`invocation_phrases`** ←Added |
-| 35b | `js_transform` — Build `intent_pattern`: split `invocation_phrases` on commas, trim and lowercase each phrase, filter empty strings, append `draft_workflow.name` (lowercased) if not already included, join with `\|`. Fallback: if `invocation_phrases` is null/empty, result is just `draft_workflow.name`. The pattern is a `\|`-joined regex matched by Pass 1a in `classify-intent.mjs`. Output: `intent_pattern` (string). | **`invocation_phrases`**, **`draft_workflow.name`** | `…`, `invocation_phrases`<br>**`intent_pattern`** ←Added |
-| 36 | `serv_insert PGC_IntentMap` — Write the routing row using the user-supplied pattern. Row: `{ pattern: intent_pattern, intent_category: draft_workflow.name, action_type: "workflow" }`. `pattern` is the `\|`-joined regex from step 35b — always includes `draft_workflow.name` as a fallback alternation so the exact name always matches Pass 1a. NOTE: no `workflow_id` column — `PGC_IntentMap` and `PGC_Workflow` are structurally independent. | **`intent_pattern`**, **`draft_workflow.name`** | `…`, `intent_pattern`<br>**`registered_intent_row`** ←Added |
+| 35b | `js_transform` — **Sprint 7 Track F1:** Build `intent_pattern_rows`, an array of one `{ pattern, intent_category, action_type, workflow_id, source }` object per distinct invocation phrase — not a joined regex. Unions (deduped): user-typed `invocation_phrases` split on commas (`source: 'user'`) **and** `draft_workflow.intent_keywords` (`source: 'auto'` — previously an either/or fallback only used when the user typed nothing; now always included) **and** a truncated alias from the original `userInput` (`source: 'auto'`) **and** `draft_workflow.name` itself (`source: 'name'`). `workflow_id` is read directly from `local_state.registered_workflow.id` (already in scope from step 35). Output: `intent_pattern_rows` (array). | **`invocation_phrases`**, **`draft_workflow.name`**, **`draft_workflow.intent_keywords`**, **`registered_workflow.id`** | `…`, `invocation_phrases`<br>**`intent_pattern_rows`** ←Added |
+| 36 | `serv_insert PGC_IntentMap` — **Sprint 7 Track F1:** Bulk-insert `{{intent_pattern_rows}}` — one row per phrase — converted from a single-object insert to a bulk array insert. Every row carries `workflow_id` so `delete-workflow.mjs` can remove all of a workflow's phrase rows with one FK-matched `deleteRows` call; `handoff()` still routes by name lookup, never by this FK (see `docs/arch-intent.md`). | **`intent_pattern_rows`** | `…`, `intent_pattern_rows`<br>**`registered_intent_rows`** ←Added |
 | 37 | `notify` — "Workflow `{{draft_workflow.name}}` is registered and ready. Deferred enhancements: `{{gap_analysis.deferred.length}}` item(s)." `on_success: end` | **`draft_workflow.name`**, **`draft_workflow.description`**, **`gap_analysis.deferred.length`** | (no new keys) |
 | 38 | `end` | — | — |
 
@@ -372,6 +401,16 @@ the step generator. This satisfies Guard 3's cycle-safety rule.
 
 If simulation repeatedly fails, the user cancels at step 27 (L1) or step 33 (L2). The L2 repair path (step 33a) does not loop back — if `fix_workflow_routing` fails (`on_else: cancel`), the run terminates without a human gate.
 There is no automated retry limit on human-gate-bounded loops.
+
+**Open question — is the step 30→31 "L2 failure" branch reachable?** `result.passed` from
+`runSimulation` (see `docs/arch-simulation-engine.md`) is computed from Level 1 + Level 2a
+(routing matrix) + Level 2b (data-flow trace) only — Level 2c (legacy path execution, the
+thing steps 28–30 actually exist to feed) never gates `passed`. Because `draft_workflow.steps`
+is unchanged between step 25 and step 30, and L1/2a/2b are deterministic given the same steps,
+step 30 should always pass whenever step 25 already passed — making `on_else: step:31`
+(the entire 31→31a→32→33→33a repair path) effectively unreachable today. Confirm this against
+a live run before depending on it; if confirmed, either Level 2c needs to gate `passed` when
+`simulation_paths` is supplied, or steps 28–33a need to be reconsidered.
 
 **Review gate placement (step 24).** The review gate runs immediately after step 23
 (generate steps), before mocks and paths are generated. This saves 2 LLM calls per

@@ -15,9 +15,9 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, buildMemoryRow } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
-import { resolvePath, resolveInput }          from '../../src/proc/template-resolver.mjs';
+import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -77,6 +77,68 @@ const SCAFFOLD = {
 };
 
 // ---------------------------------------------------------------------------
+// buildDialog — choice gate, iterator-driven options
+// ---------------------------------------------------------------------------
+
+describe('buildDialog — choice gate with iterator-expanded options', () => {
+  // Reproduces the live edit_budget (workflow 352) defect: the buttons expanded the
+  // iterator and bound each row correctly, but the description_list rendered above them
+  // was built from the RAW step.options — so the user saw one row reading literally
+  // "{{label}} — {{is_placeholder ? '(New month)' : ''}}" instead of one row per month.
+  const monthStep = {
+    step: '3', type: 'human_gate', gate_type: 'choice',
+    message_template: "Which month's budget would you like to edit?",
+    options: [
+      {
+        label: '{{label}}', value: '{{id}}', iterator: 'selectable_months',
+        on_select: 'next',
+        description: "{{is_placeholder ? '(New month)' : ''}}",
+      },
+      { label: 'Cancel', value: 'cancel', on_select: 'cancel', description: 'Stop workflow' },
+    ],
+    output_key: 'selected_month_id',
+  };
+  // Exactly the shape workflow 352's step-2 js_transform emits.
+  const localState = {
+    selectable_months: [
+      { id: '2026-07', label: '07/2026', is_placeholder: true  },
+      { id: '2026-06', label: '06/2026', is_placeholder: false },
+    ],
+  };
+
+  it('expands the iterator into one description row per item, with tokens resolved', () => {
+    const dialog = buildDialog(monthStep, localState);
+    const list   = dialog.fields.find(f => f.type === 'description_list');
+
+    assert.equal(list.items.length, 3, 'two months plus Cancel — not one unexpanded row');
+    assert.deepEqual(list.items.map(i => i.label), ['07/2026', '06/2026', 'Cancel']);
+    assert.deepEqual(list.items.map(i => i.value), ['2026-07', '2026-06', 'cancel']);
+    assert.ok(!JSON.stringify(list.items).includes('{{'),
+      'no raw template token may survive into the rendered list');
+  });
+
+  it('evaluates a per-row expression in a description against that row', () => {
+    const list = buildDialog(monthStep, localState).fields.find(f => f.type === 'description_list');
+    assert.equal(list.items[0].description, '(New month)', 'is_placeholder true → the label');
+    assert.equal(list.items[1].description, '',            'is_placeholder false → empty');
+    assert.equal(list.items[2].description, 'Stop workflow', 'non-iterator option unaffected');
+  });
+
+  it('keeps the buttons and the description list in step with each other', () => {
+    const dialog  = buildDialog(monthStep, localState);
+    const list    = dialog.fields.find(f => f.type === 'description_list');
+    const buttons = dialog.fields.find(f => f.type === 'actions').buttons;
+    assert.deepEqual(buttons.map(b => b.label), list.items.map(i => i.label),
+      'both are built from one expanded option list, so they cannot diverge');
+  });
+
+  it('an iterator naming a missing/empty array contributes no rows', () => {
+    const list = buildDialog(monthStep, {}).fields.find(f => f.type === 'description_list');
+    assert.deepEqual(list.items.map(i => i.label), ['Cancel']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildDialog — modal descriptor passthrough (the regression)
 // ---------------------------------------------------------------------------
 
@@ -85,7 +147,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     const step = {
       step:        '3',
       type:        'human_gate',
-      gate_type:   'edit_list',
+      gate_type:   'list_selection',
       description: 'Review tables',
       context_key: 'proposed_scaffold.tables',
       options: [
@@ -120,7 +182,7 @@ describe('buildDialog — modal descriptor passthrough', () => {
     const step = {
       step:        '3',
       type:        'human_gate',
-      gate_type:   'edit_list',
+      gate_type:   'list_selection',
       context_key: 'proposed_scaffold.tables',
       options: [
         { action: 'confirm', label: 'Looks good', on_select: 'next' },
@@ -136,8 +198,86 @@ describe('buildDialog — modal descriptor passthrough', () => {
     }
   });
 
+  it('list_selection gate renders one row per item with a caller-configured action button (not the defaults)', () => {
+    // Sprint 7 Track D2 drill-down — list_selection unifies what were briefly
+    // two gate types (edit_list/row_list) into one: same 'list' field rendering
+    // regardless of what the button does. item_action's label/style/action/
+    // on_select are all caller-configurable; context_key items are expected
+    // pre-formatted as { id, fields?, secondaryAction? }.
+    const step = {
+      step:         '9c',
+      type:         'human_gate',
+      gate_type:    'list_selection',
+      context_key:  'row_items',
+      item_action:  { action: 'view_record', label: 'View', style: 'default', on_select: 'step:20' },
+      output_key:   'selected_record_id',
+      options:      [{ label: 'Done', action: 'cancel', on_select: 'cancel' }],
+    };
+    const localState = {
+      row_items: [
+        { id: 3, fields: { title: 'Nov 20, 2024', card_count: 2 } },
+        { id: 4, fields: { title: 'Spanish Grammer' } },
+      ],
+    };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.ok(listField, 'list field must be present');
+    assert.equal(listField.items.length, 2);
+    assert.equal(listField.items[0].id, 3);
+    assert.deepEqual(listField.items[0].fields, { title: 'Nov 20, 2024', card_count: 2 });
+    assert.equal(listField.items[0].secondaryAction.action, 'view_record');
+    assert.equal(listField.items[0].secondaryAction.label, 'View');
+    assert.equal(listField.items[0].secondaryAction.style, 'default');
+
+    // "Done" still renders as a real bottom button — view_record does NOT,
+    // since it's resolved via item_action.on_select directly (see run-workflow.mjs),
+    // not via a duplicate options[] entry.
+    const actionsField = dialog.fields.find(f => f.type === 'actions');
+    assert.equal(actionsField.buttons.length, 1);
+    assert.equal(actionsField.buttons[0].action, 'cancel');
+  });
+
+  it('list_selection gate defaults item_action label to Select, and sends no style when omitted', () => {
+    const step = {
+      step: '9c', type: 'human_gate', gate_type: 'list_selection',
+      context_key: 'row_items',
+      item_action: { action: 'select_row', on_select: 'step:40' },
+      options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
+    };
+    const localState = { row_items: [{ id: 1, fields: { title: 'Row 1' } }] };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.equal(listField.items[0].secondaryAction.label, 'Select');
+    assert.equal(listField.items[0].secondaryAction.style, undefined,
+      'no style default — Slack rejects style: "default", and callback.mjs forwards only danger/primary');
+  });
+
+  it('list_selection gate passes an item\'s own pre-built secondaryAction through untouched, ignoring step.item_action', () => {
+    // Some items (e.g. a referenced parent row) get no action at all, decided
+    // per-item upstream, not by this generic renderer.
+    const step = {
+      step: '9c', type: 'human_gate', gate_type: 'list_selection',
+      context_key: 'row_items',
+      item_action: { action: 'select_row', on_select: 'step:40' },
+      options: [{ label: 'Looks good', action: 'confirm', on_select: 'next' }],
+    };
+    const localState = {
+      row_items: [
+        { id: 1, fields: { title: 'Child' }, secondaryAction: { label: 'Open', action: 'select_row' } },
+        { id: 2, fields: { title: 'Parent (referenced)' }, secondaryAction: null },
+      ],
+    };
+
+    const dialog = buildDialog(step, localState);
+    const listField = dialog.fields.find(f => f.type === 'list');
+    assert.ok(listField.items[0].secondaryAction, 'child item keeps its own action');
+    assert.equal(listField.items[1].secondaryAction, null, 'parent item explicitly has no action, step.item_action must not override it');
+  });
+
   it('create_domain step 12 is a choice gate with per-table reveals and inline modal', () => {
-    // Step 12 is the schema review gate — per-table task_card reveals, modal for Request changes.
+    // Step 12 is the schema review gate — per-table reveal panels, modal for Request changes.
     const step = getStep('create_domain', '12');
     assert.equal(step.gate_type, 'choice', 'step 12 must be a choice gate');
     assert.ok(step.reveals, 'step 12 must have a reveals field for per-table schema cards');
@@ -405,7 +545,13 @@ describe('help step 4 — resolveHelpContent expression', () => {
 // get_entity / list_entity expressions
 // ---------------------------------------------------------------------------
 
-describe('get_entity step 5 — formatRecordList expression (with children)', () => {
+// Sprint 7 Track D9 — get_entity/list_entity's presentation step builds a
+// { entity_name, entities: [{fields, children?}] } structure, then formats it
+// into markdown deterministically (no LLM call — format_entity_display was
+// removed as a Type-4a overcorrection, see Track A8/A9). These tests cover the
+// pre-processing builder (FK resolution, system/embedding/null stripping,
+// scalar/child separation) — the formatter itself is covered separately below.
+describe('get_entity step 11 — entity_display_data builder (with children)', () => {
   const RESULTS = [
     {
       id:           1,
@@ -413,45 +559,305 @@ describe('get_entity step 5 — formatRecordList expression (with children)', ()
       back_text:    'hello',
       created_at:   '2026-01-01',
       updated_at:   '2026-01-01',
+      parent_id:    5,
       review_logs:  [{ id: 10, result: 'pass', created_at: '2026-01-01' }],
     },
   ];
+  const ROOT_TABLE_SCHEMA = [{
+    foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Decks', column: 'id' } }],
+  }];
+  const FK_LABEL_MAP = { 'PGD_Decks:5': 'Spanish Vocabulary' };
 
-  it('formats root columns and includes child arrays', () => {
-    const step = getStep('get_entity', '5');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(typeof result === 'string');
-    assert.ok(result.includes('front_text=hola'));
-    assert.ok(result.includes('review_logs'));
-    assert.ok(!result.includes('created_at='));  // system cols suppressed
+  it('strips system/embedding columns, elides nulls, resolves FK columns, and keeps child arrays separately', () => {
+    const step = getStep('get_entity', '11');
+    const localState = { results: RESULTS, root_table_schema: ROOT_TABLE_SCHEMA, fk_label_map: FK_LABEL_MAP };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.entities.length, 1);
+    const entity = result.entities[0];
+    assert.equal(entity.fields.front_text, 'hola');
+    assert.equal(entity.fields.parent_id, 'Spanish Vocabulary'); // FK resolved to label, not raw id
+    assert.equal(entity.fields.id, 1);                   // id kept — needed to reference this record in get/update/delete
+    assert.equal(entity.fields.created_at, undefined);  // system col suppressed
+    assert.equal(entity.fields.review_logs, undefined); // arrays never land in fields
+    assert.equal(entity.children.review_logs.length, 1);
+    assert.equal(entity.children.review_logs[0].result, 'pass');
+    assert.equal(entity.children.review_logs[0].created_at, undefined); // system col suppressed on children too
   });
 
-  it('returns "No records found." for empty array', () => {
-    const step = getStep('get_entity', '5');
-    const result = runSandboxedExpression(step.expression, [], {}, 'test');
-    assert.equal(result, 'No records found.');
+  it('returns an empty entities array for no results', () => {
+    const step = getStep('get_entity', '11');
+    const result = runSandboxedExpression(step.expression, null, { results: [] }, 'test');
+    assert.deepEqual(result.entities, []);
   });
 });
 
-describe('list_entity step 3 — formatRecordList expression (root only)', () => {
-  const RESULTS = [
-    { id: 1, front_text: 'hola', back_text: 'hello', created_at: '2026', updated_at: '2026',
-      review_logs: [{ result: 'pass' }] },
-    { id: 2, front_text: 'adiós', back_text: 'goodbye', created_at: '2026', updated_at: '2026',
-      review_logs: [] },
-  ];
-
-  it('formats root columns and suppresses child arrays', () => {
-    const step = getStep('list_entity', '3');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(result.includes('front_text=hola'));
-    assert.ok(!result.includes('review_logs'), 'child arrays must be suppressed');
+describe('get_entity step 12 — deterministic formatter (replaces format_entity_display llm_call)', () => {
+  it('renders scalar fields as bold lines and keeps the id visible', () => {
+    const step = getStep('get_entity', '12');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary', card_count: 2 } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /Spanish Vocabulary \(id: 3\)/);
+    assert.match(result.formatted_markdown, /\*Card Count:\* 2/);
+    assert.equal(result.reveals.length, 0);
   });
 
-  it('includes record count in output', () => {
-    const step = getStep('list_entity', '3');
-    const result = runSandboxedExpression(step.expression, RESULTS, {}, 'test');
-    assert.ok(result.includes('Found 2 record(s)'));
+  it('collapses a child collection over the reveal threshold into a reveal panel instead of inline', () => {
+    const step = getStep('get_entity', '12');
+    const many = Array.from({ length: 8 }, (_, i) => ({ front: `card${i}`, back: `back${i}` }));
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary' }, children: { cards: many } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.doesNotMatch(result.formatted_markdown, /card0/, 'dense collection must not appear inline');
+    assert.equal(result.reveals.length, 1);
+    assert.equal(result.reveals[0].content.length, 8);
+  });
+
+  it('keeps a short child collection inline, no reveal', () => {
+    const step = getStep('get_entity', '12');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'Deck',
+        entities: [ { fields: { id: 3, title: 'Spanish Vocabulary' }, children: { cards: [{ front: 'hola', back: 'hello' }] } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /## cards/);
+    assert.equal(result.reveals.length, 0);
+  });
+});
+
+// Sprint 7 Track D9/D12 — list_entity replaced its fixed "list root → view one
+// child level → end" shape with a recursive loop over dynamic, click-time FK
+// lookups (see docs/sprints/CURRENT.md Track D). These tests cover the loop's
+// pure js_transform steps directly, independent of the engine's step routing.
+describe('list_entity step 23 — row_build (fetch → resolved row_items + full_rows_map)', () => {
+  const LOOP_STATE = {
+    defs: [
+      {
+        table: 'PGD_Parent',
+        fkColumn: 'parent_id',
+        foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }],
+      },
+      {
+        table: 'PGD_Child',
+        fkColumn: 'parent_ref_id',
+        foreign_keys: [],
+      },
+    ],
+    parent_id: 3,
+    nav_stack: [],
+  };
+  const FETCHED = [
+    [ { id: 7, title: 'Nested Parent A', created_at: '2026', updated_at: '2026', parent_id: 3 } ], // PGD_Parent rows
+    [ { id: 20, front_text: 'hola', back_text: 'hello', parent_ref_id: 3, log_entries: [{ result: 'pass' }] } ], // PGD_Child rows
+  ];
+
+  it('flattens rows across defs, strips system/embedding/null fields, and resolves outgoing FK labels', () => {
+    const step = getStep('list_entity', '23');
+    const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.length, 2);
+    const parentRow = result.row_items.find(r => r.responseData.table === 'PGD_Parent');
+    assert.equal(parentRow.id, 7, 'item.id is the record\'s own plain id, not a table-prefixed composite');
+    assert.equal(parentRow.fields.id, undefined, 'id is not duplicated inside fields — it is already the top-level item.id');
+    assert.equal(parentRow.fields.title, 'Nested Parent A', 'no forced label synthesis — the record\'s own field name/value passes through as-is');
+    assert.equal(parentRow.responseData.id, 7);
+    assert.equal(parentRow.responseData.hasChildren, false, 'hasChildren starts false — tagged later by step 26');
+    assert.equal(result.full_rows_map['PGD_Parent:7'].created_at, undefined, 'system column suppressed');
+    assert.equal(result.full_rows_map['PGD_Child:20'].log_entries, undefined, 'array-valued fields are stripped at list level — never split into a children key');
+  });
+
+  it('keeps full cleaned fields in full_rows_map for a later leaf-detail render without a re-fetch', () => {
+    const step = getStep('list_entity', '23');
+    const localState = { loop_state: LOOP_STATE, fetched_rows_by_def: FETCHED, fk_label_map: {} };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.full_rows_map['PGD_Child:20'].front_text, 'hola');
+  });
+});
+
+// Sprint 7 Track D12 (refined) — "does anything reference this table" was too
+// broad a signal for hasChildren: a table can have an incidental FK pointing
+// at it (e.g. an audit-log-style table) without that relationship being
+// something a user would ever want to navigate into. hasChildren now requires
+// either a self-reference or a relationship create_domain already curated
+// into some entity's own `joins` — driven entirely by domain_schemas (loaded
+// once at step 1) and discovered table names, never a hardcoded table name,
+// so this must behave identically for any domain, not just the one these
+// fixtures happen to resemble.
+describe('list_entity step 25a — hasChildren requires self-reference or a curated domain_schemas join', () => {
+  const DOMAIN_SCHEMAS = [
+    {
+      entity_name: 'Widget',
+      root_table:  'PGD_Parent',
+      joins:       [{ table: 'PGD_Child', alias: 'children', on: 'children.parent_id = r.id' }],
+    },
+  ];
+
+  it('self-reference is always further-navigable, even with no domain_schemas entry for it', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: [],
+      distinct_child_tables: ['PGD_Parent'],
+      child_discover_results: [[{ table_name: 'PGD_Parent' }]], // parent references itself
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Parent, true);
+  });
+
+  it('a table curated as a join child of the parent in domain_schemas is further-navigable', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: DOMAIN_SCHEMAS,
+      distinct_child_tables: ['PGD_Parent'],
+      child_discover_results: [[{ table_name: 'PGD_Child' }]],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Parent, true);
+  });
+
+  it('a table with an incidental FK but no curated relationship is NOT further-navigable', () => {
+    const step = getStep('list_entity', '25a');
+    const localState = {
+      domain_schemas: DOMAIN_SCHEMAS,
+      distinct_child_tables: ['PGD_Child'],
+      child_discover_results: [[{ table_name: 'PGD_Log' }]], // references PGD_Child, but not curated anywhere
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.PGD_Child, false, 'PGD_Log referencing PGD_Child does not make PGD_Child further-navigable — it is attached detail data');
+  });
+});
+
+describe('list_entity step 41b — next-level defs filtered to curated children only', () => {
+  it('excludes a discovered table that is not curated as a join child of the clicked row\'s table', () => {
+    const step = getStep('list_entity', '41b');
+    const localState = {
+      domain_schemas: [{ root_table: 'PGD_Parent', joins: [{ table: 'PGD_Child' }] }],
+      selected_row: { table: 'PGD_Parent', id: 3 },
+      clicked_referencing_tables: [
+        { table_name: 'PGD_Child', foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+        { table_name: 'PGD_Log',   foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+      ],
+      nav_stack_pushed: [],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.deepEqual(result.defs.map(d => d.table), ['PGD_Child']);
+    assert.equal(result.parent_id, 3);
+  });
+
+  it('includes a self-referencing table even though it is not in any joins list', () => {
+    const step = getStep('list_entity', '41b');
+    const localState = {
+      domain_schemas: [],
+      selected_row: { table: 'PGD_Parent', id: 3 },
+      clicked_referencing_tables: [
+        { table_name: 'PGD_Parent', foreign_keys: [{ column: 'parent_id', references: { table: 'PGD_Parent', column: 'id' } }] },
+      ],
+      nav_stack_pushed: [],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.deepEqual(result.defs.map(d => d.table), ['PGD_Parent']);
+  });
+});
+
+describe('list_entity steps 50/50a/50b — leaf detail children (non-curated attached data)', () => {
+  it('step 50 reuses cached (non-curated) discovery from the level this row was listed on, no new schema query', () => {
+    const step = getStep('list_entity', '50');
+    const localState = {
+      selected_row: { table: 'PGD_Child', id: 20 },
+      distinct_child_tables: ['PGD_Child'],
+      child_discover_results: [[
+        { table_name: 'PGD_Log', foreign_keys: [{ column: 'child_id', references: { table: 'PGD_Child', column: 'id' } }] },
+      ]],
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.length, 1);
+    assert.equal(result[0].table, 'PGD_Log');
+    assert.equal(result[0].fkColumn, 'child_id');
+    assert.equal(result[0].foreign_keys[0].column, 'child_id');
+  });
+
+  it('step 50b attaches fetched detail-child rows as entity.children, keyed by table name', () => {
+    const step = getStep('list_entity', '50b');
+    const localState = {
+      selected_row: { table: 'PGD_Child', id: 20 },
+      leaf_child_defs: [{ table: 'PGD_Log', fkColumn: 'child_id', foreign_keys: [] }],
+      leaf_child_rows_by_def: [[
+        { id: 1, child_id: 20, result: 'pass', created_at: '2026' },
+      ]],
+      row_build: { full_rows_map: { 'PGD_Child:20': { id: 20, front: 'hola' } } },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.entities[0].fields.front, 'hola');
+    assert.equal(result.entities[0].children.PGD_Log.length, 1);
+    assert.equal(result.entities[0].children.PGD_Log[0].result, 'pass');
+    assert.equal(result.entities[0].children.PGD_Log[0].created_at, undefined, 'system column suppressed on detail children too');
+  });
+});
+
+describe('list_entity step 26 — hasChildren tagging', () => {
+  it('tags each row true/false from has_children_map keyed by its own table', () => {
+    const step = getStep('list_entity', '26');
+    const localState = {
+      has_children_map: { PGD_Parent: true, PGD_Child: false },
+      row_build: {
+        row_items: [
+          { id: 7, fields: { title: 'Nested Parent A' }, responseData: { table: 'PGD_Parent', id: 7, hasChildren: false } },
+          { id: 20, fields: { title: 'hola' }, responseData: { table: 'PGD_Child', id: 20, hasChildren: false } },
+        ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Parent').responseData.hasChildren, true);
+    assert.equal(result.row_items.find(r => r.responseData.table === 'PGD_Child').responseData.hasChildren, false);
+    assert.match(result.message, /Found 2 record/);
+  });
+
+  it('reports "no related records" when row_items is empty', () => {
+    const step = getStep('list_entity', '26');
+    const result = runSandboxedExpression(step.expression, null, { has_children_map: {}, row_build: { row_items: [] } }, 'test');
+    assert.equal(result.row_items.length, 0);
+    assert.match(result.message, /No related records/);
+  });
+
+  // Regression: run 668 hit Slack's msg_blocks_too_long under the old one-Block-
+  // Kit-block-pair-per-row rendering (a row cap was the workaround at the time).
+  // The row list now renders as a single markdown table regardless of row count
+  // (Sprint 7 Track D, follow-up), so no combined-row cap is needed here — the
+  // per-def serv_query limit (step 20's iterator, 20 rows) is the only bound left.
+  it('does not cap combined row_items — the table renders as one block regardless of row count', () => {
+    const step = getStep('list_entity', '26');
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: i, fields: { title: `item${i}` }, responseData: { table: 'PGD_Child', id: i, hasChildren: false },
+    }));
+    const localState = { has_children_map: { PGD_Child: false }, row_build: { row_items: many } };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.equal(result.row_items.length, 40, 'all combined rows must pass through uncapped');
+    assert.match(result.message, /Found 40 record/);
+  });
+});
+
+describe('list_entity step 51 — deterministic leaf formatter (same contract as get_entity step 12)', () => {
+  it('produces formatted_markdown and reveals from entity_display_data without an LLM call', () => {
+    const step = getStep('list_entity', '51');
+    const localState = {
+      entity_display_data: {
+        entity_name: 'PGD_Child',
+        entities: [ { fields: { id: 20, front_text: 'hola', back_text: 'hello' } } ],
+      },
+    };
+    const result = runSandboxedExpression(step.expression, null, localState, 'test');
+    assert.match(result.formatted_markdown, /PGD_Child \(id: 20\)/, 'falls back to entity_name when the record has no title/name field');
+    assert.match(result.formatted_markdown, /\*Front Text:\* hola/);
+    assert.equal(result.reveals.length, 0);
   });
 });
 
@@ -1349,6 +1755,31 @@ describe('resolveInput — arithmetic expression in {{}} token', () => {
   });
 });
 
+describe('resolveTemplate — array interpolation', () => {
+  it('joins an array of primitives as plain comma-separated values', () => {
+    const state = { missing_category_names: ['Dining Out', 'Subscriptions', 'Clothing'] };
+    assert.strictEqual(
+      resolveTemplate('{{missing_category_names}}', state),
+      'Dining Out, Subscriptions, Clothing'
+    );
+  });
+
+  it('JSON-stringifies each element of an array of objects instead of producing [object Object]', () => {
+    const state = {
+      budget_rows_with_ids: [
+        { category_id: 1, planned_amount: 3300 },
+        { category_id: 2, planned_amount: 450 },
+      ],
+    };
+    const result = resolveTemplate('{{budget_rows_with_ids}}', state);
+    assert.ok(!result.includes('[object Object]'), `expected no [object Object], got: ${result}`);
+    assert.strictEqual(
+      result,
+      '{"category_id":1,"planned_amount":3300}, {"category_id":2,"planned_amount":450}'
+    );
+  });
+});
+
 describe('resolvePath — variable-based array index [varName]', () => {
   const state = {
     current_subset: [
@@ -1411,5 +1842,96 @@ describe('L1 static analysis — arithmetic expression and bracket-notation fals
     const issues = result.static_analysis.issues.filter(i => i.failure_class === 'unresolved_template_variable');
     assert.strictEqual(issues.length, 1);
     assert.match(issues[0].detail, /missing_key/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveGateOptions — one resolver for rendering AND for matching the answer back
+// ---------------------------------------------------------------------------
+
+describe('resolveGateOptions', () => {
+  // Live workflow 353 (edit_budget) step 5. resumeGate used to match the user's answer
+  // against step.options RAW, where the value is still "{{year}}-{{month}}" — so it could
+  // never match the "2026-07" that came back, and silently fell through to 'next'.
+  const step = {
+    step: '5', type: 'human_gate', gate_type: 'choice',
+    options: [
+      { label: '{{label}}', value: '{{year}}-{{month}}', iterator: 'month_summary',
+        on_select: 'next', description: 'Net: {{net_cash_flow}}' },
+      { label: 'Cancel', value: 'cancel', on_select: 'cancel', description: 'Exit' },
+    ],
+  };
+  const localState = {
+    month_summary: [
+      { year: '2026', month: '07', label: '07/2026', net_cash_flow: 250 },
+      { year: '2026', month: '06', label: '06/2026', net_cash_flow: -80 },
+    ],
+  };
+
+  it('expands an iterator option into one resolved option per row', () => {
+    const opts = resolveGateOptions(step, localState);
+    assert.equal(opts.length, 3, 'two months plus Cancel');
+    assert.deepEqual(opts.map(o => o.value), ['2026-07', '2026-06', 'cancel']);
+    assert.deepEqual(opts.map(o => o.label), ['07/2026', '06/2026', 'Cancel']);
+  });
+
+  it('resolves the value the user actually picks — so resumeGate can match it', () => {
+    const opts = resolveGateOptions(step, localState);
+    const picked = opts.find(o => o.value === '2026-07');
+    assert.ok(picked, 'the answer coming back from Slack must find its option');
+    assert.equal(picked.on_select, 'next', 'and carry that option\'s routing');
+  });
+
+  it('resolves per-row tokens in a description', () => {
+    const opts = resolveGateOptions(step, localState);
+    assert.equal(opts[0].description, 'Net: 250');
+    assert.equal(opts[1].description, 'Net: -80');
+  });
+
+  it('leaves a plain options array alone', () => {
+    const plain = { options: [{ label: 'Yes', action: 'confirm', on_select: 'next' }] };
+    assert.deepEqual(resolveGateOptions(plain, {}).map(o => o.action), ['confirm']);
+  });
+
+  it('an iterator naming a missing array contributes nothing', () => {
+    assert.deepEqual(resolveGateOptions(step, {}).map(o => o.value), ['cancel']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A cancel-action option that routes elsewhere must NOT cancel the run
+// ---------------------------------------------------------------------------
+
+describe('cancel option routing — on_select wins over the action name', () => {
+  // Live workflow 353 (edit_budget) step 16. The routing rules require every gate to carry
+  // an option with action "cancel", but nothing says that option must exit: this one is
+  // labelled "Edit More" and routes back to the category picker. resumeGate used to cancel
+  // the run on the action name alone, so "Edit More" killed the workflow.
+  //
+  // resumeGate is not exported (SQS handler module), so this pins the decision resumeGate
+  // makes — the same expression, over the real option shape.
+  const options = [
+    { label: 'Save Budget', action: 'confirm', on_select: 'next' },
+    { label: 'Edit More',   action: 'cancel',  on_select: '11'   },
+  ];
+  const routesAway = opts => {
+    const cancelOption = opts.find(o => o.action === 'cancel');
+    return !!(cancelOption?.on_select && cancelOption.on_select !== 'cancel');
+  };
+
+  it('a cancel-action option pointing at a step routes there instead of cancelling', () => {
+    assert.equal(routesAway(options), true);
+    assert.equal(options.find(o => o.action === 'cancel').on_select, '11');
+  });
+
+  it('an ordinary Cancel option still cancels', () => {
+    assert.equal(routesAway([
+      { label: 'Save',   action: 'confirm', on_select: 'next'   },
+      { label: 'Cancel', action: 'cancel',  on_select: 'cancel' },
+    ]), false);
+  });
+
+  it('a cancel option with no on_select still cancels', () => {
+    assert.equal(routesAway([{ label: 'Cancel', action: 'cancel' }]), false);
   });
 });

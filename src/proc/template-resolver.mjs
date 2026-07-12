@@ -94,7 +94,9 @@ export function resolveTemplate(template, localState) {
       if (exprVal !== undefined && exprVal !== null) return String(exprVal);
       return match;
     }
-    if (Array.isArray(val)) return val.join(', ');
+    if (Array.isArray(val)) {
+      return val.map(item => (item !== null && typeof item === 'object') ? JSON.stringify(item) : String(item)).join(', ');
+    }
     if (typeof val === 'object') return JSON.stringify(val);
     return String(val);
   });
@@ -157,7 +159,7 @@ function evalExpression(token, localState) {
 /**
  * Evaluate a simple boolean condition expression against an item object.
  * Safe evaluator — only property access, .length, comparison operators.
- * Used by edit_list gate to determine which items get action buttons.
+ * Used by the list_selection gate to determine which items are selectable.
  *
  * Supported syntax:
  *   item.foreignKeys.length > 0
@@ -170,6 +172,13 @@ function evalExpression(token, localState) {
  * @returns {boolean}
  */
 export function evalItemCondition(condition, item) {
+  // No condition means "show for every item" — a condition is a filter, and an
+  // absent filter must not filter everything out. Latent bug found Sprint 7
+  // Track D2: evaluating `(${undefined})` silently returned false, so any
+  // item_action with no condition set never rendered its button at all. Never
+  // surfaced before because this function's only caller (step-executor.mjs's
+  // list_selection case) had no live workflow exercising it until now.
+  if (!condition) return true;
   try {
     return Boolean(vm.runInNewContext(`(${condition})`, { item }, { timeout: 200 }));
   } catch (e) {

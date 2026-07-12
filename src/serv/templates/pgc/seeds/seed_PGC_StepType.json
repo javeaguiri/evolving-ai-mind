@@ -128,13 +128,13 @@
   },
   {
     "step_type": "human_gate",
-    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button \u2014 output_key written when context_key also present), edit_list (review and remove items), text_input (type free text in the input field \u2014 output_key always written on submit), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines \u2014 output_key written with selected value; when a choice option carries a modal descriptor, the typed modal text is written to the option's own output_key if declared, or to the step-level output_key if not), followup_prompt (shows a message with an \"Ask follow-up\" button that opens a free-text modal \u2014 no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only \u2014 never in description lists \u2014 and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to toggle content visibility within the same gate. Optional reveals field: array version of reveal \u2014 one reveal panel per entry (e.g. one per table). Each entry is { button_label, content }. Supports an inline array or a {{template}} reference to a local_state array.",
+    "description": "Suspends workflow execution and presents a dialog to the user. Execution resumes when the user clicks an option button. Gate types: confirm (read message, click button \u2014 output_key written when context_key also present), form (collect any number of typed values \u2014 the ONLY gate that captures user input; output_key receives an object of every field), list_selection (review a table of records and pick one), review_object (review key-value summary), choice (single-select with lettered buttons A/B/C, per-option description lines \u2014 output_key written with selected value; when a choice option carries a modal descriptor, the typed modal text is written to the option's own output_key if declared, or to the step-level output_key if not), followup_prompt (shows a message with an \"Ask follow-up\" button that opens a free-text modal \u2014 no output_key written by the gate itself; the follow-up text is handled by the EXP tier). Each option has its own on_select routing token. special_buttons appear as action buttons only \u2014 never in description lists \u2014 and support modal descriptors for overlay text input. Optional reveal field: add { button_label, content } to any gate_type to toggle content visibility within the same gate \u2014 content supports standard markdown formatting. Optional reveals field: array version of reveal \u2014 one reveal panel per entry (e.g. one per table). Each entry is { button_label, content }. Supports an inline array or a {{template}} reference to a local_state array.",
     "input_contract": [
       {
         "type": "string",
         "field": "gate_type",
         "required": true,
-        "description": "confirm | edit_list | text_input | review_object | choice | followup_prompt. Common pattern for choice: pair with reveal field for 'question → reveal answer → grade response' workflows where hidden content must be verified before the user can accurately select an option."
+        "description": "confirm | form | list_selection | review_object | choice | followup_prompt. (text_input is DEPRECATED — it still runs for workflows built before form existed, but must never appear in a new one; use a form with a `textarea` field for free-form prose.) form: collects any number of typed values in ONE gate — declare them in `fields` (each { name, type }, where type is text | textarea | select | multi_select | radio | checkbox | date | time | datetime, naming WHAT is collected, never a widget). output_key receives a single object keyed by field name. Options for select/multi_select/radio/checkbox come from `options` (fixed) or `options_key` (a local_state dot-path, so a dropdown can offer rows the workflow already queried). Never collect a date or an enumerable value as free text and then parse it with an llm_call — use a typed field. A picker is deterministic, parsing prose is not. Common pattern for choice: pair with reveal field for 'question → reveal answer → grade response' workflows where hidden content must be verified before the user can accurately select an option. list_selection: every context_key item ({id, fields?, secondaryAction?} — fields is a plain object of column name -> value, pre-formatted in a preceding js_transform, not here; no forced Name/Title synthesis, the record's own field names/values pass through as-is) renders as one row in a single markdown table (one column per distinct field key across every item, sparse where an item lacks a given key), plus one shared selection control and one Select button (label/style from item_action, label defaults to 'Select') applied uniformly unless an item already carries its own secondaryAction. The selection control is a dropdown of every selectable row — grouped by source table when a level spans more than one, so ids colliding across tables stay unambiguous — falling back to a plain id text box past Slack's 100-option cap. The user picks a row and clicks Select: the selected row is written to output_key and the gate routes via item_action.on_select, which is required and is resolved directly, never via a matching options[] entry (that would render a redundant duplicate button) — e.g. drill-down into a back-edge step that fetches/displays that one record. What selecting means is the calling workflow's concern, expressed through on_select's target, never through a different gate_type."
       },
       {
         "type": "string",
@@ -146,13 +146,19 @@
         "type": "string",
         "field": "context_key",
         "required": false,
-        "description": "Dot-path into local_state for the data shown in the dialog. Required for edit_list and review_object. Optional for confirm \u2014 when present, the selected action value is written to output_key."
+        "description": "Dot-path into local_state for the data shown in the dialog. Required for list_selection and review_object. Optional for confirm \u2014 when present, the selected action value is written to output_key. Not used by form (form declares its inputs in `fields`; a dropdown's choices come from a field's own options_key)."
+      },
+      {
+        "type": "array",
+        "field": "fields",
+        "required": false,
+        "description": "form gates only, and required for them. One entry per value to collect: { name, type, label?, optional?, placeholder?, options?, options_key?, option_value_key?, option_label_key? }. `type` is one of text | textarea | select | multi_select | radio | checkbox | date | time | datetime and states WHAT is collected \u2014 never a Slack widget name. select/radio yield one value; multi_select/checkbox yield an array. radio/checkbox cap at 10 options, select/multi_select at 100."
       },
       {
         "type": "array",
         "field": "options",
         "required": true,
-        "description": "Array of option objects \u2014 must include at least one with action/value: \"cancel\" in either options or special_buttons. Shape varies by gate_type: confirm/edit_list/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } \u2014 clicking the button opens an overlay modal; the typed value is written to the option's own output_key if declared, otherwise to the step-level output_key on submit. Any option in a choice gate may carry iterator: '<local_state_key>' \u2014 at runtime buildDialog expands it into one button per item in localState[iterator], resolving label/value/description tokens against each item. Use instead of a preceding js_transform when buttons come from a variable-length array. Only one option per gate should carry iterator; include a separate Cancel option without it."
+        "description": "Array of option objects \u2014 must include at least one with action/value: \"cancel\" in either options or special_buttons. Shape varies by gate_type: confirm/list_selection/review_object use { label, action, on_select }; choice uses { value, label, description, on_select } where value is the machine identifier written to output_key, label is the short button text (e.g. \"A\", \"B\"), and description is the explanatory sentence displayed above the buttons. Any option may carry a modal descriptor: { title, input_label, placeholder, multiline } \u2014 clicking the button opens an overlay modal; the typed value is written to the option's own output_key if declared, otherwise to the step-level output_key on submit. Any option in a choice gate may carry iterator: '<local_state_key>' \u2014 at runtime buildDialog expands it into one button per item in localState[iterator], resolving label/value/description tokens against each item. Use instead of a preceding js_transform when buttons come from a variable-length array. Only one option per gate should carry iterator; include a separate Cancel option without it."
       },
       {
         "type": "array",
@@ -164,13 +170,19 @@
         "type": "string",
         "field": "input_label",
         "required": false,
-        "description": "text_input gate only \u2014 short label shown above the inline text input. Defaults to \"Your input\". Keep concise (2-5 words). The full instructions go in message_template."
+        "description": "Legacy text_input gates only \u2014 do not use in new workflows (a form field carries its own `label`). Short label shown above the inline text input. Defaults to \"Your input\". Keep concise (2-5 words). The full instructions go in message_template."
       },
       {
         "type": "string",
         "field": "output_key",
         "required": false,
-        "description": "For text_input: local_state key where the typed value is written on submit. For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written \u2014 when the option carries a modal descriptor, the modal typed text (inputValue) is written instead of the button value."
+        "description": "For form: local_state key receiving ONE object of every collected field, keyed by field name (e.g. { period: \"2026-07-01\", category_id: \"3\" }). For confirm with context_key: local_state key where the selected action value is written. For choice: local_state key where the selected option.value is written \u2014 when the option carries a modal descriptor, the modal typed text (inputValue) is written instead of the button value."
+      },
+      {
+        "type": "string",
+        "field": "action_key",
+        "required": false,
+        "description": "Optional. local_state key recording WHICH option the user clicked (an option's `value` on choice gates, its `action` on all others). Set it when a LATER step must know the gate's outcome. The case that needs it: a save-and-continue loop, where 'Save' and 'Done' both run the SAME write and diverge only AFTER it \u2014 the decision has to survive the write so a condition can read it downstream. Routing the two buttons to separate chains instead would duplicate the write. When you set action_key, every option must carry a DISTINCT action ('save', 'done', 'cancel'): two buttons both using the conventional 'confirm' are indistinguishable to everything downstream. Independent of output_key \u2014 a form gate uses BOTH, because output_key holds the FIELD VALUES, not the button."
       },
       {
         "type": "string",
@@ -194,13 +206,13 @@
         "type": "object",
         "field": "reveal",
         "required": false,
-        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string }. content supports {{template}} substitution. Both button_label and content must be non-empty strings. Use reveals (array) instead when the number of panels is determined at runtime."
+        "description": "Optional progressive disclosure for decision-making \u2014 toggles content visibility within the same gate. Use when the user needs to view hidden information before making their choice: e.g. 'attempt \u2192 verify \u2192 decide' patterns where visible content is processed first, hidden context is revealed, and an option is selected in the same interaction moment. Do NOT use (use separate steps instead) when: the reveal action itself produces data (timestamps, logs, computations) needed downstream; different routing logic applies before vs after the reveal; or the revealed content requires an external or LLM call. Composable with any gate_type. Shape: { button_label: string, content: string | array }. content supports {{template}} substitution. A string or array of strings renders via basic mrkdwn formatting (bold, italic, links) \u2014 NOT markdown table syntax, which the underlying block cannot render. An array of plain record objects (e.g. [{title, count}, ...], no syntax/verb/command field) automatically renders as a real Slack table, one column per distinct key across the array \u2014 do not hand-format pipe-delimited text to fake a table. Both button_label and content must be non-empty. Use reveals (array) instead when the number of panels is determined at runtime."
       },
       {
         "type": "array_or_string",
         "field": "reveals",
         "required": false,
-        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string }. Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
+        "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
       }
     ],
     "output_contract": null,
@@ -481,6 +493,66 @@
     "status": "live"
   },
   {
+    "step_type": "serv_upsert",
+    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing budget data, syncing recurring records). Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
+    "input_contract": [
+      {
+        "type": "string",
+        "field": "input.tableName",
+        "required": true,
+        "description": "Table name — must be registered in PGC_TableMap with allow_insert: true AND allow_update: true"
+      },
+      {
+        "type": "array",
+        "field": "input.matchColumns",
+        "required": true,
+        "description": "Non-empty array of column names whose combined values identify an existing row — e.g. [\"year\", \"month\", \"category_id\"]. Must be a flat array of strings, never per-row filter objects."
+      },
+      {
+        "type": "array",
+        "field": "input.rows",
+        "required": true,
+        "description": "Non-empty array of full row objects to upsert — one per record"
+      },
+      {
+        "type": "string",
+        "field": "output_key",
+        "required": false,
+        "description": "local_state key where { tableName, inserted, updated } is written"
+      },
+      {
+        "type": "string",
+        "field": "on_success",
+        "required": false,
+        "description": "Routing token"
+      },
+      {
+        "type": "string",
+        "field": "on_else",
+        "required": false,
+        "description": "Routing token"
+      }
+    ],
+    "output_contract": [
+      {
+        "type": "object",
+        "field": "output_key",
+        "description": "{ tableName, inserted: [...new rows], updated: [...changed rows] }"
+      }
+    ],
+    "on_success_options": [
+      "next",
+      "end",
+      "step:N"
+    ],
+    "on_failure_options": [
+      "cancel",
+      "step:N"
+    ],
+    "requires_capability": null,
+    "status": "live"
+  },
+  {
     "step_type": "serv_entity_query",
     "description": "Lists assembled entities via SERV-Entity listEntities. Returns root columns plus jsonb_agg child arrays. Use instead of serv_query for domains with child tables (e.g. recipes with ingredients and steps).",
     "input_contract": [
@@ -737,6 +809,12 @@
       },
       {
         "type": "string",
+        "field": "input.locked_skeleton_key",
+        "required": false,
+        "description": "Dot-path to the routing skeleton the step array was translated from. When present, Level 1 also checks that translation emitted exactly one step per design item and invented none of its own (skeleton_drift). The step set is locked once the skeleton is validated — only the design stage may add a step."
+      },
+      {
+        "type": "string",
         "field": "input.mock_outputs_key",
         "required": false,
         "description": "Dot-path to mock_outputs object \u2014 required for Level 2. If absent, runs Level 1 only."
@@ -812,6 +890,18 @@
         "field": "on_success",
         "required": false,
         "description": "Routing token \u2014 typically \"end\" on the final notify step. Only next and end are valid."
+      },
+      {
+        "type": "object",
+        "field": "reveal",
+        "required": false,
+        "description": "Optional collapsible panel attached below the message content \u2014 e.g. a large child-record list on an entity display notify. Shape: { button_label: string, content: string | array }. content supports {{template}} substitution. A string or array of strings renders via basic mrkdwn formatting (bold, italic, links) \u2014 NOT markdown table syntax, which the underlying block cannot render. An array of plain record objects (e.g. [{title, count}, ...], no syntax/verb/command field) automatically renders as a real Slack table, one column per distinct key \u2014 do not hand-format pipe-delimited text to fake a table. Use reveals (array) instead when the number of panels is determined at runtime."
+      },
+      {
+        "type": "array_or_string",
+        "field": "reveals",
+        "required": false,
+        "description": "Array version of reveal \u2014 renders one panel per entry. Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects."
       }
     ],
     "output_contract": null,

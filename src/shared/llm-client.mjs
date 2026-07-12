@@ -10,10 +10,18 @@
 // Currently targets Perplexity Agent API.
 // Model is passed per-call from PGC_Prompt.model — not hardcoded here.
 
-// Hard abort ceiling — must be safely below ProcFunction Lambda timeout (60s).
-// Gives a clean descriptive error instead of a silent Lambda kill on large outputs
-// like generate_crud_workflows which can take ~28s.
-const LLM_TIMEOUT_MS = 115_000;
+// Hard abort ceiling — must stay safely below the ProcFunction Lambda timeout
+// (240s, template.yaml), leaving room for the step to record its failure and notify
+// before the Lambda is killed. Gives a clean descriptive error instead of a silent kill.
+//
+// A timeout is fatal to the run: the SQS message is deleted on receipt
+// (sqs-callback.mjs deleteReceivedBatch, added to stop AWS RecursiveLoop mis-firing on
+// long step cycles), so there is no redelivery to retry on. A single slow call therefore
+// destroys the whole run — which is why the ceiling has to sit well clear of the work,
+// not just above it. design_workflow_process, the longest call in create_workflow, runs
+// 40–100s depending on design size; run 718 hit the old 115s ceiling on step 21t (the
+// consolidation pass, which re-emits an entire process_design).
+const LLM_TIMEOUT_MS = 170_000;
 
 // Perplexity gateway requires max_output_tokens for Anthropic models.
 // Used as fallback when the caller (PGC_Prompt.max_output_tokens or minds-eye prefs) doesn't specify one.
@@ -148,8 +156,13 @@ export async function callLlmWithMessages(model, messages, traceId) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
 
-  const systemMsg    = messages.find(m => m.role === 'system');
-  const instructions = systemMsg?.content ?? '';
+  // Concatenate every system-role message rather than taking only the first —
+  // callers (e.g. explain.mjs) may layer their own meta-instructions on top of
+  // stored context (e.g. the original llm_call's full prompt_text) that is
+  // also recorded with role: 'system'. Dropping anything past the first
+  // silently discards that context instead of just narrowing the persona.
+  const systemMessages = messages.filter(m => m.role === 'system');
+  const instructions   = systemMessages.map(m => m.content).join('\n\n');
 
   const lastUserIdx = messages.findLastIndex(m => m.role === 'user');
   const input       = lastUserIdx !== -1 ? messages[lastUserIdx].content : '';

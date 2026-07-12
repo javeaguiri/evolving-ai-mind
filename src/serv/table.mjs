@@ -13,23 +13,28 @@
 //   POST /serv/table/insertRow  — single INSERT, gated by allow_insert
 //   POST /serv/table/updateRows — parameterised UPDATE, gated by allow_update
 //   POST /serv/table/deleteRows — parameterised DELETE, gated by allow_delete
+//   POST /serv/table/upsertRows — per-row INSERT or UPDATE by matchColumns, gated by allow_insert + allow_update
+//   POST /serv/table/runSql     — read-only SELECT/WITH statement, not PGC_TableMap-gated
 //
 // Security gates:
 //   - Table must exist in PGC_TableMap
 //   - Column names in filters/updates validated against PGC_Schema columns for that table
 //   - Filter operators validated against whitelist
 //   - filters must be non-empty on UPDATE and DELETE — mass unfiltered writes are not permitted
-//   - No raw SQL accepted in any field
+//   - No raw SQL accepted in any field, except runSql — a deliberate, narrow carve-out
+//     (SELECT/WITH-only, keyword-denylisted, same guard as createView's selectSql) for
+//     ad hoc read-only validation queries — never write-capable
 
 import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
+import { validateReadOnlySql } from './schema.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
 // ---------------------------------------------------------------------------
 const ALLOWED_OPS = new Set([
-  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains',
+  'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains', 'jsonb_contained_by',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -45,8 +50,43 @@ export async function handle(req) {
     case 'insertRow': return insertRow(req);
     case 'updateRows': return updateRows(req);
     case 'deleteRows': return deleteRows(req);
+    case 'upsertRows': return upsertRows(req);
+    case 'runSql':     return runSql(req);
     default:
       return err(404, `SERV-Table route "${req.subRoute}" not found`, req.correlationId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/table/runSql
+// ---------------------------------------------------------------------------
+
+async function runSql(req) {
+  const { selectSql, target = 'pgd' } = req.body;
+
+  const sqlError = validateReadOnlySql(selectSql);
+  if (sqlError) return err(400, sqlError, req.correlationId);
+  if (!['pgc', 'pgd'].includes(target)) {
+    return err(400, `target must be "pgc" or "pgd", got "${target}"`, req.correlationId);
+  }
+
+  const dbUrl = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
+  const client = getClient(dbUrl);
+
+  try {
+    await client.connect();
+    const result = await client.query(selectSql);
+    return ok({
+      success: true,
+      count:   result.rows.length,
+      rows:    result.rows,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+  } catch (error) {
+    console.error('table runSql error:', error.message);
+    return err(500, `runSql failed: ${error.message}`, req.correlationId);
+  } finally {
+    await client.end();
   }
 }
 
@@ -305,11 +345,17 @@ async function insertRow(req) {
 
   // Accept either a single row object or an array of rows for bulk insert.
   // Bulk path: all rows must have the same column set (derived from the first row).
-  const isBatch = Array.isArray(rows) && rows.length > 0;
+  const isBatch = Array.isArray(rows);
 
   if (!tableName) return err(400, 'tableName is required', req.correlationId);
 
   if (isBatch) {
+    // An empty batch is a valid no-op (e.g. "insert whichever of these rows
+    // are missing" resolving to zero rows) — not an error, and not a single-row
+    // insert. Must be checked before rows[0]-dependent validation below.
+    if (rows.length === 0) {
+      return ok({ success: true, tableName, rows: [], correlationId: req.correlationId }, req.correlationId);
+    }
     if (rows.some(r => !r || typeof r !== 'object' || Array.isArray(r))) {
       return err(400, 'rows must be an array of non-null objects', req.correlationId);
     }
@@ -647,6 +693,149 @@ async function deleteRows(req) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /serv/table/upsertRows
+//
+// Workaround upsert — no table currently declares a compound unique
+// constraint on matchColumns, so this queries for a match on matchColumns
+// and then inserts or updates, rather than a native INSERT ... ON CONFLICT.
+// A future migration may add compound unique constraints and switch this
+// to native ON CONFLICT for tables that have one.
+// ---------------------------------------------------------------------------
+
+async function upsertRows(req) {
+  const { tableName, matchColumns, rows } = req.body;
+
+  if (!tableName) return err(400, 'tableName is required', req.correlationId);
+  if (!Array.isArray(matchColumns) || matchColumns.length === 0) {
+    return err(400, 'matchColumns must be a non-empty array', req.correlationId);
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return err(400, 'rows must be a non-empty array', req.correlationId);
+  }
+  if (rows.some(r => !r || typeof r !== 'object' || Array.isArray(r))) {
+    return err(400, 'rows must be an array of non-null objects', req.correlationId);
+  }
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+
+  try {
+    await pgcClient.connect();
+
+    // --- Gate: table must be registered and allow both insert + update ---
+    const gate = await pgcClient.query(
+      `SELECT tm.allow_insert, tm.allow_update, s.target, s.columns
+         FROM "PGC_TableMap" tm
+         JOIN "PGC_Schema"   s  ON s.id = tm.schema_id
+        WHERE tm.table_name = $1`,
+      [tableName]
+    );
+    if (gate.rows.length === 0) {
+      return err(404, `Table "${tableName}" not registered in PGC_TableMap`, req.correlationId);
+    }
+
+    const { allow_insert, allow_update, target, columns: schemaColumns } = gate.rows[0];
+    if (!allow_insert || !allow_update) {
+      return err(403, `UPSERT requires both INSERT and UPDATE permission on "${tableName}"`, req.correlationId);
+    }
+
+    // --- Validate matchColumns and row column names against PGC_Schema ---
+    const validColumns = new Set(schemaColumns.map(c => c.name));
+    for (const col of matchColumns) {
+      if (!validColumns.has(col)) {
+        return err(400, `matchColumns column "${col}" not found in schema for "${tableName}"`, req.correlationId);
+      }
+    }
+    for (const col of Object.keys(rows[0])) {
+      if (!validColumns.has(col)) {
+        return err(400, `Column "${col}" not found in schema for "${tableName}"`, req.correlationId);
+      }
+    }
+
+    const colTypeMap = Object.fromEntries(schemaColumns.map(c => [c.name, c.type]));
+    const embedCols  = getEmbedColumns(schemaColumns);
+
+    const dbClient = target === 'pgd'
+      ? getClient(process.env.PGD_DATABASE_URL)
+      : pgcClient;
+
+    if (target === 'pgd') await dbClient.connect();
+
+    const inserted = [];
+    const updated  = [];
+
+    try {
+      await dbClient.query('BEGIN');
+
+      for (const rawRow of rows) {
+        // --- Find an existing row matching matchColumns ---
+        const matchFilters = matchColumns.map(col => ({ column: col, op: 'eq', value: rawRow[col] }));
+        const { whereClause, values: matchVals } = buildWhereClause(matchFilters);
+        const existing = await dbClient.query(
+          `SELECT id FROM "${tableName}" ${whereClause} LIMIT 1`,
+          matchVals
+        );
+
+        // --- Compute embeddings (same pattern as insertRow/updateRows) ---
+        const effectiveRow = { ...rawRow };
+        for (const vc of embedCols) {
+          const vec = await resolveEmbedding(vc, effectiveRow, req.correlationId);
+          if (vec !== null) effectiveRow[vc.name] = vec;
+        }
+
+        const cols = Object.keys(effectiveRow);
+        const vals = cols.map(col => {
+          const v = effectiveRow[col];
+          if (v !== null && typeof v === 'object') return JSON.stringify(v);
+          if (typeof v === 'string' && colTypeMap[col] === 'jsonb') return JSON.stringify(v);
+          return v;
+        });
+
+        if (existing.rows.length > 0) {
+          const id = existing.rows[0].id;
+          const setClause = cols.map((col, i) => `"${col}" = $${i + 1}`).join(', ');
+          const result = await dbClient.query(
+            `UPDATE "${tableName}" SET ${setClause} WHERE "id" = $${cols.length + 1} RETURNING *`,
+            [...vals, id]
+          );
+          updated.push(result.rows[0]);
+        } else {
+          const colList = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+          const result = await dbClient.query(
+            `INSERT INTO "${tableName}" (${colList}) VALUES (${placeholders}) RETURNING *`,
+            vals
+          );
+          inserted.push(result.rows[0]);
+        }
+      }
+
+      await dbClient.query('COMMIT');
+    } catch (innerError) {
+      await dbClient.query('ROLLBACK');
+      throw innerError;
+    }
+
+    if (target === 'pgd') await dbClient.end();
+
+    console.info(`table: upserted ${tableName} — inserted ${inserted.length}, updated ${updated.length}`);
+
+    return ok({
+      success:       true,
+      tableName,
+      inserted,
+      updated,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+
+  } catch (error) {
+    console.error('table upsertRows error:', error.message);
+    return err(500, `upsertRows failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
 
@@ -748,6 +937,10 @@ function buildWhereClause(filters, startIdx = 1) {
         break;
       case 'jsonb_contains':
         conditions.push(`${col} @> $${idx++}::jsonb`);
+        values.push(typeof f.value === 'string' ? f.value : JSON.stringify(f.value));
+        break;
+      case 'jsonb_contained_by':
+        conditions.push(`${col} <@ $${idx++}::jsonb`);
         values.push(typeof f.value === 'string' ? f.value : JSON.stringify(f.value));
         break;
     }

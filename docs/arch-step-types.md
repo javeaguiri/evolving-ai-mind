@@ -45,8 +45,9 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║              ║ Generic expression field: Session 19.                ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ human_gate   ║ Suspend stack, present dialog to user, resume on     ║ ✅ Implemented   ║
-║              ║ response. Gate types: confirm, edit_list, text_input,║                  ║
-║              ║ review_object. (select_one, select_many Backlog)     ║                  ║
+║              ║ response. Gate types: confirm, list_selection,       ║                  ║
+║              ║ text_input, review_object, choice, followup_prompt.  ║                  ║
+║              ║ (select_one, select_many Backlog)                    ║                  ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_schema  ║ Create a PGD table via SERV createTable              ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
@@ -64,6 +65,9 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ║ serv_update  ║ UPDATE rows in a PGD table via SERV                  ║ ✅ Implemented   ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ serv_delete  ║ DELETE rows from a PGD table via SERV                ║ ✅ Implemented   ║
+╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
+║ serv_upsert  ║ INSERT or UPDATE rows in a PGD table via SERV —      ║ ✅ Sprint 7      ║
+║              ║ matches on matchColumns, else inserts                ║                 ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ notify       ║ Resolve message_template from local_state, enqueue   ║ ✅ Implemented   ║
 ║              ║ HUMAN_NOTIFICATION to callback                          ║                  ║
@@ -87,8 +91,8 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 ╠══════════════╣══════════════════════════════════════════════════════╣══════════════════╣
 ║ simulate       ║ Dry-run a workflow step array against named         ║ ✅ live          ║
 ║               ║ execution paths using injected mock outputs.         ║ v3.2-create-    ║
-║               ║ Three validation levels: static analysis, path        ║ workflow-       ║
-║               ║ execution, skip-path analysis. See Section 6.5.6.   ║ complete        ║
+║               ║ Static analysis, routing matrix, data-flow trace,    ║ workflow-       ║
+║               ║ legacy path execution (informational). Sec 6.5.6.   ║ complete        ║
 ╠══════════════╬══════════════════════════════════════════════════════╬══════════════════╣
 ║ write_memory  ║ Persist a PGC_Memory row. Reads content string from  ║ ✅ Sprint 3      ║
 ║               ║ local_state[content_key]. Never fails the run —      ║                  ║
@@ -195,15 +199,11 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 ```json
 {
   "step": "3", "type": "human_gate",
-  "gate_type":        "edit_list",
+  "gate_type":        "confirm",
   "message_template": "Here's my plan for domain {{proposed_scaffold.domain}}.",
-  "context_key":      "proposed_scaffold.tables",
-  "item_primary_key": "tableName",
-  "item_secondary_key": "columnSummary",
   "options": [
-    { "label": "Looks good",  "action": "confirm",   "on_select": "step:3d" },
-    { "label": "Add a table", "action": "add_table", "on_select": "step:3a" },
-    { "label": "Cancel",      "action": "cancel",    "on_select": "cancel"  }
+    { "label": "Looks good", "action": "confirm", "on_select": "step:3d" },
+    { "label": "Cancel",     "action": "cancel",  "on_select": "cancel"  }
   ],
   "on_success": "next",
   "on_else": "cancel"
@@ -214,10 +214,249 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
+###### `action_key` — recording *which* option was chosen
+
+`output_key` records the gate's **payload**: the typed text, the selected value, the
+clicked row, or — on a `form` — the field values. It does **not** record which button
+was pressed. `on_select` routes on the click and then discards it.
+
+`action_key` is the local_state key that captures the click itself (an option's `value`
+on `choice` gates, its `action` on all others). Set it when a **later** step must know
+the gate's outcome.
+
+The case that requires it is a **save-and-continue loop**: *"Save persists and re-shows
+the form; Done persists and exits."* Both buttons run the **same** write and diverge only
+*after* it, so the decision has to survive the write and be read by a `condition`
+downstream. There is no workaround — routing the two buttons to separate chains
+duplicates the write, and making Done skip the write loses the user's edits.
+
+When `action_key` is set, **every option must carry a distinct `action`** (`"save"`,
+`"done"`, `"cancel"`). Two buttons both using the conventional `"confirm"` are
+indistinguishable to everything downstream. `action_key` is independent of `output_key`:
+a `form` gate uses both.
+
+```json
+{
+  "step": "10", "type": "human_gate", "gate_type": "form",
+  "fields": "{{budget_fields}}",
+  "output_key": "budget_edits",
+  "action_key": "edit_action",
+  "options": [
+    { "label": "Save", "action": "save", "on_select": "step:11" },
+    { "label": "Done", "action": "done", "on_select": "step:11" },
+    { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+  ],
+  "on_cancel": "cancel", "on_success": "step:11"
+}
+```
+
+L1 counts `action_key` as a **write** in the state-flow trace, so a downstream
+`{{edit_action}}` resolves. Without that it would be rejected as never written — which is
+exactly how run 719 failed before this existed.
+
+###### `form` gate_type
+
+Collects any number of typed values in **one** gate and writes them to `output_key`
+as a single object keyed by field name.
+
+**This is the gate type that stops gate types multiplying.** A widget is a *field
+type*, not a gate type — so `select_one`, `select_many`, `date_input`,
+`number_input` and every future picker are `fields[].type` values, not new entries
+in the `gate_type` enum. Adding a widget means adding one row to
+`buildInputElement()` in `callback.mjs`. It never means touching the procedure layer.
+
+A field's `type` states **what is being collected**, never which widget draws it:
+
+| `type` | Collects | Slack element (chosen by `/ui/slack`) | Limit |
+|---|---|---|---|
+| `text` / `textarea` | A string | `plain_text_input` | — |
+| `select` | One value | `static_select` | 100 options |
+| `multi_select` | An **array** | `multi_static_select` | 100 options |
+| `radio` | One value | `radio_buttons` | 10 options |
+| `checkbox` | An **array** | `checkboxes` | 10 options |
+| `date` | `"YYYY-MM-DD"` | `datepicker` | — |
+| `time` | `"HH:mm"` | `timepicker` | — |
+| `datetime` | Epoch seconds | `datetimepicker` | — |
+
+`number`, `email`, `url` and `file` are deliberately absent — Slack supports those
+elements only in modals. Collect `text` and validate in a `js_transform`.
+
+`default` pre-fills a field, so a user amends an existing record rather than retyping
+it (`"YYYY-MM-DD"` for `date`; the option's `value` for `select`/`radio`). It is named
+`default` — the standard term in JSON Schema and HTML forms — because that is what an
+LLM emits unprompted; run 695 was rejected for using it against a schema that had
+invented `initial` instead. The dialog still carries it to Slack as `initial`, which is
+Slack's own name for the same thing.
+
+**Data-driven field lists.** `fields` may be a `{{state_key}}` reference to an array a
+preceding `js_transform` built, exactly as `options` and `reveals` may be. That is how a
+form carries **one field per data row** — an amount box and a type dropdown for *each*
+budget category, each pre-filled via `default` — which a fixed field list cannot express.
+The transform must be a real step in `process_design`: it cannot be introduced at
+translation time, because the routing skeleton is already locked by then.
+
+Size is a real constraint: every field is one Slack input block and a message holds at
+most 50. For a long or unbounded row list, use `list_selection` to pick one row and then
+a small form to edit it, rather than one giant form over every row.
+
+Options for `select`/`multi_select`/`radio`/`checkbox` come from either `options`
+(a fixed list) or **`options_key`** (a dot-path into `local_state`), the latter
+letting a dropdown offer rows the workflow has already queried:
+
+```json
+{
+  "step": "1", "type": "human_gate",
+  "gate_type":        "form",
+  "message_template": "Which month do you want to edit?",
+  "fields": [
+    { "name": "period",      "type": "date",   "label": "Budget month" },
+    { "name": "category_id", "type": "select", "label": "Category",
+      "options_key": "categories", "option_value_key": "id", "option_label_key": "name" },
+    { "name": "notes",       "type": "textarea", "label": "Notes", "optional": true }
+  ],
+  "output_key": "budget_target",
+  "options": [
+    { "label": "Submit", "action": "confirm", "on_select": "next"   },
+    { "label": "Cancel", "action": "cancel",  "on_select": "cancel" }
+  ],
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+→ `local_state.budget_target = { period: "2026-07-01", category_id: "3", notes: null }`
+
+**The rule this exists to enforce:** never collect a date, or a value from an
+enumerable set, as free text and then add an `llm_call` to parse it. A picker is
+deterministic; parsing prose costs a model call and can misread the user. `text_input`
+is for genuinely open-ended prose only.
+
+**Required fields are enforced on resume, not by Slack.** Slack honours a field's
+`optional` flag only on *modal* submit — a message's Submit button performs no
+validation. `resumeGate` re-checks required fields and re-renders the gate with a
+"Please complete: …" line rather than advancing with a hole in the data. An
+unanswered optional field arrives as `null`, never missing, so a workflow always
+sees every field it asked for.
+
+###### `list_selection` gate_type
+
+Renders all `context_key` items as a single Slack `markdown` table (`ID` plus
+one column per distinct field key across every item), plus one shared
+selection control and one Select button (labeled/styled from `item_action`)
+below it — one block for the whole list regardless of row count, no per-row
+block cost. The selection control is a `static_select` dropdown of every
+selectable row, grouped into one `option_group` per source table when a level
+spans more than one; past Slack's 100-option cap it falls back to a plain
+id text box. The table itself is uncapped under either control. **This gate_type is only concerned with rendering.** What
+selecting a row *does* is entirely the calling workflow's concern, expressed
+through `item_action`'s own config — never a different gate_type for a
+different action semantic (Sprint 7 Track D2: this merges what were briefly
+two separate gate types, `edit_list`/`row_list`, back into one — rendering
+the same thing two ways for two action semantics was exactly the one-off
+duplication this project avoids elsewhere).
+
+`context_key` items must arrive **pre-formatted** as `{ id, fields?,
+secondaryAction?, responseData? }` — `fields` is a plain object of column
+name -> value (the record's own cleaned fields, passed through as-is; no
+forced Name/Title synthesis) rendered as one table column per distinct key
+across every item. Column headers are formatted purely from the key itself —
+no workflow-level naming is needed: snake_case is title-cased (`ease_factor`
+-> `Ease Factor`), and a key ending in `_id` whose values are no longer
+numeric (the workflow already resolved that FK to its label, keeping the
+original column name — this is `callback.mjs`'s call to make, not the
+workflow's) drops the suffix and reads as `<Prefix> Name` (`deck_id` ->
+`Deck Name`). An `_id` column still holding raw numeric ids is left as a
+plain title-cased `Deck Id`. Building the `fields` shape itself is a
+workflow-level (`js_transform`)
+concern. An item may carry its own fully custom `secondaryAction` (e.g.
+omitted for a referenced parent table that can't be removed) that overrides
+`step.item_action` entirely for that one row.
+
+**`responseData` (optional, per item)** — lets a row carry a structured
+payload beyond the bare id (e.g. `{ table: 'PGD_SomeTable', id: 7, hasChildren: true }`)
+through to `output_key` on click. When an item omits it, `callback.mjs` falls
+back to the legacy `{ tableName: item.id }` shape every existing consumer
+expects — this is additive, not a breaking change to older workflows. See
+`list_entity`'s recursive navigation loop (`docs/arch-workflow-patterns.md`
+§6.17) for the pattern this exists to support: a row needs to say which table
+it belongs to and whether it can be drilled into further, not just its id.
+
+**Behavior is driven by `item_action`, never by gate_type.** Selecting a row writes
+that row to `output_key` and routes via `item_action.on_select` — what selecting
+*means* is expressed through where `on_select` points, never through a different
+gate_type for a different action semantic.
+
+`item_action.confirm_template` (per-item confirm text, resolved against
+`{...localState, item}`) is still computed by `buildDialog` but has no
+current renderer — the single shared Select button has no specific row bound
+to it until after submission, so there's no click surface left to attach a
+native Slack confirm popup to. Not currently used by any live workflow.
+`item_action.label` defaults to `"Select"`; `.style` has no default (Slack rejects
+`style: "default"`, and only `danger`/`primary` are forwarded).
+
+*Advance* (`item_action.on_select` set) — writes the selected row to `output_key`,
+pops the gate frame, routes elsewhere (e.g. drill-down into a back-edge step that
+fetches and displays that one record):
+
+```json
+{
+  "step": "9c", "type": "human_gate",
+  "gate_type":        "list_selection",
+  "message_template": "Found {{entity_display_data.entities.length}} record(s). Click View for details on one, or Done to finish.",
+  "context_key":      "row_items",
+  "item_action":       { "action": "view_record", "label": "View", "style": "default", "on_select": "step:20" },
+  "output_key":       "selected_record_id",
+  "options": [
+    { "label": "Done", "action": "cancel", "on_select": "cancel" }
+  ],
+  "on_success": "next",
+  "on_else":    "cancel",
+  "on_cancel":  "cancel"
+}
+```
+
+**`item_action.on_select` is resolved directly — never via a matching `options[]`
+entry.** Every `options[]` entry also renders as its own real, visible bottom
+button; since every row shares the same `item_action.action` (e.g. `view_record`),
+putting it in `options[]` too would render a redundant duplicate Select button.
+`options[]` should only ever list buttons meant to be genuinely visible at the
+bottom (here, just "Done"). Note `style: "default"` is set explicitly here —
+the shared default is `"danger"` (matching the remove-item case above), which
+would render the Select button as a destructive-looking red button if left
+unset. Slack itself has no `"default"` style value; the harness omits the
+field entirely rather than sending the literal string.
+
+**Identifying the selected row:** the table has no per-row click target — the
+user picks a row in the shared selection control and clicks Select.
+`callback.mjs` sends only `{ workflowRunId, action }` on the button itself; the
+row identity rides in Slack's `state.values` (harvested by `interactive.mjs`).
+From the dropdown that is `responseData.selectedValue`, a JSON `{id, table}`
+payload built from the chosen option — the source table travels with the id, so
+a level spanning more than one child table cannot resolve an id that collides
+across both to the wrong table's row. On the text-box fallback it is
+`responseData.inputValue`, a bare id with no table, where a collision still
+resolves first-hit.
+
+`run-workflow.mjs`'s `resumeGate` resolves either form against `context_key`'s
+fully-resolved items (via `buildDialog`, so the id-to-row mapping is computed in
+exactly one place) before writing to `output_key` and routing via
+`item_action.on_select`. A selection that doesn't match a selectable row
+re-renders the same gate in place with an error line — the gate never advances
+on an unresolved value. When the matched row never set its own `responseData`,
+the legacy bare scalar (`responseData.tableName`) is written, matching every
+pre-existing consumer.
+When the row set a `responseData` object without a `tableName` key (the
+recursive drill-down case above), the whole object is written through instead
+— see `list_entity`'s navigation loop in `docs/arch-workflow-patterns.md`
+§6.17 for the live example (a shared loop entry step reads
+`{{selected_row.table}}`/`{{selected_row.id}}`/`{{selected_row.hasChildren}}`
+off exactly this payload).
+
 ###### `reveal` / `reveals` (optional, all gate types)
 
-Renders one or more inline `task_card` blocks above the gate buttons. Cards are
-always visible — no click required. The gate remains suspended; cards are read-only.
+Renders one or more collapsible `container` blocks above the gate buttons. Panels are
+always visible (collapsed by default) — no click required to know they exist, only
+to expand them. The gate remains suspended; panels are read-only.
 
 **`reveal`** — single panel (object):
 
@@ -235,7 +474,7 @@ always visible — no click required. The gate remains suspended; cards are read
 ```
 
 `reveals` resolves to an array of `{ button_label, content }` objects at runtime —
-one `task_card` panel per array entry. Use `reveals` when the number of panels is
+one `container` panel per array entry. Use `reveals` when the number of panels is
 driven by data.
 
 **`content` rendering** — resolved via `resolveInput` before the HUMAN_GATE SQS
@@ -243,13 +482,14 @@ message is built:
 
 | Resolved type | Rendered as |
 |---|---|
-| string | `task_card.output` — `rich_text_section` (plain text) |
-| array of strings | `task_card.details` — `rich_text_list` with `style: "bullet"` (one bullet per element) |
+| string | the container's `section`/`mrkdwn` child block text, directly |
+| array of strings | the same child block text, one `• ` bullet per line |
 
-`button_label` becomes the `task_card` title. Both fields are required and must be
+`button_label` becomes the container's `title`. Both fields are required and must be
 non-empty — L1 validation rejects steps where either is missing. `callback.mjs`
-renders each block with `randomUUID()` for `task_id` and `status: "complete"`,
-posted directly in the gate message.
+renders each panel with `randomUUID()` in `block_id`, `is_collapsible: true`,
+`default_collapsed: true`, posted directly in the gate message. See
+`docs/slack-block-kit.md`'s `container` reference for the full field/limit details.
 
 **Example — accordion hierarchy** (parent categories with bulleted child items):
 
@@ -388,6 +628,36 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
 }
 ```
 
+##### `serv_upsert`
+```json
+{
+  "step": "1", "type": "serv_upsert",
+  "input": {
+    "tableName":    "PGD_Budgets",
+    "matchColumns": ["year", "month", "category_id"],
+    "rows":         "{{budget_records_with_ids}}"
+  },
+  "output_key": "upsert_result",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+For each row in `rows`, updates the existing row if one matches all `matchColumns`
+values, otherwise inserts a new row. `matchColumns` is always a flat array of
+column name strings — never per-row filter objects. Replaces the
+query-existing-rows + diff-into-insert/update-lists pattern (a `serv_query` with
+`filters` built from a preceding `js_transform`, then a `condition`/iterator
+choosing `serv_insert` vs `serv_update` per record) for the common case of
+importing or syncing a batch of records that may already exist.
+`output_key` receives `{ tableName, inserted: [...], updated: [...] }`.
+
+Workaround upsert, not a native `INSERT ... ON CONFLICT` — no table currently
+declares a compound unique constraint on `matchColumns` (Sprint 8 backlog item
+adds constraint inference to `design_table`/`create_domain` and upgrades
+`serv_upsert` to use `ON CONFLICT` where a constraint exists). Matching today is
+query-then-write: SERV selects the first row satisfying `matchColumns` and
+inserts or updates accordingly, inside one transaction per call.
+
 ##### `serv_entity_query` / `serv_entity_get`
 ```json
 {
@@ -428,6 +698,19 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 }
 ```
 
+**`reveal` / `reveals` (optional, Sprint 7 Track D2)** — same shape and resolution as `human_gate`'s (see §"`reveal` / `reveals`" below): `reveal` is a single `{ button_label, content }` object; `reveals` is an inline array or a `{{template}}` reference to a `local_state` array of the same shape. Rendered by `postHumanNotification` via the shared `buildRevealBlock()` helper, appended after the message content.
+
+```json
+{
+  "step": "13", "type": "notify",
+  "message_template": "{{formatted_display.formatted_markdown}}",
+  "reveals": "{{formatted_display.reveals}}",
+  "on_success": "end"
+}
+```
+
+`message_template` supports standard markdown headings (`#`–`######`) — `markdownToBlocks()` (`callback.mjs`) splits heading lines into real Slack `header` blocks with genuine H1–H4 visual sizing (a different mechanism from a `markdown` block's own inline `#` syntax, which renders all levels at one size — see `docs/slack-block-kit.md`).
+
 ##### `end`
 ```json
 { "step": "12", "type": "end" }
@@ -449,10 +732,14 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 }
 ```
 All three `input` fields are dot-paths into `local_state`. `mock_outputs_key`
-and `paths_key` are optional — if absent, the `simulate` step runs Level 1
-static analysis only. `on_else` routes back to the step where the user can
-review and correct the workflow definition before re-simulating.
-Full schema, validation levels, and result structure: see **Section 6.5.6**.
+and `paths_key` are optional — Level 1 (static analysis), Level 2a (routing
+matrix), and Level 2b (data-flow trace) always run once L1 passes; only Level
+2c (legacy path execution, informational-only) is skipped when they are absent.
+`on_else` routes back to the step where the user can review and correct the
+workflow definition before re-simulating.
+Validation levels and result structure: see `docs/arch-simulation-engine.md`.
+Step definition schema and the `simulation_mode` execution flag: see
+`docs/arch-step-processor.md` Section 6.5.6.
 
 ##### Post-write L1 validation
 
@@ -548,7 +835,7 @@ Any of the following causes an immediate throw:
 | `columnSummary` | Expression reading `local_state.proposed_scaffold.domain` | `create_domain` steps 2, 3c |
 | `buildHelpOptions` | Expression over `items` (registered_domains) | `help` step 2 |
 | `resolveHelpContent` | Expression reading `local_state.help_selection` + `local_state.help_options` | `help` step 4 |
-| `formatRecordList` | Expression with root_only variant | `get_entity` step 4, `list_entity` step 2 |
+| `formatRecordList` | Deterministic `js_transform` pre-processing (FK resolution, null/system/embedding stripping) feeding the `format_entity_display` `llm_call` (Sprint 7 Track D2) — see `docs/arch-workflow-patterns.md` §6.17 | `get_entity` steps 5-11, `list_entity` steps 3-9 |
 | `buildChildInserts` | Expression reading `local_state.full_entity_schema`, `local_state.parsed_entity`, `local_state.new_record` | `add_entity` step 5 |
 
 ##### `serv_entity_schema`

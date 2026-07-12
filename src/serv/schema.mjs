@@ -9,6 +9,7 @@
 //
 // Routes:
 //   POST   /serv/schema/createTable      — build DDL from JSON + register in PGC_Schema
+//   POST   /serv/schema/createView       — CREATE OR REPLACE VIEW + register in PGC_Schema (type: view)
 //   POST   /serv/schema/addColumn        — ALTER TABLE ... ADD COLUMN + PGC_Schema sync
 //   POST   /serv/schema/modifyColumn     — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
 //   POST   /serv/schema/dropColumn       — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
@@ -58,6 +59,7 @@ const TABLE_NAME_PATTERN = /^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$/;
 export async function handle(req) {
   switch (req.subRoute) {
     case 'createTable': return createTable(req);
+    case 'createView':  return createView(req);
     case 'addColumn':    return addColumn(req);
     case 'modifyColumn': return modifyColumn(req);
     case 'dropColumn':   return dropColumn(req);
@@ -171,6 +173,136 @@ async function createTable(req) {
     await pgcClient.end();
     if (pgdClient) await pgdClient.end();
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/createView
+// ---------------------------------------------------------------------------
+
+// selectSql must be a single read-only SELECT/WITH statement. This is a
+// backstop, not a parser — the primary defense is human review of the SQL
+// upstream (create_domain's propose-view gate, Novia's confirm gate).
+const SELECT_ONLY_PATTERN = /^\s*(SELECT|WITH)\b/i;
+const SQL_DENYLIST_PATTERN = /;|\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|COPY|EXECUTE|TRUNCATE)\b/i;
+
+// Shared read-only SQL guard — used by createView's selectSql and by
+// SERV-Table's runSql. Not a parser — a backstop behind human review
+// (create_domain's propose-view gate, Novia's create_view/run_sql confirm).
+export function validateReadOnlySql(sql) {
+  if (!sql || typeof sql !== 'string' || !sql.trim()) {
+    return 'sql is required';
+  }
+  if (!SELECT_ONLY_PATTERN.test(sql)) {
+    return 'sql must be a SELECT or WITH statement';
+  }
+  if (SQL_DENYLIST_PATTERN.test(sql)) {
+    return 'sql contains a disallowed keyword or statement separator';
+  }
+  return null;
+}
+
+async function createView(req) {
+  const {
+    tableName, target, domain = null,
+    selectSql, description = '',
+  } = req.body;
+
+  const validationError = validateCreateViewPayload({ tableName, target, selectSql });
+  if (validationError) {
+    return err(400, validationError, req.correlationId);
+  }
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  const pgdClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : null;
+
+  try {
+    await pgcClient.connect();
+    if (pgdClient) await pgdClient.connect();
+
+    // --- Check for duplicate ---
+    const exists = await pgcClient.query(
+      `SELECT id FROM "PGC_Schema" WHERE table_name = $1`,
+      [tableName]
+    );
+    if (exists.rows.length > 0) {
+      return err(409, `Table "${tableName}" already exists in PGC_Schema`, req.correlationId);
+    }
+
+    const dbClient = target === 'pgd' ? pgdClient : pgcClient;
+
+    // --- Create the view ---
+    await dbClient.query(`CREATE OR REPLACE VIEW "${tableName}" AS ${selectSql}`);
+    console.info(`schema: view DDL executed for ${tableName} on ${target.toUpperCase()}`);
+
+    // --- Introspect resulting columns — not caller-declared ---
+    const introspect = await dbClient.query(
+      `SELECT column_name, data_type, udt_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_name = $1
+        ORDER BY ordinal_position`,
+      [tableName]
+    );
+    const columns = introspect.rows.map(c => ({
+      name:     c.column_name,
+      type:     c.data_type === 'USER-DEFINED' ? c.udt_name : c.data_type,
+      nullable: c.is_nullable === 'YES',
+    }));
+
+    // --- Register in PGC_Schema ---
+    const insert = await pgcClient.query(
+      `INSERT INTO "PGC_Schema"
+         (table_name, target, domain, type, select_sql, description, columns, foreign_keys, constraints, triggers)
+       VALUES ($1, $2, $3, 'view', $4, $5, $6, '[]', '[]', '[]')
+       RETURNING id, created_at`,
+      [tableName, target, domain, selectSql, description, JSON.stringify(columns)]
+    );
+    console.info(`schema: PGC_Schema row inserted for view ${tableName}`);
+
+    // --- Register in PGC_TableMap — views are read-only ---
+    await pgcClient.query(
+      `INSERT INTO "PGC_TableMap"
+         (table_name, target, domain, schema_id, allow_insert, allow_update, allow_delete)
+       VALUES ($1, $2, $3, $4, false, false, false)`,
+      [tableName, target, domain, insert.rows[0].id]
+    );
+    console.info(`schema: PGC_TableMap row inserted for view ${tableName}`);
+
+    return ok({
+      success:       true,
+      tableName,
+      target,
+      domain,
+      type:       'view',
+      columns,
+      schemaId:   insert.rows[0].id,
+      createdAt:  insert.rows[0].created_at,
+      correlationId: req.correlationId,
+    }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema createView error:', error.message);
+    return err(500, `createView failed: ${error.message}`, req.correlationId);
+  } finally {
+    await pgcClient.end();
+    if (pgdClient) await pgdClient.end();
+  }
+}
+
+function validateCreateViewPayload({ tableName, target, selectSql }) {
+  if (!tableName) return 'tableName is required';
+  if (!target)    return 'target is required (pgc or pgd)';
+
+  if (!['pgc', 'pgd'].includes(target)) {
+    return `target must be "pgc" or "pgd", got "${target}"`;
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return `Invalid table name "${tableName}" — must match PGC_* or PGD_* pattern`;
+  }
+
+  const sqlError = validateReadOnlySql(selectSql);
+  if (sqlError) return sqlError.replace(/^sql/, 'selectSql');
+
+  return null;  // valid
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +489,41 @@ async function modifyColumn(req) {
 }
 
 // ---------------------------------------------------------------------------
+// pruneColumnRefs — every place PGC_Schema references a column by name.
+//
+// `ALTER TABLE ... DROP COLUMN ... CASCADE` removes the column AND everything that
+// depends on it in the database. The registry must be pruned to match, or it starts
+// asserting things the database does not.
+//
+// This is not hypothetical. Dropping PGD_Budgets.type left `chk_budgets_type` behind in
+// PGC_Schema.constraints — a CHECK on a column that no longer existed. Every LLM that
+// reads domain_schema then believed PGD_Budgets had a required, enum-constrained `type`
+// column, because a CHECK on a column implies the column. analyze_workflow_gaps reasoned
+// correctly from that and reported a blocking schema gap for a column that was not there
+// (run 717). A registry that lies is worse than one that is merely incomplete.
+//
+// Same class as F3, where delete-workflow removed PGC_IntentMap and PGC_Prompt rows but
+// left PGC_DomainHelp.commands behind: a delete path that does not clean every place the
+// thing is referenced.
+// ---------------------------------------------------------------------------
+
+export function pruneColumnRefs({ columns, constraints, foreign_keys }, columnName) {
+  const mentionsCol = entry =>
+    Array.isArray(entry?.columns) && entry.columns.includes(columnName);
+
+  return {
+    columns:      (columns      ?? []).filter(c => c.name !== columnName),
+    // A constraint over the dropped column cannot survive it — CASCADE has already
+    // removed it from the database. A composite constraint (e.g. unique(a, b)) that
+    // merely includes the column is dropped too, for the same reason.
+    constraints:  (constraints  ?? []).filter(c => !mentionsCol(c)),
+    // An FK declared ON the dropped column goes with it. `column` is the singular form
+    // used by the FK shape; `columns` is checked too so a composite FK is not missed.
+    foreign_keys: (foreign_keys ?? []).filter(fk => fk?.column !== columnName && !mentionsCol(fk)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/dropColumn
 // ---------------------------------------------------------------------------
 
@@ -379,7 +546,7 @@ async function dropColumn(req) {
     await client.connect();
 
     const lookup = await client.query(
-      `SELECT id, target, columns FROM "PGC_Schema" WHERE table_name = $1`,
+      `SELECT id, target, columns, constraints, foreign_keys FROM "PGC_Schema" WHERE table_name = $1`,
       [tableName]
     );
     if (lookup.rows.length === 0) {
@@ -396,18 +563,62 @@ async function dropColumn(req) {
     const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
     if (target === 'pgd') await ddlClient.connect();
 
-    await ddlClient.query(`ALTER TABLE "${tableName}" DROP COLUMN IF EXISTS "${columnName}" CASCADE`);
+    // RESTRICT (the default), never CASCADE.
+    //
+    // Postgres drops a column's OWN indexes and constraints automatically either way —
+    // CASCADE is only needed to destroy OUTSIDE dependents, which in practice means views.
+    // So CASCADE meant "silently delete any view that reads this column", and it did:
+    // Novia's budgets migration dropped PGD_Budgets.type at 10:20 and took
+    // PGD_BudgetExpenseSummary with it. She reported "migration complete ✅" with the view
+    // already gone, and it surfaced only because the user happened to ask about the report
+    // next — her own pg_views lookups then came back empty (session 1054, seq 14-18).
+    // PGC_Schema went on advertising the deleted view.
+    //
+    // Without CASCADE, Postgres refuses and names the dependents. A caller that means to
+    // drop the column must deal with the views first — which is exactly what
+    // sop_schema_change instructs. Loud beats silent: a destroyed view you are told about
+    // is a task; one you are not told about is a landmine.
+    try {
+      await ddlClient.query(`ALTER TABLE "${tableName}" DROP COLUMN IF EXISTS "${columnName}"`);
+    } catch (ddlError) {
+      if (target === 'pgd') await ddlClient.end();
+      if (/depend/i.test(ddlError.message)) {
+        return err(
+          409,
+          `Cannot drop "${tableName}.${columnName}" — other objects depend on it (typically a view). ` +
+          `Rewrite or drop the dependent objects first, then retry. Postgres reported: ${ddlError.message}`,
+          req.correlationId,
+        );
+      }
+      throw ddlError;
+    }
     console.info(`schema: dropped column ${columnName} from ${tableName}`);
 
     if (target === 'pgd') await ddlClient.end();
 
-    const updatedCols = colsArray.filter(c => c.name !== columnName);
+    const pruned = pruneColumnRefs(lookup.rows[0], columnName);
     await client.query(
-      `UPDATE "PGC_Schema" SET columns = $1::jsonb, updated_at = now() WHERE id = $2`,
-      [JSON.stringify(updatedCols), schemaId]
+      `UPDATE "PGC_Schema"
+          SET columns = $1::jsonb, constraints = $2::jsonb, foreign_keys = $3::jsonb, updated_at = now()
+        WHERE id = $4`,
+      [
+        JSON.stringify(pruned.columns),
+        JSON.stringify(pruned.constraints),
+        JSON.stringify(pruned.foreign_keys),
+        schemaId,
+      ]
     );
 
-    return ok({ success: true, tableName, column: columnName, action: 'dropped' }, req.correlationId);
+    const droppedConstraints = (lookup.rows[0].constraints  ?? []).length - pruned.constraints.length;
+    const droppedForeignKeys = (lookup.rows[0].foreign_keys ?? []).length - pruned.foreign_keys.length;
+    if (droppedConstraints || droppedForeignKeys) {
+      console.info(`schema: pruned registry refs to ${tableName}.${columnName}`, { droppedConstraints, droppedForeignKeys });
+    }
+
+    return ok({
+      success: true, tableName, column: columnName, action: 'dropped',
+      droppedConstraints, droppedForeignKeys,
+    }, req.correlationId);
 
   } catch (error) {
     console.error('schema dropColumn error:', error.message);
@@ -542,14 +753,39 @@ async function getTable(req) {
 }
 
 // ---------------------------------------------------------------------------
+// upsertConstraint — the registry must record every CHECK the database enforces.
+//
+// The DDL below is an upsert (DROP IF EXISTS, then ADD), so it happily creates a
+// constraint that did not exist before. The registry sync did not: it was a pure
+// `.map()`, which updates a constraint already present and silently does NOTHING for
+// a new one. So adding a CHECK left the database enforcing a rule that PGC_Schema had
+// never heard of.
+//
+// That is the inverse of the dropColumn bug (see pruneColumnRefs) and it matters just
+// as much, for a reason beyond tidiness: `domain_schema` is built FROM PGC_Schema, and
+// design_workflow_process / design_workflow_prompts read a column's allowed values out
+// of its CHECK expression there. A constraint missing from the registry is invisible to
+// them — so generated workflows keep emitting values the database will reject, and the
+// violation traces back to a rule nobody told them about.
+// ---------------------------------------------------------------------------
+
+export function upsertConstraint(existing, constraintName, expression, columns) {
+  const constraints = existing ?? [];
+  if (constraints.some(c => c.name === constraintName)) {
+    return constraints.map(c => (c.name === constraintName ? { ...c, expression } : c));
+  }
+  return [...constraints, { name: constraintName, type: 'check', columns: columns ?? [], expression }];
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/modifyConstraint
-// Drops an existing named constraint and replaces it with a new CHECK expression.
-// Updates PGC_Schema metadata to match. Use when a CHECK constraint's expression
-// needs to change (e.g. adding a new allowed value to an IN list).
+// Adds a named CHECK constraint, or replaces its expression if it already exists.
+// Keeps PGC_Schema in step with the database either way. Use when a CHECK is being
+// introduced, or when its expression must change (e.g. a new allowed value in an IN list).
 // ---------------------------------------------------------------------------
 
 async function modifyConstraint(req) {
-  const { tableName, constraintName, expression, target = 'pgc' } = req.body;
+  const { tableName, constraintName, expression, columns } = req.body;
 
   if (!tableName || !constraintName || !expression) {
     return err(400, 'tableName, constraintName, and expression are required', req.correlationId);
@@ -558,15 +794,28 @@ async function modifyConstraint(req) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
   }
 
-  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
-  const pgcUrl = process.env.PGC_DATABASE_URL;
-
-  const dbClient  = getClient(dbUrl);
-  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+  // `target` is read from PGC_Schema, never from the caller. It used to default to 'pgc'
+  // in the request body, so every PGD table needed the caller to know to say so — an
+  // invisible requirement that only a technical caller would satisfy, and one Novia's
+  // alter_schema tool forwards only if the LLM happens to include it. addColumn,
+  // modifyColumn and dropColumn have always looked it up here; these two were the outliers.
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
 
   try {
-    await dbClient.connect();
-    if (dbClient !== pgcClient) await pgcClient.connect();
+    await pgcClient.connect();
+
+    const reg = await pgcClient.query(
+      `SELECT target, constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+    const target = reg.rows[0].target;
+    if (target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
 
     await dbClient.query(
       `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
@@ -575,23 +824,16 @@ async function modifyConstraint(req) {
       `ALTER TABLE "${tableName}" ADD CONSTRAINT "${constraintName}" CHECK (${expression})`
     );
 
-    // Update PGC_Schema constraints field
-    const schemaRow = await pgcClient.query(
-      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    // Sync PGC_Schema — append when the constraint is new, update when it already exists.
+    const existing = reg.rows[0].constraints ?? [];
+    const action   = existing.some(c => c.name === constraintName) ? 'updated' : 'added';
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(upsertConstraint(existing, constraintName, expression, columns)), tableName]
     );
-    if (schemaRow.rows.length > 0) {
-      const existing = schemaRow.rows[0].constraints ?? [];
-      const updated  = existing.map(c =>
-        c.name === constraintName ? { ...c, expression } : c
-      );
-      await pgcClient.query(
-        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
-        [JSON.stringify(updated), tableName]
-      );
-    }
 
-    console.info(`schema: constraint "${constraintName}" on "${tableName}" updated`);
-    return ok({ success: true, tableName, constraintName, expression }, req.correlationId);
+    console.info(`schema: constraint "${constraintName}" on "${tableName}" ${action}`);
+    return ok({ success: true, tableName, constraintName, expression, action }, req.correlationId);
 
   } catch (error) {
     console.error('schema modifyConstraint error:', error.message);
@@ -609,7 +851,7 @@ async function modifyConstraint(req) {
 // ---------------------------------------------------------------------------
 
 async function dropConstraint(req) {
-  const { tableName, constraintName, target = 'pgc' } = req.body;
+  const { tableName, constraintName } = req.body;
 
   if (!tableName || !constraintName) {
     return err(400, 'tableName and constraintName are required', req.correlationId);
@@ -618,31 +860,33 @@ async function dropConstraint(req) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
   }
 
-  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
-  const pgcUrl = process.env.PGC_DATABASE_URL;
-
-  const dbClient  = getClient(dbUrl);
-  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+  // `target` is read from PGC_Schema, never from the caller — see modifyConstraint.
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
 
   try {
-    await dbClient.connect();
-    if (dbClient !== pgcClient) await pgcClient.connect();
+    await pgcClient.connect();
+
+    const reg = await pgcClient.query(
+      `SELECT target, constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+    if (reg.rows[0].target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
 
     await dbClient.query(
       `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
     );
 
-    const schemaRow = await pgcClient.query(
-      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    const existing = reg.rows[0].constraints ?? [];
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(existing.filter(c => c.name !== constraintName)), tableName]
     );
-    if (schemaRow.rows.length > 0) {
-      const existing = schemaRow.rows[0].constraints ?? [];
-      const updated  = existing.filter(c => c.name !== constraintName);
-      await pgcClient.query(
-        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
-        [JSON.stringify(updated), tableName]
-      );
-    }
 
     console.info(`schema: constraint "${constraintName}" on "${tableName}" dropped`);
     return ok({ success: true, tableName, constraintName }, req.correlationId);
@@ -749,7 +993,7 @@ async function deleteTable(req) {
     // force=true allows dropping tables that are not yet registered (e.g. orphaned
     // from a failed create_domain run that never wrote the PGC_Schema row).
     const lookup = await pgcClient.query(
-      `SELECT id, target FROM "PGC_Schema" WHERE table_name = $1`,
+      `SELECT id, target, type FROM "PGC_Schema" WHERE table_name = $1`,
       [tableName]
     );
 
@@ -759,6 +1003,7 @@ async function deleteTable(req) {
 
     const schemaRow  = lookup.rows[0] ?? null;
     const target     = schemaRow?.target ?? 'pgd';
+    const objectType = schemaRow?.type   ?? 'table';
     const schemaId   = schemaRow?.id     ?? null;
     const dropClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
@@ -766,9 +1011,12 @@ async function deleteTable(req) {
 
     if (target === 'pgd') await dropClient.connect();
 
-    // Drop the physical table
-    await dropClient.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
-    console.info(`schema: dropped table ${tableName} from ${target.toUpperCase()}${force && !schemaRow ? ' (force — no PGC_Schema row)' : ''}`);
+    // Drop the physical object — a view requires DROP VIEW, not DROP TABLE.
+    const dropSQL = objectType === 'view'
+      ? `DROP VIEW IF EXISTS "${tableName}" CASCADE`
+      : `DROP TABLE IF EXISTS "${tableName}" CASCADE`;
+    await dropClient.query(dropSQL);
+    console.info(`schema: dropped ${objectType} ${tableName} from ${target.toUpperCase()}${force && !schemaRow ? ' (force — no PGC_Schema row)' : ''}`);
 
     // Best-effort cleanup of PGC_Schema + PGC_TableMap (may not exist when force=true)
     if (schemaId) {
@@ -780,6 +1028,7 @@ async function deleteTable(req) {
     return ok({
       success:   true,
       tableName,
+      type:      objectType,
       dropped:   true,
       forced:    force && !schemaRow,
       correlationId: req.correlationId,

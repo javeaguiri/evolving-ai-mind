@@ -244,36 +244,53 @@ Every `execute_top` invocation checks status before executing any step. If
 `cancelled`, the message is discarded. The shutdown contract is: no step will
 execute after `/shutdown` is called, even if SQS messages are already in flight.
 
+#### Choice gate cancel sentinel
+
+`run-workflow.mjs`'s `resumeGate` checks `userResponse === 'cancel'` *before* looking
+up the matched option's `on_select` at all. For `gate_type: "choice"`, `userResponse`
+is the clicked option's `value` — so **any choice option with `value: "cancel"`
+unconditionally terminates the workflow**, regardless of what its `on_select` field
+says. The `on_select` value is never consulted once this sentinel matches.
+
+When authoring a choice gate that needs a genuine "skip / do later / go back" option
+that should *not* abort the run, give it a distinct `value` (anything other than the
+literal string `"cancel"`) and route its `on_select` wherever it needs to go. Reserve
+`value: "cancel"` for the one option that should actually end the workflow.
+
+`create_domain`'s view-proposal gate (step 16i — see `arch-create-domain.md` Phase 3)
+is the reference example: "Do later" uses `value: "later"` and routes onward to the
+DDL step; a separate "Cancel" option uses the literal `value: "cancel"` for a true
+abort.
+
+Discovered 2026-07-04 while wiring that gate. Not yet audited against other existing
+choice gates — `create_domain` step 12c's "Back" button (`action: "cancel"`, a
+`text_input` gate so the check is against `action` rather than `value`, but the same
+early-exit sentinel applies) likely has the same issue: clicking it probably cancels
+the whole domain creation rather than returning to step 12 as its `on_select: "12"`
+implies. Flagged, not fixed.
+
 ---
 
 ### 6.8 create_domain Workflow
 
-Full annotated workflow design is in [`docs/arch-create-domain.md`](arch-create-domain.md).
-
-**Sprint 4 additions:** Two-layer memory architecture — pre-confirmation episodic write (step 10 `save_to_memory`) captures initial design reasoning; `revise_domain_schema` (step 12b) and `design_table` (step 13) accumulate semantic schema_expectations memories on each iteration; post-confirmation structural snapshot (steps 16b/16c `write_memory`) writes the definitive semantic record of insert expectations and `initial_value_conventions`. All three design prompts now emit `initial_value_conventions` for application-level initial values not fully described by SQL DEFAULT.
+Full annotated workflow design, memory layer, and design patterns are in
+[`docs/arch-create-domain.md`](arch-create-domain.md) — that doc is authoritative;
+do not duplicate step-by-step or per-sprint change detail here.
 
 ### 6.9 create_workflow Workflow
 
-Full design documentation — including L/R collaboration architecture decisions,
-the six-phase step structure with `local_state` data flow, gap taxonomy application,
-simulation correction loops, and implementation notes — is in
-[`docs/arch-create-workflow.md`](arch-create-workflow.md).
-
-**Sprint 4 additions:** Skeleton-first routing validation — `design_workflow_process` now emits `routing` fields (step_label references) per process_design item; steps 21a/21b/21c derive a routing skeleton, run L1 BFS on it, and gate on failure before dialog or step content is generated. IntentMap phrasing gate — steps 35a/35b ask for invocation phrases, build a `|`-joined regex, and use it as the IntentMap pattern (step 36) so Pass 1a matches user-chosen phrases directly.
-
-**Session 13 decisions:**
-
-*Skeleton mode for L1 (`input.skeleton: true` on simulate step):* The `serv_step_missing_required_input` L1 check is a **content completeness** check — it verifies that a fully-formed step declares `tableName`, `row`, `filters`, and `updates`. A routing skeleton is intentionally content-free; those fields are filled in by `generate_workflow_steps`. Running this check on a skeleton produces false positives on every serv_* step. Decision: add a `skeleton: boolean` flag to the `simulate` step input, threaded through `runSimulation` → `runLevel1StaticAnalysis`. When `skeleton=true`, `serv_step_missing_required_input` is skipped. All routing topology checks (dead targets, missing `on_cancel`, unresolved templates, condition keys) still run — these apply equally to skeletons. The skeleton validate step (21b) sets `input.skeleton: true`; the final pre-write simulate (step 25) does not. L1 and L2 level definitions are unchanged.
-
-*`on_cancel` required on all human_gate steps:* The `PGC_StepType` human_gate contract marked `on_cancel` as `required: false`, which LLMs correctly read as optional. This caused persistent `missing_on_cancel` and `missing_cancel_option` L1 failures on skeleton and full steps. Decision: add `on_cancel` explicitly to the human_gate `input_contract` as `required: true`, with a description that makes the coupling to the cancel option explicit. Applied in `seed_PGC_StepType.json` + `upsert-step-type.mjs`; no system code change.
-
+Full design documentation — L/R collaboration architecture decisions, the
+six-phase step structure with `local_state` data flow, gap taxonomy application,
+simulation correction loops, skeleton-mode/`on_cancel` decisions, and
+implementation notes — is in [`docs/arch-create-workflow.md`](arch-create-workflow.md) —
+that doc is authoritative; do not duplicate step-by-step or per-sprint change
+detail here.
 
 ### 6.10 Session Architecture — Chat and Diagnostics
 
 Session architecture — including `PGC_Session` and `PGC_SessionEntry` table design,
-the `llm_call` diagnostic flow, `/chat` and `/explain` Slack commands, messages array
-reconstruction, and the `diagnostics_config` `PGC_SystemContext` entry — is fully
-specified in `docs/arch-session.md`.
+the `llm_call` diagnostic flow, `/chat` and `/explain` Slack commands, and messages
+array reconstruction — is fully specified in `docs/arch-session.md`.
 
 Table DDL, column definitions, and `PGC_Schema` registration entries are in
 `docs/arch-data.md` section 4.3.4.
@@ -963,8 +980,8 @@ right locus for all static workflow validation.
 **Option B becomes relevant only for analysing already-registered workflows that are
 not being regenerated.** If that diagnostic use case is needed, a minimal implementation
 is: a new `serv_query PGC_Workflow` step + a `js_transform` that calls the Level 1
-analysis function on the stored `steps` array, piped through a notify or LLM_DIAGNOSTIC
-message. This requires no new PROC handler and no new SQS type.
+analysis function on the stored `steps` array, piped through a notify message.
+This requires no new PROC handler and no new SQS type.
 
 #### Integration with `create_workflow` gap detection
 
@@ -1014,8 +1031,8 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 | `fix_workflow` | 21 | 1 | Repair a broken registered workflow |
 | `diagnose_prompt_schema` | 17 | 0 | Detect and repair `PGC_Prompt.output_schema` API incompatibilities |
 | `add_entity` | 22 | 3 | Insert a new domain entity from natural language input |
-| `get_entity` | 11 | 1 | Fetch a single entity by id or name |
-| `list_entity` | 9 | 1 | List all entities in a domain |
+| `get_entity` | 20 | 1 | Fetch a single entity by id or name |
+| `list_entity` | 32 | 1 | List/recursively drill into a domain's entities — dynamic parent/child navigation, click-time FK discovery |
 | `update_entity` | 5 | 0 | Update a single root-table field on an entity |
 | `delete_entity` | 5 | 0 | Delete an entity and all child rows via FK CASCADE |
 | `help` | 6 | 0 | Display registered domain help and commands |
@@ -1025,102 +1042,18 @@ System workflows are rows in `PGC_Workflow` that ship with the system (seeded vi
 
 #### `create_domain`
 
-Full annotated design: `docs/arch-create-domain.md`.
-
-**Phase 1 — Pre-check and use case selection**
-- `1` `js_transform` — derive candidate domain slug for duplicate pre-check
-- `2` `serv_query` — check `PGC_DomainHelp` for existing domain
-- `3` `condition` — route to exists gate or continue
-- `4` `human_gate` (confirm) — domain already exists; offer recreate or cancel
-- `3a` `human_gate` (choice) — user selects use case (personal / household / professional); shapes research depth
-- `3d` `js_transform` — build `use_case_context` string for right brain
-
-**Phase 2 — Right brain research and preference gates**
-- `5` `llm_call` [`research_domain_schema`] — RIGHT BRAIN: domain data-modelling best practices; surfaces structural preference questions and autonomous design decisions
-- `6` `js_transform` — build `preference_gates` array from research output
-- `6a` `js_transform` — format auto-decision summary for user notification
-- `6b` `notify` — show autonomous decisions before gates begin
-- `7–9a` `condition` + `iterator` + `js_transform` — present each preference question as a choice gate; enrich answers with question text and option description into `user_preferences`
-
-**Phase 3 — Left brain schema design**
-- `10` `llm_call` [`create_domain`] — LEFT BRAIN: design full domain schema (tables, columns, constraints, triggers, FK relationships) from research findings and confirmed preferences
-- `11–11a` `js_transform` — enrich tables with `columnSummary`; build `schema_summary` and per-table review items
-- `12` `human_gate` (choice) — user reviews per-table schema; chooses approve / revise / add table
-  - `12b` `llm_call` [`revise_domain_schema`] — LEFT BRAIN: revise schema based on user feedback
-  - `12c` `human_gate` (text_input) — capture description for new table addition
-  - `13` `llm_call` [`design_table`] — design a single new table from user description
-  - `14` `js_transform` — merge new table, apply modifications, topological sort
-- `16` `human_gate` (confirm) — final confirmation before DDL
-
-**Phase 4 — DDL execution and registration**
-- `16b` `js_transform` — build `domain_semantic_content` structural snapshot (insert expectations, nullable columns, initial values)
-- `16c` `write_memory` — persist confirmed schema snapshot as semantic memory (retrieved by `create_workflow` and `parse_entity_input`)
-- `16d` `js_transform` — topological sort tables by FK dependency for DDL order
-- `17` `iterator` — create each `PGD_*` table via SERV `createTable`
-- `17b` `llm_call` [`generate_domain_aliases`] — generate natural language aliases (singular/plural/synonyms)
-- `17c` `human_gate` (text_input) — user adds custom aliases
-- `18` `js_transform` — merge LLM and user aliases; derive CRUD command list
-- `19` `human_gate` (review_object) — user reviews aliases and CRUD commands before write
-- `20` `serv_insert` — write to `PGC_DomainHelp`
-- `21` `iterator` — insert 5 `PGC_IntentMap` rows (add/list/get/update/delete)
-- `22` `iterator` — register each entity schema in `PGC_EntitySchema`
-- `22a–23` `js_transform` + `notify` — confirm domain creation with registered commands
+Full annotated step-by-step design (Phase 1–4, memory layer, prompt dependencies,
+design patterns): `docs/arch-create-domain.md` — authoritative, do not duplicate
+step detail here.
 
 ---
 
 #### `create_workflow`
 
-Full annotated design: `docs/arch-create-workflow.md`.
-
-**Phase 1 — Mode and right brain**
-- `1` `serv_query` — load live domain schema rows
-- `2` `human_gate` (choice) — user selects workflow mode (new / variant / scheduled)
-- `3` `llm_call` [`research_workflow_domain`] — RIGHT BRAIN (Perplexity sonar): domain best practices; identifies preference questions affecting workflow structure
-- `4–6` `js_transform` + `human_gate` (confirm) — build and display research findings; user sees autonomous decisions before preference gates
-
-**Phase 2 — Preference gates and user context**
-- `7–8a` `condition` + `iterator` + `js_transform` — Tier 1 preference gates (choice); enrich answers with question text
-- `9` `human_gate` (text_input) — optional free-text design context from user
-
-**Phase 3 — Left brain gap analysis**
-- `11` `llm_call` [`analyze_workflow_gaps`] — LEFT BRAIN pass 1: classify all gaps (schema gaps, missing prompts, blocked capabilities); emits `gap_analysis` with `confidence` flag
-- `12` `js_transform` — evaluate routing flags from `gap_analysis`
-- `13–14` `condition` + `notify` — hard stop if missing step type capability (Type 4b gap)
-- `15–17` `condition` + `js_transform` + `human_gate` (confirm) — schema gap decision gate (Type 3a/3b)
-- `18–20` `js_transform` + `condition` + `iterator` — seed missing prompts into `PGC_Prompt` (Type 4a auto-resolution)
-
-**Phase 4 — Left brain design (process → dialogs → steps)**
-- `20a` `js_transform` — initialise retry state keys
-- `21` `llm_call` [`design_workflow_process`] — LEFT BRAIN pass 2: design step sequence, state map, routing skeleton; emits `routing` fields per process item
-- `21a–21c` `js_transform` + `simulate` + `human_gate` — build routing skeleton; L1 BFS validates all targets; gate on failure before dialog or step content generated
-- `22` `llm_call` [`design_workflow_dialogs`] — LEFT BRAIN pass 3: design Slack dialogs for every `human_gate` step
-- `22a` `js_transform` — build step generation context; initialise or carry forward correction state
-- `23` `llm_call` [`generate_workflow_steps`] — translate three-part design spec (process + dialogs + domain schema) into concrete step array; correction mode when `previous_draft_steps` or `path_errors` are non-empty
-
-**Phase 4b — Domain prompt design (conditional)**
-- `23a–23b` `js_transform` + `condition` — count `llm_call` steps with `prompt_draft`; skip prompt design if none
-- `23c` `serv_query` — load existing `PGC_Prompt` entries for reuse check
-- `23d` `llm_call` [`design_workflow_prompts`] — classify each domain-specific `llm_call` step as reuse / create / convert; draft prompt text, output schema, and model for `create` decisions
-- `23e–23h` `js_transform` + `condition` + `iterator` + `js_transform` — extract create decisions; insert new prompts; apply decisions to `draft_workflow.steps`
-
-**Phase 5 — Simulation and correction**
-- `24` `human_gate` (review_object) — user reviews proposed step array before simulation
-- `25–26a` `simulate` + `js_transform` — Level 1 static analysis; format issues; mark steps by pass/fail
-- `27` `human_gate` (confirm) — L1 failure gate; offer regenerate or cancel (loops back to `22a`)
-- `28` `llm_call` [`generate_workflow_mocks`] — generate representative mock outputs for each step
-- `29` `llm_call` [`generate_workflow_paths`] — generate named simulation paths (happy / cancel / failure)
-- `30–31a` `simulate` + `js_transform` — Level 2 + Level 3 path simulation; format failures; mark steps
-- `32` `js_transform` — clear stale L1 result before L2 error gate
-- `33` `human_gate` (confirm) — L2 failure gate; offer regenerate automatically / with feedback / cancel
-- `33a` `llm_call` [`fix_workflow_routing`] — fix routing defects identified by Level 2 (targeted correction, not full regeneration)
-
-**Phase 6 — Registration**
-- `34–34a` `human_gate` (confirm) + `js_transform` — user confirms registration; strip correction state fields
-- `35` `serv_insert` — write workflow to `PGC_Workflow`
-- `35a–35b` `human_gate` (text_input) + `js_transform` — collect invocation phrases; build `|`-joined regex pattern
-- `36` `serv_insert` — write `PGC_IntentMap` row
-- `36a–36d` `condition` + `serv_query` + `js_transform` + `serv_update` — merge new command into `PGC_DomainHelp` if domain-associated
-- `37` `notify` — confirm workflow registered and ready
+Full annotated step-by-step design (six-phase structure, L/R collaboration
+decisions, gap taxonomy application, simulation correction loops, prompt
+dependencies): `docs/arch-create-workflow.md` — authoritative, do not duplicate
+step detail here.
 
 ---
 
@@ -1233,8 +1166,16 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 - `2` `condition` — `input.id` set → `3` (id lookup); else → `4` (name search)
 - `3` `serv_entity_get` — fetch entity by exact id (root + child aggregations) → `step:5`
 - `4` `serv_entity_query` — search by LIKE filter on `title` column
-- `5` `js_transform` — format matched entity (root columns + child arrays) into Slack mrkdwn; vector columns stripped
-- `6` `notify` → `7` `end`
+- `5` `js_transform` — find this entity's own `PGC_EntitySchema` row (already loaded at step 1) for its `root_table`
+- `6` `serv_query PGC_Schema` — fetch the root table's `foreign_keys`
+- `7` `js_transform` — build the deduplicated list of FK lookups the fetched row(s) actually need
+- `8` `condition` — skip resolution entirely if no FK columns are populated (the common case)
+- `9` `iterator` — resolve each distinct FK reference to its display label (`title` column of the referenced table)
+- `10` `js_transform` — zip lookups + results into a `{ 'table:id': label }` map
+- `11` `js_transform` — deterministic pre-processing (no LLM judgment): strip system/embedding columns and nulls, resolve FK columns via the label map, separate each row's scalar `fields` from its `children` collection(s) into a bounded structure
+- `11a` `condition` — skip the formatter entirely when nothing matched (`13b` `notify` "No records found." → `end`)
+- `12` `js_transform` (Sprint 7 Track D9 — replaces the earlier `format_entity_display` `llm_call`) — deterministic presentation: render the pre-cleaned structure as markdown, collapsing any child collection over a fixed length threshold into a `reveals` entry instead of showing it inline. The old LLM step was a Type-4a overcorrection identical in kind to the one Track A8/A9 diagnosed elsewhere — `entity_display_data` is already fixed-shape, pre-resolved JSON; formatting it is a length check, not a judgment call.
+- `13` `notify` — `message_template` from `formatted_markdown`, `reveals` wired from the same step's `reveals` output → `14` `end`
 
 ---
 
@@ -1242,9 +1183,48 @@ Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 
 Steps 1–1d: entity resolution preamble (see `add_entity` above — identical).
 
-- `2` `serv_entity_query` — list all entities with domain-scoped default filters; root columns only
-- `3` `js_transform` — format list results; child arrays and vector columns suppressed
-- `4` `notify` → `5` `end`
+Sprint 7 Track D9/D12 replaced the earlier fixed "list root → view one child
+level → end" shape with a single recursive loop, reached at init and re-entered
+on every drill-in/back click via backward step routing (the same established
+pattern `create_workflow`/`ping_core`/`fix_workflow` already use — safe here
+because each iteration is broken by a `human_gate` suspend, so the stuck-step
+guard's idempotency check never sees a repeated key). The loop is parameterized
+by `loop_state = { defs, parent_id, nav_stack }`, where each `def` is
+`{ table, fkColumn, foreign_keys, filters }` — a fully self-contained
+description of one plain, unjoined table query. `list_entity` never uses
+`PGC_EntitySchema`'s precomputed join/aggregation tree (that model can't
+represent a self-referential parent/child table without hardcoding
+domain-specific structure into `create_domain`) — children are discovered
+dynamically at click time instead.
+
+Not every table with an incoming FK is worth drilling into, though — an
+audit/history-style table logging events against a row has an FK back to it
+without that being a relationship a user would ever navigate. `hasChildren`
+(steps 25a/41b) is true only for a self-reference, or a relationship
+`create_domain` already curated into some entity's own `joins` — driven
+entirely by `domain_schemas` (loaded once at step 1) and the discovered
+table names at runtime; no table or entity name is hardcoded anywhere in
+these steps, so the rule applies identically to every domain. Anything else
+that merely has an FK pointing at the row is attached "detail" data — it
+never gets its own `row_selection`; the leaf-detail path (steps 50–50b)
+fetches it and folds it into the record's own view as a `reveals` panel or
+inline section instead.
+
+- `2` `js_transform` — find this entity's own `PGC_EntitySchema` row (root_table) from the domain_schemas loaded at step 1
+- `2a` `serv_query PGC_Schema` — the root table's own schema row (`foreign_keys`), for self-reference detection and outgoing FK label resolution
+- `2b` `js_transform` — build the initial `loop_state`: one synthetic `def` for the root table, filtered to top-level rows only (`IS NULL` on its own self-referential column) if it turns out to be self-referential; otherwise unfiltered, matching the original root-list behaviour
+- `20` `iterator` (shared loop entry, reached via every back-edge) — one plain `serv_query` per `loop_state.defs` entry: `SELECT * FROM <def.table> WHERE <def.filters>`, `limit: 20`. No joins, no aggregation.
+- `21`–`22a` — outgoing FK-lookup preamble across this level's fetched rows, same dedup/iterator/zip pattern as `get_entity` steps 7–10, sourced from each `def`'s own `foreign_keys` (already known from whichever discover query produced these defs)
+- `23` `js_transform` — deterministic: strip system/embedding/null fields, resolve outgoing FK labels, flatten every def's fetched rows into one `row_items` list (`responseData: { table, id, hasChildren: false }` per row) and a `full_rows_map` (keyed `table:id`) so a later leaf-detail click can render without a re-fetch
+- `24`–`25a` — for each **distinct table** among this level's defs (not per row — rows sharing a table share the answer), a lightweight schema-only `jsonb_contains` query against `PGC_Schema` (`foreign_keys @> [{"references":{"table": X}}]`) finds every table referencing X, then filters to the self-reference-or-curated-join rule above — no row data is ever fetched just to make this decision
+- `26` `js_transform` — apply the resulting `hasChildren` flags to `row_items`, build the gate's message text
+- `27` `human_gate` (`list_selection`) — one row per record; `item_action.on_select` → `step:40` (router); `options`: "⬅ Back" → `step:42`, "Done" → `cancel`
+- `40` `condition` — routes on `selected_row.hasChildren`: `true` → `41` (drill deeper), `false` → `50` (leaf detail)
+- `41`–`41b` — push the current level (`defs` + `parent_id`, not just an id — so Back can restore it exactly with no re-discovery) onto `nav_stack`; run the same `jsonb_contains` discover query against the clicked row's own table, filtered to curated children only, to build the next level's `defs`; loop back to `20`
+- `42`/`42a` — Back: pop `nav_stack` and loop back to `20` with the restored level; at the root (empty `nav_stack`), Back ends the run like Done
+- `50`–`50b` — leaf detail: the clicked row's own table was already discovered as non-curated at the level it was listed on, so `50` reuses that cached discovery (no new schema query) to find its detail-child tables; `50a` fetches each one's rows for this specific record (the one query a leaf view needs, run only now that it's actually been opened); `50b` attaches them as `entity.children` alongside the row's already-resolved fields from `full_rows_map`
+- `51` `js_transform` — same deterministic formatter as `get_entity` step 12, reused verbatim (identical `{ entity_name, entities: [{fields, children?}] }` input contract) — a detail-children collection renders inline or behind a `reveals` panel depending on size, no different from any other child collection
+- `52` `human_gate` (`confirm`) — shows the formatted leaf detail with `reveals`; "⬅ Back" → `step:42`, "Done" → `cancel`
 
 ---
 

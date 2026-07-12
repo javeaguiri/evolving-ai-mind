@@ -12,15 +12,17 @@
 //   4. Delete PGC_WorkflowRunStep rows where run_id IN (run ids)
 //   5. Delete PGC_WorkflowRun rows where workflow_id = id
 //   6. Delete PGC_IntentMap rows where workflow_id = id (FK — exact match)
-//   7. Delete PGC_Workflow row
+//   7. Prune this workflow's entry from PGC_DomainHelp.commands (domain-associated workflows only)
+//   8. Delete PGC_Workflow row
 //
 // Not idempotent — returns 404 (HTTP) or error callback (SQS) if name unknown.
 // Transport-agnostic — no AWS SDK, no Slack SDK imports.
 
 import { ok, err }         from '../shared/lambda-utils.mjs';
 import { enqueueCallback } from '../shared/sqs-callback.mjs';
-import { getRows, deleteRows, bestEffort } from '../shared/serv-client.mjs';
+import { getRows, deleteRows, updateRows, bestEffort } from '../shared/serv-client.mjs';
 import { matchIntentMap, matchDomainAlias, matchWorkflowByKeywords } from './classify-intent-tiers.mjs';
+
 
 export async function handle(req) {
   const { name } = req.body ?? {};
@@ -71,8 +73,9 @@ export async function handle(req) {
     if (req.source === 'http') return ok(result, req.correlationId);
 
     if (callback) {
-      const promptNote = result.deletedPromptCount > 0 ? `\n• Domain prompts removed: ${result.deletedPromptCount}` : '';
-      const message = `Workflow \`${result.name}\` deleted.\n• Run history removed: ${result.deletedRunCount} run(s), ${result.deletedRunStepCount} step(s)\n• Intent patterns removed: ${result.deletedIntentCount}${promptNote}`;
+      const promptNote  = result.deletedPromptCount > 0  ? `\n• Domain prompts removed: ${result.deletedPromptCount}`  : '';
+      const commandNote = result.deletedCommandCount > 0 ? `\n• Help commands removed: ${result.deletedCommandCount}` : '';
+      const message = `Workflow \`${result.name}\` deleted.\n• Run history removed: ${result.deletedRunCount} run(s), ${result.deletedRunStepCount} step(s)\n• Intent patterns removed: ${result.deletedIntentCount}${promptNote}${commandNote}`;
       await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message });
     }
 
@@ -128,10 +131,13 @@ async function resolveWorkflowName(rawInput, traceId) {
   }
 
   // Pass 2: domain alias → keyword scan
+  // Only scan domain-specific workflows — system workflows (domain: null) are seeded
+  // infrastructure and must never be deleted via fuzzy matching.
   const domainMatch = matchDomainAlias(rawInput, domainRows);
   if (domainMatch) {
     const aliases = [domainMatch._matched_alias, ...(domainMatch.aliases ?? [])].filter(Boolean);
-    const kwMatch = matchWorkflowByKeywords(rawInput, domainMatch.domain, workflowRows, aliases);
+    const domainOnlyRows = workflowRows.filter(r => r.domain !== null);
+    const kwMatch = matchWorkflowByKeywords(rawInput, domainMatch.domain, domainOnlyRows, aliases);
     if (kwMatch?.workflow_name) {
       console.info('delete-workflow: resolved via Pass 2 keyword match', { workflow_name: kwMatch.workflow_name, domain: domainMatch.domain, traceId });
       return kwMatch.workflow_name;
@@ -163,8 +169,9 @@ async function runDeleteWorkflow({ name, traceId }) {
     return { notFound: true, error: `Workflow "${name}" not found` };
   }
 
-  const workflowId     = workflowResp.rows[0].id;
-  const workflowDomain = workflowResp.rows[0].domain ?? null;
+  const workflowId          = workflowResp.rows[0].id;
+  const workflowDomain      = workflowResp.rows[0].domain ?? null;
+  const workflowDescription = workflowResp.rows[0].description ?? null;
   console.info('delete-workflow: found workflow', { name, workflowId, workflowDomain, traceId });
 
   // --- Step 2: Fetch run ids for this workflow ---
@@ -216,15 +223,41 @@ async function runDeleteWorkflow({ name, traceId }) {
     console.info('delete-workflow: PGC_IntentMap rows removed', { name, deletedIntentCount, traceId });
   }
 
-  // --- Step 5a: Delete PGC_Prompt rows for this workflow's domain ---
-  // Only runs when the workflow has a domain — system workflows (domain: null) share
-  // prompts across all workflows and must not have their prompts wiped here.
-  let deletedPromptCount = 0;
+  // --- Step 5a: Delete PGC_Prompt rows owned by this workflow ---
+  // create_workflow step 23g writes workflow_name on every domain-specific prompt it creates.
+  // Deleting by workflow_name is exact — no cross-workflow collateral, no orphan scan needed.
+  const promptResp = await bestEffort('delete-workflow: PGC_Prompt delete failed', { name, traceId },
+    () => deleteRows('PGC_Prompt', [{ column: 'workflow_name', op: 'eq', value: name }]));
+  const deletedPromptCount = promptResp?.deletedCount ?? 0;
+  if (promptResp && deletedPromptCount > 0) console.info('delete-workflow: PGC_Prompt rows removed', { name, deletedPromptCount, traceId });
+
+  // --- Step 5b: Prune this workflow's entry from PGC_DomainHelp.commands ---
+  // create_workflow step 36c tags each command with workflow_id (exact match, same as
+  // PGC_IntentMap's FK match above). Older commands written before that tagging existed
+  // have no workflow_id — fall back to matching on description, which create_workflow
+  // step 36c always copied verbatim from this same PGC_Workflow row.
+  let deletedCommandCount = 0;
   if (workflowDomain) {
-    const promptResp = await bestEffort('delete-workflow: PGC_Prompt delete failed', { name, workflowDomain, traceId },
-      () => deleteRows('PGC_Prompt', [{ column: 'domain', op: 'eq', value: workflowDomain }]));
-    deletedPromptCount = promptResp?.deletedCount ?? 0;
-    if (promptResp) console.info('delete-workflow: PGC_Prompt rows removed', { name, workflowDomain, deletedPromptCount, traceId });
+    const commandCleanupResp = await bestEffort('delete-workflow: PGC_DomainHelp commands prune failed', { name, traceId }, async () => {
+      const domainHelpResp = await getRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: workflowDomain }], null, 1);
+      const helpRow = domainHelpResp.rows?.[0];
+      if (!helpRow) return { deletedCount: 0 };
+
+      const existing = Array.isArray(helpRow.commands) ? helpRow.commands : [];
+      const remaining = existing.filter(c => c.workflow_id != null
+        ? c.workflow_id !== workflowId
+        : c.description !== workflowDescription);
+
+      if (remaining.length === existing.length) return { deletedCount: 0 };
+
+      const updateResp = await updateRows('PGC_DomainHelp',
+        [{ column: 'domain', op: 'eq', value: workflowDomain }],
+        { commands: remaining });
+      if (!updateResp.success) throw new Error(updateResp.error);
+      return { deletedCount: existing.length - remaining.length };
+    });
+    deletedCommandCount = commandCleanupResp?.deletedCount ?? 0;
+    if (commandCleanupResp && deletedCommandCount > 0) console.info('delete-workflow: PGC_DomainHelp commands removed', { name, deletedCommandCount, traceId });
   }
 
   // --- Step 6: Delete PGC_Workflow row ---
@@ -238,7 +271,7 @@ async function runDeleteWorkflow({ name, traceId }) {
 
   console.info('delete-workflow: complete', {
     name, workflowId, workflowDomain, deletedRunStepCount, deletedRunCount,
-    deletedIntentCount, deletedPromptCount, traceId,
+    deletedIntentCount, deletedPromptCount, deletedCommandCount, traceId,
   });
 
   return {
@@ -249,6 +282,7 @@ async function runDeleteWorkflow({ name, traceId }) {
     deletedRunCount,
     deletedIntentCount,
     deletedPromptCount,
+    deletedCommandCount,
     workflowDeleted:     true,
   };
 }
