@@ -1,6 +1,86 @@
 # Sprint 7 — MVP Functionality Gaps
 
-**Status: In progress**
+**Status: CLOSED 2026-07-12** — branch `sprint/07-mvp-functionality-gaps`, 200+ commits, 529/529 unit tests, all code deployed to prod and all seeds upserted.
+
+---
+
+## RETRO — read this before scoping Sprint 8
+
+### 1. The sprint's real theme was silent failure
+
+Not the theme it was scoped with. Every significant defect found in the last three sessions had the same shape: **the system knew something was wrong and did not say so.**
+
+- A repair loop that regenerated a design **without being told what had failed** — the skeleton validator wrote 12 routing issues to `local_state` and the redesign step's input never referenced them. The second attempt passed by LLM nondeterminism, not by repair.
+- A validator that reported *"Validation failed — no specific issues reported"* while **holding a real, specific failure** — because a stale copy of the hard/soft predicate lived in a JS string inside a JSON seed and never learned about a failure class added to the engine three weeks earlier.
+- A renderer that posted a 63-field form Slack **rejected outright**, logged the rejection, retried it three times, dropped it in the DLQ, and left the user staring at an empty thread with the run wedged forever.
+- A schema registry that **asserted a column the database did not have** — `dropColumn` pruned `columns` but not `constraints` — so every LLM reading `domain_schema` believed in a phantom enum-constrained field.
+- `dropColumn`'s CASCADE **silently deleted a view**, and the migration reported success with the view already gone.
+- A capability advertised to the LLM (`on_modal_close`) that was **unreachable and a trap**. Third instance of that exact pattern this sprint, after `remove_item` and `edit_list`.
+
+**The lesson to carry:** a failure the system detects and does not surface is worse than one it never detects, because it consumes the user's trust as well as their time. When adding any check, ask what the user sees when it fires.
+
+### 2. Two consumers of one truth will always drift
+
+`docs/code-review-checklist.md` rule **2e** ("anything two consumers depend on must be derived once") was written mid-sprint from the `choice`-gate bugs, and then **kept being right**:
+
+| the truth | the second copy | how it broke |
+|---|---|---|
+| what counts as a hard simulation failure | `create_workflow` step 26's own allowlist | never learned about `serv_input_shape_mismatch` |
+| which options a gate is showing | `resumeGate` matching raw `step.options` | iterator templates never matched the rendered value |
+| a column's constraints | `PGC_Schema.constraints` vs the database | phantom CHECK on a dropped column |
+| Slack's 50-block limit | `HUMAN_NOTIFICATION` knew it, `postHumanGate` did not | 63-field form silently rejected |
+
+**The tell is always the same:** *what the user saw disagrees with what the system did.* When you find that, look for the duplicate derivation before looking for a logic bug.
+
+### 3. The LLM was usually right. The harness was usually wrong.
+
+This is the most counter-intuitive result of the sprint and it should change how the next one is scoped.
+
+- `analyze_workflow_gaps` "hallucinated" a phantom column — **it had not.** It reasoned flawlessly from a registry that was lying to it, and caught a corruption the human had looked straight past.
+- `design_workflow_process` wrote `{{edit_action}}` against a key nothing writes — **it was right.** A `form` gate genuinely discarded which button was pressed; the designer knew precisely what it needed and the harness did not have it. Same signal as run 693's `llm_call` parsing a date because no date picker existed.
+- Novia lost a CHECK constraint during a migration — **her tool catalog told her `modifyConstraint` could only *replace* an existing constraint.** She read the prompt correctly; the prompt was wrong.
+
+**When generated output looks wrong, read the assembled prompt from `PGC_SessionEntry` before concluding the model misbehaved.** It is free, it is already recorded for every `llm_call` of every run, and it was the highest-yield diagnostic of the sprint.
+
+### 4. The consolidation critic (M2) is not earning its cost
+
+Scoreboard across four live runs: **found nothing** (missed the two-view duplication it was built for) → **caught a real parallel chain** → **found two real defects** → **false-positived**, telling the designer to delete a step that was genuinely required (the Update/Done divergence happens *after* a shared write, so the decision must survive the write).
+
+It costs **19% of all LLM spend**, of which **14% is step 21t** — re-running the entire design to apply findings. **Recommendation: keep 21r (the findings, 5%), delete 21t.** Surface findings to the user at the step-24 review gate and let a human accept them. Removes both the cost and the risk of a critic overruling a correct designer.
+
+### 5. THE COST FINDING — this is what threatens the project
+
+Measured on 2026-07-12: 42 `llm_call` steps, 7 `create_workflow` runs, 1,456s of LLM time.
+
+| step | share of spend |
+|---|---|
+| 21 `design_workflow_process` | 25% |
+| 23 `generate_workflow_steps` | 19% |
+| 3 `research_workflow_domain` | 17% |
+| 21t consolidation re-design | 14% |
+| everything else | 25% |
+
+`design_workflow_process` runs **twice per pass** (21 + 21t) = **39% of all spend**.
+
+**`create_workflow` is the entire bill. Running registered workflows is nearly free** — `edit_budget` costs zero LLM calls at runtime. The product thesis (*LLM sparingly, reuse workflows*) is intact. What is expensive is **developing** `create_workflow` by invoking it 7–9 times a day.
+
+**And here is the part that hurts: of ~15 defects fixed on 2026-07-12, ELEVEN were in deterministic code.** Not one needed an LLM call to find. We paid Perplexity to discover bugs that unit tests catch for free, because running the pipeline live is the only way we currently exercise it.
+
+**The cost problem is the test loop, not the architecture.** Sprint 8 must lead with the replay harness.
+
+### 6. What worked and should be repeated
+
+- **Deterministic checks beat prompt rules.** `checkSkeletonDrift` (M1) held perfectly — 16 design items → 16 generated steps, zero invention — where M6's GATE ROUTING *instruction* did not hold between runs. When a rule can be enforced mechanically, enforce it mechanically; Sprint 4's `runRoutingValueRules` was net-negative because it was heuristic, not because it was mechanical.
+- **Probes over assertions.** The CASCADE-drops-views question was settled in two minutes with a throwaway table and view, after I had twice asserted the wrong answer from memory. Build the probe.
+- **Fix the schema, not the workflow.** `PGD_Budgets.type` was functionally dependent on `category_id`. Every `create_workflow` run improvised a different way around that hole — a type dropdown (which blew Slack's block limit), then an LLM inference step. **The "inconsistency between runs" the user chased all sprint was one schema defect being re-patched differently every time.** Fixing the schema made the improvisation vanish.
+
+### 7. Process failures worth naming
+
+- **I over-implemented twice** after being asked only to think. Both times the user caught it. Ask, then act.
+- **I reasoned ahead of the evidence twice** — proposed pruning a registry row that turned out to be the only surviving copy of a view definition, and proposed trimming a prompt when the step timings showed variance was the real cause. Both were caught only because I checked before shipping.
+- **Never round-trip a hand-formatted JSON seed through a serializer.** Cost three reverts this sprint (the F2 lesson, re-learned). Use line-level surgery.
+
+---
 
 ## Sprint Goal
 

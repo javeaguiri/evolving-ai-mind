@@ -873,7 +873,11 @@ DDL executor and PGC metadata registry.
 | `/api/v1/serv/schema/getTable` | POST | Get one entry by tableName |
 | `/api/v1/serv/schema/updateTable` | POST | Update metadata in PGC_Schema (NOT ALTER TABLE) |
 | `/api/v1/serv/schema/deleteTable` | POST | DROP TABLE + remove from PGC_Schema + PGC_TableMap |
+| `/api/v1/serv/schema/dropColumn` | POST | ALTER TABLE ... DROP COLUMN (**RESTRICT, never CASCADE**) + `pruneColumnRefs` clears every `constraints` / `foreign_keys` entry referencing the column. **Refuses with 409 when a view depends on the column** — CASCADE would delete the view silently and leave `PGC_Schema` advertising it (this happened: Sprint 7 session 18). Rewrite dependent views first. |
+| `/api/v1/serv/schema/modifyConstraint` | POST | Add a named CHECK, or replace its expression if one of that name exists. **Upserts** `PGC_Schema.constraints` — appends when new. A CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so `design_workflow_process`/`design_workflow_prompts` never see the enum and generated workflows keep emitting values the DB rejects. |
 | `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
+
+> **`target` is never supplied by the caller** on `dropColumn` / `modifyColumn` / `modifyConstraint` / `dropConstraint` — it is read from `PGC_Schema`. A correctness requirement only a technical caller would know is a bug, not a contract.
 
 Security gate on `createTable`:
 - Column types validated against whitelist (serial, text, integer, jsonb, timestamptz, etc.)
