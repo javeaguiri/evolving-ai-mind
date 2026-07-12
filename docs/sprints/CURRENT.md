@@ -113,9 +113,12 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | L2 `resolveGateOptions` extracted — `buildDialog` and `resumeGate` resolve iterator options from ONE resolver | AC5 | ✅ DONE — live-validated |
 | L3 An option's routing comes from `on_select`, never its `action` name — in `/proc` *and* `/ui` | AC5 | ✅ DONE — live-validated ("Edit More") |
 | M1 A8 fix — only `design_workflow_process` may add a step; `checkSkeletonDrift` enforces it mechanically at L1 | AC1 | ✅ DONE — not yet live-validated |
-| M2 Consolidation critic (`review_workflow_redundancy`) — findings-only, one pass per run | AC1 | ✅ DONE — first live run found nothing; tests 6/7 added after it missed the two-view duplication. **Under evaluation — see `docs/backlog.md`** |
+| M2 Consolidation critic (`review_workflow_redundancy`) — findings-only, one pass per run | AC1 | ✅ DONE — live-validated (run 709): caught the parallel presentation chain it missed first time, plus a split-transform merge. Tests 6/7 earned their place |
 | M3 Routing rule 6a — a loop must have an exit that is not Cancel | AC1 | ✅ DONE — not yet live-validated |
 | M4 `template_syntax` injected into `design_workflow_dialogs` (it had never been told what `{{...}}` means) | AC1 | ✅ DONE — live-validated |
+| N1a Engine owns the hard/soft verdict — `hard` stamped per issue, `error_summary` rendered once; step 26 stops re-deriving it (run 709: a real failure reported as "no specific issues reported", and the regeneration loop fed the same empty brief) | AC1 | ✅ DONE — re-validating on run 710 |
+| N1b Skeleton repair loop (21b→21c→21) redesigned blind — new step 21b1 + `skeleton_error_summary` into `design_workflow_process` + ROUTING REPAIR rule | AC1 | ✅ DONE — re-validating on run 710 |
+| N1c `run-workflow` dropped `null` step outputs, so step 20a's init never landed and the LLM received the literal `{{user_workflow_feedback}}` as feedback | AC1 | ✅ DONE — re-validating on run 710 |
 
 ---
 
@@ -591,6 +594,27 @@ Sequenced after H1 (SERV-Table `upsertRows`) so `serv_upsert`'s own contract can
 ---
 
 ## Session Notes
+
+**2026-07-12 (session 18) — N1: the repair loops were being told nothing to repair.**
+
+Session 17's plan was to recreate `edit_budget` via `create_workflow` and let that one run exercise M1–M4. Run 709 did exactly that, and surfaced something bigger than any of them: **three separate correction loops that regenerate without the failure that triggered them.** One shape, three instances. All fixed and deployed; `create_workflow` v81→v82, `design_workflow_process` v20→v21.
+
+**What M2 did, first — it worked.** The consolidation critic returned real findings this time, including the exact class it walked past on its first live run: *"Test 6: parallel presentation chain — after `upsert_budgets`, the flow re-executes `reload_budgets → build_edit_form → show_edit_form`… the user sees the identical form screen twice."* Plus a genuine split-transform merge. Test 6 earned its place. **M2 is no longer speculative** — one good run is not proof, but it is the first evidence it catches anything.
+
+**N1a — the stale allowlist (the one that blocked the user).** Run 709's L2b trace caught a real defect: step 15's `serv_upsert` had `input.rows` pointing at a composite object (`{budget_rows: [...], updated_type_subtotals: {...}}`) instead of the array inside it — `failure_class: serv_input_shape_mismatch`. The engine correctly set `passed: false`. The user was shown **"Validation failed - no specific issues reported."**
+- Root cause: `runJsTransformSmokeTest` computed `hardFailures`, used it to set `passed`, then **discarded it**, returning only the mixed `issues` list. So `create_workflow` step 26 kept its **own** copy of the hard/soft predicate — as a minified JS string inside a JSON seed — listing only `js_transform_syntax_error` and `js_transform_void_return`. Track I added `serv_input_shape_mismatch` to the engine on 2026-07-02 (`0de88be`); git confirms that commit touched `simulation-engine.mjs`, `table.mjs`, `openapi.yaml` and the test file, and **never the seed**. `serv_input_shape_mismatch` has never once appeared in `seed_PGC_Workflow.json`. Nothing declared the coupling, and grepping the `.mjs` sources for `failure_class` while writing Track I could not have found it.
+- **Worse than a bad message:** `simulation_error_summary` is what feeds steps 22a/23/23d — the regeneration brief. Both "Regenerate" buttons route to 22a. So the LLM was handed *"no specific issues reported"* as its repair instruction: a loop with **zero information gain**, guaranteed to reproduce the same failure forever.
+- Fix (**Execution**, system code): the engine stamps `hard: true|false` on each smoke-test issue and returns a rendered `error_summary` — the single statement of why a simulation failed (gating issues only; soft warnings stay in `issues` but are never "why it failed"). Step 26 becomes a passthrough and **never names a failure class again**. A new failure class now surfaces to the user and to the regeneration loop with no seed edit and nothing to remember. `simulate_workflow` (Novia), `troubleshoot-workflow.mjs` and `upsert-workflow.mjs`'s pre-write guard get it for free.
+- Textbook instance of `docs/code-review-checklist.md` **2e — anything two consumers depend on must be derived once**, with its own stated tell: *what the user saw disagrees with what the system did.*
+
+**N1b — the skeleton loop redesigned blind.** Step 21b writes `skeleton_validation` (12 routing issues on run 709), 21c gates, and 21c routes back to step 21 — whose input map contained **no reference to it at all**. Confirmed against the live diagnostic session (1034): `design_workflow_process` was re-run with zero information about what had failed. It discarded the design and started over; the second attempt passed **by LLM nondeterminism, not by repair**. The contrast is the tell — the *steps* loop threads `simulation_error_summary` properly; the *skeleton* loop never got the equivalent.
+- Fix (**Contract** + **Instruction**, seed + prompt): new step **21b1** captures the engine's `error_summary` on the failure edge; step 21 receives it as `skeleton_error_summary`; `design_workflow_process` gains a **ROUTING REPAIR** rule — *fix exactly the defects listed, keep the same steps, order and approach; the design was not rejected, only its routing was.* Step 21a clears the key on every design pass, so a summary from an earlier failure can never be read as describing the current design. Step 21c's gate now shows the user the issues instead of a bare count.
+
+**N1c — `null` was not a value.** Step 20a exists solely to initialise `user_workflow_feedback` to `null` before step 21. It never worked: `run-workflow.mjs`'s output-persist guard skipped the write for `null` **and** `undefined`, so the key never entered `local_state` — and a key missing from `local_state` renders as its own literal token. `design_workflow_process` was being handed the string `"{{user_workflow_feedback}}"` **as the user's feedback**, on every first pass, since step 20a was written. Same class as M4's `<angle brackets>`. Fix (**Execution**): only `undefined` skips the write.
+
+**Method note.** The `simulate` step's `output_snapshot.summary` is stored truncated at 200 chars (`run-workflow.mjs:343`), so a failed simulation cannot be diagnosed from its own step record — the diagnosis came from `PGC_WorkflowRun.stack[-1].local_state` and `PGC_SessionEntry`. Worth fixing; not in scope. Also noted: `PGC_WorkflowRunStep.step_key` holds a frame UUID, not the workflow step key, which makes a raw step trace unreadable.
+
+6 new tests including a direct run-709 reproduction. **509/509 pass.** Deployed (`sam build && sam deploy`); `upsert-workflow.mjs create_workflow` + `upsert-prompt.mjs` run live. Run 709 abandoned (its `local_state` still holds the stale summary, which step 22a would have consumed on the first regeneration lap). **Re-validating on run 710.**
 
 **2026-07-11 (session 17):** Implemented **D14** — resolved session 16's carry-forward (multi-child-table id ambiguity in `list_selection`), starting from the Block Kit input-element research the user asked for.
 
