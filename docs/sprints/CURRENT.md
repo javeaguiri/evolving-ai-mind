@@ -80,7 +80,7 @@ Close the functionality gaps uncovered during Sprint 6 MVP testing. Release-read
 | D2 `format_entity_display` pretty-print formatter | AC5 | 🔁 SUPERSEDED by D9 — walked back to deterministic (LLM formatting of already-structured data was the same Type-4a overcorrection A8/A9 diagnosed elsewhere) |
 | D3 Audit/fix `notify` templates in generated workflows | AC5 | ⬜ |
 | D4 Button/content separation + preservation audit | AC5 | ✅ DONE — full `interactive.mjs` audit, 5 sites fixed; not yet live-validated |
-| D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ⬜ |
+| D5 Modal cancel audit + `on_modal_close` dead code removal | AC5 | ✅ DONE — `on_modal_close` was unreachable AND a trap: a dismissed modal never resumes the gate (`handleViewClosed` leaves it suspended, correctly), and `hasModalInput` is false for ANY plain click, so an option declaring it would have hijacked a normal click away from `on_select`. Zero of 14 live workflows used it; `workflow-schema.json` advertised it anyway. Removed from code + schema. Modal-cancel behaviour audited and correct; the comment describing it documented the pre-Sprint-6 bug and is fixed |
 | D6 Novia action-gate messages — plain-language summary + code/SQL/diff behind a reveal | AC5 | ⬜ |
 | D7 `postHumanGate` — runId/traceId context block on every gate | AC5 | ✅ DONE |
 | D8 `list_entity` root query skips child aggregations (lazy-fetch; details come via row_list drill-down) | AC5 | 🔁 SUPERSEDED by D12 — resolved via dynamic click-time FK lookup instead of a precomputed lazy-fetch |

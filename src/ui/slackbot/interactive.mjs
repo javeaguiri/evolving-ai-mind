@@ -78,7 +78,10 @@ export async function handle(req) {
   }
 
   // view_closed — modal dismissed without submitting (notify_on_close: true required on view).
-  // Enqueues resume_gate with userResponse: 'cancel' so the workflow routes to step 3a cancel path.
+  // Enqueues NOTHING: the gate stays suspended and its Slack message stays live, so the user
+  // can pick a different button. Dismissing a modal is backing out of one option, not
+  // cancelling the workflow. (This comment previously described the pre-Sprint-6 behaviour,
+  // where a dismissed modal resumed the gate as a cancel and silently advanced the run.)
   if (payload.type === 'view_closed') {
     return handleViewClosed(payload, req.correlationId);
   }
