@@ -725,14 +725,39 @@ async function getTable(req) {
 }
 
 // ---------------------------------------------------------------------------
+// upsertConstraint — the registry must record every CHECK the database enforces.
+//
+// The DDL below is an upsert (DROP IF EXISTS, then ADD), so it happily creates a
+// constraint that did not exist before. The registry sync did not: it was a pure
+// `.map()`, which updates a constraint already present and silently does NOTHING for
+// a new one. So adding a CHECK left the database enforcing a rule that PGC_Schema had
+// never heard of.
+//
+// That is the inverse of the dropColumn bug (see pruneColumnRefs) and it matters just
+// as much, for a reason beyond tidiness: `domain_schema` is built FROM PGC_Schema, and
+// design_workflow_process / design_workflow_prompts read a column's allowed values out
+// of its CHECK expression there. A constraint missing from the registry is invisible to
+// them — so generated workflows keep emitting values the database will reject, and the
+// violation traces back to a rule nobody told them about.
+// ---------------------------------------------------------------------------
+
+export function upsertConstraint(existing, constraintName, expression, columns) {
+  const constraints = existing ?? [];
+  if (constraints.some(c => c.name === constraintName)) {
+    return constraints.map(c => (c.name === constraintName ? { ...c, expression } : c));
+  }
+  return [...constraints, { name: constraintName, type: 'check', columns: columns ?? [], expression }];
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/modifyConstraint
-// Drops an existing named constraint and replaces it with a new CHECK expression.
-// Updates PGC_Schema metadata to match. Use when a CHECK constraint's expression
-// needs to change (e.g. adding a new allowed value to an IN list).
+// Adds a named CHECK constraint, or replaces its expression if it already exists.
+// Keeps PGC_Schema in step with the database either way. Use when a CHECK is being
+// introduced, or when its expression must change (e.g. a new allowed value in an IN list).
 // ---------------------------------------------------------------------------
 
 async function modifyConstraint(req) {
-  const { tableName, constraintName, expression, target = 'pgc' } = req.body;
+  const { tableName, constraintName, expression, columns, target = 'pgc' } = req.body;
 
   if (!tableName || !constraintName || !expression) {
     return err(400, 'tableName, constraintName, and expression are required', req.correlationId);
@@ -758,23 +783,23 @@ async function modifyConstraint(req) {
       `ALTER TABLE "${tableName}" ADD CONSTRAINT "${constraintName}" CHECK (${expression})`
     );
 
-    // Update PGC_Schema constraints field
+    // Sync PGC_Schema — append when the constraint is new, update when it already exists.
     const schemaRow = await pgcClient.query(
       `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
     );
+    let action = 'not_in_schema';
     if (schemaRow.rows.length > 0) {
       const existing = schemaRow.rows[0].constraints ?? [];
-      const updated  = existing.map(c =>
-        c.name === constraintName ? { ...c, expression } : c
-      );
+      action  = existing.some(c => c.name === constraintName) ? 'updated' : 'added';
+      const updated = upsertConstraint(existing, constraintName, expression, columns);
       await pgcClient.query(
         `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
         [JSON.stringify(updated), tableName]
       );
     }
 
-    console.info(`schema: constraint "${constraintName}" on "${tableName}" updated`);
-    return ok({ success: true, tableName, constraintName, expression }, req.correlationId);
+    console.info(`schema: constraint "${constraintName}" on "${tableName}" ${action}`);
+    return ok({ success: true, tableName, constraintName, expression, action }, req.correlationId);
 
   } catch (error) {
     console.error('schema modifyConstraint error:', error.message);
