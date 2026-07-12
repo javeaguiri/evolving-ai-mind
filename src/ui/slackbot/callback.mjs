@@ -183,7 +183,8 @@ function textToBlocks(text, contextText) {
 // split on paragraph boundaries as before.
 // ---------------------------------------------------------------------------
 
-const HEADER_TEXT_LIMIT = 150; // Slack header block text.text max length
+const HEADER_TEXT_LIMIT  = 150; // Slack header block text.text max length
+const SLACK_BLOCK_LIMIT  = 50;  // Slack rejects any message with more than 50 blocks (invalid_blocks)
 
 function markdownToBlocks(text, contextText) {
   const blocks = [];
@@ -355,7 +356,6 @@ async function postHumanNotification(message) {
     });
   }
 
-  const SLACK_BLOCK_LIMIT = 50;
   const chunkSize = SLACK_BLOCK_LIMIT - suffixBlocks.length;
   const groups     = groupBlocksForSlack(contentBlocks, chunkSize);
 
@@ -432,6 +432,55 @@ async function postExplainStepSelect(message) {
 // only (e.g. whether to use chat.update for in-place re-renders).
 // ---------------------------------------------------------------------------
 
+// refuseOversizedGate — the one place a gate is checked against Slack's block ceiling.
+//
+// A gate cannot be chunked the way a notification can: interactive.mjs collects
+// state.values from the single message carrying the Submit button, so splitting a form
+// across messages would lose the user's input. Nor can it be truncated — dropping input
+// blocks silently discards the data they exist to collect. So an oversized gate is
+// refused, loudly, and the user is told why.
+//
+// Posting it anyway is the worst available option, and was the behaviour until run 711:
+// Slack rejects the entire message with invalid_blocks, the run stays parked at
+// awaiting_human_gate forever, and the user sees nothing at all — no gate, no error, no
+// hint. (Run 711's edit_budget form asked for 63 input fields: 21 spending categories x
+// amount/type/notes, where only the amount had been asked for.)
+//
+// oversizedGateMessage — the decision, kept pure so it can be tested against the real
+// function rather than a copy. Returns null when the gate fits, or the diagnosis when it
+// does not. refuseOversizedGate below does the posting.
+export function oversizedGateMessage(blocks) {
+  if (blocks.length <= SLACK_BLOCK_LIMIT) return null;
+
+  const inputCount = blocks.filter(b => b.type === 'input').length;
+  const detail = inputCount
+    ? `This step asks for *${inputCount} input fields* in a single message. Slack allows at most ${SLACK_BLOCK_LIMIT} blocks per message, and every field takes one.`
+    : `This step needs *${blocks.length} blocks*. Slack allows at most ${SLACK_BLOCK_LIMIT} per message.`;
+
+  return {
+    blockCount: blocks.length,
+    inputCount,
+    text: `⚠️ *This step can't be displayed*\n\n${detail}\n\nThe workflow is paused and cannot continue. It needs to be redesigned to ask for less at once — for example, picking one record at a time instead of showing every record together.`,
+  };
+}
+
+// Returns true when the gate was refused, in which case the caller must not post.
+async function refuseOversizedGate({ callback, blocks, gateType, workflowRunId, traceId }) {
+  const oversized = oversizedGateMessage(blocks);
+  if (!oversized) return false;
+
+  console.error('callback: HUMAN_GATE too large to render', {
+    gateType, workflowRunId, blockCount: oversized.blockCount, inputCount: oversized.inputCount,
+    limit: SLACK_BLOCK_LIMIT, traceId,
+  });
+  await routeCallback(
+    callback,
+    oversized.text.slice(0, 150),
+    textToBlocks(oversized.text, `runId: ${workflowRunId} | traceId: ${traceId}`),
+  );
+  return true;
+}
+
 async function postHumanGate(message) {
   const { callback, gate_type: gateType, dialog, workflowRunId, step: stepKey, message_ts, traceId } = message;
   const gateContextText = workflowRunId
@@ -501,6 +550,7 @@ async function postHumanGate(message) {
       gateContextBlock,
       { type: 'actions', elements: actionElements },
     ];
+    if (await refuseOversizedGate({ callback, blocks, gateType, workflowRunId, traceId })) return;
     await routeCallback(callback, fallbackText.slice(0, 150), blocks);
     console.info('callback: HUMAN_GATE text_input posted', { workflowRunId, multiline: isMultiline, traceId });
     return;
@@ -615,6 +665,8 @@ async function postHumanGate(message) {
   blocks.push(gateContextBlock);
   const fallbackText = dialog?.fields?.find(f => f.type === 'typography')?.value
     ?? 'Workflow gate \u2014 please review and respond.';
+
+  if (await refuseOversizedGate({ callback, blocks, gateType, workflowRunId, traceId })) return;
 
   if (message_ts) {
     // Re-render of a gate that stayed suspended — update the existing message in-place
