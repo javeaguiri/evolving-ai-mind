@@ -489,6 +489,41 @@ async function modifyColumn(req) {
 }
 
 // ---------------------------------------------------------------------------
+// pruneColumnRefs — every place PGC_Schema references a column by name.
+//
+// `ALTER TABLE ... DROP COLUMN ... CASCADE` removes the column AND everything that
+// depends on it in the database. The registry must be pruned to match, or it starts
+// asserting things the database does not.
+//
+// This is not hypothetical. Dropping PGD_Budgets.type left `chk_budgets_type` behind in
+// PGC_Schema.constraints — a CHECK on a column that no longer existed. Every LLM that
+// reads domain_schema then believed PGD_Budgets had a required, enum-constrained `type`
+// column, because a CHECK on a column implies the column. analyze_workflow_gaps reasoned
+// correctly from that and reported a blocking schema gap for a column that was not there
+// (run 717). A registry that lies is worse than one that is merely incomplete.
+//
+// Same class as F3, where delete-workflow removed PGC_IntentMap and PGC_Prompt rows but
+// left PGC_DomainHelp.commands behind: a delete path that does not clean every place the
+// thing is referenced.
+// ---------------------------------------------------------------------------
+
+export function pruneColumnRefs({ columns, constraints, foreign_keys }, columnName) {
+  const mentionsCol = entry =>
+    Array.isArray(entry?.columns) && entry.columns.includes(columnName);
+
+  return {
+    columns:      (columns      ?? []).filter(c => c.name !== columnName),
+    // A constraint over the dropped column cannot survive it — CASCADE has already
+    // removed it from the database. A composite constraint (e.g. unique(a, b)) that
+    // merely includes the column is dropped too, for the same reason.
+    constraints:  (constraints  ?? []).filter(c => !mentionsCol(c)),
+    // An FK declared ON the dropped column goes with it. `column` is the singular form
+    // used by the FK shape; `columns` is checked too so a composite FK is not missed.
+    foreign_keys: (foreign_keys ?? []).filter(fk => fk?.column !== columnName && !mentionsCol(fk)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // POST /serv/schema/dropColumn
 // ---------------------------------------------------------------------------
 
@@ -511,7 +546,7 @@ async function dropColumn(req) {
     await client.connect();
 
     const lookup = await client.query(
-      `SELECT id, target, columns FROM "PGC_Schema" WHERE table_name = $1`,
+      `SELECT id, target, columns, constraints, foreign_keys FROM "PGC_Schema" WHERE table_name = $1`,
       [tableName]
     );
     if (lookup.rows.length === 0) {
@@ -533,13 +568,29 @@ async function dropColumn(req) {
 
     if (target === 'pgd') await ddlClient.end();
 
-    const updatedCols = colsArray.filter(c => c.name !== columnName);
+    const pruned = pruneColumnRefs(lookup.rows[0], columnName);
     await client.query(
-      `UPDATE "PGC_Schema" SET columns = $1::jsonb, updated_at = now() WHERE id = $2`,
-      [JSON.stringify(updatedCols), schemaId]
+      `UPDATE "PGC_Schema"
+          SET columns = $1::jsonb, constraints = $2::jsonb, foreign_keys = $3::jsonb, updated_at = now()
+        WHERE id = $4`,
+      [
+        JSON.stringify(pruned.columns),
+        JSON.stringify(pruned.constraints),
+        JSON.stringify(pruned.foreign_keys),
+        schemaId,
+      ]
     );
 
-    return ok({ success: true, tableName, column: columnName, action: 'dropped' }, req.correlationId);
+    const droppedConstraints = (lookup.rows[0].constraints  ?? []).length - pruned.constraints.length;
+    const droppedForeignKeys = (lookup.rows[0].foreign_keys ?? []).length - pruned.foreign_keys.length;
+    if (droppedConstraints || droppedForeignKeys) {
+      console.info(`schema: pruned registry refs to ${tableName}.${columnName}`, { droppedConstraints, droppedForeignKeys });
+    }
+
+    return ok({
+      success: true, tableName, column: columnName, action: 'dropped',
+      droppedConstraints, droppedForeignKeys,
+    }, req.correlationId);
 
   } catch (error) {
     console.error('schema dropColumn error:', error.message);
