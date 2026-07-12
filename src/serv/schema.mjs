@@ -757,7 +757,7 @@ export function upsertConstraint(existing, constraintName, expression, columns) 
 // ---------------------------------------------------------------------------
 
 async function modifyConstraint(req) {
-  const { tableName, constraintName, expression, columns, target = 'pgc' } = req.body;
+  const { tableName, constraintName, expression, columns } = req.body;
 
   if (!tableName || !constraintName || !expression) {
     return err(400, 'tableName, constraintName, and expression are required', req.correlationId);
@@ -766,15 +766,28 @@ async function modifyConstraint(req) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
   }
 
-  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
-  const pgcUrl = process.env.PGC_DATABASE_URL;
-
-  const dbClient  = getClient(dbUrl);
-  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+  // `target` is read from PGC_Schema, never from the caller. It used to default to 'pgc'
+  // in the request body, so every PGD table needed the caller to know to say so — an
+  // invisible requirement that only a technical caller would satisfy, and one Novia's
+  // alter_schema tool forwards only if the LLM happens to include it. addColumn,
+  // modifyColumn and dropColumn have always looked it up here; these two were the outliers.
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
 
   try {
-    await dbClient.connect();
-    if (dbClient !== pgcClient) await pgcClient.connect();
+    await pgcClient.connect();
+
+    const reg = await pgcClient.query(
+      `SELECT target, constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+    const target = reg.rows[0].target;
+    if (target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
 
     await dbClient.query(
       `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
@@ -784,19 +797,12 @@ async function modifyConstraint(req) {
     );
 
     // Sync PGC_Schema — append when the constraint is new, update when it already exists.
-    const schemaRow = await pgcClient.query(
-      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    const existing = reg.rows[0].constraints ?? [];
+    const action   = existing.some(c => c.name === constraintName) ? 'updated' : 'added';
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(upsertConstraint(existing, constraintName, expression, columns)), tableName]
     );
-    let action = 'not_in_schema';
-    if (schemaRow.rows.length > 0) {
-      const existing = schemaRow.rows[0].constraints ?? [];
-      action  = existing.some(c => c.name === constraintName) ? 'updated' : 'added';
-      const updated = upsertConstraint(existing, constraintName, expression, columns);
-      await pgcClient.query(
-        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
-        [JSON.stringify(updated), tableName]
-      );
-    }
 
     console.info(`schema: constraint "${constraintName}" on "${tableName}" ${action}`);
     return ok({ success: true, tableName, constraintName, expression, action }, req.correlationId);
@@ -817,7 +823,7 @@ async function modifyConstraint(req) {
 // ---------------------------------------------------------------------------
 
 async function dropConstraint(req) {
-  const { tableName, constraintName, target = 'pgc' } = req.body;
+  const { tableName, constraintName } = req.body;
 
   if (!tableName || !constraintName) {
     return err(400, 'tableName and constraintName are required', req.correlationId);
@@ -826,31 +832,33 @@ async function dropConstraint(req) {
     return err(400, `Invalid table name "${tableName}"`, req.correlationId);
   }
 
-  const dbUrl  = target === 'pgd' ? process.env.PGD_DATABASE_URL : process.env.PGC_DATABASE_URL;
-  const pgcUrl = process.env.PGC_DATABASE_URL;
-
-  const dbClient  = getClient(dbUrl);
-  const pgcClient = dbUrl === pgcUrl ? dbClient : getClient(pgcUrl);
+  // `target` is read from PGC_Schema, never from the caller — see modifyConstraint.
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
 
   try {
-    await dbClient.connect();
-    if (dbClient !== pgcClient) await pgcClient.connect();
+    await pgcClient.connect();
+
+    const reg = await pgcClient.query(
+      `SELECT target, constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+    if (reg.rows[0].target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
 
     await dbClient.query(
       `ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`
     );
 
-    const schemaRow = await pgcClient.query(
-      `SELECT constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    const existing = reg.rows[0].constraints ?? [];
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(existing.filter(c => c.name !== constraintName)), tableName]
     );
-    if (schemaRow.rows.length > 0) {
-      const existing = schemaRow.rows[0].constraints ?? [];
-      const updated  = existing.filter(c => c.name !== constraintName);
-      await pgcClient.query(
-        `UPDATE "PGC_Schema" SET constraints = $1, updated_at = now() WHERE table_name = $2`,
-        [JSON.stringify(updated), tableName]
-      );
-    }
 
     console.info(`schema: constraint "${constraintName}" on "${tableName}" dropped`);
     return ok({ success: true, tableName, constraintName }, req.correlationId);
