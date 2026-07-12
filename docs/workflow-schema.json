@@ -312,7 +312,11 @@
         },
         "output_key": {
           "type": "string",
-          "description": "Required for text_input (written on Submit) and choice (written on selection or modal submit). The typed modal text (inputValue) takes precedence over the button value for choice gates with modal options."
+          "description": "Required for text_input (written on Submit) and choice (written on selection or modal submit). The typed modal text (inputValue) takes precedence over the button value for choice gates with modal options. On a form gate it holds the FIELD VALUES — not which button was pressed; use action_key for that."
+        },
+        "action_key": {
+          "type": "string",
+          "description": "local_state key recording WHICH option the user chose (an option's value on choice gates, its action on all others). Use it when a later step must know the gate's outcome — most commonly a save-and-continue loop, where 'Save' and 'Done' run the SAME write and only diverge afterwards, so the decision must survive the write. Every option must then carry a DISTINCT action (e.g. 'save', 'done', 'cancel'): reusing the conventional 'confirm' on two buttons makes them indistinguishable to everything downstream. Independent of output_key — a form gate uses both."
         },
         "context_key": {
           "type": "string",

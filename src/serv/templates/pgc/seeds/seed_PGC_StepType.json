@@ -180,6 +180,12 @@
       },
       {
         "type": "string",
+        "field": "action_key",
+        "required": false,
+        "description": "Optional. local_state key recording WHICH option the user clicked (an option's `value` on choice gates, its `action` on all others). Set it when a LATER step must know the gate's outcome. The case that needs it: a save-and-continue loop, where 'Save' and 'Done' both run the SAME write and diverge only AFTER it \u2014 the decision has to survive the write so a condition can read it downstream. Routing the two buttons to separate chains instead would duplicate the write. When you set action_key, every option must carry a DISTINCT action ('save', 'done', 'cancel'): two buttons both using the conventional 'confirm' are indistinguishable to everything downstream. Independent of output_key \u2014 a form gate uses BOTH, because output_key holds the FIELD VALUES, not the button."
+      },
+      {
+        "type": "string",
         "field": "on_cancel",
         "required": true,
         "description": "Routing when user clicks a cancel option \u2014 REQUIRED on every human_gate. Must point to a valid step_label or \"cancel\". Both the cancel option (action/value: \"cancel\" in options or special_buttons) AND this on_cancel routing field are mandatory \u2014 satisfying one without the other fails L1 validation."

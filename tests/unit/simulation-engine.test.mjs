@@ -414,3 +414,67 @@ describe('runSimulation — error_summary', () => {
     assert.equal(result.error_summary, '');
   });
 });
+
+// ---------------------------------------------------------------------------
+// action_key — a gate's outcome must be readable downstream (run 719).
+//
+// A `form` gate's output_key holds the FIELD VALUES; which button was pressed was
+// used for routing and then discarded. So a save-and-continue loop was undesignable:
+// "Update" and "Done" must run the SAME write and diverge only afterwards, which means
+// the decision has to survive the write. The designer wrote {{edit_action}} and noted it
+// was "tracked via a hidden mechanism or gate action value" — it knew exactly what it
+// needed, and the harness did not have it. L1 correctly rejected the workflow.
+// ---------------------------------------------------------------------------
+
+describe('L1 state flow — action_key records the gate outcome', () => {
+  // Run 719's shape: form gate -> transform -> upsert -> condition on the button pressed.
+  const saveAndContinueLoop = actionKey => [
+    { step: '1', type: 'serv_query', input: { tableName: 'PGD_Budgets' }, on_success: 'next', on_else: 'cancel', output_key: 'budgets' },
+    {
+      step: '2', type: 'human_gate', gate_type: 'form',
+      message_template: 'Edit the budget',
+      fields: [{ name: 'amount_1', type: 'text', label: 'Groceries' }],
+      output_key: 'budget_edits',
+      ...(actionKey ? { action_key: 'edit_action' } : {}),
+      options: [
+        { label: 'Save',   action: 'save',   on_select: 'next' },
+        { label: 'Done',   action: 'done',   on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+      on_cancel: 'cancel', on_success: 'next',
+    },
+    { step: '3', type: 'js_transform', expression: `[{ id: 1 }]`, on_success: 'next', output_key: 'rows' },
+    { step: '4', type: 'serv_upsert', input: { tableName: 'PGD_Budgets', matchColumns: ['id'], rows: '{{rows}}' }, on_success: 'next', on_else: 'cancel', output_key: 'written' },
+    { step: '5', type: 'condition', expression: `{{edit_action}}`, on_success: '2', on_else: '6' },
+    { step: '6', type: 'end' },
+  ];
+
+  it('rejects the gate outcome being read when no action_key declares it (run 719)', () => {
+    const result = runSimulation({ steps: saveAndContinueLoop(false), traceId: 't' });
+    const issue  = result.static_analysis.issues.find(i => /edit_action/.test(i.detail ?? ''));
+
+    assert.ok(issue, 'reading a key nothing writes must be caught');
+    assert.match(issue.detail, /has not been written by any prior step/);
+  });
+
+  it('accepts it once the gate declares action_key', () => {
+    const result = runSimulation({ steps: saveAndContinueLoop(true), traceId: 't' });
+    const issue  = result.static_analysis.issues.find(i => /edit_action/.test(i.detail ?? ''));
+
+    assert.equal(issue, undefined,
+      `action_key must register as a write; got: ${JSON.stringify(result.static_analysis.issues)}`);
+    assert.equal(result.passed, true);
+  });
+
+  it('mocks action_key from the gate\'s own first option, so L2b can resolve it', () => {
+    const steps = [
+      ...saveAndContinueLoop(true).slice(0, 5),
+      { step: '6', type: 'js_transform', expression: `local_state.edit_action === 'save'`, on_success: 'next', output_key: 'looping' },
+      { step: '7', type: 'end' },
+    ];
+    steps[4] = { step: '5', type: 'condition', expression: `{{edit_action}}`, on_success: '6', on_else: '7' };
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.equal(result.passed, true, JSON.stringify(result.error_summary));
+  });
+});
