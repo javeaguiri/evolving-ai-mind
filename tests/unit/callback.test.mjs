@@ -13,6 +13,7 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { oversizedGateMessage } from '../../src/ui/slackbot/callback.mjs';
 
 // ---------------------------------------------------------------------------
 // Module extraction
@@ -1969,5 +1970,49 @@ describe('every button payload carries its label', () => {
     };
     const button = dialogToBlocks(dialog, 42, 'confirm').find(b => b.type === 'actions').elements[0];
     assert.equal(JSON.parse(button.value).label, 'Save Budget');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slack's 50-block message ceiling — gates must be refused, not posted (run 711).
+//
+// Imports the REAL function. callback.mjs has no module-level side effect that
+// prevents it (the WebClient constructor does not touch the network), so there is
+// no reason to keep a copy here — and the copy in this file has already drifted
+// from production once this sprint.
+// ---------------------------------------------------------------------------
+
+describe('oversizedGateMessage — Slack block ceiling', () => {
+  const inputBlocks = n => Array.from({ length: n }, (_, i) => ({ type: 'input', block_id: `f${i}` }));
+
+  it('passes a gate that fits', () => {
+    const blocks = [{ type: 'section' }, ...inputBlocks(20), { type: 'actions' }];
+    assert.equal(oversizedGateMessage(blocks), null);
+  });
+
+  it('passes a gate at exactly the limit', () => {
+    assert.equal(oversizedGateMessage(inputBlocks(50)), null);
+  });
+
+  it('refuses run 711: 63 input fields (21 categories x amount/type/notes)', () => {
+    const blocks = [{ type: 'section' }, ...inputBlocks(63), { type: 'context' }, { type: 'actions' }];
+    const result = oversizedGateMessage(blocks);
+
+    assert.ok(result, 'a 66-block gate must be refused, not posted');
+    assert.equal(result.inputCount, 63);
+    assert.equal(result.blockCount, 66);
+    // The user must be told what is wrong, in their terms — not left staring at nothing.
+    assert.match(result.text, /63 input fields/);
+    assert.match(result.text, /50 blocks/);
+    assert.match(result.text, /paused and cannot continue/);
+  });
+
+  it('reports block count when the overflow is not input fields', () => {
+    const blocks = Array.from({ length: 60 }, () => ({ type: 'section' }));
+    const result = oversizedGateMessage(blocks);
+
+    assert.ok(result);
+    assert.equal(result.inputCount, 0);
+    assert.match(result.text, /60 blocks/);
   });
 });

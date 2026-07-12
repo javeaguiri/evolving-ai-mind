@@ -1263,7 +1263,9 @@
           "prompt": "review_workflow_redundancy",
           "process_design": "{{process_spec.process_design}}",
           "state_map": "{{process_spec.state_map}}",
-          "userInput": "{{input.userInput}}"
+          "userInput": "{{input.userInput}}",
+          "user_mode_instructions": "{{user_mode_instructions}}",
+          "user_design_notes": "{{user_design_notes}}"
         },
         "output_key": "redundancy_review",
         "on_success": "next",
@@ -1303,11 +1305,11 @@
       {
         "step": "21a",
         "type": "js_transform",
-        "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation. Also clears skeleton_error_summary — this step runs immediately before every skeleton simulate, so clearing here guarantees a summary from an earlier failed design can never be read as if it described the current one.",
+        "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation. This step COPIES routing — it never invents it: a design item with no on_success is a design defect, and L1's BFS must be allowed to see it as the dead end it is. (It previously defaulted a missing on_success to 'next', which silently turned an under-specified design into a valid linear graph — run 710's edit_budget_gate described 'Update loops back to reload' in prose, emitted no on_success at all, and was quietly flattened into a workflow with no loop and two buttons that did the same thing.) Also clears skeleton_error_summary — this step runs immediately before every skeleton simulate, so clearing here guarantees a summary from an earlier failed design can never be read as if it described the current one.",
         "output_key": "routing_skeleton,skeleton_error_summary",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_else) s.on_else = r.on_else; if (r.on_success)  s.on_success  = r.on_success; if (r.on_else)   s.on_else   = r.on_else; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_success) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return { routing_skeleton: steps, skeleton_error_summary: null }; })()"
+        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_else)   s.on_else   = r.on_else; if (r.on_cancel)  s.on_cancel  = r.on_cancel; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return { routing_skeleton: steps, skeleton_error_summary: null }; })()"
       },
       {
         "step": "21b",
