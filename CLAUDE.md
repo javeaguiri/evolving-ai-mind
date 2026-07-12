@@ -233,20 +233,22 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-**Sprint 6 closed 2026-06-29 (branch `sprint/06-pantry-expenses-trackp`).** Track P complete (PGC_Prompt.domain, design_workflow_prompts, generate_workflow_steps prompt, delete flow cleanup). Expenses domain live (PGD_Expenses, PGD_Budgets, PGD_SpendingCategories, PGD_RecurringExpenses). Recipe domain recreated. quiz_flashcards and study_flashcards workflows recreated. Entity resolution chain added to add/get/list_entity for multi-entity domains. SHUTDOWN SQS ack-and-notify. RecursiveLoop: Allow + ProcFunction MemorySize 1024. listPhysicalTables + dropConstraint SERV endpoints. embed_source auto-inference in schema.mjs. UC-E1, UC-E2, UC-E3 validated from Slack.
+**Sprint 7 closed 2026-07-12 (branch `sprint/07-mvp-functionality-gaps`).** MVP functionality gaps. All ACs met except one carried item (D3). Highlights: `serv_upsert` step type + L2 data-flow trace; `form` gate type (a widget is a field type, not a gate type) and `text_input` retired from the instruction layer; `choice` renders as a dropdown past five options; `list_selection` markdown-table rendering with grouped `static_select`; view infrastructure (`PGC_Schema.type`/`select_sql`, `createView`); `PGC_IntentMap` one row per phrase; `/explain` step-selection gate; Novia SOP library. Late-sprint work concentrated on **silent failure**: repair loops that regenerated without being told what failed, a renderer that posted messages Slack rejected, and a schema registry that lied.
 
-**Sprint 7 not yet scoped.** Next session: run retro → scope Sprint 7 → create new `docs/sprints/CURRENT.md`.
+**Sprint 8 not yet scoped.** **COST STOP IN EFFECT — read `docs/sprints/sprint-07.md` (retro) before scoping.** Perplexity spend hit ~$50/month against a $10 target. `create_workflow` is ~39% `design_workflow_process` alone and is the entire bill; running registered workflows is nearly free. Sprint 8 leads with the **LLM replay harness**, without which every remaining item costs money to verify.
 
-### Open Work (carry-forward to Sprint 7)
+### Open Work (carry-forward to Sprint 8)
 
-1. Session ID per workflow run — `PGC_WorkflowRun.session_id` FK + `PGC_SessionEntry` rows for all LLM calls. Prerequisite for `/explain` step-selection and Novia run-scoped diagnostics.
-2. `/explain <run-id>` step-selection gate — Slack button list of LLM steps; user picks one; spawns explain thread scoped to that step.
-3. `generate_workflow_steps` Instruction fix — domain-specific `llm_call` steps must always emit a unique `prompt_draft`; never reuse a system prompt (domain: null).
-4. `design_workflow_prompts` Instruction fix — system or cross-domain prompt candidates must always be classified "create", never "reuse".
-5. PGC_SystemContext procedure library for Novia (`novia_diagnostic_protocol`) — on-demand diagnostic steps without bloating the always-injected system prompt.
-6. UC-E4 budget report — `PGD_MonthlyExpensesByCategory` DB view + reporting workflow; blocked on data.
-7. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
-8. `create_domain` — reference table entity separation. See backlog High Priority.
+1. **LLM replay harness** — `llm-harness` returns a recorded response from `PGC_SessionEntry` instead of calling Perplexity, keyed by run + step, gated on prompt/context **version match** so staleness is detected automatically. Gates stay real (usability work needs them). No SERV/SQS stubbing. Makes harness and UI iteration free; prompt iteration still costs the suffix from the changed step onward.
+2. **Delete `create_workflow` step 21t** (the automatic consolidation re-design, 14% of spend). Keep 21r's findings and surface them at the step-24 review gate for a human to accept. The critic false-positived in run 719 — it told the designer to delete a step that was genuinely required.
+3. **Gate `research_workflow_domain` on new domains** (17% of spend) — it re-derives findings already present in `PGC_Schema` for an existing domain.
+4. **D3** — audit/fix `notify` templates in generated workflows. Requires generating workflows, so it must ride *behind* the replay harness.
+5. **Re-validate `edit_budget` end to end** — run 719 reached L1 with a correct design; `action_key` (landed) is the last blocker. Deferred until replay exists.
+6. `create_domain` schema critic — deterministic core (unsourceable required column; functional dependency computable from live data), LLM around it. See backlog.
+7. `create_workflow` domain-confirmation gate — `input.domain: null` is a legitimate value (Mode C), so a typo silently builds a standalone workflow. See backlog.
+8. Validate every `llm_call` step supplies every `{{token}}` its prompt declares — shared prompts silently hand the LLM its own literal token text. See backlog.
+9. A render failure in the Experience tier should fail the run, not just report it — the run still wedges at `awaiting_human_gate`. See backlog.
+10. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
 
 ### Deferred
 

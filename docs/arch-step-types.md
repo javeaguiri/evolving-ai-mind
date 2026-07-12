@@ -214,6 +214,46 @@ The constraint boundary: `js_transform` is restricted to **pure synchronous data
 `options[].on_select` drives routing after the gate resolves — `"step:3d"` is a
 jump; `"next"` advances to the sequentially next step; `"cancel"` cancels the run.
 
+###### `action_key` — recording *which* option was chosen
+
+`output_key` records the gate's **payload**: the typed text, the selected value, the
+clicked row, or — on a `form` — the field values. It does **not** record which button
+was pressed. `on_select` routes on the click and then discards it.
+
+`action_key` is the local_state key that captures the click itself (an option's `value`
+on `choice` gates, its `action` on all others). Set it when a **later** step must know
+the gate's outcome.
+
+The case that requires it is a **save-and-continue loop**: *"Save persists and re-shows
+the form; Done persists and exits."* Both buttons run the **same** write and diverge only
+*after* it, so the decision has to survive the write and be read by a `condition`
+downstream. There is no workaround — routing the two buttons to separate chains
+duplicates the write, and making Done skip the write loses the user's edits.
+
+When `action_key` is set, **every option must carry a distinct `action`** (`"save"`,
+`"done"`, `"cancel"`). Two buttons both using the conventional `"confirm"` are
+indistinguishable to everything downstream. `action_key` is independent of `output_key`:
+a `form` gate uses both.
+
+```json
+{
+  "step": "10", "type": "human_gate", "gate_type": "form",
+  "fields": "{{budget_fields}}",
+  "output_key": "budget_edits",
+  "action_key": "edit_action",
+  "options": [
+    { "label": "Save", "action": "save", "on_select": "step:11" },
+    { "label": "Done", "action": "done", "on_select": "step:11" },
+    { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+  ],
+  "on_cancel": "cancel", "on_success": "step:11"
+}
+```
+
+L1 counts `action_key` as a **write** in the state-flow trace, so a downstream
+`{{edit_action}}` resolves. Without that it would be rejected as never written — which is
+exactly how run 719 failed before this existed.
+
 ###### `form` gate_type
 
 Collects any number of typed values in **one** gate and writes them to `output_key`
