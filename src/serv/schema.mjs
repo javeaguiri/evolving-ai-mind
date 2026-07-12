@@ -563,7 +563,35 @@ async function dropColumn(req) {
     const ddlClient = target === 'pgd' ? getClient(process.env.PGD_DATABASE_URL) : client;
     if (target === 'pgd') await ddlClient.connect();
 
-    await ddlClient.query(`ALTER TABLE "${tableName}" DROP COLUMN IF EXISTS "${columnName}" CASCADE`);
+    // RESTRICT (the default), never CASCADE.
+    //
+    // Postgres drops a column's OWN indexes and constraints automatically either way —
+    // CASCADE is only needed to destroy OUTSIDE dependents, which in practice means views.
+    // So CASCADE meant "silently delete any view that reads this column", and it did:
+    // Novia's budgets migration dropped PGD_Budgets.type at 10:20 and took
+    // PGD_BudgetExpenseSummary with it. She reported "migration complete ✅" with the view
+    // already gone, and it surfaced only because the user happened to ask about the report
+    // next — her own pg_views lookups then came back empty (session 1054, seq 14-18).
+    // PGC_Schema went on advertising the deleted view.
+    //
+    // Without CASCADE, Postgres refuses and names the dependents. A caller that means to
+    // drop the column must deal with the views first — which is exactly what
+    // sop_schema_change instructs. Loud beats silent: a destroyed view you are told about
+    // is a task; one you are not told about is a landmine.
+    try {
+      await ddlClient.query(`ALTER TABLE "${tableName}" DROP COLUMN IF EXISTS "${columnName}"`);
+    } catch (ddlError) {
+      if (target === 'pgd') await ddlClient.end();
+      if (/depend/i.test(ddlError.message)) {
+        return err(
+          409,
+          `Cannot drop "${tableName}.${columnName}" — other objects depend on it (typically a view). ` +
+          `Rewrite or drop the dependent objects first, then retry. Postgres reported: ${ddlError.message}`,
+          req.correlationId,
+        );
+      }
+      throw ddlError;
+    }
     console.info(`schema: dropped column ${columnName} from ${tableName}`);
 
     if (target === 'pgd') await ddlClient.end();
