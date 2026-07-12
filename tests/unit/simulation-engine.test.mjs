@@ -319,3 +319,98 @@ describe('runSimulation — skeleton drift', () => {
     assert.equal(result.static_analysis.issues.filter(i => i.check === 'skeleton_drift').length, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// error_summary — the single rendering of why a simulation failed.
+//
+// Run 709 reproduction: create_workflow step 26 kept its OWN list of hard
+// failure classes and never learned about serv_input_shape_mismatch (added to
+// the engine by Track I). A real data-flow failure was therefore reported to
+// the user as "Validation failed - no specific issues reported", and the
+// regeneration loop — which is fed the same summary — was handed nothing to
+// fix. The engine now emits the summary itself and stamps `hard` on each
+// issue, so no consumer can hold a second, staler opinion.
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — error_summary', () => {
+  const upsertShapeMismatch = [
+    {
+      step: '1', type: 'js_transform',
+      expression: `({ budget_rows: [], totals: { income: 0 } })`,
+      on_success: 'next', output_key: 'payload',
+    },
+    {
+      step: '2', type: 'serv_upsert',
+      input: { tableName: 'PGD_Budgets', matchColumns: ['year'], rows: '{{payload}}' },
+      on_success: 'next', on_else: 'cancel', output_key: 'written',
+    },
+    { step: '3', type: 'end' },
+  ];
+
+  it('reports a serv_input_shape_mismatch instead of falling silent (run 709)', () => {
+    const result = runSimulation({ steps: upsertShapeMismatch, traceId: 't' });
+
+    assert.equal(result.passed, false);
+    // The bug: passed:false with nothing to show for it.
+    assert.notEqual(result.error_summary, '');
+    assert.match(result.error_summary, /data-flow/);
+    assert.match(result.error_summary, /Step "?2"?/);
+  });
+
+  it('stamps hard on gating issues so no consumer re-derives the predicate', () => {
+    const result = runSimulation({ steps: upsertShapeMismatch, traceId: 't' });
+    const gating = result.smoke_test.issues.filter(i => i.hard);
+
+    assert.equal(gating.length, 1);
+    assert.equal(gating[0].failure_class, 'serv_input_shape_mismatch');
+    // passed is derived from the same stamp the summary reads.
+    assert.equal(result.smoke_test.passed, gating.length === 0);
+  });
+
+  it('excludes soft warnings — they never block, so they are not why it failed', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `({ not: 'an array' })`,
+        on_success: 'next', output_key: 'bad_items',
+      },
+      {
+        step: '2', type: 'iterator',
+        items_key:      'bad_items',
+        item_step:      { type: 'serv_query', input: { tableName: 'PGD_Records' } },
+        output_key:     'iter_results',
+        execution_mode: 'sequential',
+        on_complete:    'next',
+      },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps, traceId: 't' });
+    const soft = result.smoke_test.issues.filter(i => !i.hard);
+
+    assert.ok(soft.length > 0, 'expected at least one soft warning');
+    assert.equal(result.smoke_test.passed, true, 'soft warnings must not gate');
+    assert.equal(result.error_summary, '', 'soft warnings must not appear as failure reasons');
+  });
+
+  it('renders L1 static analysis failures', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `1`, on_success: 'nowhere', output_key: 'x' },
+      { step: '2', type: 'end' },
+    ];
+    const result = runSimulation({ steps, traceId: 't' });
+
+    assert.equal(result.passed, false);
+    assert.match(result.error_summary, /Step "?1"?/);
+  });
+
+  it('is empty when the simulation passes', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `1`, on_success: 'next', output_key: 'x' },
+      { step: '2', type: 'end' },
+    ];
+    const result = runSimulation({ steps, traceId: 't' });
+
+    assert.equal(result.passed, true);
+    assert.equal(result.error_summary, '');
+  });
+});
