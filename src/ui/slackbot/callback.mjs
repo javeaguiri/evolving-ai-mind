@@ -62,6 +62,52 @@ export async function handler(event) {
   return { batchItemFailures: failures };
 }
 
+// A Slack rejection that will recur identically on every retry. These are payload
+// defects — the message we built is not renderable — as opposed to rate limits, 5xx or
+// network faults, which are worth retrying. Retrying a payload defect just posts the
+// same failure three times and then loses it.
+const PERMANENT_SLACK_ERRORS = new Set([
+  'invalid_blocks',
+  'invalid_blocks_format',
+  'invalid_arguments',
+  'msg_too_long',
+  'too_many_attachments',
+]);
+
+export function isPermanentRenderFailure(error) {
+  return PERMANENT_SLACK_ERRORS.has(error?.data?.error);
+}
+
+// Last resort: plain text, no blocks. Whatever Slack just refused was in the blocks, so
+// the fallback deliberately carries none — there is nothing left for it to reject.
+async function notifyRenderFailure(message, error) {
+  const { callback, traceId, workflowRunId } = message;
+  if (!callback?.channel) return;
+
+  const reason = error?.data?.errors?.[0] ?? error?.data?.error ?? error.message;
+  const text =
+    `⚠️ *This step couldn't be displayed* — Slack rejected the message.\n\n` +
+    `\`${reason}\`\n\n` +
+    (workflowRunId
+      ? `The workflow is paused and cannot continue on its own (runId: ${workflowRunId}).`
+      : `traceId: ${traceId}`);
+
+  try {
+    await slack.chat.postMessage({
+      channel:   callback.channel,
+      thread_ts: callback.threadId,
+      text,
+    });
+    console.info('callback: render failure reported to user', { workflowRunId, traceId });
+  } catch (fallbackError) {
+    // If a bare-text post fails too, the channel or token is broken — nothing can reach
+    // the user, and there is no further fallback worth attempting.
+    console.error('callback: could not report render failure', {
+      traceId, error: fallbackError.message,
+    });
+  }
+}
+
 async function processRecord(record) {
   const messageId = record.messageId;
 
@@ -122,7 +168,21 @@ async function processRecord(record) {
       // just the bare error code with no positional detail.
       slackData: error.data,
     });
-    return false; // return to queue for retry
+
+    // The Experience tier exists to deliver results to the user. A failure it swallows
+    // is worse than no tier at all: until now a rejected post was logged, retried three
+    // times, and dropped into the DLQ, leaving the user staring at a thread where
+    // nothing ever arrived and a run parked at awaiting_human_gate forever (run 711).
+    //
+    // A rendering rejection is PERMANENT — the same blocks will be rejected on every
+    // retry, so retrying only re-runs the failure. Tell the user in plain text (no
+    // blocks, so nothing about the payload that Slack just rejected can fail again) and
+    // stop. Transient failures (rate limits, 5xx, network) still retry untouched.
+    if (isPermanentRenderFailure(error)) {
+      await notifyRenderFailure(message, error);
+      return true; // discard — a retry would reproduce it verbatim
+    }
+    return false; // transient — return to queue for retry
   }
 }
 

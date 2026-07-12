@@ -13,7 +13,7 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { oversizedGateMessage } from '../../src/ui/slackbot/callback.mjs';
+import { oversizedGateMessage, isPermanentRenderFailure } from '../../src/ui/slackbot/callback.mjs';
 
 // ---------------------------------------------------------------------------
 // Module extraction
@@ -2014,5 +2014,41 @@ describe('oversizedGateMessage — Slack block ceiling', () => {
     assert.ok(result);
     assert.equal(result.inputCount, 0);
     assert.match(result.text, /60 blocks/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A rejected post must reach the user, not the DLQ (run 711).
+//
+// Until now every Slack post failure was logged, retried 3x, and dropped —
+// the user saw an empty thread and a run parked forever. A payload defect is
+// permanent: retrying reproduces it verbatim. Classify, tell the user, stop.
+// ---------------------------------------------------------------------------
+
+describe('isPermanentRenderFailure — retry vs report', () => {
+  const slackError = (code, detail) => Object.assign(new Error(`An API error occurred: ${code}`), {
+    data: { ok: false, error: code, ...(detail ? { errors: [detail] } : {}) },
+  });
+
+  it('treats the run 711 rejection as permanent', () => {
+    const err = slackError('invalid_blocks', 'no more than 50 items allowed [json-pointer:/blocks]');
+    assert.equal(isPermanentRenderFailure(err), true);
+  });
+
+  it('treats other payload defects as permanent', () => {
+    for (const code of ['invalid_blocks_format', 'invalid_arguments', 'msg_too_long']) {
+      assert.equal(isPermanentRenderFailure(slackError(code)), true, code);
+    }
+  });
+
+  it('treats rate limits and transport faults as transient — these must still retry', () => {
+    assert.equal(isPermanentRenderFailure(slackError('ratelimited')), false);
+    assert.equal(isPermanentRenderFailure(slackError('service_unavailable')), false);
+    assert.equal(isPermanentRenderFailure(new Error('socket hang up')), false);
+  });
+
+  it('does not throw on a malformed error object', () => {
+    assert.equal(isPermanentRenderFailure(undefined), false);
+    assert.equal(isPermanentRenderFailure({}), false);
   });
 });
