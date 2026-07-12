@@ -826,6 +826,32 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
   }
 
+  // action_key — record WHICH option the user chose, for any gate type.
+  //
+  // Every other gate already surfaces its selection: choice writes the picked value,
+  // dynamic confirm writes userResponse, list_selection writes the clicked row,
+  // text_input writes the typed text. A `form` gate could not: output_key is spoken for
+  // by the field values, so the button was used for routing and then discarded.
+  //
+  // That made a save-and-continue loop undesignable. Run 719's edit_budget needed
+  // "Update persists and re-shows the form" and "Done persists and exits" — both must go
+  // through the SAME write, so the decision has to survive the write and be read by a
+  // condition afterwards. The designer wrote {{edit_action}} and noted it was "tracked via
+  // a hidden mechanism or gate action value": it knew exactly what it needed, and the
+  // harness did not have it. Routing the two buttons to separate chains instead would
+  // duplicate the serv_upsert; making Done skip the write would lose the user's edits.
+  //
+  // Writes the option's `value` — its identity — falling back to `action`. `label` is
+  // display text and is never the contract.
+  if (stepRef.action_key && matchedOption) {
+    const actionValue = matchedOption.value ?? matchedOption.action;
+    setPath(localState, stepRef.action_key, actionValue);
+    frame.local_state = localState;
+    console.info('run-workflow: gate action written to local_state', {
+      workflowRunId: run.id, action_key: stepRef.action_key, value: actionValue, traceId,
+    });
+  }
+
   // Pop gate frame
   run.stack.pop();
   const parentFrame = topFrame(run);

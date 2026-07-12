@@ -561,6 +561,17 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
     // Comma-separated output_key registers each listed key individually.
     // Non-string output_key is a workflow defect — report as error.
     const stepWrites = new Set();
+
+    // action_key is a write too: a human_gate carrying one records which option the user
+    // chose (run-workflow's resumeGate). Without this the state-flow trace would report
+    // the key as never written and reject every workflow that reads its own gate's outcome.
+    if (s.action_key && typeof s.action_key === 'string') {
+      const baseAction = s.action_key.split('.')[0];
+      outputKeysSoFar.add(baseAction);
+      stepWrites.add(baseAction);
+      if (!writtenByStep[baseAction]) writtenByStep[baseAction] = stepKey;
+    }
+
     if (s.output_key && typeof s.output_key === 'string') {
       for (const rawKey of s.output_key.split(',')) {
         const baseOut = rawKey.trim().split('.')[0];
@@ -1355,6 +1366,15 @@ function runJsTransformSmokeTest(steps, traceId) {
         for (const rawKey of s.output_key.split(',')) {
           const baseOut = rawKey.trim().split('.')[0];
           if (!(baseOut in mockState)) mockState[baseOut] = mockValueForType(s.type);
+        }
+      }
+      // A gate's action_key resolves to one of its own options' values at runtime — mock it
+      // with the first, so a downstream condition reading it has something of the right shape.
+      if (s.action_key && typeof s.action_key === 'string') {
+        const baseAction = s.action_key.split('.')[0];
+        const firstOpt   = (s.options ?? [])[0];
+        if (!(baseAction in mockState)) {
+          mockState[baseAction] = firstOpt?.value ?? firstOpt?.action ?? 'mock_action';
         }
       }
       for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
