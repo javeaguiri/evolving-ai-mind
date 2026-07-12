@@ -153,7 +153,7 @@ stack: [
 ```json
 stack: [
   { "frame_id": "A", "type": "workflow",    "current_step": "3",  "local_state": { "proposed_scaffold": {...} } },
-  { "frame_id": "B", "type": "human_gate",  "status": "awaiting", "gate_type": "edit_list", "step_number": "3" }
+  { "frame_id": "B", "type": "human_gate",  "status": "awaiting", "gate_type": "list_selection", "step_number": "3" }
 ]
 ```
 The workflow frame is paused at step `"3"`. The gate frame is on top. No SQS
@@ -230,16 +230,18 @@ Step 2 — js_transform
   output_key: "proposed_scaffold.tables"   writes local_state.proposed_scaffold.tables
   → each table object now has a columnSummary field
 
-Step 3 — human_gate (edit_list)
-  context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
+Step 3 — human_gate (list_selection)
+  context_key: "table_review_items"        binds  local_state.table_review_items
   message_template: "Plan for {{proposed_scaffold.domain}}"
                                            reads  local_state.proposed_scaffold.domain
-  User removes PGD_Transactions
-  → local_state.proposed_scaffold.tables now has 3 items instead of 4
+  output_key:  "selected_table"
+  User picks PGD_Transactions to inspect
+  → local_state["selected_table"] = { id: 3, table: "PGD_Transactions" }
+  (a gate both reads — via context_key — and writes — via output_key)
 
 Step 3d — human_gate (review_object)
   context_key: "proposed_scaffold.tables"  binds  local_state.proposed_scaffold.tables
-  → user sees all 3 tables with their column details before DDL
+  → user sees all 4 tables with their column details before DDL
 
 Step 5 — iterator
   items_key: "proposed_scaffold.tables"    reads  local_state.proposed_scaffold.tables
@@ -318,7 +320,7 @@ SlackbotFunction enqueues:
   │
 Step Processor receives resume_gate
   ├── Validates: top frame is human_gate, run status is awaiting_human_gate
-  ├── Applies mutation (remove_item, text_input value write, etc.)
+  ├── Applies mutation (text_input value write, list_selection row resolution, etc.)
   ├── Pops gate frame
   ├── Resolves on_select → next step key
   ├── Advances parent frame.current_step
@@ -331,9 +333,10 @@ Step Processor receives resume_gate
 | gate_type | User interaction | Data contract |
 |---|---|---|
 | `confirm` | Read a proposal, click Confirm or Cancel | `context_key` optional — context shown as text |
-| `edit_list` | View a list, remove items, click Confirm | `context_key` → array; `item_primary_key`, `item_secondary_key` label each row |
+| `form` | Collect any number of typed values in one gate | `fields[]` → one entry per value (`text`, `textarea`, `select`, `multi_select`, `radio`, `checkbox`, `date`, `time`, `datetime`). `output_key` receives one object keyed by field name. A widget is a field type, not a gate type — this is why `select_one`/`select_many`/`date_input` do not exist |
+| `list_selection` | View a table of records, pick one, advance | `context_key` → array of `{ id, fields }`; `item_action.on_select` (required) drives where selecting routes |
 | `text_input` | Type free text in an inline Slack input block, click Submit | Value written to `local_state[output_key]` on submit. Set `multiline: true` on the step for a multi-line text area. |
-| `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs |
+| `review_object` | View a structured summary, click Confirm | `context_key` → object or array; rendered as key-value pairs. An array value whose items are plain records with no recognized single-field shape (no `syntax`/`verb`/`command`) renders as a markdown table with one data-driven column per distinct record key, labeled via the same `formatColumnHeader` logic `list_selection` uses — not an unlabeled positional join |
 | `choice` | Read a question, view labelled options with descriptions, click A/B/C | Options carry `{ value, label, description, on_select }`. `value` written to `local_state[output_key]` on resolve. Mirrors HTML radio button semantics — `value` is submitted, `label` is the button text, `description` is the explanatory sentence shown above buttons |
 | `select_one` | Pick one item from a list | Backlog — `buildDialog` stub exists but `context_key` only accepts flat entity lists. Use `choice` for options with descriptions |
 | `select_many` | Pick zero or more items | Backlog |
@@ -348,20 +351,19 @@ workflow definitions containing gate steps.
 {
   "step":             "3",
   "type":             "human_gate",
-  "gate_type":        "confirm | edit_list | text_input | review_object | choice | select_one | select_many",
+  "gate_type":        "confirm | list_selection | text_input | review_object | choice | followup_prompt",
   "description":      "Human-readable — for workflow authors and right-brain only",
 
   "message_template": "Displayed to user. Supports {{template}} substitution from local_state.",
 
   "context_key":      "dot.path.into.local_state",
-  "item_primary_key": "field name — used as row label in edit_list",
-  "item_secondary_key": "field name — used as secondary text in edit_list",
+  "item_primary_key": "field name — used as an item's value where a gate needs one",
 
   "item_action": {
-    "condition":        "item.foreignKeys && item.foreignKeys.length > 0",
-    "action":           "remove_item",
-    "action_data_key":  "tableName",
-    "confirm_template": "Remove {{item.tableName}} from this domain?"
+    "condition":  "item.foreignKeys && item.foreignKeys.length > 0",
+    "action":     "select_row",
+    "label":      "Open",
+    "on_select":  "step:40"
   },
 
   "options": [
@@ -396,21 +398,23 @@ workflow definitions containing gate steps.
 not at step definition time. Template variables are read from `local_state` at the
 moment the gate suspends.
 
-**`context_key`** — dot-path into `local_state`. For `edit_list`, must resolve to
+**`context_key`** — dot-path into `local_state`. For `list_selection`, must resolve to
 an array. For `review_object`, resolves to an object or array — arrays are rendered
 as a table-name / column-list display. Optional for `confirm`.
 
-**`item_action`** — `edit_list` only. Defines a per-row action button. `condition`
-is evaluated against each item — items where the condition is falsy do not get the
-button. Only `remove_item` is currently implemented; others are Backlog.
+**`item_action`** — `list_selection` only. Defines what selecting a row does.
+`condition` is evaluated against each item — items where the condition is falsy are
+still listed but are not selectable. `on_select` is required and drives the routing;
+see `docs/arch-step-types.md` for the full field reference.
 
 **`options`** — rendered as Block Kit buttons. Each `on_select` drives post-gate
 routing: `"next"` advances sequentially, `"step:N"` jumps to step N, `"cancel"`
-cancels the run. Must include at least one option with `action: "cancel"` (confirm/edit_list)
-or `value: "cancel"` (choice) — this may be in `special_buttons` instead of `options`.
+cancels the run. Must include at least one option with `action: "cancel"`
+(confirm/list_selection) or `value: "cancel"` (choice) — this may be in
+`special_buttons` instead of `options`.
 
 Two option shapes — determined by `gate_type`:
-- `confirm`, `edit_list`, `review_object` use `{ label, action, on_select }`
+- `confirm`, `list_selection`, `review_object` use `{ label, action, on_select }`
 - `choice` uses `{ value, label, description, on_select }` — HTML radio button semantics:
   `value` is the machine identifier written to `output_key` and matched by `resume_gate`;
   `label` is the short button text (e.g. `"A"`, `"B"`);
@@ -460,7 +464,7 @@ translates it to Slack Block Kit. Adding a new UI is one new renderer in
 {
   "type":          "HUMAN_GATE",
   "workflowRunId": 23,
-  "gate_type":     "edit_list",
+  "gate_type":     "list_selection",
   "dialog": {
     "message":  "Here's my plan for domain stock_portfolio.",
     "fields": [
@@ -473,8 +477,9 @@ translates it to Slack Block Kit. Adding a new UI is one new renderer in
 }
 ```
 
-`message_ts` is present only on `remove_item` re-renders — signals `callback.mjs`
-to use `chat.update` (in-place edit) instead of posting a new message.
+`message_ts` is present when a gate re-renders while staying suspended (e.g. a
+`list_selection` selection that resolved to no row) — signals `callback.mjs` to use
+`chat.update` (in-place edit) instead of posting a new message.
 
 #### WORKFLOW_ERROR message shape
 
@@ -506,17 +511,14 @@ in the workflow definition itself. LLM response failures and schema validation
 failures (`llm_call validation failed`) are prompt quality issues that
 `TROUBLESHOOT_WORKFLOW` cannot fix — they are excluded from the repair chain.
 
-#### Mutation during gate suspension
+#### Re-rendering while a gate stays suspended
 
-`edit_list` gates support `remove_item` — the user can remove items from the
-list while the gate is still open. Each click sends `userResponse: 'remove_item'`
-with `responseData.tableName`. The Step Processor:
-1. Filters the item from `local_state[context_key]`
-2. Persists the updated `local_state`
-3. Re-renders the gate via `chat.update` (in-place edit of the Slack message)
-
-The stack remains suspended throughout. The gate stays open until the user clicks
-Confirm or Cancel.
+A gate can be re-rendered without advancing. `list_selection` does this when a
+submitted selection resolves to no selectable row: the Step Processor re-enqueues
+the `HUMAN_GATE` payload with the original `message_ts` and an added error line, so
+`callback.mjs` edits the existing Slack message in place (`chat.update`) rather than
+posting a new one. The stack remains suspended throughout — the gate never advances
+on an unresolved value.
 
 #### Routing from gates — on_select
 
@@ -591,14 +593,13 @@ execution logic using injected mock outputs and decision scripts, validates ever
 workflow is registered in `PGC_Workflow`. It is a prerequisite for `create_workflow`
 being trustworthy and is classified as Phase 2 work, not Backlog.
 
-#### Why simulation is not optional for `create_workflow`
-
-Without simulation, the only way to discover a broken workflow is to deploy it
-and run it. Given that `create_workflow` produces workflows that will themselves
-execute against real data, an undetected broken step is a production incident.
-The `confirmed_domain_help` class of bug — a template reference to a key that
-was never written to `local_state` — is invisible to Ajv validation and only
-manifests at execution time. Simulation catches it before registration.
+**Full detail — inputs, validation levels, result structure, the standalone HTTP
+endpoint, and every other consumer of the simulation engine — lives in
+`docs/arch-simulation-engine.md`.** That module (`src/proc/simulation-engine.mjs`)
+is consumer-agnostic: this `simulate` step type is one of four independent callers,
+alongside Novia's `simulate_workflow` tool, `dev_scripts/upsert-workflow.mjs`'s
+pre-write guard, and `troubleshoot-workflow.mjs`. This section covers only how a
+workflow author embeds a `simulate` step in a step array.
 
 #### Step definition schema
 
@@ -622,155 +623,11 @@ manifests at execution time. Simulation catches it before registration.
 They reference keys written by the LLM generation steps that precede the simulate
 step. `on_else: "step:3"` routes back to the human gate where the user reviewed
 the step array, with simulation failures injected into the gate context.
-`mock_outputs_key` and `paths_key` are optional — when absent the simulate step
-runs Level 1 static analysis only.
-
-#### Inputs the LLM must generate
-
-The LLM calls that precede simulate produce three structures, each in a separate
-`llm_call` step. See Section 6.8 for why these are produced across multiple LLM
-calls rather than one.
-
-**`steps`** — the workflow step array. Step keys, types, routing values, templates.
-
-**`mock_outputs`** — a plain object keyed by step number. Only steps that produce
-output need mocks (`llm_call`, `serv_query`). Steps that are pure side-effects
-(`serv_insert`, `notify`, `end`) do not.
-
-```json
-{
-  "mock_outputs": {
-    "1": { "domain": "recipes", "tables": [{ "tableName": "PGD_Recipes", "columns": [] }] },
-    "6": { "domainHelp": { "domain": "recipes", "aliases": ["recipe", "recipes"] }, "workflows": [] }
-  }
-}
-```
-
-**`simulation_paths`** — an array of named execution paths. Each path is an ordered
-list of decisions — one entry per branch point (gate step, failure point, iterator
-outcome). Human gates are simulated by injecting `user_response` and `on_select`
-as if the user clicked that option. LLM steps, SERV steps, and `js_transform` steps
-are simulated using their mock output. The path terminates when it reaches `end`,
-or `cancel`.
-
-```json
-{
-  "simulation_paths": [
-    {
-      "path_name": "happy_path",
-      "decisions": [
-        { "step": "1",  "outcome": "success" },
-        { "step": "3",  "outcome": "gate", "user_response": "confirm", "on_select": "step:3d" },
-        { "step": "3d", "outcome": "gate", "user_response": "confirm", "on_select": "next" },
-        { "step": "4",  "outcome": "gate", "user_response": "confirm", "on_select": "next" },
-        { "step": "5",  "outcome": "success" }
-      ],
-      "expected_terminal": "end"
-    },
-    {
-      "path_name": "user_cancels_at_review",
-      "decisions": [
-        { "step": "1",  "outcome": "success" },
-        { "step": "3",  "outcome": "gate", "user_response": "cancel", "on_select": "cancel" }
-      ],
-      "expected_terminal": "cancelled"
-    },
-    {
-      "path_name": "llm_step_fails",
-      "decisions": [
-        { "step": "1", "outcome": "failure", "error": "LLM returned invalid JSON" }
-      ],
-      "expected_terminal": "cancelled"
-    }
-  ]
-}
-```
-
-The LLM is expected to enumerate at minimum: the happy path, one cancel path per
-gate step, and one failure path per `llm_call` or `serv_*` step. The `output_schema`
-for the `generate_workflow_paths` prompt enforces this minimum coverage.
-
-#### What the simulator validates
-
-The simulator runs each path independently. For each path it:
-
-1. Resets `local_state` to `{ input: run.input }` — a clean slate per path
-2. Walks steps in execution order driven by the decision script
-3. At each step, records the `local_state` transition: keys present before, keys
-   added or mutated after, template variables resolved and to what values
-4. Flags any step where a template variable could not be resolved (`{{key}}` not
-   in `local_state` at that point)
-5. Verifies the path's terminal step matches `expected_terminal`
-6. Detects backward-reference loops: a step key reached more times than there are
-   gate decisions for it in the script is flagged as a potential infinite loop
-   (safe if a `human_gate` step exists on the path from target back to source —
-   the same rule as Guard 3)
-
-**Three validation levels run in order. Later levels only run if earlier levels pass.**
-
-**Level 1 — Static analysis (no execution, no mocks needed)**
-
-Runs before any path simulation. Catches structural errors in the step array itself:
-
-| Check | Failure class |
-|---|---|
-| Every `on_success`, `on_else`, `on_select` value is a known routing token | Unknown routing value |
-| Every `step:N` routing target exists in the step array | Dead routing target |
-| Every `{{template}}` reference resolves to an `output_key` written by a prior step on that path | Unresolved template variable |
-| Every `items_key` in an `iterator` resolves to an array written by a prior step | Iterator source not an array |
-| Every `input.prompt` in an `llm_call` names an `intent_category` in `PGC_Prompt` | Unknown prompt reference |
-| No `output_key` is set on a `review_object` or `confirm` gate | Gate type does not write output |
-| Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
-
-Level 1 failures are returned immediately — no path execution occurs.
-
-**Level 2 — Path execution (uses mocks and decision scripts)**
-
-Executes each path in `simulation_paths`. For each step, injects the mock output
-or decision instead of calling the real service or LLM. Records the `local_state`
-transition log. Fails the path if any template variable is unresolvable or if the
-terminal step does not match `expected_terminal`.
-
-**Level 3 — Skip-path analysis**
-
-Removed. Previously flagged data flow risks for skipped failure-path steps.
-
-#### Simulation result structure
-
-Written to `local_state[output_key]` on completion:
-
-```json
-{
-  "passed": true,
-  "paths_run": 3,
-  "paths_passed": 3,
-  "paths_failed": 0,
-  "static_analysis": { "passed": true, "issues": [] },
-  "path_results": [
-    {
-      "path_name": "happy_path",
-      "passed": true,
-      "steps_executed": 11,
-      "terminal": "end",
-      "expected_terminal": "end",
-      "local_state_transitions": [
-        {
-          "step": "1",
-          "keys_before": ["input"],
-          "keys_added": ["proposed_scaffold"],
-          "template_vars_resolved": {},
-          "template_vars_missing": []
-        }
-      ]
-    }
-  ],
-}
-```
-
-On failure, `passed: false` and `paths_failed > 0`. The first failed path's
-transition log is included in full, showing exactly which step failed and what
-`local_state` contained at that point. This is presented to the user in the
-`review_object` gate when `on_else: "step:3"` routes back for correction.
+`mock_outputs_key` and `paths_key` are optional — Level 1, 2a, and 2b always run
+once Level 1 passes; only Level 2c (legacy path execution, informational-only) is
+skipped when they are absent. See `docs/arch-simulation-engine.md` for what each
+level validates and why `mock_outputs`/`simulation_paths` are structured the way
+they are.
 
 #### Simulation mode flag on WorkflowRun
 
@@ -781,11 +638,3 @@ clears it after. This flag is checked by every step handler in `step-executor.mj
 of calling the real service. No new Lambda, no new SQS queue — the same Step
 Processor executes both live runs and simulations. The only difference is the
 execution context.
-
-#### HTTP endpoint
-
-`POST /api/v1/proc/simulate-workflow` accepts the step array, mock outputs, and
-simulation paths directly, without a `WorkflowRun`. This is the developer-facing
-test surface for validating workflow definitions during development, before they
-are registered in `PGC_Workflow`. See openapi.yaml for the full request/response
-contract.

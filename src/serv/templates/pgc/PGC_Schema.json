@@ -7,6 +7,8 @@
     { "name": "table_name",  "type": "text",    "nullable": false,    "unique": true },
     { "name": "target",      "type": "text",    "nullable": false     },
     { "name": "domain",      "type": "text",    "nullable": true      },
+    { "name": "type",        "type": "text",    "nullable": false,    "default": "'table'" },
+    { "name": "select_sql",  "type": "text",    "nullable": true      },
     { "name": "description", "type": "text",    "nullable": true      },
     { "name": "columns",     "type": "jsonb",   "nullable": false     },
     { "name": "foreign_keys","type": "jsonb",   "nullable": true,     "default": "'[]'::jsonb" },
@@ -16,7 +18,8 @@
     { "name": "updated_at",  "type": "timestamptz", "nullable": false, "default": "now()" }
   ],
   "constraints": [
-    { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" }
+    { "type": "check", "name": "chk_target", "expression": "target IN ('pgc', 'pgd')" },
+    { "type": "check", "name": "chk_type",   "expression": "type IN ('table', 'view')" }
   ],
   "triggers": [
     { "name": "trg_pgc_schema_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }

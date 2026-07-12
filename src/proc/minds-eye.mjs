@@ -27,7 +27,7 @@
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
-import { getRows, insertRow, insertRows, updateRows, deleteRows } from '../shared/serv-client.mjs';
+import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 
@@ -49,6 +49,7 @@ const DEFAULT_PREFERENCES = {
   max_output_tokens:      8192,
   turn_limit:             8,
   max_actions_per_session:5,
+  max_lifetime_turns:     100,
   tone:                   'concise but friendly',
   advisory_level:         'proactive',
   response_format:        'structured',
@@ -59,16 +60,18 @@ const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
+  'run_sql',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
-  'update_data', 'insert_data',
+  'update_data', 'insert_data', 'upsert_data',
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
+  'create_view', 'drop_view',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -196,7 +199,8 @@ async function handleGateResume(body, callback, traceId, req) {
   );
   const entries = entriesResp.rows ?? [];
 
-  // Follow-up question — add user message, reset turns, run loop, re-post continue gate after response.
+  // Follow-up question — add user message, reset turns and actions (a human just
+  // engaged with the session), run loop, re-post continue gate after response.
   if (resumeType === 'followup') {
     const { followupText } = body;
     if (!followupText?.trim()) {
@@ -210,8 +214,10 @@ async function handleGateResume(body, callback, traceId, req) {
       role:            'user',
       content:         followupText.trim(),
     });
+    // minds_eye_turn_count is a cumulative lifetime tally — never reset here,
+    // only minds_eye_action_count (a human just engaged with the session).
     await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
-      minds_eye_turn_count: 0,
+      minds_eye_action_count: 0,
     });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
@@ -224,8 +230,8 @@ async function handleGateResume(body, callback, traceId, req) {
       workingHistory:               [...entries, { role: 'user', content: followupText.trim(), sequence_number: newSeq }],
       callback,
       traceId,
-      currentTurnCount:             0,
-      currentActionCount:           session.minds_eye_action_count ?? 0,
+      currentTurnCount:             session.minds_eye_turn_count ?? 0,
+      currentActionCount:           0,
       currentSeq:                   newSeq + 1,
       threadTs:                     callback?.threadId ?? session.slack_thread_ts,
       postContinueGateAfterRespond: true,
@@ -234,15 +240,18 @@ async function handleGateResume(body, callback, traceId, req) {
     return;
   }
 
-  // Turn-limit or action-limit continue — reset counts and re-enter the reasoning loop.
+  // Turn-limit or action-limit continue — a human just reviewed and explicitly
+  // authorized more budget. Only minds_eye_action_count resets (a human
+  // touchpoint); minds_eye_turn_count is a cumulative lifetime tally that never
+  // resets — it's checked against max_lifetime_turns inside runReasoningLoop.
   if (resumeType === 'continue') {
     if (!approved) {
       console.info('proc/minds-eye: continue gate cancelled', { sessionId, traceId });
       return;
     }
-    const resetFields = { minds_eye_turn_count: 0 };
-    if (body.resetActionCount) resetFields.minds_eye_action_count = 0;
-    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], resetFields);
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_action_count: 0,
+    });
     const { prefs, systemPrompt } = await loadPrefsAndPrompt();
     const { layer1Context, layer2Context } = await assembleContext();
     await runReasoningLoop({
@@ -254,8 +263,8 @@ async function handleGateResume(body, callback, traceId, req) {
       workingHistory:     [...entries],
       callback,
       traceId,
-      currentTurnCount:   0,
-      currentActionCount: session.minds_eye_action_count ?? 0,
+      currentTurnCount:   session.minds_eye_turn_count ?? 0,
+      currentActionCount: 0,
       currentSeq:         Math.max(...entries.map(e => e.sequence_number), 0) + 1,
       threadTs:           callback?.threadId ?? session.slack_thread_ts,
     });
@@ -292,6 +301,10 @@ async function handleGateResume(body, callback, traceId, req) {
       role:            'tool',
       content:         cancelEntry,
     });
+    // A rejection is still a human touchpoint — reset the action count same as approval.
+    await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
+      minds_eye_action_count: 0,
+    });
     if (callback) {
       await enqueueCallback(callback, {
         type:      'HUMAN_NOTIFICATION',
@@ -318,7 +331,13 @@ async function handleGateResume(body, callback, traceId, req) {
 
   await writeFactualMemory(action, params, result, session.id, traceId);
 
-  const newActionCount = (session.minds_eye_action_count ?? 0) + 1;
+  // Any gate resumption is a human touchpoint, so the action count resets here
+  // rather than accumulating across approvals — this action becomes the first
+  // of a fresh count, not the Nth of a running session total. This means the
+  // action limit only ever fires on a streak of INLINE (ungated) writes with no
+  // human involved in between; a fully human-supervised sequence of gated
+  // actions never artificially hits the ceiling.
+  const newActionCount = 1;
   await updateRows('PGC_Session', [{ column: 'id', op: 'eq', value: session.id }], {
     minds_eye_action_count: newActionCount,
   });
@@ -352,15 +371,37 @@ async function handleGateResume(body, callback, traceId, req) {
 // Shared reasoning loop — called from both handle() and handleGateResume()
 // ---------------------------------------------------------------------------
 
-async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
-  let turnCount   = currentTurnCount;
-  let actionCount = currentActionCount;
-  let seq         = currentSeq;
-  let responded   = false;
-  let earlyExit   = false;
-  let turnCost    = 0;
+// Cumulative, never-reset lifetime turn ceiling — a defense-in-depth guard
+// against a runaway session, distinct from turn_limit (a per-invocation budget
+// that always starts fresh). Checked both before starting a round (cheapest —
+// refuses before spending an LLM call) and after a round ends without a
+// response (so a session can't slip past it one continue-gate at a time).
+async function notifyLifetimeCeiling(session, callback, traceId, count) {
+  console.warn('proc/minds-eye: session at/over lifetime turn ceiling', { sessionId: session.id, count, traceId });
+  if (callback) {
+    await enqueueCallback(callback, {
+      type:      'HUMAN_NOTIFICATION',
+      traceId,
+      message:   `This session has run ${count} turns in total — that's unusually long. Please start a fresh session rather than continuing this one.`,
+      sessionId: session.id,
+    });
+  }
+}
 
-  while (turnCost < prefs.turn_limit) {
+async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, layer2Context, workingHistory, callback, traceId, currentTurnCount, currentActionCount, currentSeq, threadTs, postContinueGateAfterRespond = false }) {
+  if (currentTurnCount >= prefs.max_lifetime_turns) {
+    await notifyLifetimeCeiling(session, callback, traceId, currentTurnCount);
+    return;
+  }
+
+  let turnCount      = currentTurnCount;  // cumulative lifetime tally — never reset, persisted
+  let turnsThisRound  = 0;                // per-invocation budget — always starts fresh
+  let actionCount     = currentActionCount;
+  let seq             = currentSeq;
+  let responded       = false;
+  let earlyExit       = false;
+
+  while (turnsThisRound < prefs.turn_limit) {
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
 
     let decision;
@@ -369,11 +410,12 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     } catch (llmError) {
       if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
-        // One correction turn (0.5 cost) — send raw output back and ask for reformat.
+        // The correction call is a real extra LLM call — counts as its own turn.
         try {
           const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
           decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
-          turnCost += 0.5;
+          turnCount += 1;
+          turnsThisRound += 1;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
           console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
@@ -395,7 +437,22 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       }
     }
 
+    // Every turn costs exactly 1, regardless of which tool ran or whether it
+    // errored — a tool call and a direct respond are the same cost; only the
+    // JSON-correction retry above adds an extra turn, since it's an extra LLM call.
     turnCount += 1;
+    turnsThisRound += 1;
+
+    // The top-of-function check only stops a *new* round from starting — a
+    // round already in progress could still push turnCount past the ceiling
+    // before turn_limit naturally ends it. Stop here too, before any of this
+    // iteration's branches try to persist turnCount (chk_pgc_session_turn_ceiling
+    // would reject anything over 100).
+    if (turnCount >= prefs.max_lifetime_turns) {
+      await notifyLifetimeCeiling(session, callback, traceId, turnCount);
+      earlyExit = true;
+      break;
+    }
 
     const { action, params = {}, reasoning, message, advisory } = decision;
 
@@ -449,7 +506,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += toolResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
     } else if (HOUSEKEEPING_TOOLS.has(action)) {
@@ -469,7 +525,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += hkResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -498,7 +553,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += writeResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
@@ -526,7 +580,6 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
-      turnCost += triggerResult.error ? 0.5 : 1.0;
       console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
     } else {
@@ -544,7 +597,11 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
-    await postTurnLimitGate(session.id, callback, traceId);
+    if (turnCount >= prefs.max_lifetime_turns) {
+      await notifyLifetimeCeiling(session, callback, traceId, turnCount);
+    } else {
+      await postTurnLimitGate(session.id, callback, traceId);
+    }
   }
 }
 
@@ -555,6 +612,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 function gateButtonConfig(action, params = {}) {
   if (action === 'delete_data')          return { confirmLabel: 'Delete', confirmStyle: 'danger' };
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
+  if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
+  if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
@@ -710,6 +769,18 @@ async function buildGateText(action, params, traceId) {
         return `**Drop table: \`${tableName}\`** (force=true, CASCADE)\n\n${regNote}\n\nThis is irreversible.`;
       }
 
+      case 'create_view': {
+        const { tableName, selectSql } = params;
+        if (!tableName || !selectSql) return '**Create view** — missing tableName or selectSql';
+        return `**Create view: \`${tableName}\`**\n\n\`\`\`sql\n${selectSql}\n\`\`\``;
+      }
+
+      case 'drop_view': {
+        const { tableName } = params;
+        if (!tableName) return '**Drop view** — missing tableName';
+        return `**Drop view: \`${tableName}\`**\n\nThis is irreversible.`;
+      }
+
       default:
         return `**Proposed action:** \`${action}\`\n\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``;
     }
@@ -741,12 +812,25 @@ async function executeWriteTool(action, params, traceId) {
           let inserted = 0;
           for (let i = 0; i < rows.length; i += CHUNK) {
             const resp = await insertRows(tableName, rows.slice(i, i + CHUNK));
-            inserted += resp.count ?? 0;
+            inserted += resp.rows?.length ?? 0;
           }
           return { success: true, count: inserted };
         }
         const resp = await insertRow(tableName, row ?? {});
         return { success: resp.success, row: resp.row };
+      }
+
+      case 'upsert_data': {
+        const { tableName, matchColumns, rows } = params;
+        if (!tableName)                                    return { error: 'tableName is required' };
+        if (!Array.isArray(matchColumns) || !matchColumns.length) return { error: 'matchColumns must be a non-empty array' };
+        if (!Array.isArray(rows) || !rows.length)           return { error: 'rows must be a non-empty array' };
+        const resp = await upsertRows(tableName, matchColumns, rows);
+        return {
+          success:  resp.success,
+          inserted: resp.inserted?.length ?? 0,
+          updated:  resp.updated?.length ?? 0,
+        };
       }
 
       case 'delete_data': {
@@ -825,6 +909,20 @@ async function executeWriteTool(action, params, traceId) {
         if (!tableName) return { error: 'tableName is required' };
         const { servPost } = await import('../shared/serv-client.mjs');
         return await servPost('/api/v1/serv/schema/deleteTable', { tableName, force: true });
+      }
+
+      case 'create_view': {
+        const { tableName, selectSql, target = 'pgd', domain = null, description = '' } = params;
+        if (!tableName || !selectSql) return { error: 'tableName and selectSql are required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost('/api/v1/serv/schema/createView', { tableName, selectSql, target, domain, description });
+      }
+
+      case 'drop_view': {
+        const { tableName } = params;
+        if (!tableName) return { error: 'tableName is required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        return await servPost('/api/v1/serv/schema/deleteTable', { tableName });
       }
 
       default:
@@ -907,6 +1005,8 @@ function deriveScope(workingHistory) {
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
     if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'create_view'          && params.tableName)              scope.table    = params.tableName;
+    if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
   }
   return scope;
 }
@@ -969,9 +1069,10 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
 // ---------------------------------------------------------------------------
 
 async function loadPrefsAndPrompt() {
-  const [prefResp, sysCtxResp] = await Promise.all([
+  const [prefResp, sysCtxResp, formattingResp] = await Promise.all([
     getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_preferences' }]),
     getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'minds_eye_system_prompt' }]),
+    getRows('PGC_SystemContext', [{ column: 'key', op: 'eq', value: 'markdown_formatting_syntax' }]),
   ]);
 
   const prefContent = prefResp.rows?.[0]?.content ?? {};
@@ -981,7 +1082,12 @@ async function loadPrefsAndPrompt() {
   const baseSystemPrompt = (typeof rawSysPrompt === 'object' ? rawSysPrompt?.text : rawSysPrompt)
     ?? 'You are a helpful AI assistant for evolving-mind-ai. Respond in JSON: { action, params, reasoning } or { action: "respond", message, reasoning }.';
 
-  const systemPrompt = `${baseSystemPrompt}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
+  // Shared with generate_workflow_steps/design_workflow_prompts/design_workflow_dialogs
+  // (PGC_SystemContext.markdown_formatting_syntax, injected there via inject_for) so
+  // formatting guidance has one source of truth instead of drifting copies.
+  const formattingGuidance = formattingResp.rows?.[0]?.content ?? '';
+
+  const systemPrompt = `${baseSystemPrompt}\n\n${formattingGuidance}\n\nYour name is ${prefs.name}. Style guide — tone: ${prefs.tone} | format: ${prefs.response_format} | technical level: ${prefs.technical_level}.`;
 
   return { prefs, systemPrompt };
 }
@@ -1042,34 +1148,15 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     parts.push(`CONVERSATION:\n${transcript}`);
   }
 
+  // Tool names, params, and gating are documented once in minds_eye_system_prompt
+  // (the instructions/system message) — not re-enumerated here. A second,
+  // hand-maintained copy in this per-turn message previously drifted stale
+  // (missing run_sql, upsert_data, create_view, drop_view) while still telling
+  // the model to use ONLY the tools listed here; removed rather than patched,
+  // since two copies of the same catalog will drift again.
   parts.push(
-    'Based on the context and conversation above, decide your next action.\n' +
-    'Respond with exactly one JSON object. Use ONLY these action values:\n' +
-    '- Read (no gate): search_domain_help, list_tables, list_physical_tables, query_table, query_entity, read_memory, read_workflow, read_prompt, simulate_workflow\n' +
-    '- Write without gate (executes immediately): update_data, insert_data\n' +
-    '- Write with gate (requires approval): propose_workflow_fix, propose_schema_fix, delete_data, drop_table\n' +
-    '- Memory (no gate, no action limit): write_memory\n' +
-    '- Trigger (dispatches to step-executor engine): run_workflow\n' +
-    '- respond (final answer to user)\n' +
-    'Params for read tools:\n' +
-    '  list_physical_tables: { prefix? } — lists tables physically present in the PGD database (default prefix "PGD_"); each row includes registered:bool to show whether it appears in PGC_Schema. Use to discover orphaned tables after a failed create_domain run.\n' +
-    'Params for write tools:\n' +
-    '  update_data: { tableName, filters: [{column, op, value}], updates: {field: newValue} }\n' +
-    '  insert_data: { tableName, row: {field: value} }                          -- single row\n' +
-    '  insert_data: { tableName, rows: [{field: value}, ...] }                 -- batch (any size, counts as one action)\n' +
-    '  delete_data: { tableName, filters: [{column, op, value}] }\n' +
-    '  drop_table: { tableName } — physically drops a PGD table (force=true, CASCADE); also removes PGC_Schema row if present. Use after list_physical_tables to clean up orphaned tables from a failed create_domain run. Gated — requires approval.\n' +
-    '  propose_workflow_fix: { workflowName, steps: [...] } — corrects workflow steps; posts a diff gate for human approval before writing.\n' +
-    '  propose_schema_fix: { operation, tableName, ...opParams } — applies a schema change; posts description for human approval before executing.\n' +
-    '    addColumn:        { operation: "addColumn", tableName, column: { name, type, nullable? } }\n' +
-    '    modifyColumn:     { operation: "modifyColumn", tableName, columnName, newType?, nullable?, using? }\n' +
-    '    dropColumn:       { operation: "dropColumn", tableName, columnName }\n' +
-    '    modifyConstraint: { operation: "modifyConstraint", tableName, constraintName, expression, target? }\n' +
-    '    dropConstraint:   { operation: "dropConstraint", tableName, constraintName, target? }\n' +
-    '  write_memory: { content, memory_type? } — record diagnostic reasoning; call before final respond after any change or notable finding. Scope is auto-derived from your tool history — do not set scope.\n' +
-    'Params for trigger tools:\n' +
-    '  run_workflow: { workflowName, input: {key: value} } — dispatches the named workflow to the step-executor engine. See system prompt for which workflows you may trigger.\n' +
-    'For write operations, first query_table to confirm the target row(s), then call the write tool. Never return SQL or prose — always respond with a single JSON object.'
+    'Based on the context and conversation above, decide your next action. ' +
+    'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
   );
 
   return parts.join('\n\n---\n\n');
@@ -1087,6 +1174,14 @@ async function executeReadTool(action, params, traceId) {
         const { tableName, filters = [], orderBy, limit } = params;
         if (!tableName) return { error: 'tableName is required' };
         const resp = await getRows(tableName, filters, orderBy, limit ?? 20);
+        return { count: resp.count, rows: resp.rows ?? [] };
+      }
+
+      case 'run_sql': {
+        const { selectSql, target } = params;
+        if (!selectSql) return { error: 'selectSql is required' };
+        const { servPost } = await import('../shared/serv-client.mjs');
+        const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 

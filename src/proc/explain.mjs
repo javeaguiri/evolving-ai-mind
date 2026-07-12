@@ -5,15 +5,30 @@
 // Handles POST /api/v1/proc/explain (HTTP test path) and
 //         EXPLAIN_QUERY SQS WorkflowQueue messages (async production path).
 //
+// The /explain slash command only ever sends { runId } — a user never types or
+// sees a query_id. The queryId + prompt path below is internal plumbing, reached
+// only from interactive.mjs (step-select modal submission, or the "Ask follow-up"
+// button on an existing explain reply), never directly from the slash command.
+//
 // Flow:
+//   0. If runId given (slash command path — never carries a prompt), resolve it
+//      against PGC_Session.run_id — 0 sessions -> notify not found; otherwise
+//      always post an EXPLAIN_STEP_SELECT button list (one button per llm_call
+//      step, even when there's only one) and stop. The question is only ever
+//      collected via modal after a specific step is chosen — see interactive.mjs.
 //   1. Look up PGC_Session by query_id (UUID)
 //   2. Store slack_thread_ts on session if not yet set (first /explain invocation)
-//   3. Load existing PGC_SessionEntry rows (seq 1=user prompt, seq 2=assistant output)
-//   4. Append new user entry (seq 3+)
-//   5. Reconstruct messages array (reasoning excluded)
+//   3. Load existing PGC_SessionEntry rows — llm-harness.mjs seeds 3 (system:
+//      the original llm_call's full prompt_text, user: its resolved input,
+//      assistant: its raw output) before any explain Q&A is appended
+//   4. Append new user entry
+//   5. Reconstruct messages array (reasoning excluded) — found by role, not a
+//      hardcoded sequence number, since the seed-entry count above is not
+//      part of this module's contract
 //   6. Call LLM (heavy model) with full context
 //   7. INSERT PGC_SessionEntry for assistant response
-//   8. Enqueue HUMAN_NOTIFICATION with response (surfaces reasoning from seq 2 if present)
+//   8. Enqueue HUMAN_NOTIFICATION with response (surfaces reasoning from the
+//      original assistant entry, on the first reply only)
 //
 // Transport-agnostic — no AWS SDK, no Slack SDK.
 
@@ -40,17 +55,60 @@ code blocks for structured data or multi-line examples
 Respond in clear prose. Do not return raw JSON objects unless the user explicitly asks for them. When referencing data from the workflow context, summarise it in readable sentences. Use bullet points and headers to organise longer answers.`;
 
 export async function handle(req) {
-  const { queryId, prompt } = req.body ?? {};
+  const { queryId: queryIdInput, runId, prompt } = req.body ?? {};
   const callback = req.callback ?? req.body?.callback ?? null;
   const traceId  = req.traceId  ?? req.correlationId;
   const threadTs = callback?.threadId ?? null;
 
-  if (!UUID_RE.test(queryId?.trim() ?? '')) {
-    if (req.source === 'http') return err(400, 'queryId is required and must be a UUID', req.correlationId);
+  let queryId = queryIdInput;
+
+  // run_id form: never carries a prompt — always resolve to a step-selection button
+  // list (even for a single session) so the question is only ever collected after a
+  // specific llm_call step has been chosen.
+  if (!queryId && runId) {
+    const runSessionsResp = await getRows('PGC_Session',
+      [{ column: 'run_id', op: 'eq', value: runId }],
+      { column: 'id', direction: 'asc' }
+    );
+    const runSessions = runSessionsResp.rows ?? [];
+
+    if (runSessions.length === 0) {
+      const msg = `No diagnostic sessions found for run ${runId}.`;
+      if (req.source === 'http') return err(404, msg, req.correlationId);
+      if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: msg });
+      return;
+    }
+
+    console.info('proc/explain: presenting step picker for run', {
+      runId, traceId, count: runSessions.length,
+    });
+    if (callback) {
+      await enqueueCallback(callback, {
+        type:  'EXPLAIN_STEP_SELECT',
+        traceId,
+        runId,
+        steps: runSessions.map(s => ({
+          queryId:        s.query_id,
+          stepId:         s.step_id,
+          intentCategory: s.intent_category,
+        })),
+      });
+    }
+    if (req.source === 'http') {
+      return ok({ success: true, stepSelectionRequired: true, steps: runSessions.length }, req.correlationId);
+    }
     return;
   }
+
+  // query_id form (direct, or resumed after the step-picker modal is submitted)
+  // always requires a prompt.
   if (!prompt?.trim()) {
     if (req.source === 'http') return err(400, 'prompt is required', req.correlationId);
+    return;
+  }
+
+  if (!UUID_RE.test(queryId?.trim() ?? '')) {
+    if (req.source === 'http') return err(400, 'queryId is required and must be a UUID (or provide a valid runId)', req.correlationId);
     return;
   }
 
@@ -87,8 +145,11 @@ export async function handle(req) {
   );
   const existingEntries = entriesResp.rows ?? [];
 
-  // Extract reasoning from seq 2 (assistant) for surfacing in reply
-  const assistantEntry = existingEntries.find(e => e.role === 'assistant' && e.sequence_number === 2);
+  // Extract reasoning from the first assistant entry (the original llm_call's
+  // own output) for surfacing in reply — found by role, not a hardcoded
+  // sequence number, since llm-harness.mjs's seed-entry count for a session
+  // is not part of this module's contract and has already changed once.
+  const assistantEntry = existingEntries.find(e => e.role === 'assistant');
   const reasoning = assistantEntry?.reasoning ?? null;
 
   // Next sequence number
@@ -154,7 +215,11 @@ export async function handle(req) {
   // preventing stale button accumulation in the thread.
   if (responseCallback) {
     let replyText = responseText;
-    if (reasoning && nextSeq === 3) {
+    // Surface reasoning only on the very first follow-up — i.e. this new turn
+    // immediately follows the original assistant entry, with no prior explain
+    // Q&A in between. Checked by position relative to assistantEntry itself,
+    // not a hardcoded sequence number, for the same reason as the lookup above.
+    if (reasoning && assistantEntry && nextSeq === assistantEntry.sequence_number + 1) {
       replyText = `*LLM reasoning for this output:*\n>${reasoning.replace(/\n/g, '\n>')}\n\n${responseText}`;
     }
     await enqueueCallback(responseCallback, {

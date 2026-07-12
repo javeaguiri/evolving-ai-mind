@@ -1408,13 +1408,18 @@ paths:
 
   /api/v1/ui/slack/explain:
     post:
-      summary: /explain slash command — continues a diagnostic conversation
+      summary: /explain slash command — resolves a run to its llm_call steps
       description: >
-        Handles the /explain Slack slash command. Takes a query_id (UUID) and optional
-        prompt, loads the existing PGC_Session entries for that query, and enqueues
-        EXPLAIN_QUERY to ProcFunction for an async LLM follow-up.
-
-        Usage: /explain <query_id> <optional follow-up question>
+        Handles the /explain Slack slash command. Takes only a run_id
+        (PGC_WorkflowRun.id) — a user never types or sees a query_id. ACKs
+        immediately and enqueues EXPLAIN_QUERY (runId only) to ProcFunction, which
+        always resolves run_id to an EXPLAIN_STEP_SELECT button list (one button
+        per llm_call step in that run, even when there's only one). Picking a
+        step opens a Slack modal to collect the question; submission enqueues
+        EXPLAIN_QUERY internally with the resolved query_id + prompt (see
+        interactive.mjs handleExplainStepSelectButton / handleExplainViewSubmission),
+        which is also how the "Ask follow-up" button on any explain reply continues
+        the conversation — neither path is user-typed.
 
         Flow: Slack POST → SlackbotFunction → ACK → SQS EXPLAIN_QUERY → ProcFunction → reply
       tags: [UI-Slack]
@@ -1428,8 +1433,8 @@ paths:
               properties:
                 text:
                   type: string
-                  description: "<query_id> <optional prompt>"
-                  example: "550e8400-e29b-41d4-a716-446655440000 why did step 14 fail?"
+                  description: "<run_id>"
+                  example: "623"
                 user_id:
                   type: string
                   example: U012AB3CD
@@ -1438,12 +1443,12 @@ paths:
                   example: C0AEJ87JSKF
       responses:
         '200':
-          description: ACK posted to Slack; explanation arrives as a threaded reply
+          description: ACK posted to Slack; step-selection button list arrives as a threaded reply
           content:
             application/json:
               example: {}
         '400':
-          description: text is empty or query_id is not a valid UUID v4
+          description: text is empty or not an integer run_id
         '500':
           description: Slack ACK post failed or SQS enqueue failed
 
@@ -2804,14 +2809,22 @@ paths:
 
   /api/v1/proc/explain:
     post:
-      summary: Continue a diagnostic conversation anchored to a specific llm_call step
+      summary: Continue a diagnostic conversation anchored to a specific llm_call step, or resolve a run to its steps
       description: >
         HTTP test path for the EXPLAIN_QUERY SQS message type.
-        Looks up the PGC_Session by query_id, appends the user turn as a PGC_SessionEntry,
-        reconstructs the full messages array, and calls the LLM (anthropic/claude-sonnet-4-5).
-        On first invocation (seq=3), the LLM reasoning from the original step (seq=2) is
-        surfaced in the reply if present. Subsequent invocations continue the conversation.
-        In production the /explain Slack command enqueues EXPLAIN_QUERY to SQS.
+        The /explain slash command only ever sends runId (PGC_WorkflowRun.id, never
+        a prompt) — this always resolves to an EXPLAIN_STEP_SELECT callback, one
+        button per llm_call step in that run, even when there's only one, since the
+        question is only ever collected via a Slack modal after a specific step is
+        chosen (see interactive.mjs handleExplainStepSelectButton). The response
+        reports stepSelectionRequired: true in this case; no LLM call is made.
+        queryId (+ required prompt) is internal plumbing only, reached from the
+        step-select modal submission or the "Ask follow-up" button on an existing
+        reply — never typed directly by a user. That path looks up the PGC_Session,
+        appends the user turn as a PGC_SessionEntry, reconstructs the full messages
+        array, and calls the LLM (anthropic/claude-sonnet-4-5). On first invocation
+        (seq=3), the LLM reasoning from the original step (seq=2) is surfaced in the
+        reply if present. Subsequent invocations continue the conversation.
       tags: [PROC]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -2821,24 +2834,30 @@ paths:
           application/json:
             schema:
               type: object
-              required: [queryId, prompt]
               properties:
                 queryId:
                   type: string
                   format: uuid
-                  description: PGC_Session.query_id — obtained from LLM_DIAGNOSTIC Slack notification
+                  description: PGC_Session.query_id — mutually exclusive with runId; requires prompt
+                runId:
+                  type: integer
+                  description: PGC_WorkflowRun.id — mutually exclusive with queryId; prompt is ignored/omitted
                 prompt:
                   type: string
-                  description: User question about the LLM output
+                  description: User question about the LLM output — required with queryId, not used with runId
             examples:
               explain_output:
                 summary: Ask about a specific LLM step output
                 value:
                   queryId: "a1b2c3d4-e5f6-4789-abcd-ef0123456789"
                   prompt: "Why did you choose those column names for the recipes table?"
+              explain_run:
+                summary: Resolve a run to its llm_call steps — triggers step selection
+                value:
+                  runId: 621
       responses:
         '200':
-          description: LLM explanation response
+          description: LLM explanation response, or step-selection acknowledgement
           content:
             application/json:
               schema:
@@ -2850,6 +2869,10 @@ paths:
                     type: integer
                   response:
                     type: string
+                  stepSelectionRequired:
+                    type: boolean
+                  steps:
+                    type: integer
               examples:
                 explain_response:
                   summary: Explanation of LLM output
@@ -2857,14 +2880,20 @@ paths:
                     success: true
                     sessionId: 17
                     response: "I chose those column names because..."
+                step_selection:
+                  summary: runId matched multiple llm_call steps
+                  value:
+                    success: true
+                    stepSelectionRequired: true
+                    steps: 3
         '400':
-          description: Missing queryId or prompt, or queryId not a valid UUID
+          description: Missing prompt, or neither a valid queryId nor a runId with sessions was provided
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: No PGC_Session found for the given query_id
+          description: No PGC_Session found for the given query_id or runId
           content:
             application/json:
               schema:
@@ -3174,6 +3203,75 @@ paths:
                 createdAt: "2026-03-11T15:18:24.000Z"
         '400':
           description: Validation error — invalid table name, missing fields, disallowed type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Table already exists in PGC_Schema
+        '500':
+          description: DDL execution or PGC write failed
+
+  /api/v1/serv/schema/createView:
+    post:
+      summary: Create a view + register in PGC_Schema
+      description: >
+        Executes CREATE OR REPLACE VIEW on the target database (pgc or pgd),
+        introspects the resulting columns from information_schema (not
+        caller-declared), writes a metadata row to PGC_Schema (type: view,
+        select_sql stored for future redesign), and registers in PGC_TableMap
+        with allow_insert/allow_update/allow_delete all false — views are
+        read-only. selectSql must be a single SELECT/WITH statement; a
+        denylist rejects DDL/DML keywords and statement separators as a
+        backstop — the primary defense is human review of the SQL upstream.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, target, selectSql]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGD_MonthlyExpensesByCategory
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                domain:
+                  type: string
+                selectSql:
+                  type: string
+                description:
+                  type: string
+            example:
+              tableName: PGD_MonthlyExpensesByCategory
+              target: pgd
+              domain: expenses
+              selectSql: >-
+                SELECT category_id, SUM(amount) AS total_amount,
+                date_trunc('month', expense_date) AS month
+                FROM "PGD_Expenses" GROUP BY category_id, month
+              description: Monthly spend by category
+      responses:
+        '200':
+          description: View created and registered
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGD_MonthlyExpensesByCategory
+                target: pgd
+                domain: expenses
+                type: view
+                schemaId: 28
+                createdAt: "2026-07-04T15:18:24.000Z"
+        '400':
+          description: Validation error — invalid view name, missing fields, disallowed SQL
           content:
             application/json:
               schema:
@@ -3538,6 +3636,80 @@ paths:
         '500':
           description: ALTER TABLE or PGC_Schema update failed
 
+  /api/v1/serv/schema/modifyConstraint:
+    post:
+      summary: Add or replace a CHECK constraint — DDL + PGC_Schema sync
+      description: >
+        Adds a named CHECK constraint, or replaces its expression if one of that name
+        already exists (DROP CONSTRAINT IF EXISTS, then ADD CONSTRAINT). PGC_Schema.constraints
+        is upserted to match — appended when the constraint is new, updated when it exists.
+        Registering it is not optional bookkeeping: domain_schema is built from PGC_Schema,
+        and the workflow-design prompts read a column's allowed values out of its CHECK
+        expression there. A constraint enforced by the database but missing from the registry
+        is invisible to them, so generated workflows keep emitting values the database rejects.
+        Which database the table lives in is read from PGC_Schema.target — never supplied by
+        the caller.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, constraintName, expression]
+              properties:
+                tableName:
+                  type: string
+                  example: PGD_SpendingCategories
+                constraintName:
+                  type: string
+                  example: chk_spendingcategories_type
+                expression:
+                  type: string
+                  description: The CHECK body, without the surrounding CHECK(...).
+                  example: type IN ('income', 'discretionary', 'non_discretionary', 'savings')
+                columns:
+                  type: array
+                  items:
+                    type: string
+                  description: >
+                    Columns the constraint covers. Recorded in PGC_Schema so the constraint
+                    can be matched back to its column. Optional, but omitting it makes the
+                    registry entry harder to interpret downstream.
+                  example: [type]
+            examples:
+              add_enum_check:
+                summary: Add an enum CHECK to a column that had none
+                value:
+                  tableName: PGD_SpendingCategories
+                  constraintName: chk_spendingcategories_type
+                  expression: type IN ('income', 'discretionary', 'non_discretionary', 'savings')
+                  columns: [type]
+      responses:
+        '200':
+          description: Constraint applied and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Constraint was new — appended to the registry
+                  value:
+                    success: true
+                    tableName: PGD_SpendingCategories
+                    constraintName: chk_spendingcategories_type
+                    action: added
+                updated:
+                  summary: Constraint already existed — expression replaced
+                  value:
+                    success: true
+                    tableName: PGD_SpendingCategories
+                    constraintName: chk_spendingcategories_type
+                    action: updated
+        '404':
+          description: Table not found in PGC_Schema
+
   /api/v1/serv/schema/dropConstraint:
     post:
       summary: Drop a named constraint — DDL + PGC_Schema sync
@@ -3546,7 +3718,8 @@ paths:
         and removes the entry from PGC_Schema.constraints. Supports any constraint
         type (unique, check, foreign key). Use when a constraint is wrong by design
         (e.g. a UNIQUE constraint that is too restrictive) or when dropColumn CASCADE
-        is insufficient. Table name must match PGC_TableMap.
+        is insufficient. Which database the table lives in is read from PGC_Schema.target —
+        never supplied by the caller. Table name must match PGC_TableMap.
       tags: [SERV-Schema]
       parameters:
         - $ref: '#/components/parameters/CorrelationId'
@@ -3564,17 +3737,12 @@ paths:
                 constraintName:
                   type: string
                   example: uq_recipeingredients_recipe_ingredient
-                target:
-                  type: string
-                  enum: [pgc, pgd]
-                  default: pgc
             examples:
               drop_unique:
                 summary: Drop over-restrictive unique constraint
                 value:
                   tableName: PGD_RecipeIngredients
                   constraintName: uq_recipeingredients_recipe_ingredient
-                  target: pgd
       responses:
         '200':
           description: Constraint dropped and PGC_Schema updated
@@ -3594,11 +3762,13 @@ paths:
 
   /api/v1/serv/schema/deleteTable:
     post:
-      summary: Drop table + remove from PGC_Schema
+      summary: Drop table or view + remove from PGC_Schema
       description: >
-        Drops the physical table (CASCADE) and removes rows from
-        PGC_Schema and PGC_TableMap. Protected system tables
-        (PGC_Schema, PGC_TableMap, PGC_EntitySchema, PGC_DomainHelp)
+        Drops the physical object (CASCADE) and removes rows from
+        PGC_Schema and PGC_TableMap. Branches on PGC_Schema.type — DROP VIEW
+        for a registered view, DROP TABLE for a table (defaults to table
+        when force=true and no PGC_Schema row exists). Protected system
+        tables (PGC_Schema, PGC_TableMap, PGC_EntitySchema, PGC_DomainHelp)
         are rejected with 403.
       tags: [SERV-Schema]
       parameters:
@@ -4017,6 +4187,145 @@ paths:
           description: Table not registered in PGC_TableMap
         '500':
           description: Delete failed
+
+  /api/v1/serv/table/upsertRows:
+    post:
+      summary: INSERT or UPDATE each row depending on whether a match already exists
+      description: >
+        For each row in `rows`, queries the table for an existing row whose
+        `matchColumns` values equal that row's values. A match updates the
+        existing row by id; no match inserts a new row. Gated by both
+        allow_insert and allow_update in PGC_TableMap. The whole batch runs
+        inside a single transaction — a failure partway through rolls back
+        the entire call.
+
+        **Workaround, not a native upsert:** no table in the system currently
+        declares a compound unique constraint on `matchColumns`, so this is a
+        query-then-write implementation, not `INSERT ... ON CONFLICT`. Matching
+        is best-effort (`LIMIT 1` on the first row satisfying `matchColumns`).
+        A future migration may add compound unique constraints and switch this
+        endpoint to native `ON CONFLICT` for tables that have one — see backlog.
+
+        **Automatic embedding**
+
+        Same behaviour as insertRow/updateRows — vector columns with
+        embed_source in PGC_Schema are computed/recomputed server-side;
+        callers must not supply them.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, matchColumns, rows]
+              properties:
+                tableName:
+                  type: string
+                  pattern: '^(PGC|PGD)_[A-Za-z][A-Za-z0-9_]*$'
+                  example: PGD_Budgets
+                matchColumns:
+                  type: array
+                  minItems: 1
+                  description: Column names whose combined values identify an existing row.
+                  items:
+                    type: string
+                rows:
+                  type: array
+                  minItems: 1
+                  description: Full row objects — one per record to upsert.
+                  items:
+                    type: object
+            example:
+              tableName: PGD_Budgets
+              matchColumns: [year, month, category_id]
+              rows:
+                - { year: 2026, month: 7, category_id: 3, planned_amount: 3300, currency: USD, type: non_discretionary }
+                - { year: 2026, month: 7, category_id: 4, planned_amount: 450,  currency: USD, type: non_discretionary }
+      responses:
+        '200':
+          description: Rows upserted — split into inserted and updated arrays
+          content:
+            application/json:
+              example:
+                success: true
+                tableName: PGD_Budgets
+                inserted:
+                  - { id: 21, year: 2026, month: 7, category_id: 3, planned_amount: 3300 }
+                updated:
+                  - { id: 14, year: 2026, month: 7, category_id: 4, planned_amount: 450 }
+        '400':
+          description: >
+            Validation error — missing matchColumns/rows, bad table name,
+            unknown column in matchColumns or rows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: UPSERT requires both allow_insert and allow_update to be true in PGC_TableMap
+        '404':
+          description: Table not registered in PGC_TableMap
+        '500':
+          description: Upsert failed — transaction rolled back
+
+  /api/v1/serv/table/runSql:
+    post:
+      summary: Execute a read-only SELECT/WITH statement directly
+      description: >
+        A deliberate, narrow carve-out from SERV-Table's "no raw SQL" rule —
+        read-only only, not gated by PGC_TableMap (works on any table or view,
+        registered or not). selectSql must start with SELECT or WITH; a
+        denylist rejects semicolons and any DDL/DML keyword. Not intended for
+        general querying — built for Novia's view-creation validation
+        workflow (running a proposed view's selectSql directly, or an
+        independent aggregate cross-check against source tables, before
+        trusting a view's output) and for equivalent ad hoc read-only checks.
+        Shares its SQL guard with /serv/schema/createView's selectSql field.
+      tags: [SERV-Table]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selectSql]
+              properties:
+                selectSql:
+                  type: string
+                target:
+                  type: string
+                  enum: [pgc, pgd]
+                  default: pgd
+            example:
+              selectSql: >-
+                SELECT category_id, SUM(amount) AS total FROM "PGD_Expenses"
+                WHERE EXTRACT(YEAR FROM date) = 2026 AND EXTRACT(MONTH FROM date) = 7
+                GROUP BY category_id
+              target: pgd
+      responses:
+        '200':
+          description: Query executed — rows returned
+          content:
+            application/json:
+              example:
+                success: true
+                count: 3
+                rows:
+                  - { category_id: 3, total: "1200.00" }
+                  - { category_id: 4, total: "80.00" }
+        '400':
+          description: Validation error — selectSql missing, not a SELECT/WITH statement, or contains a disallowed keyword/semicolon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Query execution failed
 
   # ── SERV-Entity ────────────────────────────────────────────────────────────
   # User-facing domain data layer. Callers use entity names (Recipe, Stock),

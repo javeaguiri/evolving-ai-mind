@@ -593,6 +593,8 @@ Resources:
       Description: 'SERV layer — JSON-native CRUD/aggregation, DDL, DB health check'
       Role: !GetAtt LambdaExecutionRole.Arn
       Handler: handler.handler
+      MemorySize: 512                  # Override Global 256MB — unprojected multi-row getRows against
+                                        # large-JSONB tables (PGC_WorkflowRun.state/stack) can OOM at 256MB
       Environment:
         Variables:
           PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'

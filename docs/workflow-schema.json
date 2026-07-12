@@ -80,21 +80,23 @@
 
     "filterItem": {
       "type": "object",
-      "description": "Single WHERE clause condition for serv_query, serv_update, serv_delete. 'value' supports {{template}} substitution against local_state.",
-      "required": ["column", "op", "value"],
+      "description": "Single WHERE clause condition for serv_query, serv_update, serv_delete. 'value' supports {{template}} substitution against local_state. Omit 'value' for null-check ops (is_null, not_null).",
+      "required": ["column", "op"],
       "additionalProperties": false,
       "properties": {
         "column": { "type": "string" },
         "op": {
           "type": "string",
-          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in"],
-          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array)"
+          "enum": ["eq", "ne", "lt", "gt", "lte", "gte", "like", "in", "is_null", "not_null", "jsonb_contains", "jsonb_contained_by"],
+          "description": "eq=equals, ne=not-equals, like=SQL LIKE, in=IN(array), is_null/not_null=null check (no value needed), jsonb_contains/jsonb_contained_by=JSONB @>/<@ containment"
         },
         "value": {
-          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'.",
+          "description": "Supports {{template}} substitution. Use a string for most operators. Use an array of strings for op: 'in'. Use an object or array of objects for op: 'jsonb_contains'/'jsonb_contained_by' — matched via Postgres @>/<@ containment, not string comparison. Omit for is_null/not_null.",
           "oneOf": [
             { "type": "string" },
-            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            { "type": "object" },
+            { "type": "array", "items": { "type": "object" }, "minItems": 1 }
           ]
         }
       }
@@ -102,14 +104,13 @@
 
     "confirmOption": {
       "type": "object",
-      "description": "Option shape for confirm, edit_list, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
+      "description": "Option shape for confirm, list_selection, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
       "required": ["label", "action", "on_select"],
       "additionalProperties": false,
       "properties": {
         "label":          { "type": "string", "description": "Button text shown to the user." },
         "action":         { "type": "string", "description": "Machine identifier matched by resume_gate. 'confirm' and 'cancel' are conventional values." },
         "on_select":      { "$ref": "#/definitions/routingToken" },
-        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this option's modal is dismissed without submitting. Defaults to on_select." },
         "output_key":     { "type": "string", "description": "Option-level output_key. When this option carries a modal, the modal inputValue is written to this local_state key on submit — instead of the parent step's output_key." },
         "modal":          { "$ref": "#/definitions/modalDescriptor" }
       }
@@ -132,7 +133,7 @@
 
     "specialButton": {
       "type": "object",
-      "description": "Button appended AFTER options in the Slack actions block. Never appears in description_list or other content fields. Use for: Cancel (so it does not appear in the option description list), Other/Skip buttons, modal triggers. Field convention: use 'value' for choice gates; use 'action' for all other gate types (confirm, text_input, edit_list, review_object).",
+      "description": "Button appended AFTER options in the Slack actions block. Never appears in description_list or other content fields. Use for: Cancel (so it does not appear in the option description list), Other/Skip buttons, modal triggers. Field convention: use 'value' for choice gates; use 'action' for all other gate types (confirm, text_input, list_selection, review_object).",
       "required": ["label", "on_select"],
       "additionalProperties": false,
       "properties": {
@@ -140,23 +141,65 @@
         "value":          { "type": "string", "description": "Machine identifier for choice gate special_buttons." },
         "action":         { "type": "string", "description": "Machine identifier for non-choice gate special_buttons." },
         "on_select":      { "$ref": "#/definitions/routingToken" },
-        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this button's modal is dismissed without submitting." },
         "style":          { "type": "string", "enum": ["primary", "danger", "default"], "description": "Slack button style. Omitting defaults to 'default'." },
         "output_key":     { "type": "string", "description": "Writes modal inputValue to this local_state key on modal submit." },
         "modal":          { "$ref": "#/definitions/modalDescriptor" }
       }
     },
 
-    "itemAction": {
+    "formField": {
       "type": "object",
-      "description": "Per-row action button for edit_list gates. Currently only 'remove_item' is implemented.",
-      "required": ["action", "action_data_key"],
+      "description": "One value collected by a form gate. `type` states WHAT is being collected, never which widget draws it — the experience layer maps 'date' to a Slack datepicker, 'select' to a dropdown, and so on. A new widget is therefore never a new gate_type.",
+      "required": ["name", "type"],
       "additionalProperties": false,
       "properties": {
-        "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy do not receive the action button." },
-        "action":           { "type": "string", "enum": ["remove_item"] },
-        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName'." },
-        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in the removal confirmation dialog. Supports {{item.field}} placeholders." }
+        "name":  { "type": "string", "description": "Key this field's answer takes in the object written to output_key." },
+        "type": {
+          "type": "string",
+          "enum": ["text", "textarea", "select", "multi_select", "radio", "checkbox", "date", "time", "datetime"],
+          "description": "What to collect. select/radio hold one value; multi_select/checkbox write an ARRAY. date yields 'YYYY-MM-DD', time 'HH:mm'. radio and checkbox are capped at 10 options by Slack; select and multi_select at 100 — above that, collect the value another way. (number/email/url/file are deliberately absent: Slack supports them only in modals, so collect text and validate in a js_transform.)"
+        },
+        "label":       { "type": "string", "description": "Shown above the input. Supports {{template}} substitution. Defaults to `name`." },
+        "placeholder": { "type": "string", "description": "Hint shown inside an empty input." },
+        "optional":    { "type": "boolean", "default": false, "description": "True lets the user submit without answering — the field arrives as null. Required fields are enforced on submit; a gap re-renders the gate rather than advancing." },
+        "default":     { "description": "Pre-filled value, shown in the input before the user edits it. For date, an ISO 'YYYY-MM-DD' string; for select/radio, the `value` of the option to pre-select. Use it to let a user amend an existing record rather than retype it." },
+        "options": {
+          "type": "array",
+          "description": "select/multi_select/radio/checkbox: a fixed option list, authored inline. Each entry is { value, label } or a bare string. Use options_key instead when the choices are data.",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["value"],
+                "additionalProperties": false,
+                "properties": {
+                  "value": { "type": ["string", "number"] },
+                  "label": { "type": "string" }
+                }
+              }
+            ]
+          }
+        },
+        "options_key":      { "type": "string", "description": "Dot-path into local_state holding the option rows — lets a dropdown offer data the workflow just queried (e.g. the categories it loaded) instead of a hardcoded list. This is what makes a deterministic pick possible where free text would otherwise need an llm_call to parse." },
+        "option_value_key": { "type": "string", "default": "id",   "description": "Field on each options_key row supplying the option's value." },
+        "option_label_key": { "type": "string", "default": "name", "description": "Field on each options_key row supplying the option's visible label." }
+      }
+    },
+
+    "itemAction": {
+      "type": "object",
+      "description": "Selection action for list_selection gates, applied uniformly to every item unless an item already carries its own secondaryAction. Rendering is always the same (one markdown table for all rows, one shared selection control, one Select button labeled/styled from this config); what the action does is entirely up to the calling workflow, expressed here, not by a different gate_type.",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "condition":        { "type": "string", "description": "JS expression evaluated against each item. Items where falsy are still listed but are not selectable." },
+        "action":           { "type": "string", "description": "Any caller-chosen action name (e.g. 'select_row', 'view_record'). Selecting a row writes it to the step's output_key and advances via on_select (below); the action name itself carries no special behaviour." },
+        "action_data_key":  { "type": "string", "description": "Field on the item written to responseData. Typically 'tableName' (the historical name — carries whatever id/value the selected row needs, regardless of action)." },
+        "confirm_template": { "type": "string", "description": "Slack mrkdwn shown in a confirmation dialog before the action fires. Supports {{item.field}} placeholders. Computed by buildDialog but currently has no renderer — the shared Select button has no row bound to it until after submission." },
+        "label":            { "type": "string", "description": "Button label. Defaults to 'Select'." },
+        "style":            { "type": "string", "enum": ["default", "primary", "danger"], "description": "Button style. No default. 'default' is never sent to Slack (no such enum value there) — omitted entirely so the button renders with no special emphasis." },
+        "on_select":        { "$ref": "#/definitions/routingToken", "description": "Required. Routing target when a row is selected (e.g. drill-down). Resolved directly — NOT via a matching entry in options[], since every options[] entry also renders as its own visible bottom button (which would duplicate it)." }
       }
     },
 
@@ -258,8 +301,8 @@
         "description": { "type": "string" },
         "gate_type": {
           "type": "string",
-          "enum": ["confirm", "edit_list", "text_input", "review_object", "choice", "followup_prompt"],
-          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. edit_list: scrollable list with per-row actions. text_input: inline Slack input block. review_object: key/value display. choice: lettered buttons with descriptions. followup_prompt: notification with Ask follow-up modal button."
+          "enum": ["confirm", "form", "list_selection", "text_input", "review_object", "choice", "followup_prompt"],
+          "description": "Determines dialog rendering and option shape. confirm: typography + buttons. list_selection: one markdown table of every context_key item (pre-formatted as { id, fields?, secondaryAction? } — fields is a plain object of column name -> value, rendered as one table column per distinct key across every item, sparse where an item lacks a given key), plus one shared selection control and one Select button. item_action applies uniformly to every item unless an item already carries its own secondaryAction. The selection control is a dropdown of every selectable row — grouped by source table when a level spans more than one — falling back to a plain id text box past Slack's 100-option cap; the user picks a row and clicks Select, and resumeGate resolves the selection back to that row. What selecting does (mutate this list and stay suspended vs write the row's id and advance elsewhere, e.g. Sprint 7 Track D2 drill-down) is driven entirely by item_action's own config (action name + on_select), never by this gate_type name — rendering and behavior are deliberately decoupled. form: collects any number of typed values in ONE gate — see `fields`. Each field declares WHAT it collects (text, select, multi_select, radio, checkbox, date, time, datetime) and the experience layer picks the widget, so a new input type never needs a new gate_type. The answers are written to output_key as one object keyed by field name. Reach for a form whenever the values are enumerable, a date, or otherwise structured: a picker is deterministic, whereas a text_input followed by an llm_call to parse the free text is not, and can misread the user. text_input: inline Slack input block — a single free-text answer, for genuinely unstructured prose only. review_object: key/value display. choice: lettered buttons with descriptions; the click itself routes (each option has its own on_select), so use it for a branch decision, not to capture data. followup_prompt: notification with Ask follow-up modal button."
         },
         "message_template": {
           "type": "string",
@@ -267,16 +310,27 @@
         },
         "output_key": {
           "type": "string",
-          "description": "Required for text_input (written on Submit) and choice (written on selection or modal submit). The typed modal text (inputValue) takes precedence over the button value for choice gates with modal options."
+          "description": "Required for text_input (written on Submit) and choice (written on selection or modal submit). The typed modal text (inputValue) takes precedence over the button value for choice gates with modal options. On a form gate it holds the FIELD VALUES — not which button was pressed; use action_key for that."
+        },
+        "action_key": {
+          "type": "string",
+          "description": "local_state key recording WHICH option the user chose (an option's value on choice gates, its action on all others). Use it when a later step must know the gate's outcome — most commonly a save-and-continue loop, where 'Save' and 'Done' run the SAME write and only diverge afterwards, so the decision must survive the write. Every option must then carry a DISTINCT action (e.g. 'save', 'done', 'cancel'): reusing the conventional 'confirm' on two buttons makes them indistinguishable to everything downstream. Independent of output_key — a form gate uses both."
         },
         "context_key": {
           "type": "string",
-          "description": "Dot-path into local_state. Required for edit_list (must resolve to an array) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
+          "description": "Dot-path into local_state. Required for list_selection (must resolve to an array, pre-formatted as { id, fields?, secondaryAction? } — building that shape is a preceding js_transform's job, not this gate's) and review_object (resolves to object or array). Optional for confirm with dynamic button list."
         },
-        "item_primary_key":    { "type": "string", "description": "edit_list / review_object: field used as the row label. Defaults to 'tableName' for arrays." },
-        "item_secondary_key":  { "type": "string", "description": "edit_list: field shown as secondary text below the row label." },
+        "item_primary_key":    { "type": "string", "description": "review_object array mode: fallback single-field label. Defaults to 'tableName'." },
+        "item_secondary_key":  { "type": "string", "description": "review_object array mode: value field. Defaults to 'columns'." },
         "item_label_template": { "type": "string", "description": "review_object array mode: template for the row label, e.g. 'step {{step}} — {{field}}'. Resolved against each array item's own properties." },
         "item_action":         { "$ref": "#/definitions/itemAction" },
+        "fields": {
+          "oneOf": [
+            { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/formField" } },
+            { "type": "string", "pattern": "^\\{\\{.+\\}\\}$" }
+          ],
+          "description": "form only, and required for it. One entry per value to collect. The whole form is answered in one gate and written to output_key as a single object keyed by field name, e.g. { period: '2026-07-01', category_id: '3' }. Collect enumerable values, dates and structured input here rather than gathering free text and parsing it with an llm_call — a picker is deterministic, parsing prose is not. May instead be a {{state_key}} reference to an array a preceding js_transform built, exactly as `options` and `reveals` may be: that is how a form carries one field per data row (an amount box and a type dropdown for each budget category, say), which a fixed field list cannot express."
+        },
         "input_label": {
           "type": "string",
           "description": "text_input only. Short label shown above the Slack input element. Defaults to 'Your input'. Full instructions go in message_template."
@@ -291,14 +345,19 @@
           "description": "text_input only. Placeholder text shown inside the Slack input element when empty. Supports newlines for multiline hints."
         },
         "options": {
-          "type": "array",
-          "description": "Gate action buttons. Shape is determined by gate_type: choice gates use choiceOption (value field, not action); all other gate types use confirmOption (action field, not value). Must include at least one cancel path — either here or in special_buttons.",
-          "items": {
-            "oneOf": [
-              { "$ref": "#/definitions/confirmOption" },
-              { "$ref": "#/definitions/choiceOption" }
-            ]
-          }
+          "description": "Gate action buttons. Shape is determined by gate_type: choice gates use choiceOption (value field, not action); all other gate types use confirmOption (action field, not value). Must include at least one cancel path — either here or in special_buttons. Supports an inline array or a {{template}} reference to a local_state array of the same shape (e.g. a level-dependent button set computed by a preceding js_transform) — when templated, the cancel-path requirement is enforced via on_cancel instead, since static analysis cannot inspect the eventual contents.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  { "$ref": "#/definitions/confirmOption" },
+                  { "$ref": "#/definitions/choiceOption" }
+                ]
+              }
+            },
+            { "type": "string", "pattern": "^\\{\\{.+\\}\\}$" }
+          ]
         },
         "special_buttons": {
           "type": "array",
@@ -307,16 +366,16 @@
         },
         "reveal": {
           "type": "object",
-          "description": "Optional single task_card block shown above the gate buttons. Does NOT advance or resume the gate.",
+          "description": "Optional single collapsible container block shown above the gate buttons. Does NOT advance or resume the gate.",
           "required": ["button_label", "content"],
           "additionalProperties": false,
           "properties": {
-            "button_label": { "type": "string", "description": "Title of the task_card." },
-            "content":      { "type": "string", "description": "Slack mrkdwn content. Supports {{key}} template substitution." }
+            "button_label": { "type": "string", "description": "Title of the container." },
+            "content":      { "type": "string", "description": "Template reference (e.g. {{key}}) resolving to a string, array of strings, or array of plain record objects. Strings render via basic mrkdwn; an array of plain records auto-renders as a real Slack table — see docs/slack-block-kit.md." }
           }
         },
         "reveals": {
-          "description": "Array version of reveal — renders one task_card per entry (e.g. one per table). Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
+          "description": "Array version of reveal — renders one collapsible container per entry (e.g. one per table). Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
           "oneOf": [
             {
               "type": "array",
@@ -637,6 +696,34 @@
         "description":      { "type": "string" },
         "message_template": { "type": "string", "description": "Slack mrkdwn. Supports {{template}} substitution against local_state." },
         "notify_type":      { "type": "string", "const": "HUMAN_NOTIFICATION" },
+        "reveal": {
+          "type": "object",
+          "description": "Optional single collapsible panel below the message content (Sprint 7 Track D2).",
+          "required": ["button_label", "content"],
+          "additionalProperties": false,
+          "properties": {
+            "button_label": { "type": "string" },
+            "content":      { "type": "string", "description": "Template reference (e.g. {{key}}) resolving to a string, array of strings, or array of plain record objects. Strings render via basic mrkdwn; an array of plain records auto-renders as a real Slack table — see docs/slack-block-kit.md." }
+          }
+        },
+        "reveals": {
+          "description": "Array version of reveal — renders one panel per entry. Supports an inline array or a {{template}} reference to a local_state array of {button_label, content} objects.",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["button_label", "content"],
+                "additionalProperties": false,
+                "properties": {
+                  "button_label": { "type": "string" },
+                  "content":      { "type": "string" }
+                }
+              }
+            },
+            { "type": "string", "description": "Template reference, e.g. {{formatted_display.reveals}}" }
+          ]
+        },
         "on_success":       { "$ref": "#/definitions/routingToken" }
       }
     },
@@ -658,7 +745,8 @@
             "steps_key":        { "type": "string", "description": "Dot-path to the draft workflow steps array in local_state." },
             "mock_outputs_key": { "type": "string", "description": "Optional. Dot-path to mock output map. If absent, only Level 1 static analysis runs." },
             "paths_key":        { "type": "string", "description": "Optional. Dot-path to simulation paths array. If absent, only Level 1 static analysis runs." },
-            "skeleton":         { "type": "boolean", "description": "Optional. Set to true when simulating a routing skeleton. Skips serv_step_missing_required_input — content fields are not yet present. All routing topology checks still run." }
+            "skeleton":         { "type": "boolean", "description": "Optional. Set to true when simulating a routing skeleton. Skips serv_step_missing_required_input — content fields are not yet present. All routing topology checks still run." },
+            "locked_skeleton_key": { "type": "string", "description": "Optional. Dot-path to the routing skeleton this step array was translated from. When present, L1 checks that translation emitted exactly one step per design item and invented none of its own (skeleton_drift). The step set is locked once the skeleton is validated; only the design stage may add a step." }
           }
         },
         "output_key":  { "type": "string", "description": "Receives the simulation result: { passed, issues, paths_executed }." },

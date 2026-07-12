@@ -35,7 +35,7 @@ import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
 import { getRows, insertRow, updateRows }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog }
+import { executeStep, buildDialog, resolveGateOptions }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
@@ -330,23 +330,6 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
         error: stepError.message, traceId,
       });
     }
-    // Send LLM_DIAGNOSTIC even on failure — diagnostics were written before the throw
-    // and the payload is attached to the error by executeLlmCall.
-    if (stepError.diagnosticPayload && run.callback) {
-      const { queryId, intentCategory: diagCategory } = stepError.diagnosticPayload;
-      try {
-        await enqueueCallback(run.callback, {
-          type:          'LLM_DIAGNOSTIC',
-          traceId,
-          queryId,
-          intentCategory: diagCategory,
-          workflowRunId:  run.id,
-          step:           frame.current_step,
-        });
-      } catch (diagErr) {
-        console.warn('run-workflow: LLM_DIAGNOSTIC on error enqueue failed (non-fatal)', diagErr.message);
-      }
-    }
     throw stepError;
   }
 
@@ -372,7 +355,13 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
   // Persist output_key → local_state.
   // Comma-separated output_key (e.g. "a,b,c") destructures an object return value into
   // multiple top-level local_state keys simultaneously.
-  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== null && result.outputValue !== undefined) {
+  //
+  // `null` is a value, not an absence: a step that initialises a key to null (create_workflow
+  // step 20a) is declaring "this key exists and is empty". Dropping it left the key missing
+  // from local_state, and template resolution renders a missing key as the literal token —
+  // so the LLM received the string "{{user_workflow_feedback}}" as the user's feedback.
+  // Only `undefined` (the step produced no output) skips the write.
+  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== undefined) {
     const outKeys = step.output_key.split(',').map(k => k.trim());
     if (outKeys.length > 1 && typeof result.outputValue === 'object' && result.outputValue !== null) {
       for (const key of outKeys) {
@@ -390,12 +379,21 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 
   // ── Handle human_gate suspension ───────────────────────────────────────
   if (result.nextAction === 'suspend' && result.gatePayload) {
+    // step.options may be a {{template}} string (e.g. a level-dependent button set) —
+    // resolve it once here, before persisting step_ref, so resume_gate can always
+    // assume options is a live array. Same treatment as the iterator item_step suspend
+    // path below (executeIteratorInline) for a nested human_gate's options.
+    const rawOptions = step.options;
+    const resolvedOptions = (typeof rawOptions === 'string' && rawOptions.startsWith('{{'))
+      ? (resolvePath(frame.local_state, rawOptions.replace(/^\{\{|\}\}$/g, '')) ?? [])
+      : (rawOptions ?? []);
+    const resolvedStepRef = { ...step, options: resolvedOptions };
     const gateFrame = {
       frame_id:      randomUUID(),
       type:          'human_gate',
       status:        'awaiting',
       gate_type:     step.gate_type,
-      step_ref:      step,
+      step_ref:      resolvedStepRef,
       step_number:   frame.current_step,
       workflow_name: run.workflow_name,
       local_state:   frame.local_state,
@@ -426,21 +424,30 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       type:          step.notify_type ?? 'HUMAN_NOTIFICATION',
       workflowRunId: run.id,
       message:       result.notifyMessage,
+      format:        'markdown',
       traceId,
+      ...(result.notifyReveals ? { reveals: result.notifyReveals } : {}),
     });
   }
 
-  // ── Handle llm_call diagnostics ────────────────────────────────────────
-  if (result.diagnosticPayload && run.callback) {
-    const { queryId, intentCategory } = result.diagnosticPayload;
-    await enqueueCallback(run.callback, {
-      type:      'LLM_DIAGNOSTIC',
-      traceId,
-      queryId,
-      intentCategory,
-      workflowRunId: run.id,
-      step:          step.step,
-    });
+  // ── Handle cancel ──────────────────────────────────────────────────────
+  // A regular step (e.g. a condition's on_else) can route to 'cancel', same
+  // control token human_gate options already use — mirrors resumeGate's
+  // inline cancel handling below rather than the standalone SQS 'cancel'
+  // dispatch (cancelRun), which has no run to notify a callback against yet.
+  if (result.nextAction === 'cancel') {
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
+    );
+    if (run.callback) {
+      await enqueueCallback(run.callback, {
+        type: 'HUMAN_NOTIFICATION', workflowRunId: run.id,
+        message: 'Workflow cancelled.', traceId,
+      });
+    }
+    console.info('run-workflow: cancelled', { workflowRunId: run.id, traceId });
+    return { action: 'cancelled' };
   }
 
   // ── Handle end ─────────────────────────────────────────────────────────
@@ -516,44 +523,22 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     workflowRunId: run.id, gateType, userResponse, traceId,
   });
 
-  // ── remove_item — mutate, re-render, stay suspended ────────────────────
-  if (userResponse === 'remove_item') {
-    if (!responseData?.tableName) {
-      throw new Error('resume_gate remove_item: responseData.tableName is required');
-    }
-
-    const contextItems = resolvePath(localState, stepRef.context_key) ?? [];
-    const filtered     = contextItems.filter(
-      item => item[stepRef.item_primary_key] !== responseData.tableName
-    );
-    setPath(localState, stepRef.context_key, filtered);
-    frame.local_state = localState;
-
-    await updateRows('PGC_WorkflowRun',
-      [{ column: 'id', op: 'eq', value: run.id }],
-      { stack: run.stack }
-    );
-
-    const updatedDialog = buildDialog(stepRef, localState);
-    await enqueueCallback(run.callback, {
-      type:          'HUMAN_GATE',
-      workflowRunId: run.id,
-      gate_type:     gateType,
-      dialog:        updatedDialog,
-      callback:      run.callback,
-      message_ts,    // present on remove_item — signals callback.mjs to chat.update in-place
-      traceId,
-    });
-
-    console.info('run-workflow: remove_item — gate re-rendered', {
-      workflowRunId: run.id, removed: responseData.tableName,
-      remaining: filtered.length, traceId,
-    });
-    return { action: 'remove_item', remaining: filtered.length };
-  }
-
   // ── cancel ─────────────────────────────────────────────────────────────
-  if (userResponse === 'cancel') {
+  // An option's ROUTING comes from its on_select, never from its action name. A gate must
+  // carry an option with action "cancel" (the routing rules require one), but a workflow is
+  // free to point that option somewhere other than the exit — live edit_budget labels it
+  // "Edit More" and routes it back to the category picker with on_select "11". Cancelling
+  // the run on the action name alone ignored that and killed the workflow instead of going
+  // back, which is the same "the action name carries behaviour" mistake removed from
+  // item_action. So: only cancel when the matched option actually routes to cancel, or when
+  // nothing matched (a bare Cancel click with no option behind it).
+  const cancelOption = userResponse === 'cancel'
+    ? [...resolveGateOptions(stepRef, localState), ...(stepRef.special_buttons ?? [])]
+        .find(o => o.action === 'cancel')
+    : null;
+  const cancelRoutesAway = cancelOption?.on_select && cancelOption.on_select !== 'cancel';
+
+  if (userResponse === 'cancel' && !cancelRoutesAway) {
     await updateRows('PGC_WorkflowRun',
       [{ column: 'id', op: 'eq', value: run.id }],
       { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
@@ -570,21 +555,195 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
 
   // ── confirm (or any option that advances) ─────────────────────────────
   // choice gate uses option.value (HTML radio semantics); all others use option.action.
+  // stepRef.options is always a resolved array by this point — a {{template}} options
+  // field is resolved once when the gate frame is pushed (see the two suspend sites),
+  // never lazily here.
   const isChoice      = gateType === 'choice';
-  const allOptions    = [...(stepRef.options ?? []), ...(stepRef.special_buttons ?? [])];
+  // resolveGateOptions, not stepRef.options — an option carrying `iterator` is one
+  // option per data row, and its value is still "{{year}}-{{month}}" until resolved.
+  // Matching the raw list could never match the "2026-07" the user actually picked.
+  // This is the same list buildDialog rendered, from the same resolver, so what the
+  // user saw and what we match against cannot disagree.
+  const allOptions    = [...resolveGateOptions(stepRef, localState), ...(stepRef.special_buttons ?? [])];
+
+  // Past a handful of options, callback.mjs draws a choice gate as a dropdown plus a
+  // Select button rather than one button per option — a rendering decision, made there.
+  // The Select button therefore carries no option value of its own; the chosen option
+  // arrives in state.values as responseData.selectedValue. Resolve it back to the option
+  // before anything matches on userResponse, so the gate behaves identically either way.
+  // Guarded on 'cancel': a user who picks a month and then clicks Cancel means Cancel.
+  let choiceResponse = userResponse;
+  if (isChoice && userResponse !== 'cancel' && responseData?.selectedValue) {
+    choiceResponse = responseData.selectedValue;
+  }
+
   const matchedOption = allOptions.find(o =>
-    isChoice ? o.value === userResponse : o.action === userResponse
+    isChoice ? o.value === choiceResponse : o.action === choiceResponse
   );
-  // When the modal was dismissed without submitting (no inputValue), route via
-  // on_modal_close if the option declares it — allows edit_list gates to loop back
-  // to themselves rather than falling through to on_select (which would advance
-  // with no captured value).
+
+  // A choice gate must never advance on a value that matches no option — clicking Select
+  // with nothing chosen would otherwise fall through to the default 'next' route and skip
+  // the decision entirely. Re-render in place instead, the same stay-suspended pattern
+  // list_selection and form use.
+  if (isChoice && !matchedOption && choiceResponse !== 'cancel') {
+    const dialogForRetry = buildDialog(stepRef, localState);
+    dialogForRetry.fields.unshift({
+      type:  'typography',
+      value: '⚠️ Choose an option before selecting.',
+    });
+    await enqueueCallback(run.callback, {
+      type:          'HUMAN_GATE',
+      workflowRunId: run.id,
+      gate_type:     gateType,
+      dialog:        dialogForRetry,
+      callback:      run.callback,
+      traceId,
+    });
+    console.info('run-workflow: choice — no option selected, gate re-rendered', {
+      workflowRunId: run.id, userResponse, traceId,
+    });
+    return { action: 'choice_unselected' };
+  }
+  // True when this resume carries text typed into a modal. Used only to decide where the
+  // modal's value is written (an option-level output_key). It is NOT a signal that a modal
+  // was dismissed — a dismissed modal never resumes the gate at all (interactive.mjs's
+  // handleViewClosed leaves it suspended), and every plain button click also has no
+  // inputValue. Reading it as "the modal was cancelled" is what made on_modal_close a trap.
   const hasModalInput = !!responseData?.inputValue;
-  const onSelect = (
-    !hasModalInput && matchedOption?.on_modal_close !== undefined
-      ? matchedOption.on_modal_close
-      : matchedOption?.on_select
-  ) ?? 'next';
+  // A row's own action button click routes via item_action.on_select directly —
+  // never via a matching options[] entry, since every options[] entry also
+  // renders as its own visible bottom button (would duplicate the per-row
+  // button). Gated only on item_action.on_select being present, not on
+  // gate_type: whether a row click advances (drill-down) or does something
+  // else entirely is the calling workflow's concern, not this gate's.
+  const itemActionMatch = stepRef.item_action?.action === userResponse && stepRef.item_action?.on_select
+    ? stepRef.item_action
+    : null;
+
+  // list_selection's Select button is a single shared control (Sprint 7 Track D —
+  // markdown table + one picker, replacing one accessory button per row, which was
+  // throwing msg_blocks_too_long above ~8 rows). The click identifies no row by
+  // itself — the chosen row rides in Slack's state.values — so resolve it here
+  // against context_key's fully-resolved items (reusing buildDialog's own item_action
+  // application rather than re-implementing it) before the advance logic below runs.
+  // A selection that doesn't resolve to a selectable row re-renders the same gate in
+  // place with an error line — it never silently advances on an unresolved value.
+  if (itemActionMatch) {
+    // The click carries one of two things, depending on which control callback.mjs
+    // rendered for this list. Normally it's a static_select's chosen option
+    // (responseData.selectedValue — a JSON {id, table} payload), which pins the row's
+    // source table alongside its id, so a level spanning more than one child table
+    // can't resolve a colliding id to the wrong table's row. Past Slack's 100-option
+    // cap the list falls back to a shared text box, and the click carries a bare typed
+    // id (responseData.inputValue) with no table — there, a collision still resolves
+    // first-hit, unchanged and acceptable at this app's scale.
+    let selected = null;
+    if (responseData?.selectedValue) {
+      try {
+        selected = JSON.parse(responseData.selectedValue);
+      } catch {
+        selected = null;
+      }
+    }
+    const typedId = responseData?.inputValue?.trim();
+
+    const dialogForLookup = buildDialog(stepRef, localState);
+    const listItems = dialogForLookup.fields.find(f => f.type === 'list')?.items ?? [];
+
+    let matchedItem = null;
+    if (selected) {
+      matchedItem = listItems.find(item =>
+        item.secondaryAction
+        && String(item.id) === String(selected.id)
+        && (item.responseData?.table ?? null) === (selected.table ?? null)
+      ) ?? null;
+    } else if (typedId) {
+      matchedItem = listItems.find(item => item.secondaryAction && String(item.id) === typedId) ?? null;
+    }
+
+    if (!matchedItem) {
+      dialogForLookup.fields.unshift({
+        type:  'typography',
+        value: selected
+          ? '⚠️ That selection no longer matches a row in this list — please try again.'
+          : typedId
+            ? `⚠️ No selectable row with ID "${typedId}" — please check and try again.`
+            : '⚠️ Choose a record before selecting.',
+      });
+      await enqueueCallback(run.callback, {
+        type:          'HUMAN_GATE',
+        workflowRunId: run.id,
+        gate_type:     gateType,
+        dialog:        dialogForLookup,
+        callback:      run.callback,
+        message_ts,
+        traceId,
+      });
+      console.info('run-workflow: list_selection — unresolved selection, gate re-rendered', {
+        workflowRunId: run.id, selected, typedId, traceId,
+      });
+      return { action: 'list_selection_invalid' };
+    }
+
+    responseData = Object.prototype.hasOwnProperty.call(matchedItem, 'responseData')
+      ? matchedItem.responseData
+      : { tableName: matchedItem.id };
+  }
+
+  // form gate — write the collected field map to output_key. Slack enforces a field's
+  // `optional` flag only on *modal* submit; a message's Submit button performs no
+  // validation at all, so required fields are checked here. A gap re-renders the gate
+  // rather than advancing with a hole in the data, mirroring list_selection's
+  // unresolved-selection path. Cancel skips validation — you can always back out.
+  if (gateType === 'form' && userResponse !== 'cancel') {
+    const values  = responseData?.formValues ?? {};
+    const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
+    const missing = (stepRef.fields ?? [])
+      .filter(f => f.optional !== true && isEmpty(values[f.name]))
+      .map(f => f.label ?? f.name);
+
+    if (missing.length > 0) {
+      const dialogForForm = buildDialog(stepRef, localState);
+      dialogForForm.fields.unshift({
+        type:  'typography',
+        value: `⚠️ Please complete: ${missing.join(', ')}.`,
+      });
+      // Deliberately no message_ts: the re-render posts a fresh gate rather than
+      // editing in place. Slack's chat.update is unreliable on a message carrying
+      // input blocks, and a silently-dropped edit would look identical to a hang.
+      await enqueueCallback(run.callback, {
+        type:          'HUMAN_GATE',
+        workflowRunId: run.id,
+        gate_type:     gateType,
+        dialog:        dialogForForm,
+        callback:      run.callback,
+        traceId,
+      });
+      console.info('run-workflow: form — required fields missing, gate re-rendered', {
+        workflowRunId: run.id, missing, traceId,
+      });
+      return { action: 'form_incomplete', missing };
+    }
+
+    if (stepRef.output_key) {
+      setPath(localState, stepRef.output_key, values);
+      frame.local_state = localState;
+      console.info('run-workflow: form values written to local_state', {
+        workflowRunId: run.id, output_key: stepRef.output_key,
+        fields: Object.keys(values), traceId,
+      });
+    }
+  }
+
+  // on_modal_close removed (D5). It was unreachable AND a trap. Unreachable because a
+  // dismissed modal never resumes the gate at all — interactive.mjs's handleViewClosed
+  // deliberately enqueues nothing and leaves the gate suspended, which is the correct
+  // behaviour and what the Sprint 6 fix established. A trap because `hasModalInput` is
+  // false for ANY plain button click, so an option declaring on_modal_close would have
+  // hijacked a normal click and routed there instead of on_select. Zero live workflows
+  // used it; workflow-schema.json advertised it anyway. Same shape as remove_item and
+  // edit_list: a capability that does not work is worse than one that does not exist.
+  const onSelect = matchedOption?.on_select ?? itemActionMatch?.on_select ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
   // before popping the frame. The value arrives in responseData.inputValue
@@ -610,7 +769,9 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   // so the typed text — not the button name — is written to the state key.
   // confirm gate with context_key: write userResponse to output_key (dynamic domain selection).
   if (isChoice && stepRef.output_key) {
-    const selectionValue = responseData?.inputValue ?? userResponse;
+    // choiceResponse, not userResponse — under dropdown rendering the click carries the
+    // Select button's action, and the real answer is the option chosen in state.values.
+    const selectionValue = responseData?.inputValue ?? choiceResponse;
     setPath(localState, stepRef.output_key, selectionValue);
     frame.local_state = localState;
     console.info('run-workflow: choice gate — selection written to local_state', {
@@ -646,6 +807,53 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
       output_key: stepRef.output_key,
       selection:  userResponse,
       traceId,
+    });
+  }
+
+  // A row was selected and the gate's item_action declares on_select — an "advance"
+  // action (e.g. drill-down). responseData is the matched row's own payload, resolved
+  // just above from the shared picker. Write it to output_key before the generic
+  // matchedOption/on_select advance below routes to wherever item_action.on_select
+  // points.
+  if (itemActionMatch && stepRef.output_key) {
+    // Legacy rows never set their own responseData, so callback.mjs sends the
+    // { tableName } shape by default — write the bare scalar, exactly as before.
+    // Rows that carry a workflow-supplied responseData (no tableName key, e.g.
+    // { table, id, hasChildren } for recursive drill-down) get written through whole.
+    const hasLegacyShape = responseData && Object.prototype.hasOwnProperty.call(responseData, 'tableName');
+    const value = hasLegacyShape ? responseData.tableName : responseData;
+    setPath(localState, stepRef.output_key, value);
+    frame.local_state = localState;
+    console.info('run-workflow: list_selection item_action — clicked row value written to local_state', {
+      output_key: stepRef.output_key,
+      value,
+      traceId,
+    });
+  }
+
+  // action_key — record WHICH option the user chose, for any gate type.
+  //
+  // Every other gate already surfaces its selection: choice writes the picked value,
+  // dynamic confirm writes userResponse, list_selection writes the clicked row,
+  // text_input writes the typed text. A `form` gate could not: output_key is spoken for
+  // by the field values, so the button was used for routing and then discarded.
+  //
+  // That made a save-and-continue loop undesignable. Run 719's edit_budget needed
+  // "Update persists and re-shows the form" and "Done persists and exits" — both must go
+  // through the SAME write, so the decision has to survive the write and be read by a
+  // condition afterwards. The designer wrote {{edit_action}} and noted it was "tracked via
+  // a hidden mechanism or gate action value": it knew exactly what it needed, and the
+  // harness did not have it. Routing the two buttons to separate chains instead would
+  // duplicate the serv_upsert; making Done skip the write would lose the user's edits.
+  //
+  // Writes the option's `value` — its identity — falling back to `action`. `label` is
+  // display text and is never the contract.
+  if (stepRef.action_key && matchedOption) {
+    const actionValue = matchedOption.value ?? matchedOption.action;
+    setPath(localState, stepRef.action_key, actionValue);
+    frame.local_state = localState;
+    console.info('run-workflow: gate action written to local_state', {
+      workflowRunId: run.id, action_key: stepRef.action_key, value: actionValue, traceId,
     });
   }
 
@@ -795,7 +1003,7 @@ async function executeIteratorInline({ run, frame, traceId }) {
     } catch (itemError) {
       await recordStepAudit(
         run.id, frame.frame_id, frame.current_index,
-        itemStep.type, 'failed', { tableName: item.tableName }, null,
+        itemStep?.type ?? 'unknown', 'failed', { tableName: item.tableName }, null,
         itemError.message, Date.now() - stepStart
       );
       const msg = `Iterator step "${frame.parent_step}" failed at index ${frame.current_index} (${item.tableName}): ${itemError.message}. Run id: ${run.id}`;
@@ -958,7 +1166,7 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
   } catch (itemError) {
     await recordStepAudit(
       run.id, frame.frame_id, frame.current_index,
-      itemStep.type, 'failed', { tableName: item.tableName }, null,
+      itemStep?.type ?? 'unknown', 'failed', { tableName: item.tableName }, null,
       itemError.message, Date.now() - stepStart
     );
     // Mark the run failed and notify the user before rethrowing.
@@ -1122,7 +1330,7 @@ async function checkIdempotency(runId, frameId, stepKey) {
       { column: 'frame_id', op: 'eq', value: frameId },
       { column: 'step_key', op: 'eq', value: String(stepKey) },
     ],
-    undefined, 1
+    undefined, 1, undefined, ['id']
   );
   return resp.success && resp.count > 0;
 }

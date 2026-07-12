@@ -1,8 +1,8 @@
 # evolving-mind-ai — Code Review Checklist
 <!-- Copyright (c) 2026 Javea Guiri. All rights reserved. -->
 
-Version: 1.0  
-Last updated: 2026-03-24 (session 9)
+Version: 1.1  
+Last updated: 2026-07-11 (Sprint 7)
 
 ---
 
@@ -64,6 +64,30 @@ patterns should be raised as tech debt register items.
 - Business logic belongs in endpoint modules or shared utilities
 - Exception: trivial inline handlers for `PING_SQS`, `PING_E2E` type messages are acceptable
 
+### 2e. Anything two consumers depend on must be derived ONCE
+The most common bug class in this codebase. Two places need the same derived value, each
+computes it separately, and they drift — usually silently, because one of them is right.
+
+- If two code paths consume the same list, shape or decision, one of them must **call** the
+  other's resolver. Never re-derive it.
+- Ask on every review: *is anything here computed a second time somewhere else?* If yes,
+  export the derivation and have both sides call it.
+- The tell is a bug where **what the user saw disagrees with what the system then did**.
+
+Instances that produced this rule, all in Sprint 7:
+- `buildDialog` expanded a choice gate's `iterator` options for the **buttons** but built the
+  **description list** from the raw `step.options` — the buttons bound each data row correctly
+  while the text above them still showed `{{label}}`.
+- `resumeGate` matched the user's answer against `step.options` **raw**, while `buildDialog`
+  rendered the **expanded** options — so an answer of `"2026-07"` could never match an option
+  whose value was still `"{{year}}-{{month}}"`. Fixed by exporting `resolveGateOptions()` and
+  calling it from both.
+- `callback.test.mjs` keeps "faithful copies" of `dialogToBlocks` and friends. Copies drift:
+  in session 14 the copy had lost branches that production still had, so the suite was green
+  against code that no longer existed. **Export the function and test the real one** — the
+  copy convention is a last resort forced by handler entanglement, never a default.
+  (See also 2c: if it is worth copying, it is worth extracting.)
+
 ---
 
 ## 3. SQS Usage in Process Layer
@@ -124,7 +148,29 @@ patterns should be raised as tech debt register items.
   not by adding cases to the Step Processor
 - Exception: new step types require a new case in `step-executor.mjs` — this is correct
 
-### 5c. LLM output validation
+### 5c. A name carries no behaviour — config does
+An identifier chosen by a workflow author (an option's `action`, an `item_action.action`, a
+`gate_type`) selects **what a thing is**, never **what it does**. Behaviour comes from the
+config beside it. The moment code branches on a name, a workflow that reuses that name for a
+different purpose breaks — and it will, because the names are chosen by an LLM.
+
+- An option's routing comes from its **`on_select`**, never from its `action` name.
+- A gate's `gate_type` governs **rendering only**. What selecting does is the calling
+  workflow's concern, expressed in its own config.
+- Never write `if (action === '<some name>')` in the executor or the resume path. If the
+  behaviour needs to differ, the workflow declares that difference in a field.
+
+Instances that produced this rule:
+- `resumeGate` cancelled the run whenever `userResponse === 'cancel'`. Live `edit_budget`
+  has an option `{ label: "Edit More", action: "cancel", on_select: "11" }` — the routing
+  rules require a cancel-action option, but nothing says it must *exit*. The action name
+  overrode explicit routing and killed the workflow instead of going back.
+- `remove_item` was an `item_action.action` **name** that `resumeGate` special-cased into
+  "mutate and stay suspended". Removed in Sprint 7: behaviour now comes from `on_select`.
+- `edit_list`/`row_list` were two gate types that rendered identically and differed only in
+  what clicking did. Merged into `list_selection`, with behaviour driven by `item_action`.
+
+### 5d. LLM output validation
 - Every `llm_call` step result must pass through `review-output.mjs` before
   being written to `local_state` or used in any downstream step
 - Raw LLM output must never be passed directly to DDL (createTable) or SQS payloads

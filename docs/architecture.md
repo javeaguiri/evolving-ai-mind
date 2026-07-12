@@ -35,7 +35,8 @@ For authoritative detail follow the section references in each row.
 | `src/ui/slackbot/handler.mjs` | EXP | Slack command parsing, Slack signing verification, HTTP dispatch to EXP endpoints | Breaks all Slack command entry if changed incorrectly |
 | `src/ui/slackbot/mind.mjs` | EXP | `/mind` command → CLASSIFY_INTENT SQS enqueue | Changes here affect how all free-form user intents enter the system |
 | `src/ui/slackbot/interactive.mjs` | EXP | Block Kit button clicks + modal submissions → `resume_gate` SQS enqueue | Changes here break all `human_gate` resume flows |
-| `src/ui/slackbot/callback.mjs` | EXP (listener) | SQS SlackResultsQueue consumer — renders ALL Slack replies (HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR) | Changes affect every result message posted to Slack |
+| `src/ui/slackbot/callback.mjs` | EXP (listener) | SQS SlackResultsQueue consumer — renders ALL Slack replies (HUMAN_GATE, HUMAN_NOTIFICATION, WORKFLOW_ERROR). `buildInputElement` is the sole place a UI-agnostic form field type ('date') becomes a Slack element ('datepicker') | Changes affect every result message posted to Slack |
+| `src/ui/slackbot/form-fields.mjs` | EXP | The `form` gate's block_id contract — `FORM_BLOCK_PREFIX`, `collectFormValues`, `extractFieldValue`. Shared by `callback.mjs` (writes the block_id) and `interactive.mjs` (parses it back into a field map) so the two cannot drift | Changes break form gate value collection |
 | `src/proc/handler.mjs` | PROC | HTTP + SQS dual dispatch; SQS batch failure reporting | Changes affect message routing for every PROC invocation |
 | `src/proc/classify-intent.mjs` | PROC | 4-pass intent routing pipeline — Pre-pass, Pass 1, Pass 2, Tier 2/3. See Section 6.3 | Changes affect routing of all `/mind` user inputs |
 | `src/proc/classify-intent-tiers.mjs` | PROC | Pure classification functions — matchIntentMap, matchDomainAlias, matchWorkflowByKeywords | 50+ unit tests cover these; changes must re-run `node --test tests/unit/*.test.mjs` |
@@ -44,14 +45,15 @@ For authoritative detail follow the section references in each row.
 | `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
 | `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
-| `src/proc/simulation-engine.mjs` | PROC | L1/L2 static analysis + path simulation — pure function, no I/O. Runs js_transform smoke tests in `vm.runInNewContext` (500ms timeout). See Section 6.5.6 | Changes affect the pre-write workflow validation gate used by create_workflow, fix_workflow, and upsert-workflow.mjs |
+| `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
 | `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
 | `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm`, `callLlmWithCorrection` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
+| `src/shared/schema-utils.mjs` | Shared | Pure interpretation of a `PGC_Schema.columns` array — `pickLabelColumn` (which column stands in for a row as its readable value; returns null when none does) | Used by `classify-intent.mjs` (display label for `/m list <table>`) and `step-executor.mjs` (natural key for reference-table FK resolution) — the two differ only in preference order |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
 | `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
-| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; `dropConstraint`; auto-infers `embed_source` for `X_embedding` vector columns. See Section 5.1 | Changes affect table creation and schema registration |
+| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; auto-infers `embed_source` for `X_embedding` vector columns. **The registry must never assert what the database does not**: `dropColumn` uses RESTRICT (never CASCADE — CASCADE silently *deletes dependent views*) and `pruneColumnRefs` clears every constraint and FK referencing the dropped column; `modifyConstraint` **upserts** into `PGC_Schema.constraints` (a CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so the design prompts never see the enum). `target` is read from `PGC_Schema`, never from the caller. See Section 5.1 | Changes affect table creation and schema registration |
 
 ### Data — PGC Table Groups
 
@@ -271,6 +273,7 @@ Two canonical types handle all live traffic. Ping types are dev/system diagnosti
 | `HUMAN_GATE` | `postHumanGate()` → `dialogToBlocks()` — interactive dialog, Block Kit with action buttons | `step-executor.mjs` (human_gate steps), `design-domain.mjs` (legacy create_domain path) |
 | `HUMAN_NOTIFICATION` | `postHumanNotification()` → `textToBlocks()` — plain text with 3000-char chunking | `run-workflow.mjs` (notify + cancel steps), `classify-intent.mjs` (CRUD results, errors), `create-domain.mjs` (error), `design-domain.mjs` (error, cancel) |
 | `WORKFLOW_ERROR` | `postWorkflowError()` → `textToBlocks()` — error summary (EXP summarises raw PROC errors) | `run-workflow.mjs` (step failure, stuck-step guard, step-not-found) |
+| `EXPLAIN_STEP_SELECT` | `postExplainStepSelect()` — one button per llm_call step (button carries only `queryId`, no question), threaded under the `/explain` ACK placeholder | `proc/explain.mjs` (`/explain <run_id>` — always resolves, even for a single `PGC_Session` row) |
 | `PING_SQS_RESULT` | `postPingSqsResult()` — hop timing context block | `proc/handler.mjs` (inline ping handler) |
 | `PING_E2E_RESULT` | `postPingE2eResult()` — round-trip timing context block | `proc/handler.mjs` (inline ping handler) |
 
@@ -354,6 +357,7 @@ src/
     sqs-callback.mjs   enqueueCallback, enqueueWorkflow — ONLY @aws-sdk/client-sqs location in PROC
     llm-client.mjs     callLlm, callLlmWithCorrection — Perplexity gateway
     serv-client.mjs    getRows, insertRow, updateRows, deleteRows — all PROC→SERV HTTP calls
+    schema-utils.mjs   pickLabelColumn — reads a PGC_Schema columns array, no I/O
 dev_scripts/          Manual tooling only — never imported by Lambda code
 tests/unit/           node:test unit tests — run with `node --test tests/unit/*.test.mjs`
 tests/integration/    Integration tests — require live env vars from .env.test.template
@@ -580,15 +584,16 @@ programmer's intent.
 | 6.1 | this file | Process Layer API — HTTP routes and SQS message types |
 | 6.2 | this file | Process Layer config tables — PGC as the brain's system memory |
 | 6.3 | `docs/arch-intent.md` | Intent Preprocessor — two-pass pipeline, I/O contracts, generic CRUD workflows (6.4) |
-| 6.5 | `docs/arch-step-processor.md` | Step Processor execution engine — WorkflowRun, stack, local_state, human gates, simulation |
+| 6.5 | `docs/arch-step-processor.md` | Step Processor execution engine — WorkflowRun, stack, local_state, human gates |
 | 6.5.1 | `docs/arch-step-types.md` | Step type reference — all fields, schemas, examples |
+| 6.5.6 | `docs/arch-simulation-engine.md` | Simulation engine — L1/L2a/L2b/L2c validation levels, result structure, standalone endpoint (consumer-agnostic — also used by Novia, dev tooling) |
 | 6.6–6.16 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, memory layer, self-repair, monitoring |
 
 ### Design documents
 
 | Doc | Topic |
 |---|---|
-| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step reference (live v33) |
+| `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step reference |
 | `docs/arch-create-workflow.md` | `create_workflow` workflow — full design, LLM call chain, L1/L2 |
 | `docs/arch-memory.md` | Memory layer — PGC_Memory write paths, retrieval, scope, provenance |
 | `docs/arch-session.md` | Session and chat — PGC_Session/PGC_SessionEntry, `/chat`, `/explain` |
@@ -630,8 +635,8 @@ CREATE_WORKFLOW    → create-workflow.mjs
   "type":          "WORKFLOW_STEP",
   "workflowRunId": 42,
   "action":        "execute_top | resume_gate | cancel",
-  "userResponse":  "confirm | cancel | remove_item | ...",
-  "responseData":  { "tableName": "...", "inputValue": "..." },
+  "userResponse":  "confirm | cancel | <item_action.action> | ...",
+  "responseData":  { "selectedValue": "...", "inputValue": "..." },
   "traceId":       "uuid"
 }
 ```
@@ -673,8 +678,8 @@ from PGC at runtime.
 | `PGC_WorkflowRun` | Process control block — stack, status, state, callback for each run | Step Processor | Step Processor |
 | `PGC_WorkflowRunStep` | Audit log — one row per step execution, used for idempotency | Step Processor | Step Processor |
 | `PGC_Prompt` | Prompt store — `prompt_text`, `output_schema`, `model`, `error_log` per intent | Step Processor (llm_call steps) | `upsert-prompt.mjs` / right-brain |
-| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `action_type`. Structurally independent from `PGC_Workflow` — no `workflow_id` FK. Routing uses `action_type` + `intent_category` name lookup | Intent Preprocessor | `create_domain` workflow (step 10) |
-| `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 8) |
+| `PGC_IntentMap` | Intent routing table — regex patterns → `intent_category` + `action_type`, the routing signal. Full detail: `docs/arch-intent.md` | Intent Preprocessor | `create_domain` (step 18/21), `create_workflow` (step 35b/36) |
+| `PGC_DomainHelp` | Domain registry — aliases, description, CRUD commands per domain | Intent Preprocessor | `create_domain` workflow (step 20) |
 | `PGC_Schema` | Schema registry — column definitions per PGD table | SERV (column validation) | `create_domain` workflow (DDL iterator) |
 | `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
 | `PGC_SystemContext` | System-wide config — thresholds, defaults, feature flags | Step Processor, Preprocessor | `init-brain.mjs` / admin |
@@ -691,7 +696,7 @@ When `create_domain` runs, the Step Processor:
 3. Writes `PGC_WorkflowRun.stack` and `.state` after every step — persisting the program counter and data bag
 4. Writes `PGC_WorkflowRunStep` after every step — idempotency audit log
 5. Calls SERV which reads `PGC_Schema` and `PGC_TableMap` to validate and route inserts
-6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` (5 rows — one per `*_entity` intent category, pointing to the 5 pre-existing generic `*_entity` workflows with `domain: null`), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
+6. At the end of the workflow, writes `PGC_DomainHelp`, `PGC_IntentMap` rows (routing the domain to the pre-existing generic `*_entity` workflows with `domain: null` — see `docs/arch-create-domain.md` for the current row shape), and `PGC_EntitySchema` (entity join/aggregation definitions) — making the new domain available to the Intent Preprocessor and SERV-Entity. **`create_domain` does not create any `PGC_Workflow` rows for the domain.** Domain-specific workflows are created separately via `create_workflow`.
 
 The PGC tables are not just config — they are the evolving state of the brain.
 The Intent Preprocessor reads from PGC to route incoming intents. The Step
@@ -709,9 +714,10 @@ The Intent Preprocessor (`classify-intent.mjs`) is the kernel. It receives every
 
 ### 6.5 Step Processor — Execution Engine
 
-> **Full detail extracted to two focused docs:**
+> **Full detail extracted to three focused docs:**
 > - `docs/arch-step-types.md` — step type reference catalog: `llm_call`, `js_transform`, `human_gate`, `iterator`, `serv_*`, `condition`, `simulate`, `write_memory`, `notify`, `end` — all fields, schemas, examples
-> - `docs/arch-step-processor.md` — execution engine internals: PGC_WorkflowRun, execution loop, execution stack, `local_state`, Human-in-the-Loop (gate lifecycle + gate catalog + UI dialog contract), simulation (L1/L2, validation levels, result structure)
+> - `docs/arch-step-processor.md` — execution engine internals: PGC_WorkflowRun, execution loop, execution stack, `local_state`, Human-in-the-Loop (gate lifecycle + gate catalog + UI dialog contract)
+> - `docs/arch-simulation-engine.md` — simulation engine: L1/L2a/L2b/L2c validation levels, result structure, standalone endpoint — consumer-agnostic, also used by Novia's `simulate_workflow` tool and dev tooling, not just the Step Processor
 
 When the Intent Preprocessor decides a workflow should run, it creates a `PGC_WorkflowRun` row and enqueues `WORKFLOW_STEP execute_top`. The Step Processor (`run-workflow.mjs` + `step-executor.mjs`) takes over: one SQS message per stack frame, one step per invocation. Stack persisted to `PGC_WorkflowRun` before Lambda returns — no in-process state between invocations.
 
@@ -721,7 +727,7 @@ When the Intent Preprocessor decides a workflow should run, it creates a `PGC_Wo
 > **Full detail extracted to `docs/arch-workflow-patterns.md`** — covers:
 > - **6.6** Right-brain output validation pipeline (Ajv → semantic → routing rules, correction loop, `PGC_Prompt.error_log`)
 > - **6.7** Workflow safety — circuit breakers, Guard 1, `/shutdown`
-> - **6.8** `create_domain` workflow (annotated step-by-step)
+> - **6.8** `create_domain` workflow (pointer to `docs/arch-create-domain.md`)
 > - **6.9** `create_workflow` workflow (pointer to `docs/arch-create-workflow.md`)
 > - **6.10** Session architecture — chat and diagnostics (pointer to `docs/arch-session.md`)
 > - **6.11** Gap taxonomy — the five gap types and resolution sequence

@@ -11,6 +11,7 @@
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 import vm from 'vm';
+import { resolveInput, resolvePath } from './template-resolver.mjs';
 
 // Known valid routing token pattern — "next", "end", "cancel",
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
@@ -29,7 +30,42 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // @returns {SimulateWorkflowResponse}
 // ---------------------------------------------------------------------------
 
-export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, traceId }) {
+// ---------------------------------------------------------------------------
+// buildErrorSummary — the single rendering of why a simulation failed.
+//
+// Every consumer that needs to tell a human or an LLM what went wrong reads this
+// string: create_workflow's failure gates (steps 21c/27), the regeneration brief
+// handed to generate_workflow_steps, Novia's simulate_workflow tool, and
+// troubleshoot-workflow.mjs. None of them re-derive it — a summary that disagrees
+// with `passed` is how a run ends up reporting "no specific issues reported" while
+// the engine is holding a real failure.
+//
+// Only gating issues appear here. Soft warnings are in `issues` for anyone who
+// wants them, but they never block a workflow, so they are not "why it failed".
+// ---------------------------------------------------------------------------
+
+function buildErrorSummary({ staticIssues = [], routingMatrix = null, smokeTest = null }) {
+  const lines = [];
+
+  const push = (list, cap, prefix) => {
+    list.slice(0, cap).forEach(i => {
+      lines.push(`- ${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
+    });
+    if (list.length > cap) lines.push(`- ...and ${list.length - cap} more`);
+  };
+
+  push(staticIssues, 8, '');
+  if (routingMatrix && !routingMatrix.passed) {
+    push(routingMatrix.issues ?? [], 5, '[routing] ');
+  }
+  if (smokeTest && !smokeTest.passed) {
+    push((smokeTest.issues ?? []).filter(i => i.hard), 5, '[data-flow] ');
+  }
+
+  return lines.join('\n');
+}
+
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, lockedSkeleton = null, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
@@ -40,7 +76,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 
   // ── Level 1 — Static analysis ────────────────────────────────────────────
   const level1Result  = runLevel1StaticAnalysis(steps, { skeleton });
-  const staticIssues  = level1Result.issues;
+  const staticIssues  = [...level1Result.issues, ...checkSkeletonDrift(steps, lockedSkeleton)];
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
 
@@ -51,6 +87,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              false,
       total_issues:        staticIssues.length,
+      error_summary:       buildErrorSummary({ staticIssues }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -80,6 +117,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              l2Passed,
       total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+      error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -110,6 +148,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const result = {
     passed:              l2Passed,
     total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+    error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
@@ -128,6 +167,65 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   });
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton drift — did translation invent steps the design never authorised?
+// ---------------------------------------------------------------------------
+
+/**
+ * The routing skeleton is built from process_design and L1-BFS-validated BEFORE any
+ * content is generated; from that point the step set is locked. Translation
+ * (generate_workflow_steps) must therefore emit exactly one step per design item —
+ * it is a translator, not a designer.
+ *
+ * It does not always obey. Run 702 shipped 20 steps from a 15-step design: five
+ * js_transform steps ("format X into a markdown display", "parse Y") invented at
+ * translation time. That is not a cosmetic problem. Those steps were never in the
+ * graph the skeleton validated, and they arrive after the consolidation critic has
+ * already reviewed the design — so they are invisible to both. A step nobody
+ * authorised and nobody reviewed is exactly where redundancy accumulates.
+ *
+ * The comparison is on the ordered sequence of step TYPES, ignoring `end` steps:
+ * translation renumbers step_labels to numeric keys, so keys cannot be compared, and
+ * the skeleton builder appends its own `end` even when the design already declared one.
+ * Types are enough — an invented step always shows up as an extra type in the sequence.
+ *
+ * Deterministic, not heuristic: the design either authorised a step or it did not.
+ *
+ * @param {Array}  steps           The generated step array
+ * @param {Array?} lockedSkeleton  The routing_skeleton the design locked, if supplied
+ * @returns {Array} issues
+ */
+function checkSkeletonDrift(steps, lockedSkeleton) {
+  if (!Array.isArray(lockedSkeleton) || lockedSkeleton.length === 0) return [];
+
+  const types = arr => arr.filter(s => s.type !== 'end').map(s => s.type);
+  const generated = types(steps);
+  const locked    = types(lockedSkeleton);
+
+  if (generated.length === locked.length && generated.every((t, i) => t === locked[i])) return [];
+
+  // Report what was added, per type — enough for the correction pass to act on.
+  const tally = list => list.reduce((acc, t) => ({ ...acc, [t]: (acc[t] ?? 0) + 1 }), {});
+  const genT  = tally(generated);
+  const lockT = tally(locked);
+  const added = Object.keys(genT)
+    .filter(t => (genT[t] ?? 0) > (lockT[t] ?? 0))
+    .map(t => `${genT[t] - (lockT[t] ?? 0)}× ${t}`);
+
+  return [{
+    check:         'skeleton_drift',
+    step:          null,
+    failure_class: 'skeleton_drift',
+    detail:
+      `Translation produced ${generated.length} steps but the locked routing skeleton has ${locked.length}. ` +
+      `The step set was fixed when the design was accepted — translation must emit exactly one step per ` +
+      `process_design item, never add its own. ` +
+      (added.length ? `Steps added that the design never authorised: ${added.join(', ')}. ` : '') +
+      `If a gate genuinely needs a preceding formatting or parsing step, that is a design defect: the step ` +
+      `belongs in process_design, not here. Re-emit one step per design item, in order.`,
+  }];
 }
 
 // ---------------------------------------------------------------------------
@@ -190,26 +288,26 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Condition steps have a stricter contract: on_success/on_else must be bare step keys
-    // or terminal tokens (end, cancel). "next" and "step:N" are ambiguous on condition steps —
-    // the branch target must be named explicitly.
+    // Condition steps must name the branch target explicitly — "next" is ambiguous
+    // because it means "whichever step follows in array order", which differs per branch.
+    // "step:N" is accepted and normalised the same as a bare key by resolveSimNextKey.
     if (s.type === 'condition') {
       for (const field of ['on_success', 'on_else']) {
         const val = s[field];
         if (val == null) continue;
         const sv = String(val);
-        if (sv === 'next' || sv.startsWith('step:')) {
+        if (sv === 'next') {
           issues.push({
             check:         'condition_routing_invalid',
             step:          stepKey,
             failure_class: 'condition_routing_invalid',
-            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5", "9a") or a terminal token (end, cancel), but got "${sv}". "next" and "step:N" are ambiguous on condition steps — specify the target step key directly.`,
+            detail:        `Condition step "${stepKey}" field "${field}" must be a bare step key (e.g. "5"), "step:N", or a terminal token (end, cancel), but got "next". "next" is ambiguous on condition steps — specify the target step key directly.`,
           });
         }
       }
     }
 
-    // Check items_key for iterator steps
+    // Check items_key and item_step for iterator steps
     if (s.type === 'iterator') {
       const baseKey = (s.items_key ?? '').split('.')[0];
       if (baseKey && !outputKeysSoFar.has(baseKey)) {
@@ -220,14 +318,28 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           detail:        `Iterator step "${stepKey}" items_key "${s.items_key}" — base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
         });
       }
+      if (!skeleton && (!s.item_step || typeof s.item_step !== 'object')) {
+        issues.push({
+          check:         'iterator_missing_item_step',
+          step:          stepKey,
+          failure_class: 'iterator_missing_item_step',
+          detail:        `Iterator step "${stepKey}" is missing item_step — the nested step definition to execute per item. Check for "body" or "step_type" fields which are invalid; use "item_step" with "type" instead.`,
+        });
+      }
     }
 
     // Check gate has at least one cancel option — skipped in skeleton mode because
     // options are dialog-layer content added after routing topology is validated.
     if (s.type === 'human_gate') {
       if (!skeleton) {
+        // options/special_buttons may be a {{template}} reference resolved at
+        // runtime from local_state (e.g. a level-dependent button set) — static
+        // analysis can't inspect its eventual contents, so the cancel-option
+        // check is skipped for either field once dynamic; on_cancel (checked
+        // unconditionally below) still guarantees a cancel path exists.
+        const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
         const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
-        const hasCancel = allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
+        const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
         if (!hasCancel) {
           issues.push({
             check:         'missing_cancel_option',
@@ -383,6 +495,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       serv_insert: ['tableName', 'row'],
       serv_update: ['tableName', 'filters', 'updates'],
       serv_delete: ['tableName', 'filters'],
+      serv_upsert: ['tableName', 'matchColumns', 'rows'],
     };
     if (!skeleton && servRequired[s.type]) {
       const inputObj = s.input ?? {};
@@ -401,7 +514,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
 
     // Validate filter array element shape and op values for serv_* steps.
     // Skips validation when filters is a template reference string (resolved at runtime).
-    const VALID_FILTER_OPS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null']);
+    const VALID_FILTER_OPS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'in', 'is_null', 'not_null', 'jsonb_contains', 'jsonb_contained_by']);
     const SERV_FILTER_STEPS = new Set(['serv_query', 'serv_update', 'serv_delete', 'serv_entity_query']);
     if (SERV_FILTER_STEPS.has(s.type)) {
       const rawFilters = s.input?.filters ?? null;
@@ -413,7 +526,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
               check:         'serv_step_invalid_filter',
               step:          stepKey,
               failure_class: 'serv_step_invalid_filter',
-              detail:        `${s.type} step "${stepKey}" filters[${fi}] must be an object with shape { column, op, value } but got ${JSON.stringify(f)}. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null`,
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] must be an object with shape { column, op, value } but got ${JSON.stringify(f)}. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by`,
             });
             continue;
           }
@@ -430,14 +543,14 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
               check:         'serv_step_invalid_filter',
               step:          stepKey,
               failure_class: 'serv_step_invalid_filter',
-              detail:        `${s.type} step "${stepKey}" filters[${fi}] is missing "op" field. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null`,
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] is missing "op" field. Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by`,
             });
           } else if (!VALID_FILTER_OPS.has(f.op)) {
             issues.push({
               check:         'serv_step_invalid_filter_op',
               step:          stepKey,
               failure_class: 'serv_step_invalid_filter_op',
-              detail:        `${s.type} step "${stepKey}" filters[${fi}] has invalid op "${f.op}". Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null — never use SQL operators like "=", "!=", "contains"`,
+              detail:        `${s.type} step "${stepKey}" filters[${fi}] has invalid op "${f.op}". Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by — never use SQL operators like "=", "!=", "contains"`,
             });
           }
         }
@@ -448,6 +561,17 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
     // Comma-separated output_key registers each listed key individually.
     // Non-string output_key is a workflow defect — report as error.
     const stepWrites = new Set();
+
+    // action_key is a write too: a human_gate carrying one records which option the user
+    // chose (run-workflow's resumeGate). Without this the state-flow trace would report
+    // the key as never written and reject every workflow that reads its own gate's outcome.
+    if (s.action_key && typeof s.action_key === 'string') {
+      const baseAction = s.action_key.split('.')[0];
+      outputKeysSoFar.add(baseAction);
+      stepWrites.add(baseAction);
+      if (!writtenByStep[baseAction]) writtenByStep[baseAction] = stepKey;
+    }
+
     if (s.output_key && typeof s.output_key === 'string') {
       for (const rawKey of s.output_key.split(',')) {
         const baseOut = rawKey.trim().split('.')[0];
@@ -1012,13 +1136,149 @@ function inferMockIndexKeys(expr) {
   return keys;
 }
 
+// ---------------------------------------------------------------------------
+// Step-input contract validation (data-flow trace)
+//
+// Resolves each step's declared input fields against mockState — which by
+// this point in the loop already holds the real js_transform-computed
+// output of every prior step — and checks the resolved value's shape
+// against the same contracts table.mjs enforces at runtime. Catches shape
+// mismatches (e.g. a js_transform building a nested filter-group array
+// instead of a flat filter array) at create time instead of on first
+// execution. Resolution reuses resolveInput/resolvePath from
+// template-resolver.mjs — the same functions step-executor.mjs uses at
+// runtime — so simulation and execution never diverge in interpretation.
+// ---------------------------------------------------------------------------
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function filterArrayShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const f of value) {
+    if (!isPlainObject(f) || !f.column) return 'each filter must be an object with a column field';
+  }
+  return null;
+}
+
+function plainObjectShape(value) {
+  return isPlainObject(value) ? null : 'must be a non-null object';
+}
+
+function arrayOfObjectsShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const item of value) {
+    if (!isPlainObject(item)) return 'each item must be an object';
+  }
+  return null;
+}
+
+function arrayShape(value) {
+  return Array.isArray(value) ? null : 'must be an array';
+}
+
+function arrayOfStringsShape(value) {
+  if (!Array.isArray(value)) return 'must be an array';
+  for (const item of value) {
+    if (typeof item !== 'string') return 'each item must be a string';
+  }
+  return null;
+}
+
+// { stepType: { fieldName: validatorFn } } — fields resolved from step.input
+// via resolveInput. Mirrors table.mjs's own runtime validators (validateFilters,
+// insertRow/updateRows/upsertRows shape checks) — these fields throw a hard
+// error at runtime today, so a mismatch here is a hard L2 failure.
+const STEP_INPUT_CONTRACTS = {
+  serv_query:  { filters: filterArrayShape },
+  serv_update: { filters: filterArrayShape, updates: plainObjectShape },
+  serv_delete: { filters: filterArrayShape },
+  serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
+  serv_upsert: { rows: arrayOfObjectsShape, matchColumns: arrayOfStringsShape },
+};
+
+// { stepType: [{ field, validate }] } — dot-path fields (not {{ }}-wrapped)
+// resolved via resolvePath directly against mockState. These fields fall
+// back silently at runtime (`?? []` / `?? {}`) rather than throwing, so a
+// mismatch here is a soft warning, not a hard failure.
+const STEP_PATH_CONTRACTS = {
+  iterator:   [{ field: 'items_key',   validate: arrayShape }],
+  human_gate: [{ field: 'context_key', validate: arrayShape }],
+};
+
+// Bare "{{key.path}}" single-token template — matches the same pattern
+// resolveInput treats as a whole-value passthrough (see template-resolver.mjs).
+const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
+
+function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
+  const key = String(s.step);
+
+  const inputContracts = STEP_INPUT_CONTRACTS[s.type];
+  if (inputContracts && s.input) {
+    for (const [field, validate] of Object.entries(inputContracts)) {
+      const raw = s.input[field];
+      if (raw === undefined) continue; // optional field not present on this step
+
+      // A field whose entire value is inherited from a step whose own smoke-test
+      // computation was inconclusive (threw, timed out, or returned undefined)
+      // cannot be confidently shape-checked — the mock state at that key is a
+      // placeholder fallback, not the step's real output. Skip rather than
+      // report a mismatch: absence of confirmation is not proof of a defect.
+      // Same reasoning applies to loop-accumulated state a single forward pass
+      // over the step array can only partially reconstruct (flat-loop patterns
+      // that iterate many times before a downstream step consumes the result).
+      if (typeof raw === 'string') {
+        const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
+        if (bareMatch && uncertainKeys.has(bareMatch[1].trim().split('.')[0])) continue;
+      }
+
+      const resolved = resolveInput(raw, mockState);
+      const problem = validate(resolved);
+      if (problem) {
+        issues.push({
+          check:         'serv_input_shape_mismatch',
+          step:          key,
+          failure_class: 'serv_input_shape_mismatch',
+          detail:        `Step "${key}" (${s.type}) input.${field} ${problem}. Resolved value: ${JSON.stringify(resolved)}`,
+        });
+      }
+    }
+  }
+
+  const pathContracts = STEP_PATH_CONTRACTS[s.type];
+  if (pathContracts) {
+    for (const { field, validate } of pathContracts) {
+      const raw = s[field];
+      if (typeof raw !== 'string' || !raw) continue;
+      const resolved = resolvePath(mockState, raw);
+      if (resolved === undefined) continue; // unresolved path is a separate concern, not a shape mismatch
+      const problem = validate(resolved);
+      if (problem) {
+        issues.push({
+          check:         'serv_input_shape_mismatch',
+          step:          key,
+          failure_class: 'serv_input_shape_mismatch',
+          severity:      'warning',
+          detail:        `Step "${key}" (${s.type}) ${field} ("${raw}") ${problem}. Resolved value: ${JSON.stringify(resolved)}`,
+        });
+      }
+    }
+  }
+}
+
 function runJsTransformSmokeTest(steps, traceId) {
-  const issues    = [];
-  let stepsTested = 0;
-  const mockState = { input: {} };
+  const issues        = [];
+  let stepsTested     = 0;
+  const mockState     = { input: {} };
+  // Base output_keys whose mockState value is a placeholder fallback rather
+  // than a real computed result — see checkStepInputContracts.
+  const uncertainKeys = new Set();
 
   for (const s of steps) {
     const key = String(s.step);
+
+    checkStepInputContracts(s, mockState, issues, uncertainKeys);
 
     if (s.type === 'js_transform') {
       const expr = s.expression;
@@ -1089,10 +1349,14 @@ function runJsTransformSmokeTest(steps, traceId) {
 
         // Propagate result to mockState for downstream steps
         if (s.output_key && typeof s.output_key === 'string') {
-          const useVal = (!threwSyntax && result !== undefined) ? result : {};
+          const isFallback = threwSyntax || threwRuntime || result === undefined;
+          const useVal      = isFallback ? {} : result;
           for (const rawKey of s.output_key.split(',')) {
             const baseOut = rawKey.trim().split('.')[0];
-            if (!(baseOut in mockState)) mockState[baseOut] = useVal;
+            if (!(baseOut in mockState)) {
+              mockState[baseOut] = useVal;
+              if (isFallback) uncertainKeys.add(baseOut);
+            }
           }
         }
       }
@@ -1104,6 +1368,15 @@ function runJsTransformSmokeTest(steps, traceId) {
           if (!(baseOut in mockState)) mockState[baseOut] = mockValueForType(s.type);
         }
       }
+      // A gate's action_key resolves to one of its own options' values at runtime — mock it
+      // with the first, so a downstream condition reading it has something of the right shape.
+      if (s.action_key && typeof s.action_key === 'string') {
+        const baseAction = s.action_key.split('.')[0];
+        const firstOpt   = (s.options ?? [])[0];
+        if (!(baseAction in mockState)) {
+          mockState[baseAction] = firstOpt?.value ?? firstOpt?.action ?? 'mock_action';
+        }
+      }
       for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
         if (opt.output_key && typeof opt.output_key === 'string') {
           const baseOut = opt.output_key.split('.')[0];
@@ -1113,18 +1386,29 @@ function runJsTransformSmokeTest(steps, traceId) {
     }
   }
 
-  // Hard failures (affect passed): syntax errors and void returns.
-  // Runtime errors are soft warnings — mock state may not match real data shapes.
-  const hardFailures = issues.filter(i =>
-    i.failure_class === 'js_transform_syntax_error' ||
-    i.failure_class === 'js_transform_void_return'
-  );
+  // Hard failures (affect passed): syntax errors, void returns, and step-input
+  // shape mismatches on fields that throw at runtime (filters/updates/row/rows).
+  // Runtime errors and severity:'warning' shape mismatches (items_key/context_key,
+  // which fail silently at runtime) are soft — mock state may not match real data shapes.
+  //
+  // The hard/soft verdict is stamped onto each issue rather than kept here.
+  // Consumers must never re-derive it by matching failure_class: `issues` mixes
+  // hard and soft, and any second copy of this predicate goes stale the moment a
+  // failure class is added (create_workflow step 26 did exactly that, and silently
+  // stopped reporting serv_input_shape_mismatch).
+  const tagged = issues.map(i => ({ ...i, hard: isHardSmokeFailure(i) }));
 
   return {
-    passed:       hardFailures.length === 0,
+    passed:       tagged.every(i => !i.hard),
     steps_tested: stepsTested,
-    issues,
+    issues:       tagged,
   };
+}
+
+function isHardSmokeFailure(issue) {
+  return issue.failure_class === 'js_transform_syntax_error' ||
+         issue.failure_class === 'js_transform_void_return'  ||
+         (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 
 // ---------------------------------------------------------------------------

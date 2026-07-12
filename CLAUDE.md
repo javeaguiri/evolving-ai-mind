@@ -47,6 +47,22 @@ This principle extends to all system code boundaries: `step-executor.mjs`, `temp
 
 Unless the change is in **system code** (a genuine engine defect), bug fixes must be made **indirectly** — by enhancing the system's self-correction and improvement capabilities (L/R brain prompts, workflow updates, system context updates). Never patch evolving artifact behaviour by adding `if` branches to system code.
 
+### Experience Layer vs Procedure Layer Partitioning
+
+The boundary is about the backend (`/proc`) giving the experience layer sufficient information so content can be rendered in a suitable and pleasant way for the user. There is no web frontend today — Slack fills the experience-layer role — but `/proc` may work with a different experience layer in the future. `/ui/slack` must be given UI-agnostic instructions that it translates into Slack-specific rendering; a different experience layer could do the same from the same instructions.
+
+| Category | Examples |
+|----------|---------|
+| **Procedure layer** (`/proc`) | workflows, `step-executor.mjs`, `js_transform` content formatting (`formatted_markdown`, report text) |
+| **Experience layer** (`/ui/slack`) | `callback.mjs`, `dialogToBlocks`, Block Kit rendering |
+
+Rules:
+- Procedure layer determines what decision the user must make and what data they need. For system workflow artifacts (e.g. `list_entity`, `add_entity`), the domain/schema knowledge required — labels, enum-driven formatting, currency, length-based reveal/no-reveal thresholds — should be handled deterministically via `js_transform`.
+- For domain-specific workflows, formatted content is acceptable and encouraged (`formatted_markdown`, for example); raw data should not be left for the experience layer to interpret and format.
+- Experience layer determines Slack-specific rendering mechanics: which block type wraps a piece of content, button/list/modal assembly, layout, ordering.
+- **Never put domain vocabulary in `/ui/slack`.** If a rendering decision requires knowing what a field means or what a value implies, that decision belongs in a workflow step, not the shared renderer.
+- Novia's direct markdown output to the user, and workflow-generated reports formatted for a human_gate, are both instances of the rule above, not exceptions to it — the domain knowledge needed to format them lives in `/proc`.
+
 ### Fault Domain Triage
 
 When a bug surfaces, identify the fault domain before reaching for a fix. Fix in that domain only — a fix applied to the wrong domain masks the root cause and creates new bugs.
@@ -217,20 +233,22 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-**Sprint 6 closed 2026-06-29 (branch `sprint/06-pantry-expenses-trackp`).** Track P complete (PGC_Prompt.domain, design_workflow_prompts, generate_workflow_steps prompt, delete flow cleanup). Expenses domain live (PGD_Expenses, PGD_Budgets, PGD_SpendingCategories, PGD_RecurringExpenses). Recipe domain recreated. quiz_flashcards and study_flashcards workflows recreated. Entity resolution chain added to add/get/list_entity for multi-entity domains. SHUTDOWN SQS ack-and-notify. RecursiveLoop: Allow + ProcFunction MemorySize 1024. listPhysicalTables + dropConstraint SERV endpoints. embed_source auto-inference in schema.mjs. UC-E1, UC-E2, UC-E3 validated from Slack.
+**Sprint 7 closed 2026-07-12 (branch `sprint/07-mvp-functionality-gaps`).** MVP functionality gaps. All ACs met except one carried item (D3). Highlights: `serv_upsert` step type + L2 data-flow trace; `form` gate type (a widget is a field type, not a gate type) and `text_input` retired from the instruction layer; `choice` renders as a dropdown past five options; `list_selection` markdown-table rendering with grouped `static_select`; view infrastructure (`PGC_Schema.type`/`select_sql`, `createView`); `PGC_IntentMap` one row per phrase; `/explain` step-selection gate; Novia SOP library. Late-sprint work concentrated on **silent failure**: repair loops that regenerated without being told what failed, a renderer that posted messages Slack rejected, and a schema registry that lied.
 
-**Sprint 7 not yet scoped.** Next session: run retro → scope Sprint 7 → create new `docs/sprints/CURRENT.md`.
+**Sprint 8 not yet scoped.** **COST STOP IN EFFECT — read `docs/sprints/sprint-07.md` (retro) before scoping.** Perplexity spend hit ~$50/month against a $10 target. `create_workflow` is ~39% `design_workflow_process` alone and is the entire bill; running registered workflows is nearly free. Sprint 8 leads with the **LLM replay harness**, without which every remaining item costs money to verify.
 
-### Open Work (carry-forward to Sprint 7)
+### Open Work (carry-forward to Sprint 8)
 
-1. Session ID per workflow run — `PGC_WorkflowRun.session_id` FK + `PGC_SessionEntry` rows for all LLM calls. Prerequisite for `/explain` step-selection and Novia run-scoped diagnostics.
-2. `/explain <run-id>` step-selection gate — Slack button list of LLM steps; user picks one; spawns explain thread scoped to that step.
-3. `generate_workflow_steps` Instruction fix — domain-specific `llm_call` steps must always emit a unique `prompt_draft`; never reuse a system prompt (domain: null).
-4. `design_workflow_prompts` Instruction fix — system or cross-domain prompt candidates must always be classified "create", never "reuse".
-5. PGC_SystemContext procedure library for Novia (`novia_diagnostic_protocol`) — on-demand diagnostic steps without bloating the always-injected system prompt.
-6. UC-E4 budget report — `PGD_MonthlyExpensesByCategory` DB view + reporting workflow; blocked on data.
-7. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
-8. `create_domain` — reference table entity separation. See backlog High Priority.
+1. **LLM replay harness** — `llm-harness` returns a recorded response from `PGC_SessionEntry` instead of calling Perplexity, keyed by run + step, gated on prompt/context **version match** so staleness is detected automatically. Gates stay real (usability work needs them). No SERV/SQS stubbing. Makes harness and UI iteration free; prompt iteration still costs the suffix from the changed step onward.
+2. **Delete `create_workflow` step 21t** (the automatic consolidation re-design, 14% of spend). Keep 21r's findings and surface them at the step-24 review gate for a human to accept. The critic false-positived in run 719 — it told the designer to delete a step that was genuinely required.
+3. **Gate `research_workflow_domain` on new domains** (17% of spend) — it re-derives findings already present in `PGC_Schema` for an existing domain.
+4. **D3** — audit/fix `notify` templates in generated workflows. Requires generating workflows, so it must ride *behind* the replay harness.
+5. **Re-validate `edit_budget` end to end** — run 719 reached L1 with a correct design; `action_key` (landed) is the last blocker. Deferred until replay exists.
+6. `create_domain` schema critic — deterministic core (unsourceable required column; functional dependency computable from live data), LLM around it. See backlog.
+7. `create_workflow` domain-confirmation gate — `input.domain: null` is a legitimate value (Mode C), so a typo silently builds a standalone workflow. See backlog.
+8. Validate every `llm_call` step supplies every `{{token}}` its prompt declares — shared prompts silently hand the LLM its own literal token text. See backlog.
+9. A render failure in the Experience tier should fail the run, not just report it — the run still wedges at `awaiting_human_gate`. See backlog.
+10. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
 
 ### Deferred
 
@@ -252,7 +270,8 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 | `docs/architecture.md` | System overview, component quick ref (§1.5), tier structure, SQS queues, directory structure, inter-module call rules, PGC config table roles |
 | `docs/arch-intent.md` | Intent classification pipeline — Pass 1a/1b/1c/2/3, I/O contracts, handoff() routing, generic CRUD workflows |
 | `docs/arch-step-types.md` | Step type reference — every field, schema, and example for `llm_call`, `serv_*`, `iterator`, `human_gate`, `condition`, `js_transform`, `simulate`, `write_memory`, `notify`, `end` |
-| `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle, simulation (L1/L2) |
+| `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle |
+| `docs/arch-simulation-engine.md` | Simulation engine (`simulation-engine.mjs`) — L1/L2a/L2b/L2c validation levels, data-flow trace, result structure, standalone `/proc/simulate-workflow` endpoint. Consumer-agnostic: used by `create_workflow`/`fix_workflow`, Novia's `simulate_workflow` tool, `troubleshoot-workflow.mjs`, and `upsert-workflow.mjs`'s pre-write guard |
 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, session, memory layer, self-repair, monitoring |
 | `docs/arch-data.md` | PGC/PGD schema (all 16 tables), SERV API reference, **curl cookbook (§5.5)** |
 | `docs/arch-security.md` | Threat model, Slack signing, PROC/SERV API key enforcement |

@@ -40,7 +40,7 @@
 
 import vm                   from 'node:vm';
 import * as acorn           from 'acorn';
-import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
+import { servPost, getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows, listEntities, getEntityById } from '../shared/serv-client.mjs';
 import { executeLlmCall }               from './llm-harness.mjs';
 import {
   resolvePath,
@@ -49,6 +49,7 @@ import {
   evalItemCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
+import { pickLabelColumn }              from '../shared/schema-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Public dispatch — routes to the correct handler by step.type
@@ -78,6 +79,7 @@ export async function executeStep({ step, localState, run, traceId }) {
     case 'serv_entity_insert': return executeServEntityInsert({ step, localState, traceId });
     case 'serv_update':       return executeServUpdate({ step, localState, traceId });
     case 'serv_delete':  return executeServDelete({ step, localState, traceId });
+    case 'serv_upsert':  return executeServUpsert({ step, localState, traceId });
     case 'simulate':     return executeSimulate({ step, localState, run, traceId });
     case 'notify':       return executeNotify({ step, localState, traceId });
     case 'write_memory': return executeWriteMemory({ step, localState, run, traceId });
@@ -259,8 +261,50 @@ async function executeHumanGate({ step, localState, run, traceId }) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve a human_gate's options into the list the user actually sees.
+ *
+ * `step.options` may be a {{template}} string (when the gate lives inside an iterator
+ * item_step), and any option may carry an `iterator` naming a local_state array — that
+ * option becomes one option per row, with label/value/description resolved against
+ * local_state merged with that row, so {{label}}, {{id}} and expressions over the row's
+ * own fields all bind to it.
+ *
+ * Exported because TWO places must agree on this list: buildDialog, which renders it,
+ * and resumeGate, which matches the user's answer back to an option. resumeGate used to
+ * match against step.options RAW — so an iterator-driven option, whose value is still
+ * "{{year}}-{{month}}" at that point, could never match the "2026-07" that came back. It
+ * silently fell through to the default 'next' route, which happened to be correct for
+ * these gates, so the bug stayed hidden until a gate needed a real routing decision.
+ * One resolver, one list, no divergence.
+ *
+ * @param {object} step        human_gate step definition
+ * @param {object} localState
+ * @returns {Array}            Fully resolved options, iterator entries expanded
+ */
+export function resolveGateOptions(step, localState) {
+  const resolvedOptions = typeof step.options === 'string'
+    ? (resolvePath(localState, step.options.replace(/^\{\{|\}\}$/g, '')) ?? [])
+    : (step.options ?? []);
+
+  const resolveOption = (option, state) => ({
+    ...option,
+    label: resolveTemplate(String(option.label ?? ''), state),
+    ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
+    ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
+    iterator: undefined,
+  });
+
+  return resolvedOptions.flatMap(option => {
+    if (!option.iterator) return [resolveOption(option, localState)];
+    const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
+    return items.map(item => resolveOption(option, { ...localState, ...item }));
+  });
+}
+
+/**
  * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
- * Called by executeHumanGate and by resume_gate when re-rendering after remove_item.
+ * Called by executeHumanGate, and by resume_gate both to resolve a list_selection
+ * click back to its row and to re-render a gate that stays suspended.
  *
  * @param {object} step        human_gate step definition
  * @param {object} localState  Current local_state (all template vars sourced here)
@@ -275,75 +319,131 @@ export function buildDialog(step, localState) {
     value: resolveTemplate(step.message_template ?? '', localState),
   });
 
+  const expandedOptions = resolveGateOptions(step, localState);
+
   // Gate-type-specific fields
   switch (step.gate_type) {
 
-    case 'edit_list': {
+    // list_selection — one markdown table row per item, selected by typing its id.
+    // A single gate_type for "render a list with a selection action" regardless of
+    // what that action does — behavior (mutate-and-restay vs write-and-advance)
+    // is entirely the calling workflow's concern, driven by item_action's own
+    // config (see run-workflow.mjs's resumeGate), never by this gate_type name.
+    // (Sprint 7 Track D2 — was briefly split into edit_list/row_list, merged
+    // back into one after review: rendering two ways for the same rendering
+    // need is exactly the one-off duplication this project avoids elsewhere.)
+    //
+    // context_key items are expected pre-formatted as { id, fields?, secondaryAction? }
+    // — fields is a plain object of column name -> value, rendered as one table
+    // column per distinct key across every item (sparse: an item missing a given
+    // key just gets a blank cell, no column is synthesized that isn't already
+    // present in some item's own data). Building that shape is a workflow-level
+    // (js_transform) concern, not this generic renderer's job. An item may carry
+    // its own fully custom secondaryAction; otherwise step.item_action applies
+    // uniformly to every item — the common case (e.g. "Open" on every row).
+    case 'list_selection': {
       const items = resolvePath(localState, step.context_key) ?? [];
+      // parent_heading lives alongside the items array (e.g. list_view.row_items ->
+      // list_view.parent_heading) — the workflow computes it once per level (the
+      // clicked row's own title/name, or its table name as fallback) so the
+      // renderer shows it once instead of re-deriving it per child table.
+      const basePath      = (step.context_key ?? '').replace(/\.[^.]+$/, '');
+      const parentHeading = basePath ? resolvePath(localState, `${basePath}.parent_heading`) : undefined;
       const resolvedItems = items.map(item => {
-        const primary   = item[step.item_primary_key] ?? String(item);
-        const secondary = item[step.item_secondary_key] ?? null;
-        let secondaryAction = null;
-
-        if (step.item_action) {
+        // Distinguish "item explicitly sets secondaryAction: null" (respect it —
+        // this item deliberately has no action) from "item never mentions the
+        // field at all" (fall back to step.item_action). Checking against null
+        // alone can't tell these apart, since both produce null.
+        const hasOwnAction = Object.prototype.hasOwnProperty.call(item, 'secondaryAction');
+        let secondaryAction = hasOwnAction ? item.secondaryAction : null;
+        if (!hasOwnAction && step.item_action) {
           const show = evalItemCondition(step.item_action.condition, item);
           if (show) {
             secondaryAction = {
-              action:  step.item_action.action,
-              label:   'Remove',
-              style:   'danger',
-              confirm: resolveTemplate(
-                step.item_action.confirm_template ?? '',
-                { ...localState, item },
-              ),
+              action: step.item_action.action,
+              label:  step.item_action.label ?? 'Select',
+              style:  step.item_action.style,
+              ...(step.item_action.confirm_template ? {
+                confirm: resolveTemplate(step.item_action.confirm_template, { ...localState, item }),
+              } : {}),
             };
           }
         }
-
         return {
-          id:              item[step.item_primary_key] ?? String(item),
-          primary,
-          secondary,
+          id:     item.id,
+          fields: item.fields ?? {},
           secondaryAction,
+          // Optional per-row payload beyond the bare id — lets a workflow carry
+          // structured context (e.g. { table, hasChildren }) through a row click
+          // without inventing a new gate_type. Undefined when the item doesn't
+          // set it; callback.mjs falls back to { tableName: item.id } in that case.
+          ...(Object.prototype.hasOwnProperty.call(item, 'responseData') ? { responseData: item.responseData } : {}),
         };
       });
 
-      // label resolves template vars (e.g. table count)
-      const domain = resolvePath(localState, 'proposed_scaffold.domain') ?? '';
+      // No `label` here — the typography field (pushed above from this same
+      // step.message_template) already renders this text once; repeating it
+      // as the list's own label duplicated every list_selection gate's message.
       fields.push({
         type:  'list',
         name:  (step.context_key ?? '').split('.').pop(),
-        label: `${domain} — ${resolvedItems.length} tables selected`,
         items: resolvedItems,
+        ...(parentHeading ? { parentHeading } : {}),
       });
       break;
     }
 
-    case 'select_one': {
-      const items = resolvePath(localState, step.context_key) ?? [];
-      fields.push({
-        type:    items.length <= 5 ? 'radio' : 'select',
-        name:    step.context_key ?? 'selection',
-        label:   resolveTemplate(step.message_template ?? '', localState),
-        options: items.map(item => ({
-          value: item[step.item_primary_key ?? 'id'] ?? String(item),
-          label: item[step.item_primary_key ?? 'id'] ?? String(item),
-        })),
-      });
-      break;
-    }
+    // form — collect any number of typed values in one gate. Replaces what would
+    // otherwise be a new gate_type per widget (select_one, select_many, date_input,
+    // …): a widget is a *field type*, not a gate type. The dialog carries UI-agnostic
+    // descriptors ('date', 'select'); the experience layer decides that means a
+    // datepicker and a dropdown, so a non-Slack front end could render the same form.
+    //
+    // Each field becomes one { type: 'input' } dialog field; reveals and the option
+    // buttons are appended by the shared tail below, same as every other gate type.
+    case 'form': {
+      // fields may be authored inline, or given as a {{template}} reference to an
+      // array a preceding js_transform built — the same shape `options` and `reveals`
+      // already accept. That is what lets a form carry one field per data row (an
+      // amount box and a type dropdown for each budget category, say), which a fixed
+      // field list cannot express.
+      const formFields = typeof step.fields === 'string'
+        ? (resolvePath(localState, step.fields.replace(/^\{\{|\}\}$/g, '')) ?? [])
+        : (step.fields ?? []);
 
-    case 'select_many': {
-      const items = resolvePath(localState, step.context_key) ?? [];
-      fields.push({
-        type:    'checkbox',
-        name:    step.context_key ?? 'selection',
-        label:   resolveTemplate(step.message_template ?? '', localState),
-        options: items.map(item => ({
-          value: item[step.item_primary_key ?? 'id'] ?? String(item),
-          label: item[step.item_primary_key ?? 'id'] ?? String(item),
-        })),
-      });
+      for (const field of (Array.isArray(formFields) ? formFields : [])) {
+        // Options may be authored inline, or pulled from local_state so a dropdown's
+        // choices can be data the workflow just queried (the categories it loaded)
+        // rather than a hardcoded list — this is what lets a workflow offer a
+        // deterministic pick instead of parsing free text with an llm_call.
+        let options;
+        if (Array.isArray(field.options)) {
+          options = field.options.map(o => (o && typeof o === 'object')
+            ? { value: String(o.value), label: String(o.label ?? o.value) }
+            : { value: String(o), label: String(o) });
+        } else if (field.options_key) {
+          const rows = resolvePath(localState, field.options_key) ?? [];
+          const valueKey = field.option_value_key ?? 'id';
+          const labelKey = field.option_label_key ?? 'name';
+          options = (Array.isArray(rows) ? rows : []).map(row => (row && typeof row === 'object')
+            ? { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) }
+            : { value: String(row), label: String(row) });
+        }
+
+        fields.push({
+          type:       'input',
+          name:       field.name,
+          input_type: field.type ?? 'text',
+          label:      resolveTemplate(String(field.label ?? field.name), localState),
+          optional:   field.optional === true,
+          ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+          // `default` — the standard name for a pre-filled value (JSON Schema, HTML
+          // forms), and what an LLM naturally emits. Carried through to the dialog as
+          // `initial` only because that is what Slack's elements call it.
+          ...(field.default !== undefined ? { initial: field.default } : {}),
+          ...(options ? { options } : {}),
+        });
+      }
       break;
     }
 
@@ -457,13 +557,15 @@ export function buildDialog(step, localState) {
     case 'choice': {
       // Single-select with question heading, per-option descriptions, and lettered buttons.
       // Mirrors HTML radio button semantics: label displays, value is submitted.
-      // Resolved options carry { value, label, description, on_select }.
       // description_list renders the explanation text above the buttons in the UI.
-      const rawChoiceOptions = typeof step.options === 'string'
-        ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
-        : (step.options ?? []);
-      const choiceItems = rawChoiceOptions
-        .map(o => ({ value: o.value, label: o.label, description: resolveTemplate(o.description ?? '', localState) }));
+      //
+      // Built from the SAME expandedOptions the buttons are (computed above): this list
+      // used to be derived from the raw step.options instead, so an iterator-driven
+      // option contributed one unexpanded row with its {{label}}/{{description}} tokens
+      // intact, while the buttons beneath it expanded correctly — the two had silently
+      // diverged. One list, resolved once, keeps them in step by construction.
+      const choiceItems = expandedOptions
+        .map(o => ({ value: o.value, label: o.label, description: o.description ?? '' }));
       if (choiceItems.length > 0 && choiceItems.some(item => item.description)) {
         fields.push({ type: 'description_list', items: choiceItems });
       }
@@ -480,7 +582,7 @@ export function buildDialog(step, localState) {
       console.warn('step-executor: unknown gate_type for dialog build', { gateType: step.gate_type });
   }
 
-  // reveal — optional on any gate type. Single task_card above the gate buttons.
+  // reveal — optional on any gate type. Single collapsible container above the gate buttons.
   // content is resolved via resolveInput so a pure {{var}} reference that points
   // to an array passes through as an array (rendered as a bulleted list by callback).
   if (step.reveal) {
@@ -491,42 +593,22 @@ export function buildDialog(step, localState) {
     });
   }
 
-  // reveals — array of task_cards, one per entry (e.g. one per table).
+  // reveals — array of containers, one per entry (e.g. one per table).
   // Supports an inline array or a {{template}} reference to localState.
   const revealsArray = typeof step.reveals === 'string'
     ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])
     : (Array.isArray(step.reveals) ? step.reveals : []);
-  for (const r of revealsArray) {
+  const stringRevealItems = revealsArray.filter(r => typeof r === 'string');
+  if (stringRevealItems.length > 0) {
+    fields.push({ type: 'reveal', button_label: 'Details', content: stringRevealItems });
+  }
+  for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     fields.push({
       type:         'reveal',
       button_label: r.button_label,
       content:      resolveInput(r.content ?? '', localState),
     });
   }
-
-  // actions — from step.options
-  // step.options may be a template string (e.g. "{{item.options}}") when the gate
-  // lives inside an iterator item_step — resolve it before mapping.
-  const resolvedOptions = typeof step.options === 'string'
-    ? (resolvePath(localState, step.options.replace(/^{{|}}$/g, '')) ?? [])
-    : (step.options ?? []);
-
-  // Expand options that carry an iterator field — one button per row in
-  // localState[o.iterator]. label and value are resolved against a merged
-  // state (localState + item) so {{name}}, {{id}} etc. bind to the row.
-  const expandedOptions = resolvedOptions.flatMap(o => {
-    if (!o.iterator) return [o];
-    const items = Array.isArray(localState[o.iterator]) ? localState[o.iterator] : [];
-    return items.map(item => {
-      const itemState = { ...localState, ...item };
-      return {
-        ...o,
-        label:    resolveTemplate(String(o.label  ?? ''), itemState),
-        value:    resolveTemplate(String(o.value  ?? ''), itemState),
-        iterator: undefined,
-      };
-    });
-  });
 
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
@@ -541,6 +623,10 @@ export function buildDialog(step, localState) {
       action: isChoice ? (o.value ?? o.action) : o.action,
       label:  o.label,
       style:  o.style ?? ((o.action === 'confirm' || o.value === 'confirm') ? 'primary' : 'default'),
+      // Carried so the experience layer can attach it to a dropdown option when it
+      // renders the choices as a select rather than as buttons — the description then
+      // sits on the option itself instead of in a separate list beneath the message.
+      ...(o.description ? { description: o.description } : {}),
       ...(o.modal ? { modal: o.modal } : {}),
     })),
   });
@@ -552,29 +638,32 @@ export function buildDialog(step, localState) {
 }
 
 // ---------------------------------------------------------------------------
-// serv_schema — creates a PGD table
+// serv_schema — creates a PGD table or view
 // ---------------------------------------------------------------------------
 
 async function executeServSchema({ step, localState, traceId }) {
-  // step.input may be "{{item}}" — resolves to the full table object
-  const tableObj = resolveInput(step.input, localState);
+  // step.input may be "{{item}}" — resolves to the full table or view object.
+  // A view object carries selectSql; a table object carries columns instead.
+  const schemaObj = resolveInput(step.input, localState);
+  const isView    = typeof schemaObj.selectSql === 'string';
+  const endpoint  = isView ? 'createView' : 'createTable';
 
-  console.info('step-executor: serv_schema — createTable', {
-    tableName: tableObj.tableName,
+  console.info(`step-executor: serv_schema — ${endpoint}`, {
+    tableName: schemaObj.tableName,
     traceId,
   });
 
-  const resp = await servPost('/api/v1/serv/schema/createTable', tableObj);
+  const resp = await servPost(`/api/v1/serv/schema/${endpoint}`, schemaObj);
 
   if (resp.statusCode !== 200 && resp.statusCode !== 201) {
     throw new Error(
-      `serv_schema createTable failed for "${tableObj.tableName}": ` +
+      `serv_schema ${endpoint} failed for "${schemaObj.tableName}": ` +
       `${resp.error ?? resp.statusCode}`
     );
   }
 
   return {
-    outputValue: { tableName: tableObj.tableName, status: 'created' },
+    outputValue: { tableName: schemaObj.tableName, type: isView ? 'view' : 'table', status: 'created' },
     nextAction:  resolveNextAction(step.on_success, null),
   };
 }
@@ -606,7 +695,7 @@ async function executeServInsert({ step, localState, traceId }) {
     const resp = await insertRows(tableName, row);
     if (!resp.success) throw new Error(`serv_insert bulk failed for "${tableName}": ${resp.error}`);
     return {
-      outputValue: resp.rows ?? { tableName, inserted: row.length },
+      outputValue: Array.isArray(resp.rows) ? resp.rows : resp.rows ? [resp.rows] : [],
       nextAction:  resolveNextAction(step.on_success, null),
     };
   }
@@ -859,12 +948,21 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       }));
   }
 
-  // For a reference table, pick the best natural key column for name-matching.
-  // Prefers columns named name/label/code/title, then falls back to first non-system column.
+  // For a reference table, pick the natural key column to match a user-supplied
+  // string against. Shares pickLabelColumn with the direct-CRUD listing path — the
+  // question ("which column stands in for a row as its readable value?") is the same,
+  // only the preference order differs.
+  //
+  // Returns null when the table has no column a string could match: previously this
+  // fell through to the first non-system column of any type, so a reference table
+  // whose leading column was jsonb/vector/an embedding would hand that column to
+  // resolveRefTableId as a lookup key — a filter that can never match. Callers now
+  // drop the FK instead (see rootRefFkCols/refFkCols below); a null must never reach
+  // resolveRefTableId, which builds it straight into a SQL filter.
   function getLookupColumn(tableName) {
-    const PREFERRED = new Set(['name', 'label', 'code', 'title']);
-    const cols = (schemaByTable[tableName] ?? []).filter(c => !SYSTEM.has(c.name));
-    return (cols.find(c => PREFERRED.has(c.name)) ?? cols[0])?.name ?? 'name';
+    return pickLabelColumn(schemaByTable[tableName] ?? [], {
+      preferred: ['name', 'label', 'code', 'title'],
+    });
   }
 
   // Returns names of all non-system text columns for a ref table.
@@ -905,7 +1003,11 @@ async function executeServEntitySchema({ step, localState, traceId }) {
       lookup_column:  getLookupColumn(fk.references.table),
       create_with:    refTextColumns(fk.references.table),
       allowed_values: refCheckAllowedValues(fk.references.table),
-    }));
+    }))
+    // No column a name could match on — omit the FK rather than resolve against a
+    // column that cannot match (a null lookup_column would reach resolveRefTableId
+    // and build a malformed SQL filter).
+    .filter(fk => fk.lookup_column !== null);
 
   // table → alias lookup — used to resolve FK references to parent aliases
   const tableToAlias = Object.fromEntries(joins.map(j => [j.table, j.alias]));
@@ -943,14 +1045,19 @@ async function executeServEntitySchema({ step, localState, traceId }) {
         parent = tableToAlias[fk.references];
         regularFkColumns.push({ column: fk.column, parent });
       } else {
-        // FK targets a table not in joins — treat as reference table
-        refFkCols.push({
-          column:         fk.column,
-          ref_table:      fk.references,
-          lookup_column:  getLookupColumn(fk.references),
-          create_with:    refTextColumns(fk.references),
-          allowed_values: refCheckAllowedValues(fk.references),
-        });
+        // FK targets a table not in joins — treat as reference table. A null lookup
+        // column means nothing a name could match on, so the FK is omitted rather
+        // than resolved against a column that cannot match (see getLookupColumn).
+        const lookupColumn = getLookupColumn(fk.references);
+        if (lookupColumn !== null) {
+          refFkCols.push({
+            column:         fk.column,
+            ref_table:      fk.references,
+            lookup_column:  lookupColumn,
+            create_with:    refTextColumns(fk.references),
+            allowed_values: refCheckAllowedValues(fk.references),
+          });
+        }
       }
     }
 
@@ -1348,6 +1455,55 @@ async function executeServDelete({ step, localState, traceId }) {
 }
 
 // ---------------------------------------------------------------------------
+// serv_upsert — INSERT or UPDATE each row depending on whether a match
+// already exists, via SERV-Table upsertRows
+// ---------------------------------------------------------------------------
+
+// Step input shape:
+//   {
+//     "tableName":     "PGD_Budgets",
+//     "matchColumns":  ["year", "month", "category_id"],
+//     "rows":          "{{budget_records_with_ids}}"
+//   }
+//
+// Replaces the query-existing-rows + diff-into-insert/update-lists pattern —
+// resolving which rows to insert vs update is handled server-side by SERV.
+// Workaround upsert — no table currently declares a compound unique
+// constraint on matchColumns, so this is query-then-write, not a native
+// INSERT ... ON CONFLICT. See docs/backlog.md for the Sprint 8 migration.
+
+async function executeServUpsert({ step, localState, traceId }) {
+  const resolvedInput = resolveInput(step.input ?? {}, localState);
+  const { tableName, matchColumns, rows } = resolvedInput;
+
+  if (!tableName) throw new Error('serv_upsert step missing input.tableName');
+  if (!Array.isArray(matchColumns) || matchColumns.length === 0) {
+    throw new Error('serv_upsert step missing or empty input.matchColumns');
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('serv_upsert step missing or empty input.rows');
+  }
+
+  console.info('step-executor: serv_upsert', {
+    tableName,
+    matchColumns,
+    rowCount: rows.length,
+    traceId,
+  });
+
+  const resp = await upsertRows(tableName, matchColumns, rows);
+
+  if (!resp.success) {
+    throw new Error(`serv_upsert failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
+  }
+
+  return {
+    outputValue: { tableName, inserted: resp.inserted ?? [], updated: resp.updated ?? [] },
+    nextAction:  resolveNextAction(step.on_success, null),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // simulate — dry-run a workflow step array (Section 6.4.6)
 // ---------------------------------------------------------------------------
 //
@@ -1376,14 +1532,19 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
   const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
+  // optional — path to the routing skeleton this step array was translated from. When
+  // present, L1 checks that translation emitted exactly one step per design item and
+  // invented none of its own (see checkSkeletonDrift).
+  const lockedSkeletonKey = step.input?.locked_skeleton_key;
 
   if (!stepsKey) {
     throw new Error('simulate step missing input.steps_key');
   }
 
-  const steps       = resolvePath(localState, stepsKey);
-  const mockOutputs = mockOutputsKey ? resolvePath(localState, mockOutputsKey) : null;
-  const simPaths    = pathsKey       ? resolvePath(localState, pathsKey)       : null;
+  const steps          = resolvePath(localState, stepsKey);
+  const mockOutputs    = mockOutputsKey    ? resolvePath(localState, mockOutputsKey)    : null;
+  const simPaths       = pathsKey          ? resolvePath(localState, pathsKey)          : null;
+  const lockedSkeleton = lockedSkeletonKey ? resolvePath(localState, lockedSkeletonKey) : null;
 
   if (!Array.isArray(steps) || steps.length === 0) {
     throw new Error(`simulate: steps_key "${stepsKey}" did not resolve to a non-empty array`);
@@ -1395,6 +1556,7 @@ async function executeSimulate({ step, localState, run, traceId }) {
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
     skeleton,
+    lockedSkeleton,
     traceId,
   });
 
@@ -1480,22 +1642,45 @@ function executeCondition({ step, localState, traceId }) {
     });
   }
 
-  const rawNext  = isTruthy ? step.on_success : step.on_else;
-  const bareNext = String(rawNext).startsWith('step:') ? String(rawNext).slice(5) : String(rawNext);
+  const rawNext = isTruthy ? step.on_success : step.on_else;
 
-  return { outputValue: null, nextAction: `step:${bareNext}` };
+  return { outputValue: null, nextAction: resolveNextAction(rawNext, null) };
 }
 
 async function executeNotify({ step, localState, traceId }) {
   const message = resolveTemplate(step.message_template ?? step.message ?? '', localState);
 
-  console.info('step-executor: notify', { traceId });
+  // reveal / reveals — same resolution as human_gate's buildDialog (see above).
+  // Optional collapsible panels rendered by postHumanNotification via buildRevealBlock.
+  const reveals = [];
+  if (step.reveal) {
+    reveals.push({
+      button_label: step.reveal.button_label,
+      content:      resolveInput(step.reveal.content ?? '', localState),
+    });
+  }
+  const revealsArray = typeof step.reveals === 'string'
+    ? (resolvePath(localState, step.reveals.replace(/^{{|}}$/g, '')) ?? [])
+    : (Array.isArray(step.reveals) ? step.reveals : []);
+  const stringRevealItems = revealsArray.filter(r => typeof r === 'string');
+  if (stringRevealItems.length > 0) {
+    reveals.push({ button_label: 'Details', content: stringRevealItems });
+  }
+  for (const r of revealsArray.filter(r => typeof r !== 'string')) {
+    reveals.push({
+      button_label: r.button_label,
+      content:      resolveInput(r.content ?? '', localState),
+    });
+  }
+
+  console.info('step-executor: notify', { traceId, revealCount: reveals.length });
 
   // run-workflow.mjs will enqueue the HUMAN_NOTIFICATION to SlackResultsQueue
   return {
     outputValue: { message },
     nextAction:  resolveNextAction(step.on_success, null),
     notifyMessage: message,
+    notifyReveals: reveals.length > 0 ? reveals : undefined,
   };
 }
 

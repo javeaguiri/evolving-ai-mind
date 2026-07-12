@@ -271,8 +271,8 @@ are tested against the live seed — any seed change that breaks an expression i
 | `create_domain step 3c — merge + columnSummary expression` | Merges `new_table` from `local_state`; applies `existing_table_modifications` patches to existing tables; topological sort ensures FK targets precede referencing tables; strips `existing_table_modifications` from stored table; handles null/absent `new_table`. |
 | `help step 2 — buildHelpOptions expression` | Builds `domainButtons` and `domainMap`; truncates long labels. |
 | `help step 4 — resolveHelpContent expression` | Resolves known selection; fallback for unknown; fallback for null. |
-| `get_entity step 4 — formatRecordList (with children)` | Formats root columns and child arrays; empty array. |
-| `list_entity step 2 — formatRecordList (root only)` | Suppresses child arrays; includes record count. |
+| `get_entity step 11 — entity_display_data builder (with children)` | Strips system/embedding columns, elides nulls, resolves FK columns to their looked-up label, keeps child arrays separate; empty results. |
+| `list_entity step 9 — entity_display_data builder (root only)` | Root scalar fields only, no children key; caps at 20 rows and reports truncated_count. |
 | `add_entity step 5 — buildChildInserts expression` | FK injection; empty child rows; missing local_state; multiple child tables. |
 
 ### Running

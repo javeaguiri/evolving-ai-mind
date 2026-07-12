@@ -124,6 +124,16 @@ export async function deleteRows(tableName, filters) {
   return servPost('/api/v1/serv/table/deleteRows', { tableName, filters });
 }
 
+/**
+ * Insert or update each row in a PGC/PGD table depending on whether a row
+ * matching matchColumns already exists, via SERV-Table upsertRows.
+ * Workaround upsert — query-then-write, not a native ON CONFLICT (no table
+ * currently declares a compound unique constraint on matchColumns).
+ */
+export async function upsertRows(tableName, matchColumns, rows) {
+  return servPost('/api/v1/serv/table/upsertRows', { tableName, matchColumns, rows });
+}
+
 // ---------------------------------------------------------------------------
 // SERV-Entity convenience wrappers
 // ---------------------------------------------------------------------------
