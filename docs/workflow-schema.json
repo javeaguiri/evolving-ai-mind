@@ -111,7 +111,6 @@
         "label":          { "type": "string", "description": "Button text shown to the user." },
         "action":         { "type": "string", "description": "Machine identifier matched by resume_gate. 'confirm' and 'cancel' are conventional values." },
         "on_select":      { "$ref": "#/definitions/routingToken" },
-        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this option's modal is dismissed without submitting. Defaults to on_select." },
         "output_key":     { "type": "string", "description": "Option-level output_key. When this option carries a modal, the modal inputValue is written to this local_state key on submit — instead of the parent step's output_key." },
         "modal":          { "$ref": "#/definitions/modalDescriptor" }
       }
@@ -142,7 +141,6 @@
         "value":          { "type": "string", "description": "Machine identifier for choice gate special_buttons." },
         "action":         { "type": "string", "description": "Machine identifier for non-choice gate special_buttons." },
         "on_select":      { "$ref": "#/definitions/routingToken" },
-        "on_modal_close": { "$ref": "#/definitions/routingToken", "description": "Routing when this button's modal is dismissed without submitting." },
         "style":          { "type": "string", "enum": ["primary", "danger", "default"], "description": "Slack button style. Omitting defaults to 'default'." },
         "output_key":     { "type": "string", "description": "Writes modal inputValue to this local_state key on modal submit." },
         "modal":          { "$ref": "#/definitions/modalDescriptor" }

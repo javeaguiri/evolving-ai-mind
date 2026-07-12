@@ -604,10 +604,11 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     });
     return { action: 'choice_unselected' };
   }
-  // When the modal was dismissed without submitting (no inputValue), route via
-  // on_modal_close if the option declares it — allows list_selection gates to loop
-  // back to themselves rather than falling through to on_select (which would
-  // advance with no captured value).
+  // True when this resume carries text typed into a modal. Used only to decide where the
+  // modal's value is written (an option-level output_key). It is NOT a signal that a modal
+  // was dismissed — a dismissed modal never resumes the gate at all (interactive.mjs's
+  // handleViewClosed leaves it suspended), and every plain button click also has no
+  // inputValue. Reading it as "the modal was cancelled" is what made on_modal_close a trap.
   const hasModalInput = !!responseData?.inputValue;
   // A row's own action button click routes via item_action.on_select directly —
   // never via a matching options[] entry, since every options[] entry also
@@ -734,11 +735,15 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     }
   }
 
-  const onSelect = (
-    !hasModalInput && matchedOption?.on_modal_close !== undefined
-      ? matchedOption.on_modal_close
-      : matchedOption?.on_select
-  ) ?? itemActionMatch?.on_select ?? 'next';
+  // on_modal_close removed (D5). It was unreachable AND a trap. Unreachable because a
+  // dismissed modal never resumes the gate at all — interactive.mjs's handleViewClosed
+  // deliberately enqueues nothing and leaves the gate suspended, which is the correct
+  // behaviour and what the Sprint 6 fix established. A trap because `hasModalInput` is
+  // false for ANY plain button click, so an option declaring on_modal_close would have
+  // hijacked a normal click and routed there instead of on_select. Zero live workflows
+  // used it; workflow-schema.json advertised it anyway. Same shape as remove_item and
+  // edit_list: a capability that does not work is worse than one that does not exist.
+  const onSelect = matchedOption?.on_select ?? itemActionMatch?.on_select ?? 'next';
 
   // For text_input gates, write the typed value to local_state[output_key]
   // before popping the frame. The value arrives in responseData.inputValue
