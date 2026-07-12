@@ -30,6 +30,41 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // @returns {SimulateWorkflowResponse}
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// buildErrorSummary — the single rendering of why a simulation failed.
+//
+// Every consumer that needs to tell a human or an LLM what went wrong reads this
+// string: create_workflow's failure gates (steps 21c/27), the regeneration brief
+// handed to generate_workflow_steps, Novia's simulate_workflow tool, and
+// troubleshoot-workflow.mjs. None of them re-derive it — a summary that disagrees
+// with `passed` is how a run ends up reporting "no specific issues reported" while
+// the engine is holding a real failure.
+//
+// Only gating issues appear here. Soft warnings are in `issues` for anyone who
+// wants them, but they never block a workflow, so they are not "why it failed".
+// ---------------------------------------------------------------------------
+
+function buildErrorSummary({ staticIssues = [], routingMatrix = null, smokeTest = null }) {
+  const lines = [];
+
+  const push = (list, cap, prefix) => {
+    list.slice(0, cap).forEach(i => {
+      lines.push(`- ${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
+    });
+    if (list.length > cap) lines.push(`- ...and ${list.length - cap} more`);
+  };
+
+  push(staticIssues, 8, '');
+  if (routingMatrix && !routingMatrix.passed) {
+    push(routingMatrix.issues ?? [], 5, '[routing] ');
+  }
+  if (smokeTest && !smokeTest.passed) {
+    push((smokeTest.issues ?? []).filter(i => i.hard), 5, '[data-flow] ');
+  }
+
+  return lines.join('\n');
+}
+
 export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, lockedSkeleton = null, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
@@ -52,6 +87,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              false,
       total_issues:        staticIssues.length,
+      error_summary:       buildErrorSummary({ staticIssues }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -81,6 +117,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              l2Passed,
       total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+      error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
@@ -111,6 +148,7 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const result = {
     passed:              l2Passed,
     total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+    error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
@@ -1332,17 +1370,25 @@ function runJsTransformSmokeTest(steps, traceId) {
   // shape mismatches on fields that throw at runtime (filters/updates/row/rows).
   // Runtime errors and severity:'warning' shape mismatches (items_key/context_key,
   // which fail silently at runtime) are soft — mock state may not match real data shapes.
-  const hardFailures = issues.filter(i =>
-    i.failure_class === 'js_transform_syntax_error' ||
-    i.failure_class === 'js_transform_void_return' ||
-    (i.failure_class === 'serv_input_shape_mismatch' && i.severity !== 'warning')
-  );
+  //
+  // The hard/soft verdict is stamped onto each issue rather than kept here.
+  // Consumers must never re-derive it by matching failure_class: `issues` mixes
+  // hard and soft, and any second copy of this predicate goes stale the moment a
+  // failure class is added (create_workflow step 26 did exactly that, and silently
+  // stopped reporting serv_input_shape_mismatch).
+  const tagged = issues.map(i => ({ ...i, hard: isHardSmokeFailure(i) }));
 
   return {
-    passed:       hardFailures.length === 0,
+    passed:       tagged.every(i => !i.hard),
     steps_tested: stepsTested,
-    issues,
+    issues:       tagged,
   };
+}
+
+function isHardSmokeFailure(issue) {
+  return issue.failure_class === 'js_transform_syntax_error' ||
+         issue.failure_class === 'js_transform_void_return'  ||
+         (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 
 // ---------------------------------------------------------------------------

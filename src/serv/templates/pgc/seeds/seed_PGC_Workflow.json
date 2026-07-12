@@ -1218,9 +1218,9 @@
       {
         "step": "20a",
         "type": "js_transform",
-        "description": "Initialise user_workflow_feedback to null on first pass; preserve existing value on revision pass (written by step 24 option before looping back here).",
-        "expression": "local_state.user_workflow_feedback !== undefined ? local_state.user_workflow_feedback : null",
-        "output_key": "user_workflow_feedback",
+        "description": "Initialise the two feedback channels into step 21 to null on first pass; preserve existing values on a revision pass (user_workflow_feedback is written by the step 24 option; skeleton_error_summary by step 21b1). Both must exist as keys before step 21 reads them — a key missing from local_state resolves to the literal token text, which the LLM then reads as if it were feedback.",
+        "expression": "({ user_workflow_feedback: local_state.user_workflow_feedback !== undefined ? local_state.user_workflow_feedback : null, skeleton_error_summary: local_state.skeleton_error_summary !== undefined ? local_state.skeleton_error_summary : null })",
+        "output_key": "user_workflow_feedback,skeleton_error_summary",
         "on_success": "next",
         "on_else": "cancel"
       },
@@ -1239,7 +1239,8 @@
           "user_design_notes": "{{user_design_notes}}",
           "special_instructions_message": "{{special_instructions_message}}",
           "user_mode_instructions": "{{user_mode_instructions}}",
-          "user_workflow_feedback": "{{user_workflow_feedback}}"
+          "user_workflow_feedback": "{{user_workflow_feedback}}",
+          "skeleton_error_summary": "{{skeleton_error_summary}}"
         },
         "output_key": "process_spec",
         "on_success": "next",
@@ -1300,11 +1301,11 @@
       {
         "step": "21a",
         "type": "js_transform",
-        "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation.",
-        "output_key": "routing_skeleton",
+        "description": "Build routing_skeleton: minimal step array (step_label key, step_type, routing fields only) derived from process_spec routing. Used by L1 BFS to validate routing topology before content generation. Also clears skeleton_error_summary — this step runs immediately before every skeleton simulate, so clearing here guarantees a summary from an earlier failed design can never be read as if it described the current one.",
+        "output_key": "routing_skeleton,skeleton_error_summary",
         "on_success": "next",
         "on_else": "cancel",
-        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_else) s.on_else = r.on_else; if (r.on_success)  s.on_success  = r.on_success; if (r.on_else)   s.on_else   = r.on_else; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_success) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return steps; })()"
+        "expression": "(function() { var design = (local_state.process_spec || {}).process_design || []; var steps = design.map(function(item) { var s = { step: item.step_label, type: item.step_type, description: item.description || '' }; var r = item.routing || {}; if (r.on_success) s.on_success = r.on_success; if (r.on_else) s.on_else = r.on_else; if (r.on_success)  s.on_success  = r.on_success; if (r.on_else)   s.on_else   = r.on_else; if (r.on_cancel)  s.on_cancel  = r.on_cancel; if (!s.on_success && !s.on_success) s.on_success = 'next'; return s; }); steps.push({ step: 'end', type: 'end', description: 'Workflow complete.' }); return { routing_skeleton: steps, skeleton_error_summary: null }; })()"
       },
       {
         "step": "21b",
@@ -1316,6 +1317,15 @@
         },
         "output_key": "skeleton_validation",
         "on_success": "step:22",
+        "on_else": "step:21b1"
+      },
+      {
+        "step": "21b1",
+        "type": "js_transform",
+        "description": "Skeleton L1 failed: capture the engine's error_summary so the redesign at step 21 is told what was wrong with its routing. Without this the redesign is blind — it discards the failed design and starts over with no knowledge of the defect, so a second attempt passes only by chance.",
+        "expression": "(local_state.skeleton_validation || {}).error_summary || null",
+        "output_key": "skeleton_error_summary",
+        "on_success": "step:21c",
         "on_else": "step:21c"
       },
       {
@@ -1323,7 +1333,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Skeleton L1 failed: process design produced an invalid routing graph. Offer to redesign or cancel before any content is generated.",
-        "message_template": "⚠️ *Process design has routing issues* — fixing these now prevents wasted step generation.\n\n*Issues found:* {{skeleton_validation.total_issues}}\n\nChoose how to proceed:",
+        "message_template": "⚠️ *Process design has routing issues* — fixing these now prevents wasted step generation.\n\n{{skeleton_error_summary}}\n\nChoose how to proceed:",
         "options": [
           {
             "label": "Redesign process",
@@ -1565,10 +1575,10 @@
       {
         "step": "26",
         "type": "js_transform",
-        "description": "Format simulation issues (L1 static analysis + routing matrix + smoke test hard failures) into a readable summary.",
+        "description": "Surface the simulation's own error_summary — the single rendering of why it failed, built by simulation-engine.mjs. This step must never re-derive which issues are gating: it previously kept its own list of hard failure classes, that list went stale when serv_input_shape_mismatch was added to the engine, and a real data-flow failure was reported to the user as 'no specific issues reported' while the regeneration loop was handed the same empty brief.",
         "input_key": "static_analysis_result",
         "output_key": "simulation_error_summary",
-        "expression": "(function(){var lines=[];var sa=items&&items.static_analysis;var l1issues=(sa&&Array.isArray(sa.issues))?sa.issues:[];l1issues.slice(0,6).forEach(function(i){lines.push(\"- Step \"+(i.step||\"?\")+\": \"+(i.detail||i.check||\"validation issue\"));});if(l1issues.length>6)lines.push(\"...and \"+(l1issues.length-6)+\" more issues\");var rm=items&&items.routing_matrix;if(rm&&!rm.passed&&Array.isArray(rm.issues)){rm.issues.slice(0,3).forEach(function(i){lines.push(\"- [routing] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"routing issue\"));});}var st=items&&items.smoke_test;if(st&&!st.passed&&Array.isArray(st.issues)){var hard=st.issues.filter(function(i){return i.failure_class===\"js_transform_syntax_error\"||i.failure_class===\"js_transform_void_return\";});hard.slice(0,3).forEach(function(i){lines.push(\"- [js_transform] Step \"+(i.step||\"?\")+\": \"+(i.detail||\"smoke test failed\"));});}if(lines.length===0)return\"Validation failed - no specific issues reported.\";return lines.join(\"\\n\");})()",
+        "expression": "(items && items.error_summary) || \"Validation failed - no specific issues reported.\"",
         "on_success": "step:26a",
         "on_else": "cancel"
       },

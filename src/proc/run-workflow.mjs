@@ -355,7 +355,13 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
   // Persist output_key → local_state.
   // Comma-separated output_key (e.g. "a,b,c") destructures an object return value into
   // multiple top-level local_state keys simultaneously.
-  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== null && result.outputValue !== undefined) {
+  //
+  // `null` is a value, not an absence: a step that initialises a key to null (create_workflow
+  // step 20a) is declaring "this key exists and is empty". Dropping it left the key missing
+  // from local_state, and template resolution renders a missing key as the literal token —
+  // so the LLM received the string "{{user_workflow_feedback}}" as the user's feedback.
+  // Only `undefined` (the step produced no output) skips the write.
+  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== undefined) {
     const outKeys = step.output_key.split(',').map(k => k.trim());
     if (outKeys.length > 1 && typeof result.outputValue === 'object' && result.outputValue !== null) {
       for (const key of outKeys) {
