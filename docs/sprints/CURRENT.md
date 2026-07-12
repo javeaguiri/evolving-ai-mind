@@ -600,6 +600,36 @@ Sequenced after H1 (SERV-Table `upsertRows`) so `serv_upsert`'s own contract can
 
 ## Session Notes
 
+**2026-07-12 (session 18, close) — COST STOP. Read this before scoping Sprint 8.**
+
+**The user is at ~$50/month against a $10 target and exhausted July's Perplexity quota in two weeks. Development on `create_workflow` is paused pending a decision.** This section exists so the next session does not resume burning quota by reflex.
+
+**Where the money actually goes — measured, 2026-07-12 (42 `llm_call` steps, 7 `create_workflow` runs, 1,456s of LLM time):**
+
+| step | % of LLM time |
+|---|---|
+| 21 `design_workflow_process` | 25% |
+| 23 `generate_workflow_steps` | 19% |
+| 3 `research_workflow_domain` | 17% |
+| 21t consolidation re-design | 14% |
+| 11 `analyze_workflow_gaps` | 6% |
+| 21r redundancy critic | 5% |
+| rest | 6% |
+
+`design_workflow_process` runs **twice** per pass (21 + 21t) = **39% of all spend**. The critic chain (21r + 21t) = **19%**. `research_workflow_domain` = **17%**, on domains whose schema we already hold.
+
+**`create_workflow` IS the bill. Running workflows is not.** A registered workflow costs 0–2 LLM calls; `edit_budget` at runtime costs zero. The product thesis — *LLM sparingly, reuse workflows* — is intact. What is expensive is **developing** `create_workflow` by invoking it 7–9 times a day.
+
+**The finding that matters: we are paying LLM money to find bugs in deterministic code.** Of ~15 defects fixed today, **11 were in code or seeds, not in LLM behaviour** — N1a (engine discarded its own hard/soft verdict), N1c (null outputs dropped), M5 (21a invented routing), M7 (no block-limit guard), M9 (Slack failures swallowed), `dropColumn` not pruning constraints, `dropColumn` CASCADE destroying views, `modifyConstraint` not appending, the `target` trap ×2, the LLM timeout ceiling. **Not one of them needed an LLM call to find.** We discovered them by running `create_workflow` live at ~8 calls a run, because that is the only way we currently exercise the pipeline. **That is the cost problem — the test loop, not the architecture.**
+
+**The fix is sitting in the database already.** `PGC_SessionEntry` stores the full assembled prompt and raw response for **every** `llm_call` of every run (Track B2). Run 719's complete LLM output corpus is recorded. Capture those as fixtures and replay them through the pipeline offline: every one of today's 11 deterministic bugs becomes a free unit test, and live LLM runs demote from *dev loop* to *acceptance test*.
+
+**The critic (M2) is misfiring and should be cut back — the user called this before I did.** Scoreboard: first live run found nothing (missed the two-view duplication); run 709 caught the parallel chain; run 713 found two real ones; **run 719 false-positived** — its Test 1 told the designer to delete `check_continue_editing`, a step that is genuinely required (the Update/Done divergence happens *after* a shared write, so the decision must survive the write). The designer correctly overruled it. Cost: 19% of the bill, of which 14% is step **21t** — re-running the entire design. **Recommendation: keep `21r` (the findings, 5%), delete `21t` (the automatic re-design, 14%). Surface findings to the user at the step-24 review gate and let a human decide.** Removes the false-positive-overrules-designer risk and cuts ~14% immediately.
+
+**Open capability gap blocking `edit_budget` (run 719, L1 failure at step 13):** a `form` gate writes only its field values to `output_key` — **which button was clicked is used for routing and then discarded.** Every other gate type records its selection (`choice`, `confirm`+`context_key`, `list_selection`, `text_input`). The designer wrote `{{edit_action}}` and noted *"tracked via a hidden mechanism or gate action value"* — it knew exactly what it needed. Same signal as run 693's `llm_call`-parsing-a-date: **you cannot design a save-and-continue loop against a widget that discards the button you pressed.** Fault domain **Execution — capability gap**. Fix: an additive `action_key` on `human_gate`, written by `resumeGate` from the matched option, uniform across gate types. **~1 hour, zero LLM cost, testable offline.** There is no design workaround: routing Update/Done to separate chains duplicates the `serv_upsert` (which the critic would then flag), and making Done not persist violates the spec.
+
+**Run 719 otherwise validated everything from this session.** 16 design items → **16 generated steps** (M1, zero invention). **Zero `llm_call` steps** in the generated workflow — the inference step from run 713 is gone, because the schema fix removed the reason it existed. Amounts only (M6 SCOPE). Sub-totals computed *before* the gate. A real Update→re-show loop. And the skeleton-repair loop fired and **fixed itself from specific feedback** (N1b's first live validation — the gate said *"Step notify_complete is not reachable"* instead of run 709's bare *"Issues found: 12"*).
+
 **2026-07-12 (session 18, continued) — run 713, and the schema defect underneath everything.**
 
 Regenerated `edit_budget` with the identical specification, as a clean A/B against run 710.
