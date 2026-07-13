@@ -309,3 +309,13 @@ Named explicitly so the deferral is a decision, not an oversight.
     second copy of one truth — the exact pattern behind four Sprint 7 bugs.
 - Established that `local_state` divergence needs no comparison logic: it manifests as prompt drift, and the
   fingerprint detects that exactly. The `local_state` diff is reporting, not control flow.
+- Verified against the code that replay is **uniform across all workflows** — the three existing entry paths
+  converge on the same two operations, so `POST /proc/replay` is a fourth entry point of identical shape.
+  No per-workflow case for `create_domain` / `create_workflow`.
+- Break notification designed as the developer **interface**, not a status report — literal runnable curl
+  per resolution, both run IDs labelled, no key material rendered.
+
+**Scope approved. Implementation starts 2026-07-14 — begin with Track B** (both are seed edits, need nothing
+built, and cut ~31% of live-run spend before the harness exists).
+
+Sprint 8 is docs-only on the branch so far: `arch-replay.md` + `CURRENT.md`. No code written.
