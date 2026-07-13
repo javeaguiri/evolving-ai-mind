@@ -193,7 +193,18 @@ Named explicitly so the deferral is a decision, not an oversight.
 - `GET /proc/replay/{runId}` — status; full break report when broken.
 - `POST /proc/replay/{runId}/resume` — `{ resolution, response?, breakPolicy? }`. Resolution is over
   **HTTP, not Slack** — an LLM response is far larger than a Slack modal accepts.
-- Slack `/replay <runId> [record]` as a convenience wrapper.
+- **Uniform across every workflow — system or evolving. No per-workflow case.** All three existing entry
+  paths (`create-domain.mjs`, `create-workflow.mjs`, `classify-intent.mjs` `handoff()`) converge on the
+  same two operations: insert `PGC_WorkflowRun` with `workflow_id` + `input`, enqueue `execute_top`.
+  Their only pre-run work is computing `input` — already persisted in the source run. `POST /proc/replay`
+  is a **fourth entry point of identical shape**.
+- Known limits, stated not discovered: `classify-intent`'s Tier 2/3 sonar calls fire before a run exists
+  and are **outside the seam**; Novia (`minds-eye.mjs`) runs its own loop and is **not replayable**.
+  Neither is in the measured bill.
+- Slack: `/replay` (list recent runs + whether each is replayable), `/replay <runId>`,
+  `/replay <runId> record`. No workflow name needed — the run row knows its `workflow_id`.
+- Recording a workflow that has **never run**: no source to clone, so `workflow` + `input` are supplied
+  directly over HTTP with `breakPolicy: always`. Also how synthetic fixtures are built.
 - `openapi.yaml` **spec-first**, before implementation.
 
 **A6 — Drift report**
