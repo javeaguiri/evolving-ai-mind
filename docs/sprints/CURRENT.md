@@ -169,6 +169,12 @@ Named explicitly so the deferral is a decision, not an oversight.
   `human_gate` uses. Not a parallel engine.
 - Suspend: stash `{ instructions, userInput, fingerprint, candidate }` on a break frame, set
   `awaiting_llm_break`, notify Slack with a **pointer** (run ID, step, drift summary) — not the payload.
+- **The break notification is the interface.** It carries a literal, runnable curl for every resolution
+  — real base URL, `$INTERNAL_API_KEY` referenced as an env var so no key material is ever rendered,
+  and both run IDs labelled (replay vs source). A break that makes the developer go hunting for the
+  route shape has handed over a chore instead of a decision. Format: `arch-replay.md` §5.
+- At a break the assembled prompt lives on the **break frame**, not in `PGC_SessionEntry` — the session
+  row is written after a response exists. `GET /proc/replay/{runId}` serves it from the frame.
 - Resume endpoint writes `{ resolution, response }` onto the break frame; the `resume_llm` SQS message
   carries `workflowRunId` only. A hand-supplied `design_workflow_process` response can approach SQS's
   256KB limit; the frame is `jsonb` and has no such ceiling.

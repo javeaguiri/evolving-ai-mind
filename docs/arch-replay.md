@@ -155,6 +155,60 @@ developer reads the break over HTTP, supplies a resolution
 way that should not change the answer, accepting the recording keeps the entire downstream suffix
 free.
 
+### The break notification is the interface
+
+A break is a message to a **developer**, not to a user. What a developer needs is not a description
+of what happened but the commands to act on it. A notification that reports a break and leaves the
+route shape, the auth header, and the resolution vocabulary to be rediscovered has handed over a
+chore instead of a decision.
+
+The notification therefore carries a literal, copy-pasteable command for every resolution:
+
+```
+🛑  Run 812 — BROKE at step 21, awaiting resume
+
+    workflow     create_workflow
+    step         21 · design_workflow_process
+    replaying    run 719
+    reason       DRIFT — input, prompt   (memory drift ignored: soft)
+    policy       on_miss
+
+    Read the break — assembled prompt, component diff, local_state diff:
+      curl -s -H "x-api-key: $INTERNAL_API_KEY" "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812"
+
+    Resume with the recorded response — free, keeps the whole suffix free:
+      curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
+
+    Resume by calling the LLM for this step only — costs one call:
+      curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"call_live"}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
+
+    Resume with a response you write — free:
+      curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d @resume.json "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
+      resume.json:  { "resolution": "supplied", "response": { ... } }
+
+    Record every remaining step:  add  "breakPolicy": "always"  to any resume body.
+    Abandon:                      -d '{"resolution":"abort"}'
+```
+
+Rules the message obeys:
+
+- **URLs are literal.** No `$BASE`, no placeholder host — the command is runnable as printed.
+- **The API key is never rendered.** `$INTERNAL_API_KEY` is referenced as an environment variable so
+  no key material is ever written to a Slack channel, a log, or a transcript.
+- **`812` is the replay run, `719` is the source run.** Both appear, so the distinction never has to
+  be inferred. Every path parameter in the API is the **replay** run (§9).
+- **The prompt is not in the message.** It is far past Slack's 3000-char block limit, and the system's
+  convention is that messages are pointers, not payloads. The `GET` returns it.
+
+### At a break, the prompt is on the frame — not in `PGC_SessionEntry`
+
+The diagnostics session is written **after** a response is obtained. At suspend time no response
+exists, so no `PGC_Session` row has been written for this call yet. The assembled prompt lives on
+the break frame in `PGC_WorkflowRun.stack`, and `GET /proc/replay/{runId}` serves it from there.
+
+The `PGC_Session` row is written on resume, once a response — recorded, live, or supplied — has been
+obtained and validated, exactly as in a live run.
+
 ### The supplied response is not privileged
 
 Whatever response is supplied — recorded, live, or hand-written — flows through `review-output`
@@ -314,10 +368,25 @@ consequence and is correctly ignored by the control path.
 ### PROC endpoints
 
 ```
-POST /proc/replay                  start a replay or record run
+POST /proc/replay                  start a replay or record run  → returns the NEW runId
 GET  /proc/replay/{runId}          status; full break report when broken
 POST /proc/replay/{runId}/resume   supply a resolution and continue
 ```
+
+**`{runId}` is always the new replay run — never the source run.**
+
+The source run is named exactly once in the entire API: as `sourceRunId` in the `POST /proc/replay`
+body. After that it is never addressed again by a caller. It is a **corpus being read**, not a
+process — it has no state to inspect and nothing to resume. Everything that can be inspected or
+resumed belongs to the new run.
+
+| | run addressed |
+|---|---|
+| `POST /proc/replay` body `sourceRunId` | **source** (old) — the corpus |
+| `POST /proc/replay` response `runId` | **replay** (new) |
+| `GET /proc/replay/{runId}` | **replay** (new) |
+| `POST /proc/replay/{runId}/resume` | **replay** (new) |
+| Slack break notification | shows **both**, labelled |
 
 **`POST /proc/replay`**
 
