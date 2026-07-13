@@ -431,11 +431,67 @@ run ID and session ID; the response is supplied over HTTP.
 Real `human_gate` steps in a replayed run are unaffected — they render in Slack and are answered in
 Slack, exactly as in a live run. That is the point: a replay is a real run with a recorded LLM.
 
+### Starting a replay — any workflow, system or evolving
+
+**There is no per-workflow case.** The seam is `executeLlmCall`, which every `llm_call` step of every
+workflow passes through. `create_domain`, `create_workflow`, `edit_budget`, a generated CRUD
+workflow — all replay identically.
+
+This holds because all three existing entry paths converge on the same two operations:
+
+| entry | what it does before the run |
+|---|---|
+| `create-domain.mjs` | resolves `input = { userInput }` → insert `PGC_WorkflowRun` → enqueue `execute_top` |
+| `create-workflow.mjs` | resolves `input = { userInput, domain }` via `matchDomainAlias` → insert `PGC_WorkflowRun` → enqueue `execute_top` |
+| `classify-intent.mjs` `handoff()` | resolves `input = workflowInput` → insert `PGC_WorkflowRun` → enqueue `execute_top` |
+
+Their only pre-run work is **computing what goes into `input`** — and that answer is already persisted
+in the source run's `PGC_WorkflowRun.input`. `POST /proc/replay` therefore clones `workflow_id` +
+`input` and enqueues `execute_top`: **a fourth entry point of identical shape.** Bypassing the entry
+module is not merely safe, it is correct — its only job was to compute a value the corpus already has.
+
+A consequence worth stating: a replay does **not** re-run `matchDomainAlias` or intent classification.
+Replay begins at the run, not at the intent. Intent routing is separately cheap to exercise and is not
+what this harness is for.
+
+### What is outside the seam
+
+| not replayable | why | matters? |
+|---|---|---|
+| `classify-intent.mjs` Tier 2/3 sonar calls | fire *before* a `PGC_WorkflowRun` exists; do not route through `llm-harness` | no — priced as negligible (§16.4) |
+| Novia (`minds-eye.mjs`) | runs its own agentic loop with its own LLM calls, not `executeLlmCall` | no — out of scope; revisit if Novia spend grows |
+
+Every `llm_call` step of every workflow **is** at the seam — which is where the entire measured bill
+lives (42 `llm_call` steps across 7 `create_workflow` runs).
+
 ### Slack
 
 ```
-/replay <runId> [record]        convenience wrapper over POST /proc/replay
+/replay                      list recent runs — id, workflow, status, llm_call count, replayable?
+/replay <runId>              replay that run          (breakPolicy: on_miss)
+/replay <runId> record       replay, breaking at every llm_call   (breakPolicy: always)
 ```
+
+`/replay` with no argument answers the question that actually blocks a developer: *which run do I
+replay?* It lists recent runs with the one fact that decides it — whether the run has a complete
+fingerprinted corpus, and therefore whether replaying it costs nothing or breaks immediately.
+
+`/replay <runId>` needs no workflow name. The run row already knows its `workflow_id`, so the same
+command replays a `create_workflow` run, a `create_domain` run, or a generated domain workflow.
+
+### Recording a workflow that has never run
+
+There is no source run to clone, so `workflow` and `input` are supplied directly. This is the HTTP
+path — it does not fit a slash command, and it should not try to.
+
+```
+curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' \
+  -d '{"workflow":"create_workflow","input":{"userInput":"<description>","domain":null},"breakPolicy":"always"}' \
+  "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay"
+```
+
+Every `llm_call` breaks; each response is hand-written. The result is a corpus for a workflow that has
+never been invoked live — which is also how synthetic fixtures are built for the regression use in §10.
 
 Break notifications post to the run's thread as `HUMAN_NOTIFICATION` — run ID, step, drift summary,
 and the session ID to pull the prompt from. They are pointers, not payloads.
