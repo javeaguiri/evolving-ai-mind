@@ -235,6 +235,7 @@ entry messages, which carry no run ID and are consumed once.
 | `SHUTDOWN` | — | 1 — fire-and-forget | SlackbotFunction (`/shutdown`) | proc/shutdown.mjs — cancels all running/awaiting runs; notifies via HUMAN_NOTIFICATION |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
+| `WORKFLOW_STEP` | `resume_llm` | 2 — workflow execution | proc/replay.mjs resume endpoint (A5) | proc/run-workflow.mjs — resumes a suspended replay break (`docs/arch-replay.md` §5) |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
 
 **Design decisions:**
