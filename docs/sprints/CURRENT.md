@@ -78,7 +78,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 
 | Track item | AC(s) | Status |
 |---|---|---|
-| A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ⬜ |
+| A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ✅ DONE 2026-07-15 — migrated + verified live (commit `891246f`) |
 | A2 — Fingerprint computation at the seam | AC1 | ⬜ |
 | A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | ⬜ |
 | A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | ⬜ |
