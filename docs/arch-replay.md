@@ -75,6 +75,7 @@ The fingerprint is recorded per `llm_call` as a set of component hashes, not one
 | `model` | resolved model ID (post alias) | a different model would answer |
 | `schema` | `PGC_Prompt.output_schema` | the response contract changed |
 | `memory` | the injected memory block | different memories were retrieved |
+| `system_context` | the injected `PGC_SystemContext` subset (`selectInjectedContext` — the rows `assembleInstructions` substitutes) | a shared context row the prompt references changed (e.g. `workflow_constraints`, `markdown_formatting_syntax`) |
 
 A **hit** requires every component to match. The composite hash is the fast path; the component
 breakdown is what a break report shows, so drift is always attributable to a cause rather than to
@@ -347,6 +348,7 @@ payloads travel in SQS. This is the same split the system already makes for `sta
 | `user_input` | hard | break |
 | `model` | hard | break |
 | `schema` | hard | break — the recorded response may no longer validate |
+| `system_context` | hard | break — a shared context row the prompt injects changed |
 | `memory` | soft | reuse, log, do not break |
 | *no recording at all* | miss | break — nothing to offer but `call_live` / `supplied` |
 

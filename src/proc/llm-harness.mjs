@@ -16,6 +16,7 @@ import { validate, logPromptError }                               from './review
 import { getRows, insertRow }                                     from '../shared/serv-client.mjs';
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
+import { computeFingerprint }                                     from './fingerprint.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -62,6 +63,28 @@ function resolveNextAction(onSuccess) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Select the PGC_SystemContext subset injected into a prompt for this call.
+ * A row is injected when it is inject_always or its inject_for list names this
+ * intentCategory, AND its key is not already supplied by resolvedInput (step
+ * input takes precedence). Returns { key: content }.
+ *
+ * The single source of truth for "what system context is injected" — used by
+ * assembleInstructions (to substitute it) and by the request fingerprint (to hash
+ * the system_context component). One function so the two cannot drift.
+ */
+export function selectInjectedContext(contextRows, resolvedInput, intentCategory) {
+  const contextMap = {};
+  for (const row of contextRows ?? []) {
+    const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
+    const injectAlways = row.inject_always === true;
+    if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
+      contextMap[row.key] = row.content;
+    }
+  }
+  return contextMap;
+}
+
+/**
  * Assemble the system instructions string for an LLM call.
  *
  * Order of assembly:
@@ -81,14 +104,7 @@ function resolveNextAction(onSuccess) {
  * @returns {string}                 Final instructions string
  */
 export function assembleInstructions(promptRow, resolvedInput, contextRows, memories, intentCategory) {
-  const contextMap = {};
-  for (const row of contextRows ?? []) {
-    const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
-    const injectAlways = row.inject_always === true;
-    if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
-      contextMap[row.key] = row.content;
-    }
-  }
+  const contextMap = selectInjectedContext(contextRows, resolvedInput, intentCategory);
 
   const allSubstitutions = { ...contextMap, ...resolvedInput };
   let instructions = Object.entries(allSubstitutions).reduce((text, [key, val]) => {
@@ -196,6 +212,17 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   const userInput = resolveTemplate(step.input?.user_input ?? '', localState);
 
+  // Request fingerprint (docs/arch-replay.md §3) — computed at the seam from the
+  // assembled request, before the LLM is called. Hashes the same injected context
+  // and memory block that assembleInstructions used, so the fingerprint and the
+  // prompt cannot disagree. Written to PGC_Session below; a live run populates the
+  // corpus for the next replay.
+  const injectedContext = selectInjectedContext(contextRows, resolvedInput, intentCategory);
+  const memoryBlock     = memories.length > 0 ? formatMemoryBlock(memories) : '';
+  const fingerprint     = computeFingerprint({
+    promptRow, resolvedInput, userInput, model: resolvedModel, memoryBlock, injectedContext,
+  });
+
   console.info('step-executor: llm_call', {
     intentCategory,
     promptVersion:    promptRow.version,
@@ -287,6 +314,10 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
         trace_id:        traceId,
         step_id:         step.step,
         intent_category: intentCategory,
+        request_fingerprint:      fingerprint.components,
+        fingerprint_hash:         fingerprint.hash,
+        response_source:          'live',
+        replayed_from_session_id: null,
       });
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;
