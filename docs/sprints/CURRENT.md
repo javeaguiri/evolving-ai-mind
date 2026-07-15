@@ -319,3 +319,22 @@ Named explicitly so the deferral is a decision, not an oversight.
 built, and cut ~31% of live-run spend before the harness exists).
 
 Sprint 8 is docs-only on the branch so far: `arch-replay.md` + `CURRENT.md`. No code written.
+
+### Session 2 — 2026-07-15 — Reprioritize: Track A leads
+
+- **Track B deferred until `create_workflow` is more stable.** Reversal of the Session 1 "begin with
+  Track B" call. Rationale: Track B is a per-*run* optimization (~14% off each live invocation once B2/step 3
+  is dropped), but the real burden is the per-*success* multiplier — 10+ live runs to land one working
+  workflow. Replay (Track A) collapses that multiplier to ~1 real run + N free replays, which dominates any
+  single-run saving. The 21t false-positive (run 719) is a stability concern, not a cost one — revisit the
+  consolidation-critic rework once the loop is free enough to iterate on safely.
+- **B2 dropped, not just deferred.** Step 3 (`research_workflow_domain`) is kept — the user sees value in it.
+  This removes AC7 and ~17% from AC8's projected cut; the measured target for AC8 is now whatever B1 alone
+  yields when it eventually lands (~14%), plus the replay-driven $0 dev-cycle.
+- **B1 direction, when revisited:** delete 21t + 21s, keep 21r (findings-only), surface
+  `redundancy_review.findings` at the step-24 gate; accepted findings ride the existing
+  `Regenerate with feedback → step 21` back-edge so `design_workflow_process` stays the single author.
+  Rejected: folding consolidation into `generate_workflow_steps` — it breaks the translation-is-not-design
+  invariant and staleness of the locked `routing_skeleton`.
+- **New order: Track A first**, starting at A1 (schema migration + `arch-data.md`), then A2 fingerprint at the
+  seam. A5's `/proc/replay` routes are spec-first — `openapi.yaml` before implementation.
