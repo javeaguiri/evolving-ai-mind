@@ -1193,6 +1193,31 @@ paths:
         '500':
           description: Session lookup, ACK post, or SQS enqueue failed
 
+  /api/v1/ui/slack/replay:
+    post:
+      summary: /replay slash command — LLM replay harness entry point
+      description: >
+        Handles the /replay Slack slash command. `/replay` lists recent runs;
+        `/replay <runId>` replays that run (breakPolicy on_miss); `/replay <runId> record`
+        records it (breakPolicy always). Posts an ACK message (its thread carries the run's
+        replies and break notifications), then enqueues a REPLAY message to WorkflowQueue for
+        proc/replay.mjs. Inspecting or resuming a broken replay is HTTP-only — see
+        /api/v1/proc/replay/{runId} and .../resume. Full design in docs/arch-replay.md §9.
+      tags: [UI]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                text:       { type: string, description: Empty (list), a run id, or "id record". }
+                channel_id: { type: string }
+      responses:
+        '200': { description: ACK posted; REPLAY enqueued (or an ephemeral usage error) }
+
   /api/v1/ui/slack/create-workflow:
     post:
       summary: /create-workflow slash command — direct workflow creation entry point
@@ -1453,6 +1478,132 @@ paths:
           description: Slack ACK post failed or SQS enqueue failed
 
   # ── PROC ───────────────────────────────────────────────────────────────────
+
+  /api/v1/proc/replay:
+    post:
+      summary: Start a replay or record run (LLM replay harness)
+      description: >
+        Creates a NEW PGC_WorkflowRun that replays an existing run's corpus, or records a
+        fresh one. See docs/arch-replay.md §9. Always mints a new run — never re-executes
+        the source in place, and never copies the source run's session entries (recordings
+        are looked up by content fingerprint).
+
+
+        With `sourceRunId`: `workflow_id` and `input` are copied from that run.
+        Without it: supply `workflow` (name) and `input` directly — with
+        `breakPolicy: always` this records a corpus for a workflow that has never run.
+
+
+        `breakPolicy`: `never` (live), `on_miss` (replay — serve fingerprint hits, break on
+        hard drift or miss), or `always` (record — break at every llm_call).
+      tags: [PROC]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [breakPolicy]
+              properties:
+                sourceRunId: { type: integer, description: Run whose corpus + input to replay. Omit to record from scratch. }
+                workflow:    { type: string, description: Workflow name — required when sourceRunId is omitted. }
+                input:       { type: object, description: Run input — required when sourceRunId is omitted. }
+                breakPolicy: { type: string, enum: [never, on_miss, always] }
+                callback:    { type: object, description: Provider-agnostic UI callback for break notifications. }
+            examples:
+              replay_existing:
+                summary: Replay run 719 on_miss
+                value: { sourceRunId: 719, breakPolicy: on_miss }
+              record_new:
+                summary: Record a workflow that has never run
+                value: { workflow: create_workflow, input: { userInput: "...", domain: null }, breakPolicy: always }
+      responses:
+        '200':
+          description: New replay run created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:  { type: integer, description: The NEW replay run id — used for all subsequent GET/resume calls. }
+                  status: { type: string }
+        '400': { description: Missing sourceRunId and workflow/input, or invalid breakPolicy }
+        '404': { description: sourceRunId or workflow not found }
+
+  /api/v1/proc/replay/{runId}:
+    get:
+      summary: Replay run status + break report
+      description: >
+        Returns the replay run's status. When it is suspended at a break
+        (`awaiting_llm_break`), returns the full break report from the break frame:
+        the assembled prompt, which fingerprint components drifted, the reason, and the
+        candidate recording (if any). `{runId}` is always the REPLAY run, never the source.
+      tags: [PROC]
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Status, plus a break report when broken
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:  { type: integer }
+                  status: { type: string }
+                  break:
+                    type: object
+                    nullable: true
+                    properties:
+                      step_id:              { type: string }
+                      intent_category:      { type: string }
+                      reason:               { type: string }
+                      policy:               { type: string }
+                      drift:                { type: array, items: { type: string }, nullable: true }
+                      instructions:         { type: string, description: The assembled prompt for this call. }
+                      fingerprint:          { type: object }
+                      candidate_session_id: { type: integer, nullable: true }
+        '404': { description: Replay run not found }
+
+  /api/v1/proc/replay/{runId}/resume:
+    post:
+      summary: Resume a suspended replay break
+      description: >
+        Supplies a resolution for a run suspended at `awaiting_llm_break`, over HTTP (an LLM
+        response is far larger than a Slack modal accepts). Writes the resolution (and any
+        supplied response) onto the break frame, then enqueues `resume_llm`.
+      operationId: resumeReplay
+      tags: [PROC]
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: integer }
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution:  { type: string, enum: [use_recorded, call_live, supplied, abort] }
+                response:    { type: object, description: Required only for resolution=supplied. }
+                breakPolicy: { type: string, enum: [never, on_miss, always], description: Optional — changes the run policy from this point on (e.g. record the rest). }
+            examples:
+              use_recorded: { value: { resolution: use_recorded } }
+              supplied:     { value: { resolution: supplied, response: { } } }
+      responses:
+        '200': { description: Resolution accepted; resume_llm enqueued }
+        '404': { description: Replay run not found }
+        '409': { description: Run is not awaiting an llm break }
 
   /api/v1/proc/ping-db:
     post:

@@ -42,6 +42,7 @@ import { handle as explain }            from './explain.mjs';
 import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 import { handle as writeMemory }        from './memory-writer.mjs';
 import { handle as mindsEye }           from './minds-eye.mjs';
+import { handle as replay }             from './replay.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -192,6 +193,13 @@ async function processSqsBatch(records) {
         await shutdown(req);
         continue;
       }
+      // REPLAY — start a replay (sourceRunId) or list recent runs (none), from the
+      // /replay Slack command. Resume/inspect of a broken replay is HTTP-only (arch-replay §9).
+      if (message.type === 'REPLAY') {
+        const req = buildReqFromSqs(message);
+        await replay(req);
+        continue;
+      }
       // MEMORY_WRITE — fire-and-forget episodic memory write on domain run completion.
       // Enqueued by run-workflow.mjs after qualifying CRUD workflow run completes.
       if (message.type === 'MEMORY_WRITE') {
@@ -254,6 +262,13 @@ async function processSqsBatch(records) {
 // ---------------------------------------------------------------------------
 
 async function dispatch(req) {
+  // Replay endpoints use path params / sub-actions (/replay, /replay/{id},
+  // /replay/{id}/resume) that the last-segment `req.route` cannot distinguish — dispatch
+  // them by the first proxy segment. SQS reqs have no `proxy`, so this never matches them.
+  if ((req.proxy || '').split('/').filter(Boolean)[0] === 'replay') {
+    return replay(req);
+  }
+
   switch (req.route) {
     case 'ping-llm':
       return pingLlm(req);

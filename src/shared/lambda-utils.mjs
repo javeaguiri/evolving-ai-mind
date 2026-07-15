@@ -30,6 +30,9 @@ export function parseEvent(event) {
   return {
     method:        event.httpMethod || 'POST',
     path:          event.path || '/',
+    // Full {proxy+} capture — used by routes with path params or sub-actions (e.g.
+    // /replay/{runId}/resume) that the last-segment `route` model below cannot express.
+    proxy:         event.pathParameters?.proxy || '',
     // Last path segment — used for sub-route switching inside a layer handler
     route:         (event.pathParameters?.proxy || '').split('/').filter(Boolean).pop() || '',
     headers:       event.headers || {},

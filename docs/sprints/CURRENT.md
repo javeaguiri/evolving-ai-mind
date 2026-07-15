@@ -82,7 +82,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A2 — Fingerprint computation at the seam | AC1 | 🔨 CODE-COMPLETE 2026-07-15 — `fingerprint.mjs` + seam write; 7th component `system_context` added; 15 unit tests. Pending `sam deploy` to write on live runs |
 | A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | 🔨 CODE-COMPLETE 2026-07-15 — `replay-corpus.mjs` (source-first→global lookup, soft/hard drift), seam decision + serve path, `allowLlmCorrection` zero-spend guard; 11 unit tests. Break signal (`llm_break`) emitted but **inert until A4**. Pending deploy |
 | A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | 🔨 CODE-COMPLETE 2026-07-15 — break-before-audit suspend, `awaiting_llm_break` guard, `llm_break` frame resume path, `resume_llm` action, break-resolution consumption in `llm-harness` (use_recorded/supplied/call_live/abort), runnable-curl notification; 6 unit tests. Resume **producer** (endpoints) is A5. Pending deploy |
-| A5 — `/proc/replay` endpoints | AC2, AC3, AC4 | ⬜ |
+| A5 — `/proc/replay` endpoints + `/replay` Slack cmd | AC2, AC3, AC4 | 🔨 CODE-COMPLETE 2026-07-15 — `proc/replay.mjs` (POST start/record, GET break report, POST resume→`resume_llm`), proxy-segment routing (`parseEvent.proxy`), `REPLAY` SQS type, `ui/slackbot/replay.mjs` (`/replay` list/replay/record); openapi spec-first; 7 unit tests. Pending deploy |
 | A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ |
 | A7 — Fingerprint backfill script | AC5 | ⬜ |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ |
