@@ -80,7 +80,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 |---|---|---|
 | A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ✅ DONE 2026-07-15 — migrated + verified live (commit `891246f`) |
 | A2 — Fingerprint computation at the seam | AC1 | 🔨 CODE-COMPLETE 2026-07-15 — `fingerprint.mjs` + seam write; 7th component `system_context` added; 15 unit tests. Pending `sam deploy` to write on live runs |
-| A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | ⬜ |
+| A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | 🔨 CODE-COMPLETE 2026-07-15 — `replay-corpus.mjs` (source-first→global lookup, soft/hard drift), seam decision + serve path, `allowLlmCorrection` zero-spend guard; 11 unit tests. Break signal (`llm_break`) emitted but **inert until A4**. Pending deploy |
 | A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | ⬜ |
 | A5 — `/proc/replay` endpoints | AC2, AC3, AC4 | ⬜ |
 | A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ |

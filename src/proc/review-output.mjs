@@ -61,7 +61,7 @@ export async function handle(req) {
  *   preserved even when the resumed output then fails schema validation.
  * @returns {Promise<ValidationResult>}
  */
-export async function validate({ intentCategory, output, traceId, priorErrorType }) {
+export async function validate({ intentCategory, output, traceId, priorErrorType, allowLlmCorrection = true }) {
   // --- Load prompt row for output_schema and model ---
   const promptResp = await getRows(
     'PGC_Prompt',
@@ -83,6 +83,16 @@ export async function validate({ intentCategory, output, traceId, priorErrorType
   if (attempt1Errors.length === 0) {
     console.info('review-output: valid on attempt 1', { intentCategory, traceId });
     return { valid: true, intentCategory, attempt: 1, traceId };
+  }
+
+  // Replay serve path (allowLlmCorrection: false) — a recorded response must never
+  // trigger a correction LLM call (AC2: zero spend on replay). A hit means schema
+  // matched, so a valid recorded response re-validates on attempt 1; reaching here
+  // means review-output's own routing/semantic rules (code, not fingerprinted)
+  // changed since the response was recorded. Surface it, do not spend to correct it.
+  if (!allowLlmCorrection) {
+    console.warn('review-output: attempt 1 failed, correction disabled (replay serve)', { intentCategory, traceId });
+    return { valid: false, intentCategory, attempt: 1, errors: attempt1Errors, correctionSkipped: true, traceId };
   }
 
   console.info('review-output: attempt 1 failed, attempting correction', {
