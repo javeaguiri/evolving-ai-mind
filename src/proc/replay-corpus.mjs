@@ -110,6 +110,16 @@ export async function lookupRecording({ compositeHash, components, sourceRunId, 
   return { status: verdict.status, candidate: await withResponse(verdict.row), drift: verdict.drift };
 }
 
+/**
+ * Fetch the final recorded response for a specific session id — used when a break is
+ * resolved with `use_recorded` (arch-replay.md §5), which accepts a named candidate
+ * recording rather than re-running the lookup.
+ */
+export async function getRecordedResponse(sessionId) {
+  const { response } = await withResponse({ id: sessionId });
+  return response;
+}
+
 // --- SERV read helpers ---
 
 async function findByHash(compositeHash, runId) {

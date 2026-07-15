@@ -90,6 +90,7 @@ async function dispatch({ action, workflowRunId, userResponse, responseData, mes
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
     case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
       throw new Error(`run-workflow: unknown action "${action}"`);
@@ -138,6 +139,16 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     return { skipped: true, reason: 'awaiting_human_gate' };
   }
 
+  // Same shield for a replay break (docs/arch-replay.md §5). A break suspends the run at
+  // a developer, exactly like a human_gate suspends at a user. A redelivered execute_top
+  // that arrives while suspended must not re-execute the seam and break (or serve) a
+  // second time. resume_llm transitions the run to 'running' before re-enqueuing, so a
+  // legitimate resume passes this guard; only stray redeliveries are discarded.
+  if (run.status === 'awaiting_llm_break') {
+    console.info('run-workflow: run awaiting llm break — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'awaiting_llm_break' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {
@@ -160,7 +171,38 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     return executeIteratorItem({ run, traceId });
   }
 
-  const frame = top;
+  // If top is a resolved replay break frame — resume it (docs/arch-replay.md §5). The
+  // resolution (and any supplied response) were written onto the frame by the resume
+  // endpoint (A5). Thread them into re-execution of the underlying llm_call step: the
+  // break wrote no audit row, so the step re-runs rather than being idempotency-blocked.
+  let breakResolution = null;
+  if (top.type === 'llm_break') {
+    const resolution = top.resolution;
+    if (!resolution) {
+      console.warn('run-workflow: llm_break frame has no resolution — skipping', { workflowRunId: run.id, traceId });
+      return { skipped: true, reason: 'llm_break_unresolved' };
+    }
+    if (resolution === 'abort') {
+      run.stack.pop();
+      await updateRows('PGC_WorkflowRun',
+        [{ column: 'id', op: 'eq', value: run.id }],
+        { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
+      );
+      if (run.callback) {
+        await enqueueCallback(run.callback, {
+          type: 'HUMAN_NOTIFICATION', workflowRunId: run.id,
+          message: `Replay run ${run.id} aborted at the break.`, traceId,
+        });
+      }
+      console.info('run-workflow: llm_break aborted', { workflowRunId: run.id, traceId });
+      return { action: 'cancelled' };
+    }
+    breakResolution = { ...(top.break ?? {}), resolution, response: top.response };
+    run.stack.pop();
+    await persistStack(run);
+  }
+
+  const frame = topFrame(run);
   const steps = await loadSteps(run.workflow_name, traceId);
   const step  = findStep(steps, frame.current_step);
 
@@ -271,7 +313,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
   let result;
 
   try {
-    result = await executeStep({ step, localState: frame.local_state, run, traceId });
+    result = await executeStep({ step, localState: frame.local_state, run, traceId, breakResolution });
   } catch (stepError) {
     await recordStepAudit(run.id, frame.frame_id, frame.current_step, step.type,
       'failed', null, null, stepError.message, Date.now() - stepStart);
@@ -331,6 +373,44 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       });
     }
     throw stepError;
+  }
+
+  // ── Handle replay break (docs/arch-replay.md §5) ───────────────────────────
+  // MUST run before the audit write: a break leaves NO 'completed' audit row, so on
+  // resume the step re-executes rather than being idempotency-blocked (unlike a
+  // human_gate, which records its audit before suspending because it never re-runs).
+  // Reuses the human_gate suspension machinery — push a frame, set status, notify,
+  // return without enqueuing a continuation. A hard halt: only resume_llm moves it.
+  if (result.nextAction === 'llm_break' && result.breakPayload) {
+    const breakFrame = {
+      frame_id:      randomUUID(),
+      type:          'llm_break',
+      status:        'awaiting',
+      step_number:   frame.current_step,
+      workflow_name: run.workflow_name,
+      break:         result.breakPayload,
+      local_state:   frame.local_state,
+      pushed_at:     new Date().toISOString(),
+    };
+    run.stack.push(breakFrame);
+
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      {
+        status:     'awaiting_llm_break',
+        stack:      run.stack,
+        step_count: (run.step_count ?? 0) + 1,
+      }
+    );
+
+    if (run.callback) {
+      await enqueueCallback(run.callback, buildBreakNotification(run, result.breakPayload, traceId));
+    }
+
+    console.info('run-workflow: llm_call break suspended', {
+      workflowRunId: run.id, step: frame.current_step, reason: result.breakPayload.reason, traceId,
+    });
+    return { action: 'llm_break', step: frame.current_step };
   }
 
   const durationMs = Date.now() - stepStart;
@@ -915,6 +995,101 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     workflowRunId: run.id, onSelect, traceId,
   });
   return { action: 'confirmed', onSelect };
+}
+
+// ---------------------------------------------------------------------------
+// resume_llm — resume a suspended replay break (docs/arch-replay.md §5)
+// ---------------------------------------------------------------------------
+
+// The resume endpoint (A5) writes { resolution, response? } onto the top llm_break
+// frame, then enqueues resume_llm carrying only workflowRunId. This handler transitions
+// the run out of suspension; executeTop's llm_break path then consumes the resolution
+// from the frame and re-executes the step. Thin by design — the re-execution is
+// executeTop's job, exactly as a normal step's is.
+async function resumeLlm({ workflowRunId, traceId }) {
+  const run = await loadRun(workflowRunId, traceId);
+
+  if (run.status !== 'awaiting_llm_break') {
+    console.warn('run-workflow: resume_llm — not awaiting llm break (duplicate?)', {
+      workflowRunId, status: run.status, traceId,
+    });
+    return { skipped: true, reason: 'not_awaiting_llm_break' };
+  }
+
+  const frame = topFrame(run);
+  if (!frame || frame.type !== 'llm_break') {
+    console.warn('run-workflow: resume_llm — no llm_break frame on top', {
+      workflowRunId, topType: frame?.type, traceId,
+    });
+    return { skipped: true, reason: 'no_break_frame' };
+  }
+
+  await updateRows('PGC_WorkflowRun',
+    [{ column: 'id', op: 'eq', value: run.id }],
+    { status: 'running' }
+  );
+  await enqueueWorkflow({
+    type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId,
+  });
+
+  console.info('run-workflow: resume_llm — transitioned to running', {
+    workflowRunId, resolution: frame.resolution, traceId,
+  });
+  return { action: 'resumed_llm', resolution: frame.resolution };
+}
+
+// Build the break notification (docs/arch-replay.md §5) — the developer interface, not a
+// status report. Carries a literal, runnable curl for every resolution: base URL from
+// SERV_API_URL (the API Gateway host also serving /proc), $INTERNAL_API_KEY referenced as
+// an env var so no key material is ever rendered, and both run IDs labelled. use_recorded
+// is offered only when a candidate recording exists (a miss has nothing to accept).
+export function buildBreakNotification(run, payload, traceId) {
+  const base    = process.env.SERV_API_URL ?? '';
+  const runId   = run.id;
+  const resume  = `${base}/api/v1/proc/replay/${runId}/resume`;
+  const read    = `${base}/api/v1/proc/replay/${runId}`;
+  const source  = run.replay_source_run_id != null ? `run ${run.replay_source_run_id}` : '(record — no source run)';
+  const driftTxt = Array.isArray(payload.drift) && payload.drift.length ? `  (drift: ${payload.drift.join(', ')})` : '';
+
+  const lines = [
+    `🛑  Run ${runId} — BROKE at step ${payload.step_id}, awaiting resume`,
+    ``,
+    `    workflow     ${run.workflow_name}`,
+    `    step         ${payload.step_id} · ${payload.intent_category}`,
+    `    replaying    ${source}`,
+    `    reason       ${payload.reason}${driftTxt}`,
+    `    policy       ${payload.policy}`,
+    ``,
+    `Read the break — assembled prompt, drift, local_state diff:`,
+    `  curl -s -H "x-api-key: $INTERNAL_API_KEY" "${read}"`,
+  ];
+  if (payload.candidate_session_id != null) {
+    lines.push(
+      ``,
+      `Resume with the recorded response — free, keeps the suffix free:`,
+      `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "${resume}"`,
+    );
+  }
+  lines.push(
+    ``,
+    `Resume by calling the LLM for this step only — costs one call:`,
+    `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"call_live"}' "${resume}"`,
+    ``,
+    `Resume with a response you write — free:`,
+    `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d @resume.json "${resume}"`,
+    `  resume.json:  { "resolution": "supplied", "response": { ... } }`,
+    ``,
+    `Record the rest: add  "breakPolicy": "always"  to any resume body.`,
+    `Abandon:  -d '{"resolution":"abort"}'`,
+  );
+
+  return {
+    type:          'HUMAN_NOTIFICATION',
+    workflowRunId: runId,
+    message:       lines.join('\n'),
+    format:        'text',
+    traceId,
+  };
 }
 
 // ---------------------------------------------------------------------------

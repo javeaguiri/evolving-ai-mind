@@ -17,7 +17,7 @@ import { getRows, insertRow }                                     from '../share
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
 import { computeFingerprint }                                     from './fingerprint.mjs';
-import { lookupRecording, decideReplayAction }                    from './replay-corpus.mjs';
+import { lookupRecording, decideReplayAction, getRecordedResponse } from './replay-corpus.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -143,9 +143,12 @@ export function assembleInstructions(promptRow, resolvedInput, contextRows, memo
  * @param {object} params.localState  Current frame local_state
  * @param {object} params.run         PGC_WorkflowRun row (read-only)
  * @param {string} params.traceId
+ * @param {object} [params.breakResolution]  present only on resume after a replay break
+ *   was resolved (docs/arch-replay.md §5): { resolution, response?, fingerprint,
+ *   candidate_session_id }. Overrides the break policy for this one call.
  * @returns {Promise<StepResult>}
  */
-export async function executeLlmCall({ step, localState, run, traceId }) {
+export async function executeLlmCall({ step, localState, run, traceId, breakResolution = null }) {
   const intentCategory = step.input?.prompt;
   if (!intentCategory) throw new Error('llm_call step missing input.prompt');
 
@@ -232,16 +235,44 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     traceId,
   });
 
-  // Replay decision (docs/arch-replay.md §4-§5) — read the break policy off the run
-  // row (already in scope; null ⇒ 'never' ⇒ today's live behaviour). One seam, three
-  // policies: never = call; on_miss = serve a fingerprint hit, break on hard drift or
-  // miss; always = break at every call. The break is a hard suspend handled in
-  // run-workflow (A4) — same machinery as a human_gate; there is NO auto-resume.
+  // Replay decision (docs/arch-replay.md §4-§5). Two entries: a fresh call reads the
+  // break policy off the run row (null ⇒ 'never' ⇒ today's live behaviour); a resume
+  // carries breakResolution, which overrides the policy for this one call.
   const breakPolicy = run?.llm_break_policy ?? 'never';
   let served              = false;
   let servedResponse      = undefined;
   let servedFromSessionId = null;
-  if (breakPolicy !== 'never') {
+  let responseSource      = 'live';
+
+  if (breakResolution) {
+    // Resuming a resolved break (§5). Assembly re-ran above; verify the fingerprint
+    // matches the one stashed at break time — local_state is frozen while suspended, so
+    // a mismatch is an anomaly, surfaced not swallowed.
+    if (breakResolution.fingerprint?.hash && breakResolution.fingerprint.hash !== fingerprint.hash) {
+      console.warn('step-executor: llm_call resume fingerprint mismatch — re-assembly differs from break', {
+        intentCategory, stashed: breakResolution.fingerprint.hash, reassembled: fingerprint.hash, traceId,
+      });
+    }
+    const res = breakResolution.resolution;
+    if (res === 'use_recorded') {
+      if (breakResolution.candidate_session_id == null) {
+        throw new Error('llm_call resume use_recorded: no candidate recording to accept');
+      }
+      servedResponse      = await getRecordedResponse(breakResolution.candidate_session_id);
+      served              = true;
+      servedFromSessionId = breakResolution.candidate_session_id;
+      responseSource      = 'replayed';
+    } else if (res === 'supplied') {
+      servedResponse = breakResolution.response;
+      served         = true;
+      responseSource = 'recorded';
+    } else if (res === 'call_live') {
+      responseSource = 'live';   // fall through to callLlm below; no re-break
+    } else {
+      throw new Error(`llm_call resume: unsupported resolution "${res}"`);
+    }
+    console.info('step-executor: llm_call resumed from break', { intentCategory, resolution: res, responseSource, traceId });
+  } else if (breakPolicy !== 'never') {
     let recording = null;
     if (breakPolicy === 'on_miss') {
       recording = await lookupRecording({
@@ -253,9 +284,9 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     }
     const action = decideReplayAction(breakPolicy, recording?.status ?? 'miss');
     if (action === 'break') {
-      // Suspend for a developer. A4 handles this signal in run-workflow (push a break
-      // frame, set awaiting_llm_break, notify Slack with a pointer, resume via
-      // resume_llm). Inert until A4: run-workflow does not yet act on 'llm_break'.
+      // Suspend for a developer. run-workflow (A4) pushes a break frame, sets
+      // awaiting_llm_break, notifies Slack with a runnable-curl pointer, and resumes via
+      // resume_llm. A hard halt — no auto-resume, same property as a human_gate.
       console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
       return {
         outputValue: null,
@@ -277,6 +308,7 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
       served              = true;
       servedResponse      = recording.candidate.response;
       servedFromSessionId = recording.candidate.sessionId;
+      responseSource      = 'replayed';
       console.info('step-executor: llm_call served from recording', {
         intentCategory, status: recording.status, drift: recording.drift ?? null, servedFromSessionId, traceId,
       });
@@ -375,7 +407,7 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
         intent_category: intentCategory,
         request_fingerprint:      fingerprint.components,
         fingerprint_hash:         fingerprint.hash,
-        response_source:          served ? 'replayed' : 'live',
+        response_source:          responseSource,
         replayed_from_session_id: servedFromSessionId,
       });
       if (sessionResp.success) {

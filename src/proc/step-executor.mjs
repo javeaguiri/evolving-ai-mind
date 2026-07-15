@@ -63,11 +63,14 @@ import { pickLabelColumn }              from '../shared/schema-utils.mjs';
  * @param {object} params.localState  Current frame local_state (may be mutated)
  * @param {object} params.run         PGC_WorkflowRun row (read-only in executor)
  * @param {string} params.traceId
+ * @param {object} [params.breakResolution]  present only when re-executing an llm_call
+ *   step after a replay break was resolved (docs/arch-replay.md §5) — forwarded to
+ *   executeLlmCall, ignored by every other step type.
  * @returns {Promise<StepResult>}
  */
-export async function executeStep({ step, localState, run, traceId }) {
+export async function executeStep({ step, localState, run, traceId, breakResolution = null }) {
   switch (step.type) {
-    case 'llm_call':     return executeLlmCall({ step, localState, run, traceId });
+    case 'llm_call':     return executeLlmCall({ step, localState, run, traceId, breakResolution });
     case 'js_transform': return executeJsTransform({ step, localState, traceId });
     case 'human_gate':   return executeHumanGate({ step, localState, run, traceId });
     case 'serv_schema':  return executeServSchema({ step, localState, traceId });
