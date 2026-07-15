@@ -17,6 +17,7 @@ import { getRows, insertRow }                                     from '../share
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
 import { computeFingerprint }                                     from './fingerprint.mjs';
+import { lookupRecording, decideReplayAction }                    from './replay-corpus.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -231,10 +232,63 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     traceId,
   });
 
+  // Replay decision (docs/arch-replay.md §4-§5) — read the break policy off the run
+  // row (already in scope; null ⇒ 'never' ⇒ today's live behaviour). One seam, three
+  // policies: never = call; on_miss = serve a fingerprint hit, break on hard drift or
+  // miss; always = break at every call. The break is a hard suspend handled in
+  // run-workflow (A4) — same machinery as a human_gate; there is NO auto-resume.
+  const breakPolicy = run?.llm_break_policy ?? 'never';
+  let served              = false;
+  let servedResponse      = undefined;
+  let servedFromSessionId = null;
+  if (breakPolicy !== 'never') {
+    let recording = null;
+    if (breakPolicy === 'on_miss') {
+      recording = await lookupRecording({
+        compositeHash: fingerprint.hash,
+        components:    fingerprint.components,
+        sourceRunId:   run.replay_source_run_id ?? null,
+        stepId:        step.step,
+      });
+    }
+    const action = decideReplayAction(breakPolicy, recording?.status ?? 'miss');
+    if (action === 'break') {
+      // Suspend for a developer. A4 handles this signal in run-workflow (push a break
+      // frame, set awaiting_llm_break, notify Slack with a pointer, resume via
+      // resume_llm). Inert until A4: run-workflow does not yet act on 'llm_break'.
+      console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
+      return {
+        outputValue: null,
+        nextAction:  'llm_break',
+        breakPayload: {
+          step_id:              step.step,
+          intent_category:      intentCategory,
+          policy:               breakPolicy,
+          reason:               breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss'),
+          fingerprint,
+          instructions,
+          userInput,
+          drift:                recording?.drift ?? null,
+          candidate_session_id: recording?.candidate?.sessionId ?? null,
+        },
+      };
+    }
+    if (action === 'serve') {
+      served              = true;
+      servedResponse      = recording.candidate.response;
+      servedFromSessionId = recording.candidate.sessionId;
+      console.info('step-executor: llm_call served from recording', {
+        intentCategory, status: recording.status, drift: recording.drift ?? null, servedFromSessionId, traceId,
+      });
+    }
+  }
+
   const t0 = Date.now();
   let rawOutput;
   let priorErrorType;
-  try {
+  if (served) {
+    rawOutput = servedResponse;
+  } else try {
     rawOutput = await callLlm(
       resolvedModel,
       instructions,
@@ -293,11 +347,16 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   console.info('step-executor: llm_call completed', { llmMs, traceId });
 
+  // On a served (replayed) response, forbid LLM correction — a recorded response must
+  // never trigger a Perplexity call (AC2). A hit means schema matched, so a valid
+  // recording re-validates on attempt 1; a failure means review-output's own rules
+  // (code, not fingerprinted) changed since recording, which surfaces as invalid.
   const validationResult = await validate({
     intentCategory,
     output: rawOutput,
     traceId,
     priorErrorType,
+    allowLlmCorrection: !served,
   });
 
   const finalOutput = validationResult.correctedOutput ?? rawOutput;
@@ -316,8 +375,8 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
         intent_category: intentCategory,
         request_fingerprint:      fingerprint.components,
         fingerprint_hash:         fingerprint.hash,
-        response_source:          'live',
-        replayed_from_session_id: null,
+        response_source:          served ? 'replayed' : 'live',
+        replayed_from_session_id: servedFromSessionId,
       });
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;

@@ -44,6 +44,7 @@ For authoritative detail follow the section references in each row.
 | `src/proc/step-executor.mjs` | PROC | Step type dispatch — one case per step type, zero workflow-specific logic. See Section 6.5.1 | Adding a case = new step type; changing a case = affects every workflow using that type |
 | `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. `selectInjectedContext` is the single source of truth for which PGC_SystemContext rows a prompt injects (shared with the request fingerprint). See Section 6.13 | Changes affect every `llm_call` step in the system |
 | `src/proc/fingerprint.mjs` | PROC | Pure request fingerprint for the LLM replay harness — per-`llm_call` component hashes (prompt/input/user_input/model/schema/memory/system_context) + composite, computed at the seam and written to PGC_Session. See `docs/arch-replay.md` §3 | Changes affect replay corpus keying — a fingerprint change invalidates prior recordings |
+| `src/proc/replay-corpus.mjs` | PROC | Replay corpus read — looks up a recorded response by `fingerprint_hash` (source-run-first, then global) and classifies drift (hit/soft/hard/miss); `decideReplayAction` maps break policy × lookup status → call/serve/break. SERV reads only. Imported by `llm-harness` (the serve/break decision) and `replay.mjs` (break report). See `docs/arch-replay.md` §3-§8 | Changes affect which recordings a replay serves and when it breaks |
 | `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
 | `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
@@ -343,6 +344,7 @@ src/
     simulation-engine.mjs  Pure L1/L2 simulator — no I/O, imported by step-executor + dev_scripts
     llm-harness.mjs    LLM call assembly + memory injection
     fingerprint.mjs    Pure request fingerprint for the replay harness (arch-replay.md §3)
+    replay-corpus.mjs  Replay corpus lookup + drift classification (arch-replay.md §3-§8)
     review-output.mjs  Ajv + semantic + routing validation of all LLM output
     minds-eye.mjs      Novia agentic loop — MINDS_EYE + MINDS_EYE_RESUME SQS handler
     shutdown.mjs       /shutdown — SHUTDOWN SQS handler; ack-and-notify pattern; cancels all active runs
