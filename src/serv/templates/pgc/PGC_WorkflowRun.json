@@ -20,6 +20,8 @@
     { "name": "error",               "type": "jsonb",       "nullable": true },
     { "name": "started_at",          "type": "timestamptz", "nullable": true },
     { "name": "completed_at",        "type": "timestamptz", "nullable": true },
+    { "name": "replay_source_run_id", "type": "integer",    "nullable": true },
+    { "name": "llm_break_policy",    "type": "text",        "nullable": true },
     { "name": "created_at",          "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",          "type": "timestamptz", "nullable": false, "default": "now()" }
   ],
@@ -35,7 +37,12 @@
     {
       "type": "check",
       "name": "chk_run_status",
-      "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'completed', 'failed', 'cancelled')"
+      "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'awaiting_llm_break', 'completed', 'failed', 'cancelled')"
+    },
+    {
+      "type": "check",
+      "name": "chk_run_break_policy",
+      "expression": "llm_break_policy IS NULL OR llm_break_policy IN ('never', 'on_miss', 'always')"
     },
     {
       "type": "check",

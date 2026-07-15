@@ -1267,7 +1267,10 @@ async function cancelRun({ workflowRunId, traceId }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error'];
+// replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
+// break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
+// arrive undefined — failing closed to `never` and silently billing a run meant to replay.
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(
