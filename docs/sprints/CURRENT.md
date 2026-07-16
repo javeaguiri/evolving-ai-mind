@@ -103,6 +103,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A6 — Drift report: **which `input` keys moved** | AC4 | 🔨 CODE-COMPLETE + deployed 2026-07-16 (`c32102c`) — `hashInputKeys` (hash + serialised size per key) → `request_fingerprint.input_keys`; `describeInputDrift` at the seam; notification renders it; `diffComponents` fixed to judge `COMPONENT_ORDER` (latent bug: it diffed the raw key union, so `input_keys` would have read as an 8th component). **Additive — not in the composite, so 720/721 keep hitting.** 16 new tests, 615 total. **Not yet seen on a live break** — needs a replay that drifts. `local_state` diff still ⬜ |
 | ~~A7 — fingerprint backfill / assembled-request hash~~ | AC5 | ❌ **STRUCK 2026-07-16 — unnecessary, not merely deferred.** Replay is second by construction: you cannot replay a run that never ran, and every run fingerprints itself. **A fingerprinted corpus is not a goal, it is a byproduct you cannot avoid.** Unfingerprinted corpora are a closed historical set (six pre-A2 runs) that shrinks to zero and never grows; 719 is already superseded by 720. The assembled hash also would **not** have fixed A9 — run 721 detected the drift correctly *with components* and offered `use_recorded` anyway. It adds nothing where components exist. See Session 5 |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
+| A12 — **blast radius: name the steps a drifted key reaches** | AC4 | ⬜ **New 2026-07-16, proven live on run 723.** The notification offers `use_recorded` as *"free, keeps the suffix free"* — **false whenever the drift originates in a `local_state` key several steps read.** `user_design_notes` changed at the step-9 gate (4→123 chars) and is read by `llm_call` steps **11, 21, 21r, 21t**: accepting at 11 does not free the suffix, it defers the identical decision three more times. Fix: A6's report names the downstream readers — *"user_design_notes (4→123 chars) — also read by steps 21, 21r, 21t"* — computable straight from the workflow definition, no new data. Turns "accept?" into a decision with its cost visible. Feeds A9: a disposition should know a drift's blast radius, not just its component. **Third instance of the day's pattern — see Session 7** |
 | A10 — **a break has no user-reachable exit** | AC3 | ⬜ **New 2026-07-16 — a wedge, found live.** `shutdown.mjs:39` filters `status IN ('running','awaiting_human_gate')`, so **`awaiting_llm_break` is invisible to `/shutdown`** — and the id filter is optional, so even a targeted `/shutdown 722` skips it. The only exit is HTTP, and the notification's curls need `$INTERNAL_API_KEY` in the developer's shell, which 403s at the edge when it is absent (silently — zero PROC invocations, see Session 3 finding 6). On 2026-07-16 every abort had to be fired by someone else's shell. **Half is deliberate** (`arch-replay` §7a made the status distinct so a blanket sweep never touches a dev break — right call), but it silently removed the *targeted* case too. Fix: `/shutdown <runId>` covers `awaiting_llm_break` **when named by id**, never in a sweep |
 | A11 — **payload-free resolutions belong in Slack** | AC3 | ⬜ **New 2026-07-16 — a design over-generalisation.** `arch-replay` §9: *"Resolution is over HTTP, not Slack — an LLM response is far larger than a Slack modal accepts."* True **for `supplied`** — the only resolution that carries a payload. `abort`, `use_recorded` and `call_live` carry **nothing** (`abort` is one word), and generalising from the one resolution that needs HTTP to all four produced a harness that cannot be driven from the interface it posts its own notifications to. Fix: Block Kit buttons for `abort` / `use_recorded` / `call_live` (with one button per candidate when `candidate_ids.length > 1`, per A5b); keep the curl for `supplied` only. **Same shape as the critic's Test 1** — a rule true of its originating case, generalised into an absolute. Sits behind A9, whose disposition decides which buttons are even offered |
 | A9 — drift **disposition**, not detection | AC4 | ⬜ **Respecified 2026-07-16 — the gap was never detection.** Run 721 detected the drift correctly (`drift: input`, 6/7 identical) and **offered `use_recorded` anyway**, where accepting it discards 10KB of repair context. No new hash fixes this. Fix = a **disposition per component** over the hashes we already have (`memory` soft→serve; `prompt` hard→`use_recorded` is the *intended* resolution; **`input` hard→a different question was asked, discourage/refuse**; `schema` caught downstream by `review-output`). **Depends on A6's per-key `input` breakdown** — `input` is ambiguous: `step_type_contracts` moving is benign (step 11/`action_key`, accepting was right), the question-keys moving is fatal (step 23 pass 2). Also subsumes the old part (a): the ambiguity warning keys on `candidate_ids.length > 1`, but the danger occurs at N=1 |
@@ -723,3 +724,50 @@ it guessed, as calling an unfingerprinted recording `hard_drift`.
 **A6's payoff needs an A6-era corpus on the candidate side**, which is what run 722 now is: 8 sessions, all
 carrying `input_keys`. Step 11's `user_design_notes` is **4 chars** — the literal string `null`, because the
 step-9 gate was skipped. Typing anything there on a replay of 722 moves exactly one key.
+
+### Session 7 — 2026-07-16 — A6 proven live; the day's pattern named
+
+**A6 works.** Run 723 (replaying 722's A6-era corpus) broke at step 11 with the step-9 gate answered
+instead of skipped, and the notification said, unprompted:
+
+```
+input   changed: user_design_notes (4→123 chars)  |  unchanged: domain, domain_schema,
+        prompt, right_brain_research, step_type_contracts, userInput, user_preferences
+```
+
+One key moved, seven held still, sizes included. **That is the sentence that cost four file diffs and a
+scratchpad to assemble by hand this morning.** AC4's "says why" is real. The two cases that were
+indistinguishable at 10:00 — a benign contract edit and a materially different question — now read
+differently at a glance.
+
+**Day's spend: 25 `llm_call`s across runs 720–723, `response_source: live` = 0.** Counted in `PGC_Session`.
+A harness built, deployed and debugged against live traffic, for nothing.
+
+#### THE PATTERN — three instances in one day, and it belongs in the retro
+
+**A rule true of its originating specimen, promoted to an unconditional.**
+
+| claim | true of | promoted to | consequence |
+|---|---|---|---|
+| critic Test 1 — *"This is always removable"* | run 700, where the gate's options diverged **immediately** | all button-interpretation steps | proposed bypassing `upsert_budgets` — **a budget editor that silently never saves** |
+| `arch-replay` §9 — *"resolution is over HTTP; an LLM response is far larger than a Slack modal accepts"* | **`supplied`**, the only resolution carrying a payload | all four resolutions | `abort` — one word — requires a shell with `$INTERNAL_API_KEY`; a break has no user-reachable exit (A10/A11) |
+| break notification — *"free, **keeps the suffix free**"* | step-local drift (a prompt reworded at one step) | all drift | false for a `local_state` key several steps read: `user_design_notes` is read by 11, 21, 21r, 21t, so accepting at 11 defers the same decision three more times (A12) |
+
+Each was written from a real case and was correct about it. Each then travelled to a case whose assumptions
+did not hold, and stated its conclusion with no trace of the conditions that made it true.
+
+**The rule to carry forward: when a rule is derived from one specimen, write down what about that specimen
+made it true.** Test 2 in the same critic prompt does exactly this — *"NOT a finding: a re-query AFTER a
+write"* — and Test 2 has never false-positived. The discipline is available; it was simply not applied.
+
+Corollary, and the reason this keeps costing us: **the failure is silent by construction.** An
+over-generalised rule does not error. It confidently produces a wrong answer that looks like a right one —
+a workflow that never saves, a notification you cannot act on, a "free" resolution that defers its cost.
+
+#### Sprint 8's own lesson, restated
+
+Sprint 7's retro said *"the cost problem is the test loop, not the architecture"* and *"11 of ~15 defects
+were in deterministic code."* Sprint 8 built the loop — and then **the loop immediately found five defects
+in itself and its own design**, every one deterministic, none needing an LLM to detect, and none visible
+without something comparing two runs byte-for-byte: the unordered `PGC_StepType` read, `diffComponents`
+diffing the raw key union, A10, A11, A12. **The harness's first user was the harness.**
