@@ -121,7 +121,14 @@ Named explicitly so the deferral is a decision, not an oversight.
   The replay harness is also a *prerequisite* for a sane test environment — it is the thing that makes
   a non-prod environment affordable to exercise.
 - **Cross-domain `create_workflow`** (5 known gaps) — backlog.
-- **`create_domain` schema critic** — backlog. Deterministic core first, LLM around it.
+- ~~**`create_domain` schema critic**~~ — **dropped 2026-07-16**, removed from the backlog. Superseded by
+  the same evidence that revised B1: an LLM critic's findings land at a gate no non-expert can referee, and
+  the item's own case makes the point — *"a non-technical user confirming a schema cannot evaluate a
+  functional dependency."* Its two most valuable checks (unsourceable required column; functional dependency)
+  were always **computable**, and computable checks do not need a critic wrapped round them. If the
+  `PGD_Budgets.type` class of defect resurfaces, the answer is a deterministic check where schemas are
+  validated — not a second LLM opining at a human who cannot judge it. Analysis preserved in
+  `sprint-07.md` §retro and in git (`docs/backlog.md` before this commit).
 - **`create_workflow` domain-confirmation gate** (`input.domain: null` is legitimate in Mode C, so a
   typo silently builds a standalone workflow) — backlog.
 - **`llm_call` token validation** (shared prompts silently hand the LLM its own literal `{{token}}`

@@ -244,11 +244,10 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 3. **Gate `research_workflow_domain` on new domains** (17% of spend) — it re-derives findings already present in `PGC_Schema` for an existing domain.
 4. **D3** — audit/fix `notify` templates in generated workflows. Requires generating workflows, so it must ride *behind* the replay harness.
 5. **Re-validate `edit_budget` end to end** — run 719 reached L1 with a correct design; `action_key` (landed) is the last blocker. Deferred until replay exists.
-6. `create_domain` schema critic — deterministic core (unsourceable required column; functional dependency computable from live data), LLM around it. See backlog.
-7. `create_workflow` domain-confirmation gate — `input.domain: null` is a legitimate value (Mode C), so a typo silently builds a standalone workflow. See backlog.
-8. Validate every `llm_call` step supplies every `{{token}}` its prompt declares — shared prompts silently hand the LLM its own literal token text. See backlog.
-9. A render failure in the Experience tier should fail the run, not just report it — the run still wedges at `awaiting_human_gate`. See backlog.
-10. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
+6. `create_workflow` domain-confirmation gate — `input.domain: null` is a legitimate value (Mode C), so a typo silently builds a standalone workflow. See backlog.
+7. Validate every `llm_call` step supplies every `{{token}}` its prompt declares — shared prompts silently hand the LLM its own literal token text. See backlog.
+8. A render failure in the Experience tier should fail the run, not just report it — the run still wedges at `awaiting_human_gate`. See backlog.
+9. `/chat` dead code removal (obviated by Novia). See backlog High Priority.
 
 ### Deferred
 
