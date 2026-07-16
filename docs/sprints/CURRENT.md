@@ -58,8 +58,12 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   `local_state` diff against the source run. `use_recorded` accepts the recording and keeps the suffix free.
 - **AC5 — Historical runs are replayable.** Backfill fingerprints onto existing `PGC_Session` rows.
   Run 719 replays.
-- **AC6 — Step 21t deleted.** The consolidation re-design is removed from `create_workflow`. 21r's
-  findings survive and are surfaced at the step-24 review gate for a human to accept or reject.
+- **AC6 — The consolidation critic is partitioned by who can judge it.** (Revised 2026-07-16 — the original
+  wording, "21r's findings are surfaced at the step-24 gate for a human to accept or reject", fails the
+  non-expert test; see Track B.) 21t is deleted. Structural tests 1–5 become deterministic checks in
+  `simulation-engine.mjs` — no LLM, no gate. Only the semantic tests (6–7) reach a human, phrased in terms of
+  what the user will **see**, never which steps to merge. **No gate ever asks a non-expert to referee two
+  LLMs.**
 - **AC7 — `research_workflow_domain` gated on new domains.** Skipped when the domain already exists in
   `PGC_Schema`.
 - **AC8 — Measured spend drop.** A full `create_workflow` development cycle (design change → verify)
@@ -89,7 +93,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A7 — ~~Fingerprint backfill~~ → **assembled-request hash** | AC5 | ⬜ **Redesigned — see Session 3.** The original (recompute the composite from stored messages) is impossible: assembly is lossy and prompt text is overwritten in place. The replacement is an 8th `assembled` component, and it is a **correctness** mechanism, not a convenience — see the step-23 finding |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
 | A9 — Candidate offering is keyed on count, not on request equality | AC4 | ⬜ **New — real gap.** `candidate_ids.length > 1` triggers the ambiguity warning, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1. Subsumed by A7's assembled hash |
-| B1 — Delete `create_workflow` step 21t | AC6, AC8 | ⬜ |
+| B1 — **Revised 2026-07-16**: partition the consolidation critic (delete 21t; Tests 1–5 → `simulation-engine`; narrow 21r to Tests 6–7, gated in experience terms) | AC6, AC8 | ⬜ Original plan (surface findings at the step-24 gate) **fails the non-expert test** — see Track B |
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
 | C1 — `notify` template audit (D3 carry-forward) | AC9 | ⬜ |
@@ -232,16 +236,90 @@ Named explicitly so the deferral is a decision, not an oversight.
 
 > Both are deletions. Land them early — they cut ~31% of live-run spend in week one rather than at close.
 
-**B1 — Delete `create_workflow` step 21t**
-- 14% of all spend. The consolidation re-design re-runs the entire design to apply the critic's findings.
-- Scoreboard across four live runs: found nothing → caught a real chain → found two real defects →
-  **false-positived**, telling the designer to delete a genuinely required step (the Update/Done divergence
-  happens *after* a shared write, so the decision must survive the write).
-- **Keep 21r** (the findings, 5%). Surface them at the **step-24 review gate** for a human to accept or reject.
-- Removes both the cost and the risk of a critic overruling a correct designer.
-- Precedent: Sprint 4's `runRoutingValueRules` was a heuristic check whose false positives made it
-  net-negative; the correct fix was deleting it, not tuning it.
-- Edit `seed_PGC_Workflow.json` → `upsert-workflow.mjs create_workflow`.
+**B1 (revised 2026-07-16) — Partition the consolidation critic by who can judge its findings**
+
+> Supersedes the original B1 ("delete 21t, keep 21r, surface findings at the step-24 gate"). That plan
+> fails the **non-expert test**: it ends at a gate saying *LLM-1 says delete this step, LLM-2 says keep it —
+> you decide*. This product is a secondary brain for households. The person at that gate entered their
+> grocery spend; they cannot referee workflow topology, and must never be asked to.
+
+**Why the original plan fails**
+
+- Adjudicating **one** finding from run 719 took four DB reads (the routing graph, the critic's output,
+  the Test 1 rule text, `action_key`'s contract) plus simulating what happens when a write is skipped.
+- The stake is not aesthetic. Run 719's design is `edit_budget_gate → upsert_budgets (SHARED WRITE) →
+  check_gate_action → {load_existing_budgets | notify_complete}`. The critic proposed routing `update` and
+  `done` straight from the gate with *"`upsert_budgets`… likely removed entirely"* — **a budget editor that
+  silently never saves, on both paths.** That is not a preference question.
+
+**The critic did not misunderstand. It obeyed.** (Fault domain: **Instruction**, not Generation.)
+
+- Test 1 states an absolute: *"This is always removable."* It carries no exception, while Test 2 directly
+  beneath it carries two (*"NOT a finding: a re-query AFTER a write…"*). The author knew to write exceptions.
+- Test 1 was **over-fitted to its specimen**. Commit `13973cee` was built from run 700, where steps 15+16
+  interpreted a button whose options diverged *immediately* — genuinely removable. Generalising that one true
+  case to "always" made it false wherever options converge on a shared step first.
+- **The system already contains the refutation and the critic cannot see it.** `action_key`'s contract
+  (`f06a700`) says: *"a save-and-continue loop, where 'Save' and 'Done' both run the SAME write and diverge
+  only AFTER it — the decision has to survive the write… Routing the two buttons to separate chains instead
+  would duplicate the write."* `review_workflow_redundancy` does **not** inject `step_type_contracts`, so it
+  has never seen this and would repeat the error today. Two contradicting statements of one truth, with
+  nothing reconciling them (checklist rule 2e, in a new form).
+
+**The partition — the deciding question is "can a non-expert answer it?"**
+
+| Test | What it actually asks | Nature | Home |
+|---|---|---|---|
+| 1 Button-interpretation | do the gate's options converge on a shared step before diverging? | graph reachability | `simulation-engine` |
+| 2 Duplicate producers | same output key, same inputs, nothing mutating between? | data-flow | `simulation-engine` |
+| 3 Redundant reads | already in `local_state`, unmutated? | data-flow | `simulation-engine` |
+| 4 Pass-through steps | output materially identical to input? | data-flow | `simulation-engine` |
+| 5 Split steps | two adjacent same-type steps, no branching, same data? | graph adjacency | `simulation-engine` |
+| 6 Parallel presentation chains | *"would a user, seeing the second gate with no memory of the first, know they were looking at a different thing?"* | **semantic** | LLM — gate in experience terms |
+| 7 User asked for fewer screens | design vs. what the user actually requested | **semantic** | LLM — gate in experience terms |
+
+Tests 1–5 are **structure**: computable, and a household user can neither judge nor care. Deterministic or
+nothing — an LLM guessing at static analysis is strictly worse than the static analysis, because it
+false-positives and then needs a referee who doesn't exist.
+
+Tests 6–7 are **experience**, and here the non-expert is the *right* judge — the finding is about what they
+will see. *"Your design shows the budget view twice, once before editing and once after. Want it once, looping
+back after each edit?"* is a question they can answer. Test 6's own disambiguator is already phrased that way,
+and it earned its place: added by `3de304f` after run 702 designed one screen twice
+(`comprehensive_view` / `updated_comprehensive_view`) and the five structural tests all returned `findings: []`
+because the keys differed. **The most costly form of redundancy was not computable — which is exactly why it
+needs an LLM, and exactly why the other five do not.**
+
+**Actions**
+
+1. **Delete 21t.** Unreviewed advice must never author a design — that is where the catastrophe lands.
+   14% of spend, and the risk of a critic overruling a correct designer.
+2. **Move Tests 1–5 into `simulation-engine.mjs`** as static checks. Test 1 carries the exception the prompt
+   lacks: options converging on a shared step before diverging is **required** structure, not redundancy.
+   Deterministic, no LLM, no gate, no false positive on a graph property.
+3. **Narrow 21r to Tests 6–7.** Surface at the step-24 gate phrased in **user-experience terms** — screens
+   seen, not steps merged. The user decides *what* they see; the system decides *how* it is wired.
+4. Note `3de304f` already put the preventive rule in `design_workflow_process` (*"a screen the user must see
+   again after a change is a LOOP, not a copy"*). Test 6 is the safety net for when that is ignored — measure
+   whether the net still catches anything before paying for it again.
+
+**Backing out `13973cee` is the right direction but is not a `git revert`.** It is seed-only
+(`seed_PGC_Prompt.json`, `seed_PGC_Workflow.json`, `backlog.md`) — an artifact change, correctly placed. But
+ten commits have touched those seeds since, including `f06a700` (`action_key`) and `3de304f` (Test 6), so it
+needs surgical removal from the current seeds. The commit **pre-registered its own deletion** — *"If this
+proves to be noise, delete it"*, citing the `runRoutingValueRules` precedent. This executes that exit
+condition rather than reversing a decision.
+
+**What deleting the critic outright would lose.** `13973cee`'s root-cause diagnosis still stands and is not
+addressed by deletion: *"The pipeline is additive by construction… nothing in the chain ever merges or
+deletes — there is no point at which a step can die. Nothing gives the LLM a cost signal for step count."*
+Run 700's complexity also **hid a real bug** (*"step 18 saved the budget rows before step 19 applied the user's
+edit"*). Removing the counterweight is only safe because Tests 1–5 become static checks that run on every
+design — a stronger counterweight than an LLM that reads the design once.
+
+- Edit `seed_PGC_Workflow.json` + `seed_PGC_Prompt.json` → `upsert-workflow.mjs create_workflow`,
+  `upsert-prompt.mjs`. Extend `simulation-engine.mjs` (system code — Execution domain) with unit tests per
+  test moved.
 
 **B2 — Gate `research_workflow_domain` on new domains**
 - 17% of all spend. For an existing domain it re-derives findings already present in `PGC_Schema`.
