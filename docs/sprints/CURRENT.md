@@ -46,9 +46,11 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 
 - **AC1 — Fingerprint recorded for every `llm_call`.** `PGC_Session` carries `request_fingerprint`,
   `fingerprint_hash`, `response_source`, `replayed_from_session_id`. Every live run writes them.
-- **AC2 — Replay completes with zero LLM spend.** A `create_workflow` run replayed from a complete
-  corpus, walking the same path, reaches the same terminal state having made **zero** Perplexity calls.
-  Verified against the LLM call count, not inferred.
+- **AC2 — Replay completes with zero LLM spend.** ✅ **CLOSED 2026-07-16.** A `create_workflow` run replayed
+  from a complete corpus, walking the same path, reaches the same terminal state having made **zero**
+  Perplexity calls. Verified against the LLM call count, not inferred. **Result:** run 721 (replaying 720's
+  fingerprinted corpus) — 8 `llm_call`s, 8 `hit`, **0 breaks, 0 live calls**. With run 720: **16 `llm_call`s,
+  0 live**, counted in `PGC_Session`. See Session 4.
 - **AC3 — Record mode.** `breakPolicy: always` breaks at every `llm_call`. The assembled prompt is
   readable over HTTP; a hand-supplied response resumes the run and is validated through
   `review-output` exactly as a live response is. A response that would fail validation **fails the run**.
@@ -56,8 +58,12 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   answering a gate differently produces a break at the next affected `llm_call`, with a component-level
   drift report (which of prompt/input/user_input/model/schema/memory moved, plus a text diff) and a
   `local_state` diff against the source run. `use_recorded` accepts the recording and keeps the suffix free.
-- **AC5 — Historical runs are replayable.** Backfill fingerprints onto existing `PGC_Session` rows.
-  Run 719 replays.
+- **AC5 — Historical runs are replayable.** ↩️ **Reframed 2026-07-16 — achieved, but not as written.**
+  Run 719 replayed (run 720), and no backfill script exists or should. **Walking a run once with
+  `use_recorded` mints its corpus**, because every `llm_call` fingerprints itself regardless of mode. The
+  backfill as specified is impossible (assembly is lossy; prompt text is overwritten in place), and the
+  reconstructable version would fabricate. What remains is making that first walk **safe**, not possible —
+  see A7's assembled hash and the step-23 finding in Session 4.
 - ~~**AC6 — Step 21t deleted.**~~ **→ SPRINT 9** (deferred 2026-07-16). Revised into "partition the
   consolidation critic by who can judge it" — the original wording failed the non-expert test. The revision
   is no longer a seed edit: moving Tests 1–5 into `simulation-engine.mjs` is system code with unit tests,
@@ -92,10 +98,10 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A5 — `/proc/replay` endpoints + `/replay` Slack cmd | AC2, AC3, AC4 | ✅ DONE 2026-07-16 — verified live: `/replay 719` → run 720; GET served the 20KB assembled prompt from the frame; 9 resumes incl. `sessionId` + `abort` |
 | A5b — `use_recorded` names its recording (`sessionId`) | AC3 | ✅ DONE 2026-07-16 — commit `2b3858a`. Validated against `candidate_ids`; notification offers one named curl per candidate. **Load-bearing**: run 720 needed 1064 on step 21 pass 1 and 1067 on pass 2 |
 | A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `919e874`. Own verdict; no fabricated drift list |
-| A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ **Confirmed necessary.** Every diff on 2026-07-16 was run by hand in a scratchpad. The harness said *that* it drifted; a human said *what* |
+| A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ **Spec sharpened by run 721.** Component-level is **not enough** — `drift: input` is ambiguous, covering both benign `step_type_contracts` drift (step 11) and a different question entirely (step 23 pass 2), with opposite correct answers. Must report **which keys within `input`** moved, with sizes. Every diff on 2026-07-16 was manual |
 | A7 — ~~Fingerprint backfill~~ → **assembled-request hash** | AC5 | ⬜ **Redesigned — see Session 3.** The original (recompute the composite from stored messages) is impossible: assembly is lossy and prompt text is overwritten in place. The replacement is an 8th `assembled` component, and it is a **correctness** mechanism, not a convenience — see the step-23 finding |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
-| A9 — Candidate offering is keyed on count, not on request equality | AC4 | ⬜ **New — real gap.** `candidate_ids.length > 1` triggers the ambiguity warning, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1. Subsumed by A7's assembled hash |
+| A9 — `use_recorded` is offered where accepting it is wrong | AC4 | ⬜ **Real gap — persists WITH fingerprints (run 721).** Two parts: (a) the ambiguity warning keys on `candidate_ids.length > 1`, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1; (b) **the soft/hard binary is too coarse.** `use_recorded`'s documented purpose is **prompt** drift ("edited in a way that should not change the answer"); **`input` drift means a different question was asked**, where accepting a recording is almost never right — yet it is still offered as "free, keeps the suffix free". Drift needs a third disposition: *different question — discourage or refuse* |
 | B1 — Partition the consolidation critic | AC6 | ➡️ **SPRINT 9** (2026-07-16). Revised design complete and evidence-backed — see Track B. Deferred because Tests 1–5 → `simulation-engine` is system code + tests, not the seed edit originally scoped |
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
@@ -505,3 +511,82 @@ then reinstated for a different reason — see below.**
   run against today's `action_key`-aware prompts. A2 is deployed, so that run fingerprints itself and every
   iteration after it is free. **One paid run, then free forever** — which is the sprint's thesis, now
   demonstrated rather than asserted.
+
+### Session 4 — 2026-07-16 — AC2 CLOSED: the loop is free
+
+**`/replay 720` → run 721: 8 `llm_call`s, 8 `status: 'hit'`, `drift: null`, ZERO breaks, ZERO live calls.**
+
+That is AC2 in its literal wording — *"replayed from a complete corpus, walking the same path, having made zero
+Perplexity calls, verified against the LLM call count, not inferred."* Measured across both runs:
+
+| run | source | `llm_call`s | live | breaks |
+|---|---|---|---|---|
+| 720 | 719 (unfingerprinted) | 8 | **0** | 9 — every call, hand-resolved |
+| 721 | 720 (fingerprinted) | 8 | **0** | **0** |
+
+**Two runs, sixteen `llm_call`s, zero spend.** The sprint goal — *make the `create_workflow` development loop
+free* — is met and demonstrated, not asserted.
+
+**The difference between those two rows is the whole sprint.** Same workflow, same path, same recordings by
+content. Run 720 walked an unfingerprinted corpus and needed a human at all nine breaks, including two where
+the correct answer required diffing prompts in a scratchpad. Run 721 walked a fingerprinted one and needed
+nobody. **A corpus is minted by walking a run once; every walk after it is free and unattended.**
+
+**Step 21 is the proof in miniature.** It executes twice per path (design, then regeneration). In run 720 the
+two recordings were indistinguishable and had to be named by hand — `sessionId: 1064` for pass 1, `1067` for
+pass 2 — after establishing which was which from a text diff. In run 721 the composite hash selected 1072 and
+1075 **automatically, correctly, silently**. That is the entire argument for keying on a content fingerprint
+rather than `(run_id, step_id)`, executed rather than reasoned about.
+
+#### The 9th break: right verdict, undecidable report
+
+Both runs stop at step 23's second pass, where run 719's quota died on 2026-07-12 and no recording has ever
+existed. Run 721's verdict is a genuine improvement on 720's:
+
+- 720 (unfingerprinted): `unfingerprinted` — no comparison possible; offered a **wrong candidate**, unwarned.
+- 721 (fingerprinted): `hard_drift (drift: input)` — **six of seven components byte-identical**, one moved,
+  correctly attributed.
+
+**But `drift: input` is not actionable, and this is a real finding.** `input` conflates two things with
+opposite correct answers:
+
+- `step_type_contracts` — injected system knowledge. This is what drifted at step 11 (`action_key`), where
+  `use_recorded` was **defensible**.
+- the question itself — `draft_workflow` (10,405 chars), `skeleton_error_summary` (416),
+  `skeleton_validation` (3,457). This is what drifted at step 23 pass 2, where `use_recorded` is **wrong**.
+
+Identical signal, opposite answers. The only way to tell them apart today is to diff raw text by hand.
+
+**This sharpens A6.** Reporting which *component* moved is not enough — we already have that, and it is
+ambiguous. A6 must report which **keys within `input`** moved, with sizes:
+`input drifted — added: draft_workflow (10,405), skeleton_error_summary (416), skeleton_validation (3,457);
+step_type_contracts unchanged.` That makes the decision obvious without a scratchpad.
+
+**And A9 persists even with fingerprints.** `use_recorded` is still offered — framed as *"free, keeps the
+suffix free"* — on a drift where accepting it discards 10KB of repair context. Its documented purpose is
+**prompt** drift (*"a prompt edited in a way that should not change the answer"*). `input` drift means a
+different question was asked, where accepting a recording is almost never right. **The soft/hard binary is
+too coarse:** drift needs a third disposition — *this is a different question, `use_recorded` should be
+discouraged or refused*.
+
+#### Corrections to earlier claims in this sprint
+
+- **`soft_drift` is still untested.** Predicted memory would drift between 720 and 721 and be forgiven. It did
+  not move — `PGC_Memory` gained nothing in between, and these prompts mostly do not retrieve memory (budget 0
+  when `memory_config` is absent). The component-level fingerprint's *justification* is that memory is
+  time-varying; today it did not vary. **Not proven — do not claim it.**
+- **Predicted the 9th break would be a `miss`.** It was `hard_drift` — because 720's recording is now
+  fingerprinted, so a comparison was possible. Better than predicted.
+
+#### AC status after Session 4
+
+| AC | Status |
+|---|---|
+| AC1 — fingerprint per `llm_call` | ✅ written, and proven **reproducible** — run 721's 8 hits are the proof |
+| AC2 — replay completes with zero spend | ✅ **CLOSED** — 16 `llm_call`s / 0 live across runs 720+721; 0 breaks on the clean corpus |
+| AC4 — drift breaks and says why | ⚠️ half — breaks fire and attribute correctly, but `drift: input` is undecidable. A6 does not exist |
+| AC3 — record mode | ❌ untouched — `breakPolicy: always` and `supplied` never exercised |
+| AC5 — historical runs replayable | ↩️ reframed — achieved by walking a run once (`use_recorded`), not by a backfill script. A7 is now about making that walk *safe*, not possible |
+| AC6 — critic partition | ➡️ Sprint 9 |
+| AC7 | ❌ dropped (Session 2) |
+| AC8 — measured spend drop | ✅ on the dev cycle ($0, measured). Per-run cuts gone with AC6/AC7 |
