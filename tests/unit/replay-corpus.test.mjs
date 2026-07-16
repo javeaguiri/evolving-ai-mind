@@ -127,3 +127,23 @@ describe('decideReplayAction — policy × status', () => {
     assert.equal(decideReplayAction('on_miss', 'unfingerprinted'), 'break');
   });
 });
+
+// A6 — a stored request_fingerprint carries input_keys alongside the seven components.
+// It is a finer view of `input`, not an eighth component: diffing the raw key union would
+// report it as drift and pollute every drift list.
+describe('diffComponents judges COMPONENT_ORDER, not whatever keys are present', () => {
+  it('ignores input_keys entirely', () => {
+    const rec = { ...BASE, input_keys: { a: { h: 'zzz', n: 1 } } };
+    assert.deepEqual(diffComponents(BASE, rec), [], 'input_keys must not read as a drifting component');
+  });
+
+  it('still detects real drift when input_keys is present and differs', () => {
+    const cur = { ...BASE, input: 'i2', input_keys: { a: { h: 'p', n: 1 } } };
+    const rec = { ...BASE,               input_keys: { a: { h: 'q', n: 9 } } };
+    assert.deepEqual(diffComponents(cur, rec), ['input']);
+  });
+
+  it('an unknown extra key never invents a component', () => {
+    assert.deepEqual(diffComponents({ ...BASE, future_field: 'x' }, BASE), []);
+  });
+});

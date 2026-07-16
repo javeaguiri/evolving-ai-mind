@@ -1043,6 +1043,28 @@ async function resumeLlm({ workflowRunId, traceId }) {
 // SERV_API_URL (the API Gateway host also serving /proc), $INTERNAL_API_KEY referenced as
 // an env var so no key material is ever rendered, and both run IDs labelled. use_recorded
 // is offered only when a candidate recording exists (a miss has nothing to accept).
+/**
+ * A6 — one line naming which `input` keys moved, so the drift is legible without a curl.
+ * "drift: input" alone cannot be acted on: a changed step_type_contracts and a materially
+ * different question look identical at component level and have opposite right answers.
+ * Returns '' when there is nothing useful to say, so the line is omitted rather than empty.
+ */
+export function summariseInputDrift(inputDiff) {
+  if (!inputDiff) return '';
+  const fmt = (e) => `${e.key} (${e.chars ?? '?'} chars)`;
+  const parts = [];
+  if (inputDiff.added?.length)   parts.push(`added: ${inputDiff.added.map(fmt).join(', ')}`);
+  if (inputDiff.removed?.length) parts.push(`removed: ${inputDiff.removed.map(fmt).join(', ')}`);
+  if (inputDiff.changed?.length) {
+    parts.push(`changed: ${inputDiff.changed.map(e => `${e.key} (${e.was_chars ?? '?'}→${e.chars ?? '?'} chars)`).join(', ')}`);
+  }
+  if (!parts.length) return '';
+  // Naming what held still is as load-bearing as naming what moved: "step_type_contracts
+  // unchanged" is what tells a developer this is a different question, not a contract edit.
+  if (inputDiff.unchanged?.length) parts.push(`unchanged: ${inputDiff.unchanged.join(', ')}`);
+  return parts.join('  |  ');
+}
+
 export function buildBreakNotification(run, payload, traceId) {
   const base    = process.env.SERV_API_URL ?? '';
   const runId   = run.id;
@@ -1050,6 +1072,7 @@ export function buildBreakNotification(run, payload, traceId) {
   const read    = `${base}/api/v1/proc/replay/${runId}`;
   const source  = run.replay_source_run_id != null ? `run ${run.replay_source_run_id}` : '(record — no source run)';
   const driftTxt = Array.isArray(payload.drift) && payload.drift.length ? `  (drift: ${payload.drift.join(', ')})` : '';
+  const inputTxt = summariseInputDrift(payload.input_diff);
 
   const lines = [
     `🛑  Run ${runId} — BROKE at step ${payload.step_id}, awaiting resume`,
@@ -1058,6 +1081,7 @@ export function buildBreakNotification(run, payload, traceId) {
     `    step         ${payload.step_id} · ${payload.intent_category}`,
     `    replaying    ${source}`,
     `    reason       ${payload.reason}${driftTxt}`,
+    ...(inputTxt ? [`    input        ${inputTxt}`] : []),
     `    policy       ${payload.policy}`,
     ``,
     `Read the break — assembled prompt, drift, local_state diff:`,

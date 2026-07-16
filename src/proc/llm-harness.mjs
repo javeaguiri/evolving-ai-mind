@@ -16,7 +16,7 @@ import { validate, logPromptError }                               from './review
 import { getRows, insertRow }                                     from '../shared/serv-client.mjs';
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
-import { computeFingerprint }                                     from './fingerprint.mjs';
+import { computeFingerprint, diffInputKeys }                      from './fingerprint.mjs';
 import { lookupRecording, decideReplayAction, getRecordedResponse } from './replay-corpus.mjs';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,31 @@ export const STEP_TYPE_CONTRACT_COLUMNS = [
   'step_type', 'description', 'input_contract', 'output_contract',
   'on_success_options', 'on_failure_options', 'requires_capability',
 ];
+
+/**
+ * A6 — turn `drift: ['input']` into a sentence a developer can act on.
+ *
+ * `input` is ambiguous: `step_type_contracts` moving is benign (an injected contract changed;
+ * accepting the recording is right), while the question keys moving means a materially different
+ * question was asked (accepting it discards the difference). Opposite correct answers, identical
+ * component-level signal — so the disposition (A9) cannot fire without knowing which keys moved.
+ *
+ * Sizes are carried so the report says WHAT arrived, not merely that something did.
+ * Returns null when either side has no per-key hashes — absent data is unknowable, never
+ * "unchanged".
+ */
+export function describeInputDrift(currentKeys, candidateFingerprint) {
+  const cand = candidateFingerprint?.input_keys ?? null;
+  const raw  = diffInputKeys(currentKeys ?? null, cand);
+  if (!raw) return null;
+  const cur = currentKeys ?? {};
+  return {
+    added:     raw.added.map(k   => ({ key: k, chars: cur[k]?.n ?? null })),
+    removed:   raw.removed.map(k => ({ key: k, chars: cand[k]?.n ?? null })),
+    changed:   raw.changed.map(k => ({ key: k, chars: cur[k]?.n ?? null, was_chars: cand[k]?.n ?? null })),
+    unchanged: raw.unchanged,
+  };
+}
 
 /**
  * Resolve a model alias (e.g. 'smart', 'cheap') to a concrete model ID using
@@ -332,6 +357,10 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           drift:                recording?.drift ?? null,
           candidate_session_id: recording?.candidate?.sessionId ?? null,
           candidate_ids:        recording?.candidateIds ?? null,
+          // A6 — WHICH keys within `input` moved. Computed here because this is the only place
+          // both sides are already in hand; the report and the notification both read it off the
+          // frame rather than re-deriving it (checklist rule 2e).
+          input_diff:           describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint),
         },
       };
     }
@@ -436,7 +465,10 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
         trace_id:        traceId,
         step_id:         step.step,
         intent_category: intentCategory,
-        request_fingerprint:      fingerprint.components,
+        // input_keys rides alongside the seven components (A6): a finer view of `input`, not an
+        // eighth component — it is excluded from the composite, so recordings predating it keep
+        // hitting. diffComponents judges COMPONENT_ORDER only and ignores it.
+        request_fingerprint:      { ...fingerprint.components, input_keys: fingerprint.inputKeys },
         fingerprint_hash:         fingerprint.hash,
         response_source:          responseSource,
         replayed_from_session_id: servedFromSessionId,
