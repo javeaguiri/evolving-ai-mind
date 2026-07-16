@@ -178,6 +178,10 @@ async function getReplay(req, runId, traceId) {
       fingerprint:          b.fingerprint?.components ?? null,
       candidate_session_id: b.candidate_session_id ?? null,
       candidate_ids:        b.candidate_ids ?? null,
+      // A6 — computed once at the seam, where both sides were already in hand, and stashed on
+      // the frame. Recomputing it here would make the report a second derivation of one truth
+      // (checklist rule 2e) and cost a SERV read to re-fetch what the lookup already had.
+      input_diff:           b.input_diff ?? null,
     };
   }
 

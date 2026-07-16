@@ -14,7 +14,8 @@
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { computeFingerprint, stableStringify } from '../../src/proc/fingerprint.mjs';
+import { createHash }                          from 'crypto';
+import { computeFingerprint, stableStringify, hashInputKeys, diffInputKeys } from '../../src/proc/fingerprint.mjs';
 import { selectInjectedContext }               from '../../src/proc/llm-harness.mjs';
 
 const baseCall = () => ({
@@ -129,5 +130,57 @@ describe('selectInjectedContext — the reuse contract', () => {
     const map = selectInjectedContext(rows, { always_on: 'override' }, 'design_workflow_process');
     assert.ok(!('always_on' in map), 'resolvedInput key must not be injected from context');
     assert.equal(map.for_design, 'B');
+  });
+});
+
+// A6 — per-key hashes of `input`. A single `input` hash cannot be decomposed, so the
+// distinction the disposition (A9) depends on has to be WRITTEN, not recovered by reading harder.
+describe('hashInputKeys / diffInputKeys', () => {
+  it('hashes each key independently and records its serialised size', () => {
+    const k = hashInputKeys({ a: 'x', b: { deep: 1 } });
+    assert.deepEqual(Object.keys(k).sort(), ['a', 'b']);
+    assert.equal(typeof k.a.h, 'string');
+    assert.equal(k.a.n, JSON.stringify('x').length);
+    assert.notEqual(k.a.h, k.b.h);
+  });
+
+  it('is stable across key order — object ordering must not read as drift', () => {
+    assert.deepEqual(hashInputKeys({ a: 1, b: 2 }), hashInputKeys({ b: 2, a: 1 }));
+  });
+
+  it('is NOT part of the composite — recordings predating A6 must keep hitting', () => {
+    const args = { promptRow: { version: 1, prompt_text: 'p', output_schema: null }, userInput: '', model: 'm', memoryBlock: '', injectedContext: {} };
+    const a = computeFingerprint({ ...args, resolvedInput: { x: 1 } });
+    // Composite is derived from the seven components only; inputKeys rides alongside.
+    assert.equal(a.hash, createHash('sha256').update(
+      ['prompt', 'input', 'user_input', 'model', 'schema', 'memory', 'system_context'].map(c => a.components[c]).join(':'), 'utf8').digest('hex'));
+    assert.ok(a.inputKeys.x, 'inputKeys is returned');
+    assert.equal(a.components.input_keys, undefined, 'inputKeys must not be a component');
+  });
+
+  // The step-23 pass-2 case: a repair pass carrying draft + feedback the first pass never had.
+  it('names keys that arrived, with sizes', () => {
+    const d = diffInputKeys(hashInputKeys({ step_type_contracts: 'c', draft_workflow: 'BIG' }), hashInputKeys({ step_type_contracts: 'c' }));
+    assert.deepEqual(d.added, ['draft_workflow']);
+    assert.deepEqual(d.unchanged, ['step_type_contracts']);
+    assert.deepEqual(d.changed, []);
+  });
+
+  // The step-11 case: action_key landed, so an injected contract changed — benign.
+  it('distinguishes a changed contract from a changed question', () => {
+    const d = diffInputKeys(hashInputKeys({ step_type_contracts: 'v2', process_spec: 'same' }), hashInputKeys({ step_type_contracts: 'v1', process_spec: 'same' }));
+    assert.deepEqual(d.changed, ['step_type_contracts']);
+    assert.deepEqual(d.unchanged, ['process_spec']);
+  });
+
+  it('reports a vanished key', () => {
+    assert.deepEqual(diffInputKeys(hashInputKeys({}), hashInputKeys({ gone: 1 })).removed, ['gone']);
+  });
+
+  // Absent per-key hashes are unknowable. Reporting them as "unchanged" would assert agreement
+  // that was never measured -- the same error as calling an unfingerprinted recording hard_drift.
+  it('returns null when either side predates A6, rather than implying agreement', () => {
+    assert.equal(diffInputKeys(hashInputKeys({ a: 1 }), null), null);
+    assert.equal(diffInputKeys(null, hashInputKeys({ a: 1 })), null);
   });
 });

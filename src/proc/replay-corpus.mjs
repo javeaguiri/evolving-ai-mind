@@ -18,7 +18,8 @@
 // is judged only against the SOURCE run's recordings for the step — "what did this
 // run do here, and how does the current call differ" — which has no meaning globally.
 
-import { getRows } from '../shared/serv-client.mjs';
+import { getRows }         from '../shared/serv-client.mjs';
+import { COMPONENT_ORDER } from './fingerprint.mjs';
 
 // memory is the only SOFT component (arch-replay.md §8): PGC_Memory accumulates, so
 // an identical request assembled later retrieves a different block. Drift confined to
@@ -29,13 +30,18 @@ const SOFT_COMPONENTS = new Set(['memory']);
 // Pure classification — unit-tested; no I/O
 // ---------------------------------------------------------------------------
 
-/** Component names that differ between the current call and a candidate recording. */
+/**
+ * Component names that differ between the current call and a candidate recording.
+ * Judged over COMPONENT_ORDER — the seven defined components — never over whatever keys
+ * happen to be present. A stored request_fingerprint also carries `input_keys` (A6), which
+ * is a finer view of `input`, not a component; diffing the raw key union would report it as
+ * an eighth drifting component and pollute every drift list.
+ */
 export function diffComponents(current, candidate) {
   const cur = current ?? {};
   const cand = candidate ?? {};
-  const keys = new Set([...Object.keys(cur), ...Object.keys(cand)]);
   const drift = [];
-  for (const k of keys) if (cur[k] !== cand[k]) drift.push(k);
+  for (const k of COMPONENT_ORDER) if (cur[k] !== cand[k]) drift.push(k);
   return drift.sort();
 }
 
@@ -173,7 +179,10 @@ async function withResponse(row) {
     { column: 'role',       op: 'eq', value: 'assistant' },
   ], { column: 'sequence_number', direction: 'desc' }, 1);
   const content = resp.success && resp.count > 0 ? resp.rows[0].content : null;
-  return { sessionId: row.id, response: parseMaybeJson(content) };
+  // fingerprint travels with the candidate so the seam can diff against it without a second
+  // read (A6). Absent on the getRecordedResponse path, which passes a bare { id } and wants
+  // only the response.
+  return { sessionId: row.id, response: parseMaybeJson(content), fingerprint: row.request_fingerprint ?? null };
 }
 
 function parseMaybeJson(content) {

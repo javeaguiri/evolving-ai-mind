@@ -11,7 +11,7 @@ import assert           from 'node:assert/strict';
 
 process.env.SERV_API_URL = 'https://example.execute-api.us-east-2.amazonaws.com/Prod';
 
-const { buildBreakNotification } = await import('../../src/proc/run-workflow.mjs');
+const { buildBreakNotification, summariseInputDrift } = await import('../../src/proc/run-workflow.mjs');
 
 const run = { id: 812, workflow_name: 'create_workflow', replay_source_run_id: 719 };
 const payload = {
@@ -86,5 +86,55 @@ describe('buildBreakNotification', () => {
       assert.match(message, /"resolution":"use_recorded"\}/);
       assert.ok(!message.includes('recordings for this step'), 'no ambiguity warning when there is no ambiguity');
     });
+  });
+});
+
+// A6 — "drift: input" is not actionable on its own. These are the two cases from
+// 2026-07-16, which look identical at component level and have opposite right answers.
+describe('summariseInputDrift', () => {
+  it('says nothing when there is nothing to say — the line is omitted, not blank', () => {
+    assert.equal(summariseInputDrift(null), '');
+    assert.equal(summariseInputDrift({ added: [], removed: [], changed: [], unchanged: ['a'] }), '');
+  });
+
+  // step 23 pass 2: a repair pass carrying draft + feedback the recording never had.
+  it('names arrived keys with sizes, and what held still', () => {
+    const s = summariseInputDrift({
+      added: [{ key: 'draft_workflow', chars: 10405 }, { key: 'skeleton_error_summary', chars: 416 }],
+      removed: [], changed: [], unchanged: ['step_type_contracts', 'process_spec'],
+    });
+    assert.match(s, /added: draft_workflow \(10405 chars\), skeleton_error_summary \(416 chars\)/);
+    assert.match(s, /unchanged: step_type_contracts, process_spec/);
+  });
+
+  // step 11: action_key landed, so an injected contract changed -- benign, accept the recording.
+  it('shows a changed key as was→now, so a contract edit is legible as a contract edit', () => {
+    const s = summariseInputDrift({
+      added: [], removed: [], changed: [{ key: 'step_type_contracts', chars: 38322, was_chars: 39445 }],
+      unchanged: ['process_spec'],
+    });
+    assert.match(s, /changed: step_type_contracts \(39445→38322 chars\)/);
+    assert.match(s, /unchanged: process_spec/);
+  });
+
+  it('reports a removed key', () => {
+    assert.match(summariseInputDrift({ added: [], removed: [{ key: 'gone', chars: 12 }], changed: [], unchanged: [] }), /removed: gone \(12 chars\)/);
+  });
+});
+
+describe('the break notification carries the input drift', () => {
+  it('renders an input line naming the keys, not just the component', () => {
+    const { message } = buildBreakNotification(run, {
+      ...payload, reason: 'hard_drift', drift: ['input'],
+      input_diff: { added: [{ key: 'draft_workflow', chars: 10405 }], removed: [], changed: [], unchanged: ['step_type_contracts'] },
+    }, 't');
+    assert.match(message, /drift: input/);
+    assert.match(message, /input\s+added: draft_workflow \(10405 chars\)/);
+    assert.match(message, /unchanged: step_type_contracts/);
+  });
+
+  it('omits the line when there is no per-key detail (recording predates A6)', () => {
+    const { message } = buildBreakNotification(run, { ...payload, input_diff: null }, 't');
+    assert.ok(!/^\s+input\s+/m.test(message), 'no empty input line');
   });
 });
