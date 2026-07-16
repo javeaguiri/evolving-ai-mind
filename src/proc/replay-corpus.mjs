@@ -48,35 +48,35 @@ function isFingerprinted(row) {
 /**
  * Classify a set of source-run candidate recordings (rows carrying
  * `request_fingerprint` component maps) against the current call's components.
- * Returns { status, row?, drift?, candidateIds? } — no I/O. `row` is the chosen candidate.
+ * Returns { status, row?, drift?, candidateIds } — no I/O. `row` is the chosen candidate;
+ * `candidateIds` is every recording of the step, so a break report always states what was
+ * available and `use_recorded` can name one of them rather than accept the pick.
  */
 export function classifyDrift(components, candidates) {
   if (!candidates || candidates.length === 0) return { status: 'miss' };
+  const candidateIds = candidates.map(r => r.id);
 
   // A recording made before the fingerprint seam existed has nothing to compare against.
   // Diffing it against an absent fingerprint would report every component as drifted —
   // an assertion that they moved, when in truth they were never measured. 'unfingerprinted'
-  // is its own verdict: it still breaks, but the report says why, and `candidateIds`
-  // reports the ambiguity rather than hiding it behind an arbitrary pick.
+  // is its own verdict: it still breaks, but the report says why.
   const comparable = candidates.filter(isFingerprinted);
-  if (comparable.length === 0) {
-    return { status: 'unfingerprinted', row: candidates[0], candidateIds: candidates.map(r => r.id) };
-  }
+  if (comparable.length === 0) return { status: 'unfingerprinted', row: candidates[0], candidateIds };
 
   const scored = comparable.map(row => ({ row, drift: diffComponents(components, row.request_fingerprint) }));
 
   // Defensive: an empty diff would have matched the composite hash upstream, but if
   // one appears treat it as the hit it is.
   const exact = scored.find(s => s.drift.length === 0);
-  if (exact) return { status: 'hit', row: exact.row, drift: [] };
+  if (exact) return { status: 'hit', row: exact.row, drift: [], candidateIds };
 
   // Soft: every drifting component is soft (memory). Prefer a soft candidate — reuse.
   const soft = scored.find(s => s.drift.every(c => SOFT_COMPONENTS.has(c)));
-  if (soft) return { status: 'soft_drift', row: soft.row, drift: soft.drift };
+  if (soft) return { status: 'soft_drift', row: soft.row, drift: soft.drift, candidateIds };
 
   // Hard: report against the most similar candidate (fewest drifting components).
   scored.sort((a, b) => a.drift.length - b.drift.length);
-  return { status: 'hard_drift', row: scored[0].row, drift: scored[0].drift };
+  return { status: 'hard_drift', row: scored[0].row, drift: scored[0].drift, candidateIds };
 }
 
 /**
@@ -108,9 +108,10 @@ export function decideReplayAction(breakPolicy, lookupStatus) {
  *   candidate    { sessionId, response }  present for hit/soft_drift/hard_drift/unfingerprinted
  *   drift        string[] of drifting component names (soft_drift/hard_drift only —
  *                absent for 'unfingerprinted', where no comparison was possible)
- *   candidateIds session ids of every unfingerprinted recording for the step. Present only
- *                for 'unfingerprinted'; >1 means the pick in `candidate` is arbitrary
- *                (ordered newest-first) and cannot be trusted without a human decision.
+ *   candidateIds session ids of every recording of the step in the source run, newest first.
+ *                Absent on a composite-hash hit (no candidate set was read). >1 under
+ *                'unfingerprinted' means the pick in `candidate` is arbitrary and cannot be
+ *                trusted without a human decision — resolve with an explicit `sessionId`.
  */
 export async function lookupRecording({ compositeHash, components, sourceRunId, stepId }) {
   // 1 — exact composite match, source run first

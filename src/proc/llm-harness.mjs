@@ -255,12 +255,16 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
     }
     const res = breakResolution.resolution;
     if (res === 'use_recorded') {
-      if (breakResolution.candidate_session_id == null) {
+      // An explicit session_id names the recording to accept; it overrides the lookup's pick,
+      // which is arbitrary when a step recorded more than once and nothing distinguishes the
+      // passes (arch-replay.md §5). Validated against the break's candidate_ids at the endpoint.
+      const acceptedSessionId = breakResolution.session_id ?? breakResolution.candidate_session_id;
+      if (acceptedSessionId == null) {
         throw new Error('llm_call resume use_recorded: no candidate recording to accept');
       }
-      servedResponse      = await getRecordedResponse(breakResolution.candidate_session_id);
+      servedResponse      = await getRecordedResponse(acceptedSessionId);
       served              = true;
-      servedFromSessionId = breakResolution.candidate_session_id;
+      servedFromSessionId = acceptedSessionId;
       responseSource      = 'replayed';
     } else if (res === 'supplied') {
       servedResponse = breakResolution.response;
