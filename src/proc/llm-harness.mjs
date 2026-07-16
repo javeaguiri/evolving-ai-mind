@@ -301,6 +301,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           userInput,
           drift:                recording?.drift ?? null,
           candidate_session_id: recording?.candidate?.sessionId ?? null,
+          candidate_ids:        recording?.candidateIds ?? null,
         },
       };
     }
