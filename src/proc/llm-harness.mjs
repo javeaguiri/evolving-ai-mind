@@ -24,6 +24,17 @@ import { lookupRecording, decideReplayAction, getRecordedResponse } from './repl
 // ---------------------------------------------------------------------------
 
 /**
+ * The PGC_StepType columns that constitute a step type's contract — what an LLM needs to
+ * know to author a step. Excludes row bookkeeping (id, status, created_at, updated_at):
+ * it is not contract, and injecting it makes an unrelated row edit look like request drift.
+ * Exported for the fingerprint-stability test.
+ */
+export const STEP_TYPE_CONTRACT_COLUMNS = [
+  'step_type', 'description', 'input_contract', 'output_contract',
+  'on_success_options', 'on_failure_options', 'requires_capability',
+];
+
+/**
  * Resolve a model alias (e.g. 'smart', 'cheap') to a concrete model ID using
  * the llm_model_aliases entry in PGC_SystemContext.
  * Returns the original value unchanged when no alias is found.
@@ -170,8 +181,23 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
 
   // Auto-inject step_type_contracts when the prompt references it.
   // Fetched fresh from PGC_StepType at call time — not stored in local_state.
+  //
+  // Ordered and column-scoped so the assembled prompt is a function of the contracts alone.
+  // Without ORDER BY, row order is whatever the heap returns: updating any step type
+  // relocates its row and silently reorders the array, which reaches the prompt (arrays are
+  // order-significant to both JSON.stringify and stableStringify) and changes the `input`
+  // fingerprint with no semantic change behind it. STEP_TYPE_CONTRACT_COLUMNS excludes id,
+  // status (already filtered to 'live'), created_at and updated_at — row bookkeeping the
+  // LLM has no use for, and which would otherwise make a touched row look like a new request.
   if (!('step_type_contracts' in resolvedInput) && promptRow.prompt_text?.includes('{{step_type_contracts}}')) {
-    const stResp = await getRows('PGC_StepType', [{ column: 'status', op: 'eq', value: 'live' }]);
+    const stResp = await getRows(
+      'PGC_StepType',
+      [{ column: 'status', op: 'eq', value: 'live' }],
+      { column: 'step_type', direction: 'asc' },
+      undefined,
+      undefined,
+      STEP_TYPE_CONTRACT_COLUMNS,
+    );
     if (stResp.success && stResp.rows?.length > 0) {
       resolvedInput = { ...resolvedInput, step_type_contracts: stResp.rows };
     }
