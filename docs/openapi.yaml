@@ -1596,10 +1596,12 @@ paths:
               properties:
                 resolution:  { type: string, enum: [use_recorded, call_live, supplied, abort] }
                 response:    { type: object, description: Required only for resolution=supplied. }
+                sessionId:   { type: integer, description: "Optional, resolution=use_recorded only — accept a named recording instead of the one the lookup surfaced. Must appear in the break report's candidate_ids. Needed when a step recorded more than once in the source run: the lookup offers the newest, which is the wrong pass for every iteration but the last." }
                 breakPolicy: { type: string, enum: [never, on_miss, always], description: Optional — changes the run policy from this point on (e.g. record the rest). }
             examples:
-              use_recorded: { value: { resolution: use_recorded } }
-              supplied:     { value: { resolution: supplied, response: { } } }
+              use_recorded:       { value: { resolution: use_recorded } }
+              use_recorded_named: { value: { resolution: use_recorded, sessionId: 1064 } }
+              supplied:           { value: { resolution: supplied, response: { } } }
       responses:
         '200': { description: Resolution accepted; resume_llm enqueued }
         '404': { description: Replay run not found }

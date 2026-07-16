@@ -147,7 +147,7 @@ developer reads the break over HTTP, supplies a resolution
 
 | resolution | effect |
 |---|---|
-| `use_recorded` | accept the candidate recording despite drift |
+| `use_recorded` | accept the candidate recording despite drift. Optionally names one via `sessionId` — see below |
 | `call_live` | call the LLM for this one step, then continue under the run's policy |
 | `supplied` | use a response supplied in the request body |
 | `abort` | cancel the run |
@@ -155,6 +155,29 @@ developer reads the break over HTTP, supplies a resolution
 `use_recorded` is the resolution that makes prompt iteration cheap. When a prompt is edited in a
 way that should not change the answer, accepting the recording keeps the entire downstream suffix
 free.
+
+### A step can record more than once, so the candidate is named, not assumed
+
+One step can execute several times in one path — a repair loop, or a back-edge that regenerates.
+Each pass records its own response under the same `step_id`, so the lookup faces several candidates
+and orders them newest-first. When the fingerprint distinguishes them the composite hash picks the
+right one and the ordering is irrelevant. When it cannot — an unfingerprinted corpus, or several
+passes assembled identically — the pick is **arbitrary**, and newest-first is the wrong pass for
+every iteration but the last.
+
+The break report therefore always carries `candidate_ids`: every recording of that step in the
+source run. `use_recorded` accepts an optional `sessionId` naming one of them, validated against
+that list — an id the break never offered is rejected rather than fetched, because serving an
+unrelated response silently is the failure the fingerprint exists to prevent (§3). `sessionId` is
+omitted in the ordinary case, where the lookup's pick is the only candidate.
+
+### `unfingerprinted` is not drift
+
+A recording made before the fingerprint seam existed carries no components. Diffing against an
+absent fingerprint reports every component as drifted — an assertion that they *moved*, when they
+were never *measured*. It is its own verdict: it breaks like drift, but carries no drift list, and
+the report says the corpus is uncomparable rather than sending a developer hunting for changes that
+did not happen.
 
 ### The break notification is the interface
 
@@ -179,6 +202,14 @@ The notification therefore carries a literal, copy-pasteable command for every r
 
     Resume with the recorded response — free, keeps the whole suffix free:
       curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
+
+    — where the step recorded more than once, that single line is replaced by one named
+      curl per candidate, because the default pick would otherwise be a coin flip:
+
+    ⚠  2 recordings for this step — the default pick (1067) is the newest,
+       not necessarily the one this pass corresponds to. Name the recording:
+      curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded","sessionId":1067}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
+      curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded","sessionId":1064}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"
 
     Resume by calling the LLM for this step only — costs one call:
       curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"call_live"}' "https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod/api/v1/proc/replay/812/resume"

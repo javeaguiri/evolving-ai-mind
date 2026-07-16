@@ -185,18 +185,40 @@ async function getReplay(req, runId, traceId) {
 }
 
 // POST /proc/replay/{runId}/resume
-async function resumeReplay(req, runId, traceId) {
-  const { resolution, response, breakPolicy } = req.body ?? {};
+/**
+ * Shape of a resume body, independent of the run — checked before the run is read.
+ * Pure; returns an error message or null.
+ */
+export function validateResumeBody({ resolution, response, breakPolicy, sessionId } = {}) {
+  if (!RESOLUTIONS.includes(resolution))                          return `resolution must be one of: ${RESOLUTIONS.join(', ')}`;
+  if (resolution === 'supplied' && response === undefined)        return 'resolution=supplied requires a response';
+  if (breakPolicy !== undefined && !BREAK_POLICIES.includes(breakPolicy)) return `breakPolicy must be one of: ${BREAK_POLICIES.join(', ')}`;
+  if (sessionId !== undefined) {
+    if (resolution !== 'use_recorded')                            return 'sessionId applies only to resolution=use_recorded';
+    if (!Number.isInteger(sessionId) || sessionId <= 0)           return 'sessionId must be a positive integer';
+  }
+  return null;
+}
 
-  if (!RESOLUTIONS.includes(resolution)) {
-    return err(400, `resolution must be one of: ${RESOLUTIONS.join(', ')}`, req.correlationId);
-  }
-  if (resolution === 'supplied' && response === undefined) {
-    return err(400, 'resolution=supplied requires a response', req.correlationId);
-  }
-  if (breakPolicy !== undefined && !BREAK_POLICIES.includes(breakPolicy)) {
-    return err(400, `breakPolicy must be one of: ${BREAK_POLICIES.join(', ')}`, req.correlationId);
-  }
+/**
+ * A named recording must be one the break offered for this step. Without this a mistyped id
+ * serves an unrelated response and the run continues looking correct — the silently-wrong-hit
+ * failure the fingerprint exists to prevent (arch-replay.md §3). Pure; returns a message or null.
+ * `offeredIds` is absent when no candidate set was read (breakPolicy: always), in which case
+ * naming a recording is an explicit developer assertion and is accepted — `response_source`
+ * and `replayed_from_session_id` record exactly which was used.
+ */
+export function validateNamedRecording(sessionId, offeredIds) {
+  if (sessionId === undefined || !Array.isArray(offeredIds)) return null;
+  if (offeredIds.includes(sessionId)) return null;
+  return `sessionId ${sessionId} is not a recording of this step — offered: ${offeredIds.join(', ')}`;
+}
+
+async function resumeReplay(req, runId, traceId) {
+  const { resolution, response, breakPolicy, sessionId } = req.body ?? {};
+
+  const bodyError = validateResumeBody(req.body ?? {});
+  if (bodyError) return err(400, bodyError, req.correlationId);
 
   const resp = await getRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'status', 'stack']);
@@ -212,11 +234,15 @@ async function resumeReplay(req, runId, traceId) {
     return err(409, `run ${runId} has no llm_break frame on top`, req.correlationId);
   }
 
+  const namedError = validateNamedRecording(sessionId, top.break?.candidate_ids);
+  if (namedError) return err(400, namedError, req.correlationId);
+
   // Write the resolution (and any supplied response) onto the break frame — a
   // design_workflow_process response can approach SQS's 256KB limit, so it rides on the
   // jsonb frame, never in the resume_llm message, which carries only workflowRunId.
   top.resolution = resolution;
   top.response   = response ?? null;
+  top.session_id = sessionId ?? null;
 
   const updates = { stack };
   if (breakPolicy !== undefined) updates.llm_break_policy = breakPolicy;

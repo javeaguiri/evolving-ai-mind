@@ -197,7 +197,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       console.info('run-workflow: llm_break aborted', { workflowRunId: run.id, traceId });
       return { action: 'cancelled' };
     }
-    breakResolution = { ...(top.break ?? {}), resolution, response: top.response };
+    breakResolution = { ...(top.break ?? {}), resolution, response: top.response, session_id: top.session_id ?? null };
     run.stack.pop();
     await persistStack(run);
   }
@@ -1064,11 +1064,24 @@ export function buildBreakNotification(run, payload, traceId) {
     `  curl -s -H "x-api-key: $INTERNAL_API_KEY" "${read}"`,
   ];
   if (payload.candidate_session_id != null) {
-    lines.push(
-      ``,
-      `Resume with the recorded response — free, keeps the suffix free:`,
-      `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "${resume}"`,
-    );
+    const ids = Array.isArray(payload.candidate_ids) ? payload.candidate_ids : [];
+    if (ids.length > 1) {
+      // Several passes recorded under one step_id and nothing distinguishes them, so the pick is
+      // arbitrary (newest first) — offer each by name rather than present a coin flip as a default.
+      lines.push(
+        ``,
+        `⚠  ${ids.length} recordings for this step — the default pick (${payload.candidate_session_id}) is the newest,`,
+        `   not necessarily the one this pass corresponds to. Name the recording:`,
+        ...ids.map(id =>
+          `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded","sessionId":${id}}' "${resume}"`),
+      );
+    } else {
+      lines.push(
+        ``,
+        `Resume with the recorded response — free, keeps the suffix free:`,
+        `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "${resume}"`,
+      );
+    }
   }
   lines.push(
     ``,

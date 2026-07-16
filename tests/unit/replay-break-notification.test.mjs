@@ -58,4 +58,33 @@ describe('buildBreakNotification', () => {
     const rec = buildBreakNotification({ ...run, replay_source_run_id: null }, payload, 't').message;
     assert.match(rec, /record — no source run/);
   });
+
+  // A step that ran twice records twice under one step_id. Offering one unqualified
+  // use_recorded would present the newest pick as though it were the considered one.
+  describe('when a step recorded more than once', () => {
+    const ambiguous = { ...payload, reason: 'unfingerprinted', drift: null, candidate_session_id: 1067, candidate_ids: [1067, 1064] };
+
+    it('warns that the default pick is arbitrary', () => {
+      const { message } = buildBreakNotification(run, ambiguous, 't');
+      assert.match(message, /2 recordings for this step/);
+      assert.match(message, /not necessarily the one this pass corresponds to/);
+    });
+
+    it('offers a named, runnable curl for every candidate', () => {
+      const { message } = buildBreakNotification(run, ambiguous, 't');
+      assert.match(message, /"resolution":"use_recorded","sessionId":1067/);
+      assert.match(message, /"resolution":"use_recorded","sessionId":1064/);
+    });
+
+    it('never offers the unqualified use_recorded that would hide the choice', () => {
+      const { message } = buildBreakNotification(run, ambiguous, 't');
+      assert.ok(!message.includes(`'{"resolution":"use_recorded"}'`), 'the ambiguous pick must not be a default');
+    });
+
+    it('a single candidate keeps the plain resolution — nothing to choose between', () => {
+      const { message } = buildBreakNotification(run, { ...payload, candidate_ids: [5501] }, 't');
+      assert.match(message, /"resolution":"use_recorded"\}/);
+      assert.ok(!message.includes('recordings for this step'), 'no ambiguity warning when there is no ambiguity');
+    });
+  });
 });
