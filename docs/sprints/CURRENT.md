@@ -58,17 +58,20 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   `local_state` diff against the source run. `use_recorded` accepts the recording and keeps the suffix free.
 - **AC5 — Historical runs are replayable.** Backfill fingerprints onto existing `PGC_Session` rows.
   Run 719 replays.
-- **AC6 — The consolidation critic is partitioned by who can judge it.** (Revised 2026-07-16 — the original
-  wording, "21r's findings are surfaced at the step-24 gate for a human to accept or reject", fails the
-  non-expert test; see Track B.) 21t is deleted. Structural tests 1–5 become deterministic checks in
-  `simulation-engine.mjs` — no LLM, no gate. Only the semantic tests (6–7) reach a human, phrased in terms of
-  what the user will **see**, never which steps to merge. **No gate ever asks a non-expert to referee two
-  LLMs.**
+- ~~**AC6 — Step 21t deleted.**~~ **→ SPRINT 9** (deferred 2026-07-16). Revised into "partition the
+  consolidation critic by who can judge it" — the original wording failed the non-expert test. The revision
+  is no longer a seed edit: moving Tests 1–5 into `simulation-engine.mjs` is system code with unit tests,
+  which is more than this sprint has left. Full design retained in Track B. **Nothing about it is urgent —
+  the critic's false positive is contained by the step-24 gate today, and Sprint 8's remaining work
+  (A6/A7/A8) is what makes iterating on it free.**
 - **AC7 — `research_workflow_domain` gated on new domains.** Skipped when the domain already exists in
   `PGC_Schema`.
 - **AC8 — Measured spend drop.** A full `create_workflow` development cycle (design change → verify)
-  costs **$0** in replay. AC6+AC7 together remove ~31% of live-run spend, measured against the Sprint 7
-  baseline, not estimated.
+  costs **$0** in replay. **Revised 2026-07-16:** both per-run cuts are gone — AC7 dropped (Session 2, step 3
+  is kept) and AC6 deferred to Sprint 9 — so AC8 now rests entirely on the replay loop, which is the item
+  that actually mattered: the burden was never the per-*run* cost but the per-*success* multiplier of ~10 live
+  runs to land one workflow. **Demonstrated 2026-07-16:** run 720 replayed 8 `llm_call`s for 0 live calls,
+  measured against `PGC_Session`. Remaining proof is a clean-corpus replay with **zero breaks** — `/replay 720`.
 - **AC9 — D3: `notify` template audit.** Generated domain workflows emit markdown-formatted `notify`
   output, not raw JSON field dumps. Fixed at the creation prompts (`generate_crud_workflows`,
   `design_workflow_dialogs`), never by patching generated workflows.
@@ -93,7 +96,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A7 — ~~Fingerprint backfill~~ → **assembled-request hash** | AC5 | ⬜ **Redesigned — see Session 3.** The original (recompute the composite from stored messages) is impossible: assembly is lossy and prompt text is overwritten in place. The replacement is an 8th `assembled` component, and it is a **correctness** mechanism, not a convenience — see the step-23 finding |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
 | A9 — Candidate offering is keyed on count, not on request equality | AC4 | ⬜ **New — real gap.** `candidate_ids.length > 1` triggers the ambiguity warning, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1. Subsumed by A7's assembled hash |
-| B1 — **Revised 2026-07-16**: partition the consolidation critic (delete 21t; Tests 1–5 → `simulation-engine`; narrow 21r to Tests 6–7, gated in experience terms) | AC6, AC8 | ⬜ Original plan (surface findings at the step-24 gate) **fails the non-expert test** — see Track B |
+| B1 — Partition the consolidation critic | AC6 | ➡️ **SPRINT 9** (2026-07-16). Revised design complete and evidence-backed — see Track B. Deferred because Tests 1–5 → `simulation-engine` is system code + tests, not the seed edit originally scoped |
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
 | C1 — `notify` template audit (D3 carry-forward) | AC9 | ⬜ |
@@ -234,7 +237,12 @@ Named explicitly so the deferral is a decision, not an oversight.
 
 ### Track B — Cost Cuts That Do Not Need the Harness
 
-> Both are deletions. Land them early — they cut ~31% of live-run spend in week one rather than at close.
+> **Track B is empty as of 2026-07-16.** B2 was dropped in Session 2 (step 3 is kept). B1 moved to Sprint 9 —
+> its revision turned out to be system code, not a seed edit. The design below is complete and carries the
+> evidence; it is a Sprint 9 scope item, retained here so the reasoning is not re-derived.
+>
+> This leaves Sprint 8 resting entirely on Track A, which is the correct outcome: the per-run cuts were
+> always secondary to the per-success multiplier the replay loop removes.
 
 **B1 (revised 2026-07-16) — Partition the consolidation critic by who can judge its findings**
 
