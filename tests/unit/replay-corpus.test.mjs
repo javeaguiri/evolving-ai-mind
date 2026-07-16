@@ -53,6 +53,39 @@ describe('classifyDrift', () => {
     assert.deepEqual(v.drift, ['memory', 'prompt']);
   });
 
+  // A recording made before the fingerprint seam existed has no components to compare.
+  // Reporting that as hard_drift asserts every component moved — it never measured them.
+  it('unfingerprinted (not hard_drift) when the candidate has no fingerprint', () => {
+    const v = classifyDrift(BASE, [{ id: 1069, request_fingerprint: null }]);
+    assert.equal(v.status, 'unfingerprinted');
+    assert.equal(v.drift, undefined, 'must not fabricate a drift list');
+    assert.equal(v.row.id, 1069);
+  });
+
+  it('unfingerprinted when the candidate fingerprint is an empty object', () => {
+    assert.equal(classifyDrift(BASE, [{ id: 7, request_fingerprint: {} }]).status, 'unfingerprinted');
+  });
+
+  // The ambiguity that makes an arbitrary pick dangerous: two passes through one step
+  // are indistinguishable without a fingerprint, so every id is reported.
+  it('unfingerprinted reports every candidate id when a step recorded more than once', () => {
+    const v = classifyDrift(BASE, [{ id: 1067, request_fingerprint: null }, { id: 1064, request_fingerprint: null }]);
+    assert.equal(v.status, 'unfingerprinted');
+    assert.deepEqual(v.candidateIds, [1067, 1064]);
+  });
+
+  it('prefers a comparable candidate over an unfingerprinted one', () => {
+    const v = classifyDrift(BASE, [{ id: 9, request_fingerprint: null }, withDiffs('input')]);
+    assert.equal(v.status, 'hard_drift');
+    assert.deepEqual(v.drift, ['input']);
+  });
+
+  it('an unfingerprinted candidate never dilutes a real hit', () => {
+    const v = classifyDrift(BASE, [{ id: 9, request_fingerprint: null }, { request_fingerprint: { ...BASE } }]);
+    assert.equal(v.status, 'hit');
+    assert.deepEqual(v.drift, []);
+  });
+
   it('prefers a soft candidate over a hard one (iterator: many recordings for a step)', () => {
     const v = classifyDrift(BASE, [withDiffs('input'), withDiffs('memory')]);
     assert.equal(v.status, 'soft_drift');
@@ -87,5 +120,10 @@ describe('decideReplayAction — policy × status', () => {
     assert.equal(decideReplayAction('on_miss', 'soft_drift'), 'serve');
     assert.equal(decideReplayAction('on_miss', 'hard_drift'), 'break');
     assert.equal(decideReplayAction('on_miss', 'miss'),       'break');
+  });
+
+  // An uncomparable recording must never be served silently — it breaks for a human.
+  it('on_miss → break on unfingerprinted (never serve)', () => {
+    assert.equal(decideReplayAction('on_miss', 'unfingerprinted'), 'break');
   });
 });

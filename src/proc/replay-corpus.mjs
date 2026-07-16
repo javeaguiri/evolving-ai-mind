@@ -39,15 +39,31 @@ export function diffComponents(current, candidate) {
   return drift.sort();
 }
 
+/** A recording predating the fingerprint seam carries no components to compare against. */
+function isFingerprinted(row) {
+  const fp = row?.request_fingerprint;
+  return fp != null && Object.keys(fp).length > 0;
+}
+
 /**
  * Classify a set of source-run candidate recordings (rows carrying
  * `request_fingerprint` component maps) against the current call's components.
- * Returns { status, row?, drift? } — no I/O. `row` is the chosen candidate.
+ * Returns { status, row?, drift?, candidateIds? } — no I/O. `row` is the chosen candidate.
  */
 export function classifyDrift(components, candidates) {
   if (!candidates || candidates.length === 0) return { status: 'miss' };
 
-  const scored = candidates.map(row => ({ row, drift: diffComponents(components, row.request_fingerprint ?? {}) }));
+  // A recording made before the fingerprint seam existed has nothing to compare against.
+  // Diffing it against an absent fingerprint would report every component as drifted —
+  // an assertion that they moved, when in truth they were never measured. 'unfingerprinted'
+  // is its own verdict: it still breaks, but the report says why, and `candidateIds`
+  // reports the ambiguity rather than hiding it behind an arbitrary pick.
+  const comparable = candidates.filter(isFingerprinted);
+  if (comparable.length === 0) {
+    return { status: 'unfingerprinted', row: candidates[0], candidateIds: candidates.map(r => r.id) };
+  }
+
+  const scored = comparable.map(row => ({ row, drift: diffComponents(components, row.request_fingerprint) }));
 
   // Defensive: an empty diff would have matched the composite hash upstream, but if
   // one appears treat it as the hit it is.
@@ -72,7 +88,7 @@ export function decideReplayAction(breakPolicy, lookupStatus) {
   if (breakPolicy === 'always') return 'break';
   if (breakPolicy !== 'on_miss') return 'call';               // 'never' / null / unknown → live
   if (lookupStatus === 'hit' || lookupStatus === 'soft_drift') return 'serve';
-  return 'break';                                              // 'hard_drift' | 'miss'
+  return 'break';                          // 'hard_drift' | 'miss' | 'unfingerprinted'
 }
 
 // ---------------------------------------------------------------------------
@@ -87,10 +103,14 @@ export function decideReplayAction(breakPolicy, lookupStatus) {
  * @param {object} params.components      the current call's component hash map
  * @param {number|null} params.sourceRunId  run whose corpus is being replayed
  * @param {string} params.stepId          workflow step id
- * @returns {Promise<{ status, candidate?, drift? }>}
- *   status    'hit' | 'soft_drift' | 'hard_drift' | 'miss'
- *   candidate { sessionId, response }  present for hit/soft_drift/hard_drift
- *   drift     string[] of drifting component names (soft_drift/hard_drift)
+ * @returns {Promise<{ status, candidate?, drift?, candidateIds? }>}
+ *   status       'hit' | 'soft_drift' | 'hard_drift' | 'miss' | 'unfingerprinted'
+ *   candidate    { sessionId, response }  present for hit/soft_drift/hard_drift/unfingerprinted
+ *   drift        string[] of drifting component names (soft_drift/hard_drift only —
+ *                absent for 'unfingerprinted', where no comparison was possible)
+ *   candidateIds session ids of every unfingerprinted recording for the step. Present only
+ *                for 'unfingerprinted'; >1 means the pick in `candidate` is arbitrary
+ *                (ordered newest-first) and cannot be trusted without a human decision.
  */
 export async function lookupRecording({ compositeHash, components, sourceRunId, stepId }) {
   // 1 — exact composite match, source run first
@@ -107,7 +127,12 @@ export async function lookupRecording({ compositeHash, components, sourceRunId, 
   const candidates = await sourceStepSessions(sourceRunId, stepId);
   const verdict = classifyDrift(components, candidates);
   if (verdict.status === 'miss') return { status: 'miss' };
-  return { status: verdict.status, candidate: await withResponse(verdict.row), drift: verdict.drift };
+  return {
+    status:       verdict.status,
+    candidate:    await withResponse(verdict.row),
+    drift:        verdict.drift,
+    candidateIds: verdict.candidateIds,
+  };
 }
 
 /**

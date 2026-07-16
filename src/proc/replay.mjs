@@ -177,6 +177,7 @@ async function getReplay(req, runId, traceId) {
       instructions:         b.instructions,        // the assembled prompt — served from the frame, not PGC_Session
       fingerprint:          b.fingerprint?.components ?? null,
       candidate_session_id: b.candidate_session_id ?? null,
+      candidate_ids:        b.candidate_ids ?? null,
     };
   }
 
