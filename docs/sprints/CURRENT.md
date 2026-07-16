@@ -58,26 +58,28 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   answering a gate differently produces a break at the next affected `llm_call`, with a component-level
   drift report (which of prompt/input/user_input/model/schema/memory moved, plus a text diff) and a
   `local_state` diff against the source run. `use_recorded` accepts the recording and keeps the suffix free.
-- **AC5 — Historical runs are replayable.** ↩️ **Reframed 2026-07-16 — achieved, but not as written.**
-  Run 719 replayed (run 720), and no backfill script exists or should. **Walking a run once with
-  `use_recorded` mints its corpus**, because every `llm_call` fingerprints itself regardless of mode. The
-  backfill as specified is impossible (assembly is lossy; prompt text is overwritten in place), and the
-  reconstructable version would fabricate. What remains is making that first walk **safe**, not possible —
-  see A7's assembled hash and the step-23 finding in Session 4.
+- **AC5 — Historical runs are replayable.** ✅ **CLOSED 2026-07-16 — achieved, and the AC was aimed at the
+  wrong thing.** Run 719 replayed (run 720). No backfill script exists, and none should: **walking a run once
+  mints its corpus**, because every `llm_call` fingerprints itself regardless of mode. The backfill as
+  specified is impossible (assembly is lossy; `upsert-prompt` overwrites text in place), and the
+  reconstructable version would fabricate a hash asserting an old response answers today's prompt — the
+  silently-wrong-hit failure the fingerprint exists to prevent. **The AC is moot going forward:** replay is
+  second by construction, so every corpus is fingerprinted by the run that made it. "Historical" now means
+  only the six pre-A2 runs — a set that shrinks to zero and never grows.
 - ~~**AC6 — Step 21t deleted.**~~ **→ SPRINT 9** (deferred 2026-07-16). Revised into "partition the
   consolidation critic by who can judge it" — the original wording failed the non-expert test. The revision
   is no longer a seed edit: moving Tests 1–5 into `simulation-engine.mjs` is system code with unit tests,
   which is more than this sprint has left. Full design retained in Track B. **Nothing about it is urgent —
   the critic's false positive is contained by the step-24 gate today, and Sprint 8's remaining work
-  (A6/A7/A8) is what makes iterating on it free.**
+  (A6/A9/A8) is what makes iterating on it free.**
 - **AC7 — `research_workflow_domain` gated on new domains.** Skipped when the domain already exists in
   `PGC_Schema`.
 - **AC8 — Measured spend drop.** A full `create_workflow` development cycle (design change → verify)
   costs **$0** in replay. **Revised 2026-07-16:** both per-run cuts are gone — AC7 dropped (Session 2, step 3
   is kept) and AC6 deferred to Sprint 9 — so AC8 now rests entirely on the replay loop, which is the item
   that actually mattered: the burden was never the per-*run* cost but the per-*success* multiplier of ~10 live
-  runs to land one workflow. **Demonstrated 2026-07-16:** run 720 replayed 8 `llm_call`s for 0 live calls,
-  measured against `PGC_Session`. Remaining proof is a clean-corpus replay with **zero breaks** — `/replay 720`.
+  runs to land one workflow. ✅ **PROVEN 2026-07-16:** runs 720 + 721 — **16 `llm_call`s, 0 live**, and run 721
+  (clean corpus) completed its 8 with **zero breaks**, measured against `PGC_Session`. The dev cycle costs $0.
 - **AC9 — D3: `notify` template audit.** Generated domain workflows emit markdown-formatted `notify`
   output, not raw JSON field dumps. Fixed at the creation prompts (`generate_crud_workflows`,
   `design_workflow_dialogs`), never by patching generated workflows.
@@ -99,9 +101,9 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A5b — `use_recorded` names its recording (`sessionId`) | AC3 | ✅ DONE 2026-07-16 — commit `2b3858a`. Validated against `candidate_ids`; notification offers one named curl per candidate. **Load-bearing**: run 720 needed 1064 on step 21 pass 1 and 1067 on pass 2 |
 | A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `919e874`. Own verdict; no fabricated drift list |
 | A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ **Spec sharpened by run 721.** Component-level is **not enough** — `drift: input` is ambiguous, covering both benign `step_type_contracts` drift (step 11) and a different question entirely (step 23 pass 2), with opposite correct answers. Must report **which keys within `input`** moved, with sizes. Every diff on 2026-07-16 was manual |
-| A7 — ~~Fingerprint backfill~~ → **assembled-request hash** | AC5 | ⬜ **Redesigned — see Session 3.** The original (recompute the composite from stored messages) is impossible: assembly is lossy and prompt text is overwritten in place. The replacement is an 8th `assembled` component, and it is a **correctness** mechanism, not a convenience — see the step-23 finding |
+| ~~A7 — fingerprint backfill / assembled-request hash~~ | AC5 | ❌ **STRUCK 2026-07-16 — unnecessary, not merely deferred.** Replay is second by construction: you cannot replay a run that never ran, and every run fingerprints itself. **A fingerprinted corpus is not a goal, it is a byproduct you cannot avoid.** Unfingerprinted corpora are a closed historical set (six pre-A2 runs) that shrinks to zero and never grows; 719 is already superseded by 720. The assembled hash also would **not** have fixed A9 — run 721 detected the drift correctly *with components* and offered `use_recorded` anyway. It adds nothing where components exist. See Session 5 |
 | A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
-| A9 — `use_recorded` is offered where accepting it is wrong | AC4 | ⬜ **Real gap — persists WITH fingerprints (run 721).** Two parts: (a) the ambiguity warning keys on `candidate_ids.length > 1`, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1; (b) **the soft/hard binary is too coarse.** `use_recorded`'s documented purpose is **prompt** drift ("edited in a way that should not change the answer"); **`input` drift means a different question was asked**, where accepting a recording is almost never right — yet it is still offered as "free, keeps the suffix free". Drift needs a third disposition: *different question — discourage or refuse* |
+| A9 — drift **disposition**, not detection | AC4 | ⬜ **Respecified 2026-07-16 — the gap was never detection.** Run 721 detected the drift correctly (`drift: input`, 6/7 identical) and **offered `use_recorded` anyway**, where accepting it discards 10KB of repair context. No new hash fixes this. Fix = a **disposition per component** over the hashes we already have (`memory` soft→serve; `prompt` hard→`use_recorded` is the *intended* resolution; **`input` hard→a different question was asked, discourage/refuse**; `schema` caught downstream by `review-output`). **Depends on A6's per-key `input` breakdown** — `input` is ambiguous: `step_type_contracts` moving is benign (step 11/`action_key`, accepting was right), the question-keys moving is fatal (step 23 pass 2). Also subsumes the old part (a): the ambiguity warning keys on `candidate_ids.length > 1`, but the danger occurs at N=1 |
 | B1 — Partition the consolidation critic | AC6 | ➡️ **SPRINT 9** (2026-07-16). Revised design complete and evidence-backed — see Track B. Deferred because Tests 1–5 → `simulation-engine` is system code + tests, not the seed edit originally scoped |
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
@@ -230,16 +232,42 @@ Named explicitly so the deferral is a decision, not an oversight.
   directly over HTTP with `breakPolicy: always`. Also how synthetic fixtures are built.
 - `openapi.yaml` **spec-first**, before implementation.
 
-**A6 — Drift report**
+**A6 — Drift report** *(revised 2026-07-16 — the load-bearing item)*
 - Which components moved + a text diff of each.
+- **Per-key within `input`, with sizes** — component-level alone is **not enough**, proven by runs 720/721.
+  `drift: input` is ambiguous: `step_type_contracts` moving is benign (step 11, `action_key` — accepting the
+  recording was right), while the question-keys moving is fatal (step 23 pass 2 — `draft_workflow` 10,405
+  chars, `skeleton_error_summary` 416, `skeleton_validation` 3,457). **Identical signal, opposite correct
+  answers.** Target: `input drifted — added: draft_workflow (10,405), skeleton_error_summary (416),
+  skeleton_validation (3,457); step_type_contracts unchanged.` A9's disposition cannot fire correctly
+  without this.
 - A `local_state` diff against the source run at the same step — **diagnostic only.** It is never consulted
   to decide whether to break; the fingerprint decides. `local_state` divergence that never reaches a
   prompt has no LLM consequence and is correctly ignored by the control path.
 
-**A7 — Fingerprint backfill**
-- `dev_scripts/backfill-fingerprints.mjs` — recompute the composite hash for existing `PGC_Session` rows
-  from their stored system/user `PGC_SessionEntry` messages. Makes the seven measured `create_workflow`
-  runs immediately replayable.
+**~~A7 — Fingerprint backfill / assembled hash~~ — STRUCK 2026-07-16**
+- Neither version is needed. **Replay is second by construction** — you cannot replay a run that never ran,
+  and every run fingerprints itself, so a fingerprinted corpus is a byproduct that cannot be avoided rather
+  than a goal. Unfingerprinted corpora are a closed set of six pre-A2 runs, already superseded by 720 as a
+  corpus, shrinking to zero and never growing.
+- The backfill as originally specified is **impossible**: assembly is lossy (prompt + context + memory collapse
+  into one string) and `upsert-prompt` overwrites text **in place** — `design_workflow_process` is one row at
+  v23 with v1–v22 gone. The reconstructable version would **fabricate**, asserting an old response answers
+  today's prompt, and would hit rather than break — the exact silently-wrong-hit failure the fingerprint exists
+  to prevent.
+- The assembled-hash replacement would **not** have fixed A9 either: run 721 detected the drift correctly with
+  components alone and offered `use_recorded` anyway. **It adds nothing where components exist.**
+
+**A9 — Drift disposition** *(new 2026-07-16 — replaces A7 as the correctness item)*
+- The gap is **disposition, not detection**. The harness knows the request changed and still offers
+  `use_recorded` as "free, keeps the suffix free".
+- A policy over the hashes already computed — no new hash: `memory` soft→serve; `prompt` hard→`use_recorded`
+  is the **intended** resolution; **`input` hard→a different question was asked, discourage or refuse**;
+  `model`→judgment; `schema`→already caught by `review-output` (`allowLlmCorrection: false` fails the run).
+- **Depends on A6's per-key `input` breakdown** to distinguish benign `step_type_contracts` drift from a
+  changed question.
+- Subsumes the earlier framing: the ambiguity warning keys on `candidate_ids.length > 1`, but the danger
+  (*this pass ≠ the recorded pass*) occurs at N=1 — step 23 pass 2, single candidate, no warning.
 
 **A8 — Developer loop**
 - `dev_scripts/replay.mjs`: start run → poll → on break, dump the assembled prompt + drift report to a
@@ -597,3 +625,51 @@ discouraged or refused*.
 | AC6 — critic partition | ➡️ Sprint 9 |
 | AC7 | ❌ dropped (Session 2) |
 | AC8 — measured spend drop | ✅ on the dev cycle ($0, measured). Per-run cuts gone with AC6/AC7 |
+
+### Session 5 — 2026-07-16 — A7 struck; A9 is disposition, not detection
+
+**One question dissolved A7: if a live run always precedes a replay, what unfingerprinted corpus is left?**
+None — and not by convention. **Replay is second by construction.** You cannot replay a run that never ran,
+and every run fingerprints itself (A2, deployed). A fingerprinted corpus is therefore not a goal to work
+toward but a **byproduct that cannot be avoided**. Unfingerprinted corpora are a closed historical set — six
+pre-A2 runs, already superseded by 720 as a corpus — that shrinks to zero and never grows. **A7 is struck as
+unnecessary, not deferred.** AC5 closes with it.
+
+**A7 was wrong four times in one day, and the pattern is the lesson.** Impossible → a convenience → a
+correctness mechanism → unnecessary. Each position was re-derived from whatever evidence had just landed;
+none asked *what problem is this for*. The user's question did. **When an item keeps changing its
+justification, the item is the problem, not the evidence.**
+
+**And the assembled hash would not have fixed A9 anyway.** Run 721 is the disproof, and it was already in
+hand: it walked a **fingerprinted** corpus, detected the drift **correctly** (`drift: input`, six of seven
+components byte-identical) — and offered `use_recorded` regardless, on a recording whose acceptance discards
+10KB of repair context. An assembled hash would have detected exactly the difference the `input` hash already
+detected. **It adds nothing where components exist.**
+
+**So A9 is respecified: the gap is disposition, not detection.** The harness knows the request changed and
+offers acceptance anyway. That needs no new hash — only a policy over the hashes already computed:
+
+| component | what drift means | disposition |
+|---|---|---|
+| `memory` | accumulated since the recording | soft — serve, log |
+| `prompt` | reworded | hard — but `use_recorded` is the **intended** resolution ("edited in a way that should not change the answer") |
+| `input` | **a different question was asked** | hard — `use_recorded` almost always **wrong**; discourage or refuse |
+| `model` | different model | judgment — the risk `use_recorded` already accepts |
+| `schema` | output contract moved | caught downstream: `review-output` with `allowLlmCorrection: false` fails the run |
+
+**A9 depends on A6, and that is the whole remaining shape of Track A.** `input` is ambiguous — only
+`step_type_contracts` moving is benign (step 11, `action_key`, where accepting was right); the question-keys
+moving is fatal (step 23 pass 2). The disposition cannot fire correctly without A6's per-key breakdown, and
+A6's per-key breakdown is what makes the disposition decidable. **A6 + a disposition table = A9 solved, A7
+deleted, A8 is pure ergonomics.**
+
+#### Track A remaining, after Session 5
+
+| item | status |
+|---|---|
+| A6 — drift report, **per-key within `input`, with sizes** | ⬜ the load-bearing item |
+| A9 — disposition table over the existing components | ⬜ depends on A6 |
+| A8 — `dev_scripts/replay.mjs` | ⬜ ergonomics only; collapses 9 curls to 1 |
+| A7 | ❌ struck |
+| AC3 — record mode (`breakPolicy: always`, `supplied`) | ⬜ **still never exercised** |
+| `soft_drift` | ⬜ **still never exercised** — memory did not move between 720 and 721 |
