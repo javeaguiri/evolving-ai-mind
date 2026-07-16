@@ -79,13 +79,16 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | Track item | AC(s) | Status |
 |---|---|---|
 | A1 — Schema migration: `PGC_Session` + `PGC_WorkflowRun` columns | AC1 | ✅ DONE 2026-07-15 — migrated + verified live (commit `891246f`) |
-| A2 — Fingerprint computation at the seam | AC1 | 🔨 CODE-COMPLETE 2026-07-15 — `fingerprint.mjs` + seam write; 7th component `system_context` added; 15 unit tests. Pending `sam deploy` to write on live runs |
-| A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | 🔨 CODE-COMPLETE 2026-07-15 — `replay-corpus.mjs` (source-first→global lookup, soft/hard drift), seam decision + serve path, `allowLlmCorrection` zero-spend guard; 11 unit tests. Break signal (`llm_break`) emitted but **inert until A4**. Pending deploy |
-| A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | 🔨 CODE-COMPLETE 2026-07-15 — break-before-audit suspend, `awaiting_llm_break` guard, `llm_break` frame resume path, `resume_llm` action, break-resolution consumption in `llm-harness` (use_recorded/supplied/call_live/abort), runnable-curl notification; 6 unit tests. Resume **producer** (endpoints) is A5. Pending deploy |
-| A5 — `/proc/replay` endpoints + `/replay` Slack cmd | AC2, AC3, AC4 | 🔨 CODE-COMPLETE 2026-07-15 — `proc/replay.mjs` (POST start/record, GET break report, POST resume→`resume_llm`), proxy-segment routing (`parseEvent.proxy`), `REPLAY` SQS type, `ui/slackbot/replay.mjs` (`/replay` list/replay/record); openapi spec-first; 7 unit tests. Pending deploy |
-| A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ |
-| A7 — Fingerprint backfill script | AC5 | ⬜ |
-| A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ |
+| A2 — Fingerprint computation at the seam | AC1 | ✅ DONE 2026-07-16 — deployed + **verified live**: run 720 wrote 7-component fingerprints on all 8 `llm_call`s |
+| A3 — Break policy + corpus lookup in `llm-harness.mjs` | AC2 | ✅ DONE 2026-07-16 — verified live; `on_miss` broke at all 8 calls, served all 8 recordings, **0 live calls** |
+| A4 — Break suspend / `resume_llm` in `run-workflow.mjs` | AC3, AC4 | ✅ DONE 2026-07-16 — verified live across 9 breaks; re-assembly fingerprint mismatch anomaly fired correctly when code was deployed mid-break |
+| A5 — `/proc/replay` endpoints + `/replay` Slack cmd | AC2, AC3, AC4 | ✅ DONE 2026-07-16 — verified live: `/replay 719` → run 720; GET served the 20KB assembled prompt from the frame; 9 resumes incl. `sessionId` + `abort` |
+| A5b — `use_recorded` names its recording (`sessionId`) | AC3 | ✅ DONE 2026-07-16 — commit `2b3858a`. Validated against `candidate_ids`; notification offers one named curl per candidate. **Load-bearing**: run 720 needed 1064 on step 21 pass 1 and 1067 on pass 2 |
+| A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `919e874`. Own verdict; no fabricated drift list |
+| A6 — Drift report (component diff + `local_state` diff) | AC4 | ⬜ **Confirmed necessary.** Every diff on 2026-07-16 was run by hand in a scratchpad. The harness said *that* it drifted; a human said *what* |
+| A7 — ~~Fingerprint backfill~~ → **assembled-request hash** | AC5 | ⬜ **Redesigned — see Session 3.** The original (recompute the composite from stored messages) is impossible: assembly is lossy and prompt text is overwritten in place. The replacement is an 8th `assembled` component, and it is a **correctness** mechanism, not a convenience — see the step-23 finding |
+| A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
+| A9 — Candidate offering is keyed on count, not on request equality | AC4 | ⬜ **New — real gap.** `candidate_ids.length > 1` triggers the ambiguity warning, but the danger is *this pass ≠ the recorded pass*, which occurs at N=1. Subsumed by A7's assembled hash |
 | B1 — Delete `create_workflow` step 21t | AC6, AC8 | ⬜ |
 | B2 — Gate `research_workflow_domain` on new domains | AC7, AC8 | ⬜ |
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
@@ -338,3 +341,81 @@ Sprint 8 is docs-only on the branch so far: `arch-replay.md` + `CURRENT.md`. No 
   invariant and staleness of the locked `routing_skeleton`.
 - **New order: Track A first**, starting at A1 (schema migration + `arch-data.md`), then A2 fingerprint at the
   seam. A5's `/proc/replay` routes are spec-first — `openapi.yaml` before implementation.
+
+### Session 3 — 2026-07-16 — The harness runs; AC2 met and measured
+
+**`/replay 719` → run 720. Eight `llm_call`s, eight recordings served, `response_source: live` count = 0.**
+Measured against `PGC_Session`, not inferred. Track A (A1–A5) is done and verified live rather than
+code-complete. Run 720 aborted by choice at the 9th break (below); its 8 fingerprinted sessions are
+retained — a cancel does not unwind the corpus.
+
+**The replay is the backfill.** Every `llm_call` writes its fingerprint regardless of mode, so serving a
+recording still records a *true* fingerprint computed from assembly that actually ran, plus
+`replayed_from_session_id` provenance. Run 720 is now a properly fingerprinted corpus for `create_workflow`
+built at zero cost — the outcome AC5 was reaching for, reached without a backfill script existing. Walking
+an old run once with `use_recorded` mints a corpus for any workflow. **This is why A7 was nearly dropped and
+then reinstated for a different reason — see below.**
+
+#### Findings, in order of how much they cost to learn
+
+1. **The harness found a defect in the harness.** (Fixed, commit `92b6e9b`.) The `PGC_StepType` read had no
+   `ORDER BY` and no column scope. Row order is whatever the heap returns, so updating any step type
+   relocates its row and reshuffles the injected array — which reaches both the prompt and the `input`
+   fingerprint, arrays being order-significant. `updated_at` was serialised into the prompt too, so a
+   *touched* row looked like a *changed* request. Left alone, the free loop would have quietly stopped being
+   free on the next step-type edit or autovacuum. Deterministic, no LLM needed to find it, and invisible
+   without something comparing two runs byte-for-byte. **This is the Sprint 7 lesson recurring: the cost
+   problem is the test loop.** Bonus: the injection is now ~1.1KB smaller per call.
+
+2. **`use_recorded` is unsafe on an unfingerprinted corpus, and `candidate_ids.length` does not detect it.**
+   Run 720's 9th break was step 23's *second* pass — a repair pass carrying a 10KB draft, a 3.4KB simulation
+   result and the `{{edit_action}}` error feedback. Session 1069 (the *first* pass) was offered as the sole
+   candidate, **with no ambiguity warning**, because the step recorded only once. Accepting it would have
+   discarded every byte of repair context, regenerated the same broken output, and reported success. The
+   warning added earlier that day keys on *candidate count*; the actual danger is *this pass is not the pass
+   the recording came from*, which occurs at N=1. **The signal that does detect it is request equality** —
+   see A7.
+
+3. **A7 was wrong twice, in opposite directions.** First read: impossible (true for the *composite*, since
+   assembly is lossy and `upsert-prompt` overwrites prompt text in place — `design_workflow_process` is one
+   row mutated to v23, v1–v22 gone). Second read: a convenience for old runs, deprioritise. **Both wrong.**
+   The stored `PGC_SessionEntry` system/user messages *are* directly comparable to a replaying run's
+   assembled instructions, byte-for-byte — proven by hand at step 3 (identical) and step 11 (848 bytes
+   apart). That cannot attribute drift to a component, but it answers the question that decides
+   serve-vs-break: **is this the same request?** The design intent on 2026-07-13 was sound; only A2's
+   seven-component composite is unreachable from stored data. The fix is an **8th `assembled` component**,
+   complementary to the seven: components attribute difference, `assembled` proves identity. It is what makes
+   `use_recorded` safe on any unfingerprinted corpus, and it closes A9 for free.
+   **Caveat, stated not discovered:** `model` and `schema` are not in the assembled text. Schema drift is
+   already caught downstream (`review-output` with `allowLlmCorrection: false` fails the run); model drift is
+   the risk `use_recorded` already accepts.
+
+4. **Real drift, correctly caught.** Step 11 broke because `human_gate` gained `action_key` at
+   2026-07-12T15:46 — 75 minutes *after* run 719 ran that step. So 719's `analyze_workflow_gaps` is
+   `action_key`-blind, and `action_key` was 719's blocker. Accepted deliberately: run 720 is a faithful
+   replay of 719, blind spot included.
+
+5. **The deterministic tier reproduces exactly.** Run 720's real `simulate` independently produced
+   `- [routing] Step notify_complete: ... not reachable`, byte-identical to the feedback line in session
+   1067's prompt. That confirmed 1064 = first pass, 1067 = regeneration, from evidence rather than inference.
+
+6. **A break the developer cannot act on is worse than no break.** The first resume never reached AWS:
+   `$INTERNAL_API_KEY` unset in the shell → `x-api-key: ` → API Gateway 403 at the edge → zero PROC
+   invocations → silence. "Never render key material" is right, but the notification assumes an environment.
+   A 403 gives the developer nothing to go on, and no news reads as good news.
+
+#### Not proven today — do not claim these
+
+- **AC3** — record mode (`breakPolicy: always`) and `supplied` were never exercised.
+- **AC4** — half. Breaks fired and said *why*; A6's report does not exist. Every diff was manual.
+- **AC2** — met on spend (0 calls, measured); the run did not reach a terminal state (aborted by choice).
+
+#### Path forward
+
+- **The harness:** A7 (assembled hash — correctness, do first), A6 (drift report), A9 (subsumed by A7),
+  A8 (dev loop). Then exercise AC3 properly.
+- **`edit_budget` (C2/AC10) needs quota — replay cannot rescue it.** Every recording predates `action_key`
+  (07-12 15:46), so the corpus can only reproduce the blind design. It needs **one** live `create_workflow`
+  run against today's `action_key`-aware prompts. A2 is deployed, so that run fingerprints itself and every
+  iteration after it is free. **One paid run, then free forever** — which is the sprint's thesis, now
+  demonstrated rather than asserted.
