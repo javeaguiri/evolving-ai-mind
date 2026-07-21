@@ -17,7 +17,7 @@ import { getRows, insertRow }                                     from '../share
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
 import { computeFingerprint, diffInputKeys }                      from './fingerprint.mjs';
-import { lookupRecording, decideReplayAction, getRecordedResponse } from './replay-corpus.mjs';
+import { lookupRecording, decideReplayAction, getRecordedResponse, dispositionForDrift } from './replay-corpus.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -343,6 +343,8 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
       // awaiting_llm_break, notifies Slack with a runnable-curl pointer, and resumes via
       // resume_llm. A hard halt — no auto-resume, same property as a human_gate.
       console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
+      const breakReason = breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss');
+      const inputDiff   = describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint);
       return {
         outputValue: null,
         nextAction:  'llm_break',
@@ -350,7 +352,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           step_id:              step.step,
           intent_category:      intentCategory,
           policy:               breakPolicy,
-          reason:               breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss'),
+          reason:               breakReason,
           fingerprint,
           instructions,
           userInput,
@@ -360,7 +362,11 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           // A6 — WHICH keys within `input` moved. Computed here because this is the only place
           // both sides are already in hand; the report and the notification both read it off the
           // frame rather than re-deriving it (checklist rule 2e).
-          input_diff:           describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint),
+          input_diff:           inputDiff,
+          // A9 — how use_recorded should be treated given what moved. Computed here (not at render
+          // time) so the GET report and the Slack notification read one disposition off the frame
+          // rather than each deriving it (checklist rule 2e).
+          disposition:          dispositionForDrift({ drift: recording?.drift ?? null, inputDiff, reason: breakReason }),
         },
       };
     }

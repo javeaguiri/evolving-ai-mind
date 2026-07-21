@@ -182,6 +182,11 @@ async function getReplay(req, runId, traceId) {
       // the frame. Recomputing it here would make the report a second derivation of one truth
       // (checklist rule 2e) and cost a SERV read to re-fetch what the lookup already had.
       input_diff:           b.input_diff ?? null,
+      // A9/A12 — disposition (how to treat use_recorded) and blast radius (which downstream
+      // steps a drifted key reaches) are stashed on the frame too, read here rather than
+      // re-derived. blast_radius is added by run-workflow at break time (it needs the steps).
+      disposition:          b.disposition ?? null,
+      blast_radius:         b.blast_radius ?? null,
     };
   }
 

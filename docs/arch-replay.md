@@ -394,6 +394,40 @@ The `local_state` diff is **diagnostic only**. It is never consulted to decide w
 the fingerprint decides. `local_state` divergence that does not reach a prompt has no LLM
 consequence and is correctly ignored by the control path.
 
+### Disposition — detection is not decision (A9)
+
+Knowing which component moved is not the same as knowing whether to accept the recording. The
+break carries a **disposition** — a policy over the components already classified, computed once at
+the seam (`dispositionForDrift`) and stashed on the break frame, so the notification and the GET
+report read one verdict rather than each deriving it. It governs how `use_recorded` is framed:
+
+| drifting component | disposition | why |
+|---|---|---|
+| `prompt`, `system_context` | **intended** | a reworded prompt / changed injected context is exactly what `use_recorded` is for |
+| `input`, only `step_type_contracts` moved | **intended** | an injected contract changed, not the question |
+| `input`, any question key moved | **refused** | a different question was asked — the recording answers the wrong one |
+| `input`, no per-key data (candidate predates A6) | **caution** | cannot confirm it is the same question — inspect first |
+| `user_input` | **refused** | the user message itself changed |
+| `model` | **judgment** | reuses another model's answer — the risk `use_recorded` already accepts |
+| `schema` | **downstream** | `review-output` (`allowLlmCorrection: false`) fails the run on resume if the recording no longer validates |
+| `memory` | **reuse** | soft — served, not broken |
+| *unfingerprinted candidate* | **caution** | could not be compared, so it is not "the same request" |
+
+The headline reflects the **most severe** drifting component, so a benign prompt reword can never
+mask a changed question. The `input` verdict depends on A6's per-key breakdown — component level
+alone cannot tell a benign contract edit from a materially different question.
+
+### Blast radius — what accepting actually frees (A12)
+
+`use_recorded` was offered as "keeps the suffix free". That is false whenever the drifted value is a
+`local_state` key several later steps read: accepting it here just defers the identical decision to
+each of them. The break carries a **blast radius** — for each drifted `input` key, the other
+`llm_call` steps whose input references the same `local_state` source root (`computeBlastRadius`,
+pure over the workflow definition, no new data). Computed in `run-workflow` where the step
+definitions are in scope, stashed on the frame. The notification names the readers
+(`user_design_notes is also read by steps 21, 21r, 21t — accepting here defers that decision`) so
+accepting is a decision with its real cost visible.
+
 ---
 
 ## 9. Services

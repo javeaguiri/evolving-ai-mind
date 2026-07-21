@@ -9,7 +9,7 @@
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { diffComponents, classifyDrift, decideReplayAction } from '../../src/proc/replay-corpus.mjs';
+import { diffComponents, classifyDrift, decideReplayAction, dispositionForDrift } from '../../src/proc/replay-corpus.mjs';
 
 // Seven-component fingerprint; helper to build a candidate that differs in named components.
 const BASE = {
@@ -145,5 +145,63 @@ describe('diffComponents judges COMPONENT_ORDER, not whatever keys are present',
 
   it('an unknown extra key never invents a component', () => {
     assert.deepEqual(diffComponents({ ...BASE, future_field: 'x' }, BASE), []);
+  });
+});
+
+// A9 — the gap Sessions 4/5 found: the harness detects drift correctly and still offers
+// use_recorded unconditionally. Disposition is a policy over the components already computed —
+// it decides whether accepting the recording is right, not whether the request changed.
+describe('dispositionForDrift', () => {
+  const changedInput  = (...keys) => ({ added: [], removed: [], changed: keys.map(k => ({ key: k })), unchanged: [] });
+
+  it('no drift → reuse: the recorded response answers the same request', () => {
+    assert.equal(dispositionForDrift({ drift: [], reason: 'hit' }).verdict, 'reuse');
+  });
+
+  it('memory-only drift → reuse (soft): accumulation is safe to serve', () => {
+    assert.equal(dispositionForDrift({ drift: ['memory'], reason: 'soft_drift' }).verdict, 'reuse');
+  });
+
+  it('prompt drift → intended: use_recorded is exactly what a reworded prompt is for', () => {
+    const d = dispositionForDrift({ drift: ['prompt'], reason: 'hard_drift' });
+    assert.equal(d.verdict, 'intended');
+    assert.match(d.headline, /intended resolution/);
+  });
+
+  // The load-bearing distinction: input drift is ambiguous and needs A6's per-key breakdown.
+  it('input drift, only step_type_contracts moved → intended (a benign contract edit — step 11)', () => {
+    const d = dispositionForDrift({ drift: ['input'], inputDiff: changedInput('step_type_contracts'), reason: 'hard_drift' });
+    assert.equal(d.verdict, 'intended');
+  });
+
+  it('input drift, a question key moved → refused (a different question — step 23 pass 2)', () => {
+    const d = dispositionForDrift({ drift: ['input'], inputDiff: changedInput('draft_workflow'), reason: 'hard_drift' });
+    assert.equal(d.verdict, 'refused');
+    assert.match(d.components.input.note, /draft_workflow/);
+    assert.match(d.headline, /DIFFERENT question/);
+  });
+
+  it('input drift with no per-key data (candidate predates A6) → caution, not a false intended', () => {
+    assert.equal(dispositionForDrift({ drift: ['input'], inputDiff: null, reason: 'hard_drift' }).verdict, 'caution');
+  });
+
+  it('user_input drift → refused: the user message itself changed', () => {
+    assert.equal(dispositionForDrift({ drift: ['user_input'], reason: 'hard_drift' }).verdict, 'refused');
+  });
+
+  it('model drift → judgment; schema drift → downstream (review-output guards it)', () => {
+    assert.equal(dispositionForDrift({ drift: ['model'], reason: 'hard_drift' }).verdict, 'judgment');
+    assert.equal(dispositionForDrift({ drift: ['schema'], reason: 'hard_drift' }).verdict, 'downstream');
+  });
+
+  it('the headline reflects the MOST severe component — a benign prompt reword cannot mask a changed question', () => {
+    const d = dispositionForDrift({ drift: ['prompt', 'input'], inputDiff: changedInput('draft_workflow'), reason: 'hard_drift' });
+    assert.equal(d.verdict, 'refused');
+  });
+
+  it('an unfingerprinted candidate → caution: it could not be compared, so it is not "the same request"', () => {
+    const d = dispositionForDrift({ drift: null, reason: 'unfingerprinted' });
+    assert.equal(d.verdict, 'caution');
+    assert.deepEqual(d.components, {});
   });
 });

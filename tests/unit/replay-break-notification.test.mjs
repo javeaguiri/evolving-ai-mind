@@ -11,7 +11,7 @@ import assert           from 'node:assert/strict';
 
 process.env.SERV_API_URL = 'https://example.execute-api.us-east-2.amazonaws.com/Prod';
 
-const { buildBreakNotification, summariseInputDrift } = await import('../../src/proc/run-workflow.mjs');
+const { buildBreakNotification, summariseInputDrift, computeBlastRadius } = await import('../../src/proc/run-workflow.mjs');
 
 const run = { id: 812, workflow_name: 'create_workflow', replay_source_run_id: 719 };
 const payload = {
@@ -136,5 +136,73 @@ describe('the break notification carries the input drift', () => {
   it('omits the line when there is no per-key detail (recording predates A6)', () => {
     const { message } = buildBreakNotification(run, { ...payload, input_diff: null }, 't');
     assert.ok(!/^\s+input\s+/m.test(message), 'no empty input line');
+  });
+});
+
+// A12 — the reach of a drifted key across the workflow definition. The notification promises
+// use_recorded "keeps the suffix free"; that is false whenever a drifted local_state value
+// also feeds later llm_call steps. Proven live on run 723: user_design_notes is read by 21/21r/21t.
+describe('computeBlastRadius', () => {
+  // A miniature of create_workflow's shape: user_design_notes set at a gate, read by 11/21/21r/21t.
+  const steps = [
+    { step: '3',  type: 'llm_call', input: { prompt: 'research', domain: '{{domain}}' } },
+    { step: '11', type: 'llm_call', input: { prompt: 'gaps', user_design_notes: '{{user_design_notes}}', domain: '{{domain}}' } },
+    { step: '21', type: 'llm_call', input: { prompt: 'design', user_design_notes: '{{user_design_notes}}' } },
+    { step: '21r', type: 'llm_call', input: { prompt: 'review', notes: '{{user_design_notes}}' } },
+    { step: '21t', type: 'llm_call', input: { prompt: 'redesign', user_design_notes: '{{user_design_notes}}' } },
+    { step: '22', type: 'js_transform', input: { x: '{{user_design_notes}}' } },   // not an llm_call → excluded
+  ];
+
+  it('names the other llm_call steps that read the same source, in array order, excluding self', () => {
+    const br = computeBlastRadius(steps, '11', ['user_design_notes']);
+    assert.deepEqual(br, { user_design_notes: ['21', '21r', '21t'] });
+  });
+
+  it('follows the source root, not the input-key name — 21r reads it under a different key', () => {
+    // 21r references {{user_design_notes}} via input.notes; it is still a reader.
+    assert.ok(computeBlastRadius(steps, '11', ['user_design_notes']).user_design_notes.includes('21r'));
+  });
+
+  it('a key another llm_call reads is reported (domain → step 3)', () => {
+    assert.deepEqual(computeBlastRadius(steps, '11', ['domain']), { domain: ['3'] });
+  });
+
+  it('omits a drifted key no other step reads', () => {
+    // step 11 alone reads a made-up key; no other step references its source.
+    const s2 = [...steps, { step: '99', type: 'llm_call', input: { prompt: 'x', solo: '{{only_here}}' } }];
+    assert.deepEqual(computeBlastRadius(s2, '99', ['solo']), {});
+  });
+
+  it('returns {} when there is no per-key drift to trace', () => {
+    assert.deepEqual(computeBlastRadius(steps, '11', []), {});
+    assert.deepEqual(computeBlastRadius(steps, '11', null), {});
+  });
+});
+
+// A9 + A12 in the notification: use_recorded framing reflects what moved, and names downstream cost.
+describe('the break notification governs use_recorded by disposition and blast radius', () => {
+  const cand = { ...payload, candidate_session_id: 5501, candidate_ids: [5501] };
+
+  it('renders the disposition headline for a refused (different-question) drift', () => {
+    const { message } = buildBreakNotification(run, {
+      ...cand, disposition: { verdict: 'refused', headline: '⛔ a DIFFERENT question was asked — use_recorded would answer the wrong one; call_live or supply' },
+    }, 't');
+    assert.match(message, /DIFFERENT question was asked/);
+    assert.match(message, /"resolution":"use_recorded"\}/); // still offered, but now framed
+  });
+
+  it('names downstream readers so "keeps the suffix free" is not promised falsely', () => {
+    const { message } = buildBreakNotification(run, {
+      ...cand,
+      disposition: { verdict: 'intended', headline: '✅ use_recorded is the intended resolution here — accepting keeps this step free' },
+      blast_radius: { user_design_notes: ['21', '21r', '21t'] },
+    }, 't');
+    assert.match(message, /user_design_notes is also read by steps 21, 21r, 21t/);
+    assert.match(message, /defers that decision/);
+  });
+
+  it('no longer promises "keeps the suffix free" unconditionally', () => {
+    const { message } = buildBreakNotification(run, cand, 't');
+    assert.ok(!message.includes('keeps the suffix free'), 'the unconditional promise A12 disproved must be gone');
   });
 });
