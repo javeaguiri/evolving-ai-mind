@@ -1100,13 +1100,13 @@ function drivenInputKeys(inputDiff) {
 /**
  * A12 — the downstream reach of a drifted key. `use_recorded` is offered as "keeps the suffix
  * free", which is false when a drifted local_state value also feeds later llm_call steps:
- * accepting the recording here just defers the identical decision to each of them (run 723 —
- * user_design_notes is read by steps 21, 21r, 21t, so accepting at 11 frees nothing).
+ * accepting the recording here just defers the identical decision to each of them.
  *
- * Pure over the workflow definition — no new data. For each drifted input key it finds the
- * local_state source root the key resolves from at the breaking step, then names every OTHER
- * llm_call step whose input references that same root. Returns { key: [stepId, …] } in step-array
- * order; a key with no other reader is omitted. Exported for unit testing.
+ * Pure graph analysis over the workflow definition — no new data, and nothing specific to any one
+ * workflow. For each drifted input key it finds the local_state source root the key resolves from
+ * at the breaking step, then names every OTHER llm_call step whose input references that same root.
+ * Returns { key: [stepId, …] } in step-array order; a key with no other reader is omitted.
+ * Exported for unit testing.
  */
 export function computeBlastRadius(steps, currentStepId, driftedKeys) {
   if (!Array.isArray(steps) || !Array.isArray(driftedKeys) || driftedKeys.length === 0) return {};
