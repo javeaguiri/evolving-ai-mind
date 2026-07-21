@@ -7,7 +7,9 @@
 //
 // Steps:
 //   1. GET active runs from SERV — PGC_WorkflowRun filtered by
-//      status IN ('running', 'awaiting_human_gate'), optionally by id
+//      status IN ('running', 'awaiting_human_gate'), optionally by id.
+//      A named id also matches 'awaiting_llm_break' (a replay break — reachable only
+//      when targeted, never swept). See A10 / arch-replay §7a.
 //   2. UPDATE each matched run to status=cancelled via SERV updateRows
 //   3. Enqueue WORKFLOW_STEP/cancel to WorkflowQueue for each cancelled run
 //      so the Step Processor discards any in-flight execution
@@ -19,6 +21,25 @@
 
 import { ok, err }          from '../shared/lambda-utils.mjs';
 import { enqueueCallback }  from '../shared/sqs-callback.mjs';
+
+/**
+ * Filters selecting the runs a shutdown may cancel. Pure; exported for unit testing.
+ *
+ * A replay break (`awaiting_llm_break`) is a developer pause, not a user gate. A blanket sweep
+ * must never touch one — a dev debugging a break would lose it (arch-replay §7a made the status
+ * distinct for exactly this). But a TARGETED `/shutdown <runId>` is the developer asking to end
+ * THIS run, and it is the only user-reachable exit from a break, so a named id includes it. The
+ * distinction is the id filter: named ⇒ reachable, sweep ⇒ never.
+ */
+export function buildActiveRunFilters(workflowRunId) {
+  const statuses = ['running', 'awaiting_human_gate'];
+  if (workflowRunId !== undefined) statuses.push('awaiting_llm_break');
+  const filters = [{ column: 'status', op: 'in', value: statuses }];
+  if (workflowRunId !== undefined) {
+    filters.push({ column: 'id', op: 'eq', value: workflowRunId });
+  }
+  return filters;
+}
 
 export async function handle(req) {
   const { workflowRunId } = req.body ?? {};
@@ -36,10 +57,7 @@ export async function handle(req) {
   // Step 1 — fetch active runs from SERV
   // ---------------------------------------------------------------------------
 
-  const filters = [{ column: 'status', op: 'in', value: ['running', 'awaiting_human_gate'] }];
-  if (workflowRunId !== undefined) {
-    filters.push({ column: 'id', op: 'eq', value: workflowRunId });
-  }
+  const filters = buildActiveRunFilters(workflowRunId);
 
   let activeRuns;
   try {
