@@ -848,3 +848,9 @@ five-feature validation cost **$0**.
 `active runs found {count: 1}` → cancelled. The targeted shutdown now reaches a break; before A10 the filter
 excluded `awaiting_llm_break` and the run had no exit. Both wedges are now proven live. **Track A remaining:** A8 (dev loop), AC3 (record mode, still never
 exercised), the A6 `local_state` diff, `soft_drift` (still never exercised).
+
+**Deferred (backlog):** `21c` redesign gate keeps the stale warning instead of a `🔄 Regenerating…` message —
+confirmed to be D4 (sprint-07 §515) working as designed, not a flaw; needs an opt-in per-option confirmation
+override (`on_select_message`/`clear_content`), never a default change. Logged to `backlog.md` Medium Priority
+with a `21c` seed follow-up. Branch deployed to prod, validated live, **not yet merged to main** (sprint-close
+step). **Session closed 2026-07-21.**
