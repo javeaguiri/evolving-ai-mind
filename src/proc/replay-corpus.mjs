@@ -85,6 +85,105 @@ export function classifyDrift(components, candidates) {
   return { status: 'hard_drift', row: scored[0].row, drift: scored[0].drift, candidateIds };
 }
 
+// ---------------------------------------------------------------------------
+// A9 — drift DISPOSITION, not just detection (arch-replay.md §8)
+// ---------------------------------------------------------------------------
+//
+// classifyDrift already knows WHICH components moved. The gap Sessions 4/5 found is that the
+// break offered `use_recorded` as "free, keeps the suffix free" REGARDLESS of what moved —
+// including step 23 pass 2, where accepting the recording answers a materially different
+// question and discards 10KB of repair context. Disposition is a policy over the hashes
+// already computed — no new hash. `input` is the one ambiguous component: `step_type_contracts`
+// moving is benign (injected contract; accepting was right at step 11/action_key), the
+// question-keys moving is fatal. It is disambiguated with A6's per-key diff, never at
+// component level alone.
+
+// Headline reflects the MOST severe drifting component; this ranks them.
+const DISPOSITION_SEVERITY = { reuse: 0, intended: 0, downstream: 1, judgment: 2, caution: 3, refused: 4 };
+
+// `input` keys that are injected system knowledge, not the user's question. When the only input
+// keys that moved are these, the drift is benign and `use_recorded` is defensible.
+const BENIGN_INPUT_KEYS = new Set(['step_type_contracts']);
+
+const DISPOSITION_HEADLINE = {
+  reuse:      '✅ recorded response answers the same request — use_recorded is safe',
+  intended:   '✅ use_recorded is the intended resolution here — accepting keeps this step free',
+  downstream: 'use_recorded reuses the recording; review-output guards the schema on resume',
+  judgment:   '⚠ use_recorded reuses a response from a different model — your call',
+  caution:    '⚠ cannot confirm this is the same request — inspect the prompt before use_recorded',
+  refused:    '⛔ a DIFFERENT question was asked — use_recorded would answer the wrong one; call_live or supply',
+};
+
+// Union of the input keys whose value differs from the recording (added, removed, or changed).
+function movedInputKeys(inputDiff) {
+  if (!inputDiff) return null;
+  return [
+    ...(inputDiff.added   ?? []).map(e => e.key),
+    ...(inputDiff.removed ?? []).map(e => e.key),
+    ...(inputDiff.changed ?? []).map(e => e.key),
+  ];
+}
+
+// Disposition of ONE drifting component toward use_recorded.
+function componentDisposition(component, inputDiff) {
+  switch (component) {
+    case 'memory':
+      return { verdict: 'reuse',      note: 'memory accumulated since the recording — reuse is safe (soft)' };
+    case 'prompt':
+      return { verdict: 'intended',   note: 'prompt reworded — use_recorded is exactly this case' };
+    case 'system_context':
+      return { verdict: 'intended',   note: 'injected system context changed, not the question' };
+    case 'schema':
+      return { verdict: 'downstream', note: 'output schema changed — review-output fails the run if the recording no longer validates' };
+    case 'model':
+      return { verdict: 'judgment',   note: "different model — use_recorded reuses another model's answer" };
+    case 'user_input':
+      return { verdict: 'refused',    note: 'the user message changed — a different question was asked' };
+    case 'input': {
+      const moved = movedInputKeys(inputDiff);
+      if (moved == null) {
+        return { verdict: 'caution',  note: 'input changed; per-key breakdown unavailable (candidate predates A6) — inspect before use_recorded' };
+      }
+      const material = moved.filter(k => !BENIGN_INPUT_KEYS.has(k));
+      if (material.length === 0) {
+        return { verdict: 'intended', note: 'only injected contracts moved (step_type_contracts) — not the question' };
+      }
+      return { verdict: 'refused',    note: `a different question was asked — ${material.join(', ')} moved; use_recorded would answer the wrong question` };
+    }
+    default:
+      return { verdict: 'judgment',   note: `${component} changed` };
+  }
+}
+
+/**
+ * A9 — how `use_recorded` should be treated given which components drifted. Pure; no I/O.
+ * Returns { verdict, headline, components }: `verdict` is the most severe per-component
+ * disposition and drives the notification's framing; `components` maps each drifting component
+ * to its own { verdict, note }. Meaningful only when a candidate exists (miss/always offer no
+ * recording to accept).
+ *
+ * @param {object} params
+ * @param {string[]|null} params.drift     drifting component names (classifyDrift output)
+ * @param {object|null}   params.inputDiff describeInputDrift output — disambiguates `input`
+ * @param {string}        params.reason    break reason (hit/soft_drift/hard_drift/unfingerprinted/…)
+ */
+export function dispositionForDrift({ drift, inputDiff = null, reason } = {}) {
+  // A candidate that predates the fingerprint seam could not be compared: not "the same
+  // request", not a known drift — inspect before accepting.
+  if (reason === 'unfingerprinted') {
+    return { verdict: 'caution', headline: DISPOSITION_HEADLINE.caution, components: {} };
+  }
+  if (!Array.isArray(drift) || drift.length === 0) {
+    return { verdict: 'reuse', headline: DISPOSITION_HEADLINE.reuse, components: {} };
+  }
+  const components = {};
+  for (const c of drift) components[c] = componentDisposition(c, inputDiff);
+  const worst = drift
+    .map(c => components[c].verdict)
+    .reduce((a, b) => (DISPOSITION_SEVERITY[b] > DISPOSITION_SEVERITY[a] ? b : a));
+  return { verdict: worst, headline: DISPOSITION_HEADLINE[worst], components };
+}
+
 /**
  * The seam decision: break policy × lookup status → action.
  *   'call'  call the LLM (live)      'serve'  serve the recording (zero cost)

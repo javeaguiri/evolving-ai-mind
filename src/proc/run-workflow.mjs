@@ -38,6 +38,7 @@ import { getRows, insertRow, updateRows }
 import { executeStep, buildDialog, resolveGateOptions }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
+import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 
 // ---------------------------------------------------------------------------
@@ -382,6 +383,13 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
   // Reuses the human_gate suspension machinery — push a frame, set status, notify,
   // return without enqueuing a continuation. A hard halt: only resume_llm moves it.
   if (result.nextAction === 'llm_break' && result.breakPayload) {
+    // A12 — name the downstream llm_call steps a drifted key also reaches, so the notification
+    // does not promise "keeps the suffix free" for a key several later steps read. Computed here
+    // because `steps` (the workflow definition) is in scope only in run-workflow; stashed on the
+    // payload so the notification and the GET report both read it off the frame (checklist 2e).
+    result.breakPayload.blast_radius = computeBlastRadius(
+      steps, frame.current_step, drivenInputKeys(result.breakPayload.input_diff)
+    );
     const breakFrame = {
       frame_id:      randomUUID(),
       type:          'llm_break',
@@ -1065,6 +1073,61 @@ export function summariseInputDrift(inputDiff) {
   return parts.join('  |  ');
 }
 
+/** Recursively collect every string value in a step input (strings may carry {{tokens}}). */
+function collectTemplateStrings(input, acc = []) {
+  if (typeof input === 'string')        acc.push(input);
+  else if (Array.isArray(input))        for (const v of input) collectTemplateStrings(v, acc);
+  else if (input && typeof input === 'object') for (const v of Object.values(input)) collectTemplateStrings(v, acc);
+  return acc;
+}
+
+/** The local_state source roots a step's input references (base key of each {{token}}). */
+function inputSourceRoots(input) {
+  const roots = new Set();
+  for (const str of collectTemplateStrings(input)) {
+    for (const ref of extractTemplateRefs(str)) roots.add(ref.split('.')[0].replace(/\[.*/, ''));
+  }
+  return roots;
+}
+
+/** Input keys whose value differs from the recording (added or changed) — the ones that drive
+ *  this step's answer differently and may propagate downstream. Empty when input_diff is absent. */
+function drivenInputKeys(inputDiff) {
+  if (!inputDiff) return [];
+  return [...(inputDiff.added ?? []).map(e => e.key), ...(inputDiff.changed ?? []).map(e => e.key)];
+}
+
+/**
+ * A12 — the downstream reach of a drifted key. `use_recorded` is offered as "keeps the suffix
+ * free", which is false when a drifted local_state value also feeds later llm_call steps:
+ * accepting the recording here just defers the identical decision to each of them (run 723 —
+ * user_design_notes is read by steps 21, 21r, 21t, so accepting at 11 frees nothing).
+ *
+ * Pure over the workflow definition — no new data. For each drifted input key it finds the
+ * local_state source root the key resolves from at the breaking step, then names every OTHER
+ * llm_call step whose input references that same root. Returns { key: [stepId, …] } in step-array
+ * order; a key with no other reader is omitted. Exported for unit testing.
+ */
+export function computeBlastRadius(steps, currentStepId, driftedKeys) {
+  if (!Array.isArray(steps) || !Array.isArray(driftedKeys) || driftedKeys.length === 0) return {};
+  const current = steps.find(s => String(s.step) === String(currentStepId));
+  if (!current) return {};
+
+  const out = {};
+  for (const key of driftedKeys) {
+    const sourceRoots = inputSourceRoots(current.input?.[key]);
+    if (sourceRoots.size === 0) continue;
+    const readers = [];
+    for (const s of steps) {
+      if (s.type !== 'llm_call' || String(s.step) === String(currentStepId)) continue;
+      const stepRoots = inputSourceRoots(s.input);
+      if ([...sourceRoots].some(r => stepRoots.has(r))) readers.push(String(s.step));
+    }
+    if (readers.length) out[key] = readers;
+  }
+  return out;
+}
+
 export function buildBreakNotification(run, payload, traceId) {
   const base    = process.env.SERV_API_URL ?? '';
   const runId   = run.id;
@@ -1088,21 +1151,33 @@ export function buildBreakNotification(run, payload, traceId) {
     `  curl -s -H "x-api-key: $INTERNAL_API_KEY" "${read}"`,
   ];
   if (payload.candidate_session_id != null) {
+    // A9 — one disposition line governing use_recorded, so its framing reflects what actually
+    // moved (a reworded prompt vs. a different question), not an unconditional "free".
+    const dispoLines = payload.disposition?.headline ? [payload.disposition.headline] : [];
+    // A12 — where a drifted key is read downstream, "keeps the suffix free" is false: name the
+    // later readers so accepting is a decision with its real cost visible.
+    const blastLines = Object.entries(payload.blast_radius ?? {}).map(
+      ([k, readers]) => `   ⤷ ${k} is also read by step${readers.length > 1 ? 's' : ''} ${readers.join(', ')} — accepting here defers that decision, it does not resolve it`,
+    );
     const ids = Array.isArray(payload.candidate_ids) ? payload.candidate_ids : [];
     if (ids.length > 1) {
       // Several passes recorded under one step_id and nothing distinguishes them, so the pick is
       // arbitrary (newest first) — offer each by name rather than present a coin flip as a default.
       lines.push(
         ``,
+        ...dispoLines,
         `⚠  ${ids.length} recordings for this step — the default pick (${payload.candidate_session_id}) is the newest,`,
         `   not necessarily the one this pass corresponds to. Name the recording:`,
+        ...blastLines,
         ...ids.map(id =>
           `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded","sessionId":${id}}' "${resume}"`),
       );
     } else {
       lines.push(
         ``,
-        `Resume with the recorded response — free, keeps the suffix free:`,
+        ...dispoLines,
+        ...blastLines,
+        `Resume with the recorded response:`,
         `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "${resume}"`,
       );
     }

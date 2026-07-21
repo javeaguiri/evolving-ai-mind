@@ -1419,7 +1419,7 @@ function isHardSmokeFailure(issue) {
  * Extract all {{ref}} template variable names from a string.
  * Returns base paths only — "proposed_scaffold.domain" for "{{proposed_scaffold.domain}}".
  */
-function extractTemplateRefs(template) {
+export function extractTemplateRefs(template) {
   if (typeof template !== 'string') return [];
   const refs = [];
   const re   = /\{\{([^}]+)\}\}/g;
