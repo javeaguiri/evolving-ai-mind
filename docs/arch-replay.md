@@ -232,6 +232,27 @@ Rules the message obeys:
 - **The prompt is not in the message.** It is far past Slack's 3000-char block limit, and the system's
   convention is that messages are pointers, not payloads. The `GET` returns it.
 
+### Payload-free resolutions are also Slack buttons (A11)
+
+The curls above resolve a break from a shell. But a break has to be resolvable from the interface it
+posts to — a developer whose shell lacks `$INTERNAL_API_KEY` gets a 403 at the edge, invoking
+nothing and logging nothing, so `abort` (one word) becomes unreachable. The three **payload-free**
+resolutions are therefore also rendered as Block Kit buttons on the notification: `abort`,
+`call_live`, and `use_recorded` (one button per candidate when a step recorded more than once).
+
+`supplied` is **not** a button. It is the only resolution that carries a payload — a response body
+that for `design_workflow_process` runs well past what a Slack interaction accepts — so it stays the
+curl. This is the corrected boundary: HTTP is required *for the resolution that carries data*, not
+for all four. Generalising the one payload case to all of them is what left a break undriveable from
+Slack in the first place.
+
+Which buttons appear is decided by the procedure tier, governed by the drift disposition (§8): on a
+`refused` verdict the `use_recorded` button is withheld (the curl remains for a developer who
+insists), because a materially different question was asked and accepting the recording would answer
+the wrong one. The experience tier only renders the descriptors PROC supplies — it never decides
+what is offered. A button click enqueues `REPLAY_RESUME`, which routes to the same resume core as
+the HTTP endpoint; the experience tier never writes the execution stack.
+
 ### At a break, the prompt is on the frame — not in `PGC_SessionEntry`
 
 The diagnostics session is written **after** a response is obtained. At suspend time no response
@@ -491,9 +512,11 @@ hand-supplied response for a step such as `design_workflow_process` can approach
 message limit; the frame is `jsonb` and has no such ceiling. SQS messages stay pointers, never
 payloads.
 
-Resolution is over **HTTP, not Slack**. An LLM response for a step like `design_workflow_process`
-is far larger than a Slack modal input accepts. Slack receives a break *notification* carrying the
-run ID and session ID; the response is supplied over HTTP.
+A **`supplied`** resolution is over **HTTP, not Slack** — an LLM response for a step like
+`design_workflow_process` is far larger than a Slack interaction accepts, so a hand-written response
+rides on the HTTP body. The three **payload-free** resolutions (`abort`, `call_live`,
+`use_recorded`) are also Slack buttons that enqueue `REPLAY_RESUME` to the same resume core (A11,
+§5) — HTTP is required for the resolution that carries data, not for all of them.
 
 Real `human_gate` steps in a replayed run are unaffected — they render in Slack and are answered in
 Slack, exactly as in a live run. That is the point: a replay is a real run with a recorded LLM.

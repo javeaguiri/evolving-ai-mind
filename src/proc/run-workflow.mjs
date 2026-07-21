@@ -1128,6 +1128,40 @@ export function computeBlastRadius(steps, currentStepId, driftedKeys) {
   return out;
 }
 
+/**
+ * A11 — the UI-agnostic set of break resolutions a user can drive from a button. The procedure
+ * tier decides WHICH are offered (the experience tier only renders them), governed by the A9
+ * disposition. Only PAYLOAD-FREE resolutions are here: `abort` (one word), `call_live` (nothing),
+ * `use_recorded` (a sessionId at most). `supplied` is never a button — it carries a response body
+ * too large for a Slack interaction — so it stays the curl in the message text. Pure; exported for
+ * unit testing. Returns [{ resolution, label, style?, sessionId? }].
+ */
+export function buildBreakActions(payload) {
+  const actions = [];
+  const verdict = payload.disposition?.verdict ?? null;
+  const ids     = Array.isArray(payload.candidate_ids) ? payload.candidate_ids : [];
+
+  // use_recorded — offered only when a candidate exists AND the disposition does not refuse it.
+  // A `refused` verdict means a materially different question was asked; withholding the easy
+  // accept is the point of A9 (the curl remains for a developer who insists). One button per
+  // candidate when the step recorded more than once (A5b) — the pick is otherwise arbitrary.
+  if (payload.candidate_session_id != null && verdict !== 'refused') {
+    const style = verdict === 'intended' ? 'primary' : undefined;
+    if (ids.length > 1) {
+      for (const id of ids) actions.push({ resolution: 'use_recorded', sessionId: id, label: `Use recording ${id}`, ...(style ? { style } : {}) });
+    } else {
+      actions.push({ resolution: 'use_recorded', label: 'Use recording', ...(style ? { style } : {}) });
+    }
+  }
+
+  // call_live — always a valid escape; costs one call.
+  actions.push({ resolution: 'call_live', label: 'Call the LLM (1 call)' });
+  // abort — always; ends the run.
+  actions.push({ resolution: 'abort', label: 'Abort run', style: 'danger' });
+
+  return actions;
+}
+
 export function buildBreakNotification(run, payload, traceId) {
   const base    = process.env.SERV_API_URL ?? '';
   const runId   = run.id;
@@ -1200,6 +1234,10 @@ export function buildBreakNotification(run, payload, traceId) {
     workflowRunId: runId,
     message:       lines.join('\n'),
     format:        'text',
+    // A11 — payload-free resolutions the experience tier renders as buttons; the curls above stay
+    // for `supplied` and as a fallback. UI-agnostic: the tier turns these into Block Kit, nothing
+    // more (it never decides which are offered — that is the A9-governed logic above).
+    breakActions:  buildBreakActions(payload),
     traceId,
   };
 }

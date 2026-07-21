@@ -145,6 +145,12 @@ export async function handle(req) {
     return handleMindsEyeContinueFollowupButton(buttonValue, payload, req.correlationId);
   }
 
+  // llm_break_resolution — a replay break resolved from Slack (A11). Payload-free resolutions
+  // only (abort / call_live / use_recorded[+sessionId]); routes to REPLAY_RESUME, not resume_gate.
+  if (buttonValue.action === 'llm_break_resolution') {
+    return handleLlmBreakResolution(buttonValue, payload, req.correlationId);
+  }
+
   const { workflowRunId, action: userResponse, responseData, label: buttonLabel } = buttonValue;
   if (!workflowRunId || userResponse === undefined || userResponse === null) {
     console.warn('interactive: button value missing workflowRunId or action', { buttonValue });
@@ -542,6 +548,67 @@ async function handleMindsEyeFollowupButton(buttonValue, payload, correlationId)
 // handleMindsEyeActionGate — Approve/Cancel clicked on a Novia deletion gate.
 // Replaces the gate message with a static confirmation, then enqueues MINDS_EYE_RESUME.
 // ---------------------------------------------------------------------------
+
+// handleLlmBreakResolution — a payload-free replay-break resolution clicked in Slack (A11).
+// Disables the buttons in place and enqueues REPLAY_RESUME, which PROC routes to the same resume
+// path as the HTTP curl. No stack write happens here — the experience tier never touches the
+// execution stack; PROC does. `supplied` never reaches this path (it is not offered as a button).
+// ---------------------------------------------------------------------------
+
+async function handleLlmBreakResolution(buttonValue, payload, correlationId) {
+  const { workflowRunId, resolution, sessionId } = buttonValue;
+  const channel  = payload.channel?.id;
+  const threadTs = payload.container?.message_ts ?? payload.message?.ts;
+  const traceId  = correlationId || randomUUID();
+
+  if (!workflowRunId || !resolution) {
+    console.warn('interactive: llm_break_resolution missing workflowRunId or resolution', { buttonValue, traceId });
+    return err(400, 'llm_break_resolution button value must contain workflowRunId and resolution', correlationId);
+  }
+
+  const confirmText = resolution === 'abort'     ? '🛑 Aborting run…'
+                    : resolution === 'call_live' ? '💸 Calling the LLM for this step…'
+                    : sessionId != null          ? `♻️ Resuming with recording ${sessionId}…`
+                    :                              '♻️ Resuming with the recorded response…';
+  if (channel && threadTs) {
+    try {
+      await slack.chat.update({
+        channel,
+        ts:     threadTs,
+        text:   confirmText,
+        blocks: [
+          ...preservedContentBlocks(payload.message?.blocks),
+          { type: 'context', elements: [{ type: 'mrkdwn', text: confirmText }] },
+        ],
+      });
+    } catch (error) {
+      console.warn('interactive: llm_break_resolution chat.update failed (non-fatal)', { error: error.message, traceId });
+    }
+  }
+
+  try {
+    await sqs.send(new SendMessageCommand({
+      QueueUrl:    process.env.SQS_WORKFLOW_URL,
+      MessageBody: JSON.stringify({
+        type:          'REPLAY_RESUME',
+        workflowRunId,
+        resolution,
+        ...(sessionId != null ? { sessionId } : {}),
+        callback:      { provider: 'slack', channel, threadId: threadTs },
+        traceId,
+        enqueuedAt:    new Date().toISOString(),
+      }),
+    }));
+  } catch (error) {
+    console.error('interactive: llm_break_resolution SQS enqueue failed', { error: error.message, traceId });
+    return err(500, `SQS enqueue failed: ${error.message}`, correlationId);
+  }
+
+  console.info('interactive: llm_break_resolution enqueued REPLAY_RESUME', {
+    workflowRunId, resolution, sessionId: sessionId ?? null, traceId,
+  });
+  return { statusCode: 200, body: '' };
+}
 
 async function handleMindsEyeActionGate(buttonValue, payload, correlationId) {
   const { sessionId, approved } = buttonValue;

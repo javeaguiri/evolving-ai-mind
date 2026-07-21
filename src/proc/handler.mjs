@@ -200,6 +200,14 @@ async function processSqsBatch(records) {
         await replay(req);
         continue;
       }
+      // REPLAY_RESUME — a break-resolution button click from Slack (A11). Routes to the same
+      // resume path as the HTTP endpoint; writes the resolution onto the break frame and enqueues
+      // resume_llm. Only payload-free resolutions arrive here — `supplied` stays HTTP-only.
+      if (message.type === 'REPLAY_RESUME') {
+        const req = buildReqFromSqs(message);
+        await replay(req);
+        continue;
+      }
       // MEMORY_WRITE — fire-and-forget episodic memory write on domain run completion.
       // Enqueued by run-workflow.mjs after qualifying CRUD workflow run completes.
       if (message.type === 'MEMORY_WRITE') {

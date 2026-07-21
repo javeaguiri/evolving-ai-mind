@@ -375,7 +375,7 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -414,6 +414,29 @@ async function postHumanNotification(message) {
         value:     JSON.stringify({ action: 'explain_followup', queryId }),
       }],
     });
+  }
+
+  // A11 — a replay break's payload-free resolutions, rendered as buttons so a break is
+  // resolvable from Slack without a shell. PROC supplies UI-agnostic descriptors; this layer only
+  // maps them to Block Kit and never decides which are offered. The click routes via the
+  // action.value (llm_break_resolution), not the action_id — indexed only to stay unique. Slack
+  // caps an actions block at 5 elements, so overflow spills into further blocks.
+  if (Array.isArray(breakActions) && breakActions.length > 0 && workflowRunId) {
+    const buttons = breakActions.map((a, i) => ({
+      type:      'button',
+      text:      { type: 'plain_text', text: a.label },
+      action_id: `llm_break_resolution_${i}`,
+      ...(a.style ? { style: a.style } : {}),
+      value:     JSON.stringify({
+        action:        'llm_break_resolution',
+        workflowRunId,
+        resolution:    a.resolution,
+        ...(a.sessionId != null ? { sessionId: a.sessionId } : {}),
+      }),
+    }));
+    for (let i = 0; i < buttons.length; i += 5) {
+      suffixBlocks.push({ type: 'actions', elements: buttons.slice(i, i + 5) });
+    }
   }
 
   const chunkSize = SLACK_BLOCK_LIMIT - suffixBlocks.length;
