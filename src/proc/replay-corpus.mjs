@@ -91,19 +91,16 @@ export function classifyDrift(components, candidates) {
 //
 // classifyDrift already knows WHICH components moved. The gap Sessions 4/5 found is that the
 // break offered `use_recorded` as "free, keeps the suffix free" REGARDLESS of what moved —
-// including step 23 pass 2, where accepting the recording answers a materially different
-// question and discards 10KB of repair context. Disposition is a policy over the hashes
-// already computed — no new hash. `input` is the one ambiguous component: `step_type_contracts`
-// moving is benign (injected contract; accepting was right at step 11/action_key), the
-// question-keys moving is fatal. It is disambiguated with A6's per-key diff, never at
-// component level alone.
+// including a repair pass where accepting the recording answers a materially different question
+// and discards its repair context. Disposition is a policy over the hashes already computed —
+// no new hash. `input` is the one ambiguous component: a HARNESS-INJECTED key moving is benign
+// (system knowledge changed, not the question), a DECLARED question key moving is fatal. Which
+// input keys are injected vs declared is a system fact supplied by the seam (see
+// injectedInputKeys) — never a hard-coded artifact key name in this classifier. Disambiguated
+// with A6's per-key diff, never at component level alone.
 
 // Headline reflects the MOST severe drifting component; this ranks them.
 const DISPOSITION_SEVERITY = { reuse: 0, intended: 0, downstream: 1, judgment: 2, caution: 3, refused: 4 };
-
-// `input` keys that are injected system knowledge, not the user's question. When the only input
-// keys that moved are these, the drift is benign and `use_recorded` is defensible.
-const BENIGN_INPUT_KEYS = new Set(['step_type_contracts']);
 
 const DISPOSITION_HEADLINE = {
   reuse:      '✅ recorded response answers the same request — use_recorded is safe',
@@ -125,7 +122,9 @@ function movedInputKeys(inputDiff) {
 }
 
 // Disposition of ONE drifting component toward use_recorded.
-function componentDisposition(component, inputDiff) {
+// `injectedKeys` is the set of input keys the harness injected (not part of the workflow's
+// declared question) — supplied by the seam so no artifact key name lives in this classifier.
+function componentDisposition(component, inputDiff, injectedKeys) {
   switch (component) {
     case 'memory':
       return { verdict: 'reuse',      note: 'memory accumulated since the recording — reuse is safe (soft)' };
@@ -144,9 +143,11 @@ function componentDisposition(component, inputDiff) {
       if (moved == null) {
         return { verdict: 'caution',  note: 'input changed; per-key breakdown unavailable (candidate predates A6) — inspect before use_recorded' };
       }
-      const material = moved.filter(k => !BENIGN_INPUT_KEYS.has(k));
+      // Benign iff every moved key is one the harness injected (system knowledge, not the
+      // question). Anything else is a declared question key — a materially different question.
+      const material = moved.filter(k => !injectedKeys.has(k));
       if (material.length === 0) {
-        return { verdict: 'intended', note: 'only injected contracts moved (step_type_contracts) — not the question' };
+        return { verdict: 'intended', note: 'only harness-injected keys moved — not the question' };
       }
       return { verdict: 'refused',    note: `a different question was asked — ${material.join(', ')} moved; use_recorded would answer the wrong question` };
     }
@@ -163,11 +164,14 @@ function componentDisposition(component, inputDiff) {
  * recording to accept).
  *
  * @param {object} params
- * @param {string[]|null} params.drift     drifting component names (classifyDrift output)
- * @param {object|null}   params.inputDiff describeInputDrift output — disambiguates `input`
- * @param {string}        params.reason    break reason (hit/soft_drift/hard_drift/unfingerprinted/…)
+ * @param {string[]|null} params.drift            drifting component names (classifyDrift output)
+ * @param {object|null}   params.inputDiff        describeInputDrift output — disambiguates `input`
+ * @param {string}        params.reason           break reason (hit/soft_drift/hard_drift/unfingerprinted/…)
+ * @param {string[]}      params.injectedInputKeys input keys the harness injected (not the declared
+ *   question) — the system fact that tells a benign injected-content change from a changed question,
+ *   supplied by the seam so no artifact key name is hard-coded here.
  */
-export function dispositionForDrift({ drift, inputDiff = null, reason } = {}) {
+export function dispositionForDrift({ drift, inputDiff = null, reason, injectedInputKeys = [] } = {}) {
   // A candidate that predates the fingerprint seam could not be compared: not "the same
   // request", not a known drift — inspect before accepting.
   if (reason === 'unfingerprinted') {
@@ -176,8 +180,9 @@ export function dispositionForDrift({ drift, inputDiff = null, reason } = {}) {
   if (!Array.isArray(drift) || drift.length === 0) {
     return { verdict: 'reuse', headline: DISPOSITION_HEADLINE.reuse, components: {} };
   }
+  const injectedKeys = new Set(injectedInputKeys);
   const components = {};
-  for (const c of drift) components[c] = componentDisposition(c, inputDiff);
+  for (const c of drift) components[c] = componentDisposition(c, inputDiff, injectedKeys);
   const worst = drift
     .map(c => components[c].verdict)
     .reduce((a, b) => (DISPOSITION_SEVERITY[b] > DISPOSITION_SEVERITY[a] ? b : a));

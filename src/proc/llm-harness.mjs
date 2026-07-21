@@ -201,6 +201,13 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
 
   let resolvedInput = resolveInput(step.input ?? {}, localState);
 
+  // The workflow's DECLARED input keys — the question, exactly as authored in step.input. Any key
+  // the harness adds beyond these (step_type_contracts, below, and any future auto-injection) is
+  // system-injected knowledge, not part of the question. The drift disposition (A9) uses this
+  // general split — never a hard-coded key name — to tell a benign injected-content change from a
+  // materially different question.
+  const declaredInputKeys = new Set(Object.keys(resolvedInput));
+
   const contextResp = await getRows('PGC_SystemContext');
   const contextRows = contextResp.success ? (contextResp.rows ?? []) : [];
 
@@ -345,6 +352,9 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
       console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
       const breakReason = breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss');
       const inputDiff   = describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint);
+      // Keys the harness injected beyond the declared question — the general, name-free signal the
+      // disposition uses to judge whether input drift is benign (injected) or material (the question).
+      const injectedInputKeys = Object.keys(resolvedInput).filter(k => !declaredInputKeys.has(k));
       return {
         outputValue: null,
         nextAction:  'llm_break',
@@ -366,7 +376,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           // A9 — how use_recorded should be treated given what moved. Computed here (not at render
           // time) so the GET report and the Slack notification read one disposition off the frame
           // rather than each deriving it (checklist rule 2e).
-          disposition:          dispositionForDrift({ drift: recording?.drift ?? null, inputDiff, reason: breakReason }),
+          disposition:          dispositionForDrift({ drift: recording?.drift ?? null, inputDiff, reason: breakReason, injectedInputKeys }),
         },
       };
     }
