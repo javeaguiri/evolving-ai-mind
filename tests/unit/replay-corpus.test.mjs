@@ -169,16 +169,29 @@ describe('dispositionForDrift', () => {
   });
 
   // The load-bearing distinction: input drift is ambiguous and needs A6's per-key breakdown.
-  it('input drift, only step_type_contracts moved → intended (a benign contract edit — step 11)', () => {
-    const d = dispositionForDrift({ drift: ['input'], inputDiff: changedInput('step_type_contracts'), reason: 'hard_drift' });
+  // Benign vs material is decided by whether the key was HARNESS-INJECTED (system knowledge) or
+  // DECLARED (the question) — a general property supplied by the seam, never a hard-coded name.
+  it('input drift, only a harness-injected key moved → intended (a benign injected-content change)', () => {
+    const d = dispositionForDrift({
+      drift: ['input'], inputDiff: changedInput('injected_ctx'), reason: 'hard_drift',
+      injectedInputKeys: ['injected_ctx'],
+    });
     assert.equal(d.verdict, 'intended');
   });
 
-  it('input drift, a question key moved → refused (a different question — step 23 pass 2)', () => {
-    const d = dispositionForDrift({ drift: ['input'], inputDiff: changedInput('draft_workflow'), reason: 'hard_drift' });
+  it('input drift, a declared (non-injected) key moved → refused (a different question)', () => {
+    const d = dispositionForDrift({
+      drift: ['input'], inputDiff: changedInput('some_question_field'), reason: 'hard_drift',
+      injectedInputKeys: ['injected_ctx'],   // the moved key is NOT injected → part of the question
+    });
     assert.equal(d.verdict, 'refused');
-    assert.match(d.components.input.note, /draft_workflow/);
+    assert.match(d.components.input.note, /some_question_field/);
     assert.match(d.headline, /DIFFERENT question/);
+  });
+
+  it('with no injected-key info, any moved input key reads as the question → refused', () => {
+    // Absent the seam's signal, err toward material — a moved key is the question unless proven injected.
+    assert.equal(dispositionForDrift({ drift: ['input'], inputDiff: changedInput('anything'), reason: 'hard_drift' }).verdict, 'refused');
   });
 
   it('input drift with no per-key data (candidate predates A6) → caution, not a false intended', () => {
@@ -195,7 +208,10 @@ describe('dispositionForDrift', () => {
   });
 
   it('the headline reflects the MOST severe component — a benign prompt reword cannot mask a changed question', () => {
-    const d = dispositionForDrift({ drift: ['prompt', 'input'], inputDiff: changedInput('draft_workflow'), reason: 'hard_drift' });
+    const d = dispositionForDrift({
+      drift: ['prompt', 'input'], inputDiff: changedInput('some_question_field'), reason: 'hard_drift',
+      injectedInputKeys: [],
+    });
     assert.equal(d.verdict, 'refused');
   });
 
