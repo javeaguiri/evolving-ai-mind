@@ -11,7 +11,7 @@ import assert           from 'node:assert/strict';
 
 process.env.SERV_API_URL = 'https://example.execute-api.us-east-2.amazonaws.com/Prod';
 
-const { buildBreakNotification, summariseInputDrift, computeBlastRadius } = await import('../../src/proc/run-workflow.mjs');
+const { buildBreakNotification, summariseInputDrift, computeBlastRadius, buildBreakActions } = await import('../../src/proc/run-workflow.mjs');
 
 const run = { id: 812, workflow_name: 'create_workflow', replay_source_run_id: 719 };
 const payload = {
@@ -204,5 +204,63 @@ describe('the break notification governs use_recorded by disposition and blast r
   it('no longer promises "keeps the suffix free" unconditionally', () => {
     const { message } = buildBreakNotification(run, cand, 't');
     assert.ok(!message.includes('keeps the suffix free'), 'the unconditional promise A12 disproved must be gone');
+  });
+});
+
+// A11 — payload-free resolutions become Slack buttons so a break is resolvable without a shell.
+// The procedure tier decides WHICH are offered (A9-governed); `supplied` is never one (it carries
+// a payload). buildBreakActions is that decision, pure and testable.
+describe('buildBreakActions', () => {
+  const resolutions = (acts) => acts.map(a => a.resolution);
+
+  it('always offers call_live and abort, never supplied (it carries a payload)', () => {
+    const acts = buildBreakActions({});
+    assert.ok(resolutions(acts).includes('call_live'));
+    assert.ok(resolutions(acts).includes('abort'));
+    assert.ok(!resolutions(acts).includes('supplied'), 'supplied is a curl, never a button');
+  });
+
+  it('abort is styled danger', () => {
+    assert.equal(buildBreakActions({}).find(a => a.resolution === 'abort').style, 'danger');
+  });
+
+  it('offers no use_recorded when there is no candidate to accept', () => {
+    assert.ok(!resolutions(buildBreakActions({ candidate_session_id: null })).includes('use_recorded'));
+  });
+
+  it('offers use_recorded (primary) when the disposition is intended', () => {
+    const acts = buildBreakActions({ candidate_session_id: 5501, disposition: { verdict: 'intended' } });
+    const ur   = acts.find(a => a.resolution === 'use_recorded');
+    assert.ok(ur, 'intended → offer the recording');
+    assert.equal(ur.style, 'primary');
+  });
+
+  // The point of A9: when a different question was asked, the easy accept is withheld.
+  it('WITHHOLDS use_recorded when the disposition is refused (curl remains, button does not)', () => {
+    const acts = buildBreakActions({ candidate_session_id: 5501, disposition: { verdict: 'refused' } });
+    assert.ok(!resolutions(acts).includes('use_recorded'), 'a refused drift must not offer the accept button');
+    assert.ok(resolutions(acts).includes('call_live') && resolutions(acts).includes('abort'), 'the escapes remain');
+  });
+
+  it('offers use_recorded but not primary on a cautionary disposition', () => {
+    const ur = buildBreakActions({ candidate_session_id: 5501, disposition: { verdict: 'caution' } }).find(a => a.resolution === 'use_recorded');
+    assert.ok(ur && ur.style === undefined, 'caution offers the button but does not push it');
+  });
+
+  // A5b — a step recorded more than once: one button per candidate, each naming its recording.
+  it('offers one named use_recorded per candidate when a step recorded more than once', () => {
+    const acts = buildBreakActions({ candidate_session_id: 1067, candidate_ids: [1067, 1064], disposition: { verdict: 'intended' } });
+    const urs  = acts.filter(a => a.resolution === 'use_recorded');
+    assert.equal(urs.length, 2);
+    assert.deepEqual(urs.map(a => a.sessionId).sort(), [1064, 1067]);
+  });
+});
+
+describe('the break notification carries breakActions for the experience tier', () => {
+  it('attaches the payload-free resolutions to the notification', () => {
+    const n = buildBreakNotification(run, { ...payload, candidate_session_id: 5501, disposition: { verdict: 'intended' } }, 't');
+    assert.ok(Array.isArray(n.breakActions));
+    assert.ok(n.breakActions.some(a => a.resolution === 'abort'));
+    assert.ok(n.breakActions.some(a => a.resolution === 'use_recorded'));
   });
 });

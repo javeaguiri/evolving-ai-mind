@@ -40,9 +40,15 @@ export function parseReplayRoute(method, segments) {
 export async function handle(req) {
   const traceId = req.traceId ?? req.correlationId ?? randomUUID();
 
-  // SQS path — a REPLAY message from the /replay Slack command. sourceRunId present →
-  // start a replay; absent → list recent runs. (Record-from-scratch is HTTP-only, §9.)
+  // SQS path — from a Slack command or a break-resolution button.
   if (req.source === 'sqs') {
+    // REPLAY_RESUME — a break-resolution button (A11). Carries a payload-free resolution
+    // (abort / call_live / use_recorded[+sessionId]); `supplied` is never a button (it carries a
+    // response body larger than a Slack interaction can) so it never arrives here — HTTP-only.
+    // The run id rides in the message body, not a path param.
+    if (req.body?.resolution != null) return resumeReplay(req, Number(req.body.workflowRunId), traceId);
+    // A REPLAY message from /replay: sourceRunId present → start a replay; absent → list recent
+    // runs. (Record-from-scratch is HTTP-only, §9.)
     return (req.body?.sourceRunId != null) ? startReplay(req, traceId) : listReplays(req, traceId);
   }
 
@@ -225,26 +231,37 @@ export function validateNamedRecording(sessionId, offeredIds) {
 
 async function resumeReplay(req, runId, traceId) {
   const { resolution, response, breakPolicy, sessionId } = req.body ?? {};
+  const isSqs    = req.source === 'sqs';
+  const callback = req.callback ?? req.body?.callback ?? null;
+  // fail() adapts to transport. HTTP has a caller to receive the error; a Slack button click
+  // arrives over SQS with none, so its failure is posted back to the thread instead of dropped.
+  const fail = (code, msg) => {
+    if (isSqs) {
+      if (callback) enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', workflowRunId: runId, message: `❌ Resume failed — ${msg}`, traceId });
+      return;
+    }
+    return err(code, msg, req.correlationId);
+  };
 
   const bodyError = validateResumeBody(req.body ?? {});
-  if (bodyError) return err(400, bodyError, req.correlationId);
+  if (bodyError) return fail(400, bodyError);
 
   const resp = await getRows('PGC_WorkflowRun',
     [{ column: 'id', op: 'eq', value: runId }], undefined, 1, undefined, ['id', 'status', 'stack']);
-  if (!resp.success || resp.count === 0) return err(404, `replay run ${runId} not found`, req.correlationId);
+  if (!resp.success || resp.count === 0) return fail(404, `replay run ${runId} not found`);
 
   const run = resp.rows[0];
   if (run.status !== 'awaiting_llm_break') {
-    return err(409, `run ${runId} is not awaiting an llm break (status: ${run.status})`, req.correlationId);
+    return fail(409, `run ${runId} is not awaiting an llm break (status: ${run.status})`);
   }
   const stack = run.stack;
   const top   = stack[stack.length - 1];
   if (!top || top.type !== 'llm_break') {
-    return err(409, `run ${runId} has no llm_break frame on top`, req.correlationId);
+    return fail(409, `run ${runId} has no llm_break frame on top`);
   }
 
   const namedError = validateNamedRecording(sessionId, top.break?.candidate_ids);
-  if (namedError) return err(400, namedError, req.correlationId);
+  if (namedError) return fail(400, namedError);
 
   // Write the resolution (and any supplied response) onto the break frame — a
   // design_workflow_process response can approach SQS's 256KB limit, so it rides on the
@@ -258,6 +275,10 @@ async function resumeReplay(req, runId, traceId) {
   await updateRows('PGC_WorkflowRun', [{ column: 'id', op: 'eq', value: runId }], updates);
 
   await enqueueWorkflow({ type: 'WORKFLOW_STEP', action: 'resume_llm', workflowRunId: runId, traceId });
-  console.info('proc/replay: resume enqueued', { runId, resolution, breakPolicy: breakPolicy ?? null, traceId });
+  console.info('proc/replay: resume enqueued', { runId, resolution, breakPolicy: breakPolicy ?? null, source: req.source, traceId });
+
+  // SQS (button) path posts nothing on success — the resumed run posts its own progress or next
+  // break through the run's own callback, so a success ack here would just be noise.
+  if (isSqs) return;
   return ok({ runId, resolution, status: 'resuming' }, req.correlationId);
 }
