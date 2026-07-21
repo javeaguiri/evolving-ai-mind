@@ -11,8 +11,9 @@
 //
 // Flow: SlackbotFunction → enqueue REPLAY to WorkflowQueue → ProcFunction → proc/replay.mjs.
 // Break notifications and the run's replies thread under the ACK message posted here.
-// Resume is HTTP-only (an LLM response is far larger than a Slack modal) — the break
-// notification carries runnable curls; see docs/arch-replay.md §5, §9.
+// Payload-free resolutions (abort / call_live / use_recorded) are buttons on the break
+// notification (A11); `supplied` carries a response body and stays an HTTP curl. See
+// docs/arch-replay.md §5, §9.
 
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { WebClient }                     from '@slack/web-api';
