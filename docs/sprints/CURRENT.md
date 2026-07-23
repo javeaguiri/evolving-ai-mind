@@ -90,7 +90,8 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   `design_workflow_dialogs`), never by patching generated workflows.
 - **AC10 — `edit_budget` validated end to end.** Run 719 reached L1 with a correct design; `action_key`
   (landed Sprint 7) was the last blocker. Register and run it from Slack.
-- **AC11 — `/chat` dead code removed.** Obviated by Novia.
+- ~~**AC11 — `/chat` dead code removed.**~~ **→ BACKLOG (2026-07-23).** Deletion not yet decided — moved out
+  of the sprint until the call is made. See `docs/backlog.md`.
 
 ---
 
@@ -117,7 +118,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | B3 — Spend measurement against Sprint 7 baseline | AC8 | ⬜ |
 | C1 — `notify` template audit (D3 carry-forward) | AC9 | ⬜ |
 | C2 — `edit_budget` end-to-end validation | AC10 | ⬜ |
-| D1 — `/chat` dead code removal | AC11 | ⬜ |
+| D1 — `/chat` dead code removal | AC11 | ➡️ **BACKLOG** (2026-07-23) — deletion undecided, moved out of sprint |
 
 ---
 
@@ -409,12 +410,10 @@ design — a stronger counterweight than an LLM that reads the design once.
 
 ### Track D — Dead Code
 
-**D1 — `/chat` removal**
-- Obviated by Novia. Remove `ui/slackbot/chat.mjs`, `proc/chat.mjs`, the `CHAT_MESSAGE` SQS type, the route,
-  and the `openapi.yaml` entry.
-- Confirm `PGC_Session`/`PGC_SessionEntry` usage by `/explain` and Novia is untouched — **the replay corpus
-  depends on those tables.**
-- Update `docs/architecture.md` (message-type table, directory structure) and `docs/arch-session.md`.
+**D1 — `/chat` removal → BACKLOG (2026-07-23).** Deletion is not yet decided; moved to `docs/backlog.md` until
+the call is made. The removal recipe (chat.mjs both tiers, `CHAT_MESSAGE` SQS, route, openapi, doc updates) and
+the guardrail (`/explain` + Novia + the replay corpus all read `PGC_Session`/`PGC_SessionEntry` — must stay
+untouched) are preserved there.
 
 ---
 
