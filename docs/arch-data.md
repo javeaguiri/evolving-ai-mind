@@ -565,7 +565,7 @@ CREATE TABLE "PGC_Session" (
 | intent_category | varchar(100) NULL | `llm_call_diagnostic` only |
 | minds_eye_turn_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — reasoning turns consumed; compared against `minds_eye_preferences.turn_limit` |
 | minds_eye_action_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — write-tool actions consumed; compared against `minds_eye_preferences.max_actions_per_session` |
-| request_fingerprint | jsonb NULL | Replay harness (`docs/arch-replay.md` §3) — per-component request hashes (`prompt`, `input`, `user_input`, `model`, `schema`, `memory`). `llm_call_diagnostic` sessions |
+| request_fingerprint | jsonb NULL | Replay harness (`docs/arch-replay.md` §3) — the seven per-component request hashes (`prompt`, `input`, `user_input`, `model`, `schema`, `memory`, `system_context`), plus two diagnostic per-key size+hash maps used only for the drift report: `input_keys` (A6) and `local_state_keys` (A6 local_state diff). Both are excluded from the composite (`fingerprint_hash`), so recordings predating them keep matching. `llm_call_diagnostic` sessions |
 | fingerprint_hash | text NULL | Composite of the component hashes — the corpus lookup key. Indexed |
 | response_source | text NULL | `live` \| `replayed` \| `recorded` — where this call's response came from |
 | replayed_from_session_id | integer NULL | Provenance — the `PGC_Session.id` whose recording was served on a replayed call |

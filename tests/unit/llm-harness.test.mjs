@@ -10,8 +10,25 @@
 
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
-import { assembleInstructions, STEP_TYPE_CONTRACT_COLUMNS } from '../../src/proc/llm-harness.mjs';
+import { assembleInstructions, STEP_TYPE_CONTRACT_COLUMNS, describeStateDrift } from '../../src/proc/llm-harness.mjs';
 import { computeFingerprint }                               from '../../src/proc/fingerprint.mjs';
+
+// A6 (diagnostic) — the local_state diff reads local_state_keys off the candidate fingerprint,
+// mirroring describeInputDrift over input_keys. Broader than input drift, never gates a break.
+describe('describeStateDrift', () => {
+  it('reads local_state_keys from the candidate and sizes the keys that moved', () => {
+    const current      = { gap_analysis: { h: 'h1', n: 101 }, domain: { h: 'hd', n: 8 } };
+    const candidateFp  = { local_state_keys: { domain: { h: 'hd', n: 8 } } };  // gap_analysis is new state
+    const d = describeStateDrift(current, candidateFp);
+    assert.deepEqual(d.added, [{ key: 'gap_analysis', chars: 101 }]);
+    assert.deepEqual(d.unchanged, ['domain']);
+  });
+
+  it('returns null when the candidate predates the snapshot (no local_state_keys)', () => {
+    assert.equal(describeStateDrift({ a: { h: 'x', n: 1 } }, { input_keys: {} }), null);
+    assert.equal(describeStateDrift({ a: { h: 'x', n: 1 } }, null), null);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures

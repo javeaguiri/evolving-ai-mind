@@ -48,9 +48,10 @@ export function stableStringify(value) {
  * @param {string} params.model           resolved model ID (post alias)
  * @param {string} params.memoryBlock     the memory block actually injected ('' when memory is off)
  * @param {object} params.injectedContext the PGC_SystemContext subset injected into the prompt (see selectInjectedContext)
- * @returns {{ components: object, hash: string }}
+ * @param {object} params.localState      the full frame local_state at this call — for the diagnostic-only local_state diff (A6)
+ * @returns {{ components: object, hash: string, inputKeys: object, stateKeys: object }}
  */
-export function computeFingerprint({ promptRow, resolvedInput, userInput, model, memoryBlock, injectedContext }) {
+export function computeFingerprint({ promptRow, resolvedInput, userInput, model, memoryBlock, injectedContext, localState }) {
   const components = {
     prompt:         sha256(stableStringify({ version: promptRow?.version ?? null, text: promptRow?.prompt_text ?? '' })),
     input:          sha256(stableStringify(resolvedInput ?? {})),
@@ -61,7 +62,10 @@ export function computeFingerprint({ promptRow, resolvedInput, userInput, model,
     system_context: sha256(stableStringify(injectedContext ?? {})),
   };
   const hash = sha256(COMPONENT_ORDER.map(k => components[k]).join(':'));
-  return { components, hash, inputKeys: hashInputKeys(resolvedInput) };
+  // inputKeys and stateKeys are both per-key size+hash maps (hashInputKeys is generic over any
+  // object). Neither is a component and neither is in the composite: inputKeys is a finer view of
+  // `input`; stateKeys backs the diagnostic-only local_state diff (A6), which never gates a break.
+  return { components, hash, inputKeys: hashInputKeys(resolvedInput), stateKeys: hashInputKeys(localState) };
 }
 
 /**

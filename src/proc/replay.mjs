@@ -188,6 +188,9 @@ async function getReplay(req, runId, traceId) {
       // the frame. Recomputing it here would make the report a second derivation of one truth
       // (checklist rule 2e) and cost a SERV read to re-fetch what the lookup already had.
       input_diff:           b.input_diff ?? null,
+      // A6 (diagnostic) — how the full local_state diverged from the source run at this step;
+      // broader than input_diff, never used to decide the break.
+      local_state_diff:     b.local_state_diff ?? null,
       // A9/A12 — disposition (how to treat use_recorded) and blast radius (which downstream
       // steps a drifted key reaches) are stashed on the frame too, read here rather than
       // re-derived. blast_radius is added by run-workflow at break time (it needs the steps).
