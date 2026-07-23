@@ -193,9 +193,30 @@ async function processRecord(record) {
 // is provided. All notification handlers call this — the limit is never missed.
 // ---------------------------------------------------------------------------
 
+// toSlackMrkdwn — normalize standard/CommonMark bold to Slack's `mrkdwn` flavor.
+// A `mrkdwn` block (section text, reveal text) renders bold as *single* asterisks,
+// but the procedure layer and LLMs naturally emit standard **double**-asterisk bold
+// (and `__bold__`), so left unconverted `**Income**` shows literally (run 731). This
+// converts `**x**` / `__x__` -> `*x*`, leaves inline/fenced code untouched, and never
+// touches a lone `*`/`_` (Slack's own bold/italic). The `markdown` block path is NOT
+// normalized — it already wants `**` (docs/slack-block-kit.md), so converting there
+// would turn bold into italic. Experience-tier translation of standard output, not a
+// new format rule for the procedure layer.
+export function toSlackMrkdwn(text) {
+  if (typeof text !== 'string') return text;
+  if (!text.includes('**') && !text.includes('__')) return text;
+  return text.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
+    if (i % 2 === 1) return seg;                         // a code span/block — leave literal
+    return seg
+      .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '*$1*')    // **bold** -> *bold*
+      .replace(/__(?=\S)([\s\S]*?\S)__/g, '*$1*');       // __bold__ -> *bold*
+  }).join('');
+}
+
 function textToBlocks(text, contextText) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
+  text = toSlackMrkdwn(text);
 
   if (text.length <= BLOCK_CHAR_LIMIT) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
@@ -902,7 +923,9 @@ function splitMarkdownTableSegments(text) {
 // `section`/`mrkdwn` blocks, capped at REVEAL_MAX_CHILD_BLOCKS with a trailing
 // truncation note merged into the last kept chunk.
 function chunkTextBlocks(text) {
-  const lines = text ? text.split('\n') : [];
+  // Reveal prose renders as `mrkdwn`, so standard **bold** must be converted to
+  // Slack's *bold* here — the reveal path is where a summary with type headers lands.
+  const lines = text ? toSlackMrkdwn(text).split('\n') : [];
   const chunks = [];
   let chunk = '';
   for (const line of lines) {

@@ -13,7 +13,34 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { oversizedGateMessage, isPermanentRenderFailure } from '../../src/ui/slackbot/callback.mjs';
+import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn } from '../../src/ui/slackbot/callback.mjs';
+
+// toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
+// **bold** / __bold__ to Slack mrkdwn *bold* for section/reveal text (run 731).
+describe('toSlackMrkdwn', () => {
+  it('converts **bold** to *bold*', () => {
+    assert.equal(toSlackMrkdwn('**Income**'), '*Income*');
+  });
+  it('converts __bold__ to *bold*', () => {
+    assert.equal(toSlackMrkdwn('__Income__'), '*Income*');
+  });
+  it('converts each bold span independently, preserving surrounding text', () => {
+    assert.equal(toSlackMrkdwn('**Income**\nMedical: $130\n**Net: $-50**'), '*Income*\nMedical: $130\n*Net: $-50*');
+  });
+  it('leaves a lone * or _ (Slack bold/italic) untouched', () => {
+    assert.equal(toSlackMrkdwn('*already* and _italic_'), '*already* and _italic_');
+  });
+  it('does not touch bold inside inline code', () => {
+    assert.equal(toSlackMrkdwn('use `**literal**` here'), 'use `**literal**` here');
+  });
+  it('returns non-strings and bold-free text unchanged', () => {
+    assert.equal(toSlackMrkdwn('no bold here'), 'no bold here');
+    assert.equal(toSlackMrkdwn(null), null);
+  });
+  it('ignores an unbalanced ** (no false conversion)', () => {
+    assert.equal(toSlackMrkdwn('a ** b'), 'a ** b');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Module extraction
