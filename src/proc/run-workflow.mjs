@@ -35,7 +35,7 @@ import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
 import { getRows, insertRow, updateRows }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog, resolveGateOptions }
+import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
 import { extractTemplateRefs }  from './simulation-engine.mjs';
@@ -786,7 +786,10 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   if (gateType === 'form' && userResponse !== 'cancel') {
     const values  = responseData?.formValues ?? {};
     const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
-    const missing = (stepRef.fields ?? [])
+    // Resolve `fields` the same way buildDialog does — a form's fields may be a {{template}}
+    // reference to an array a js_transform built, so filtering the raw step (a string) crashed
+    // with ".filter is not a function" (run 730). One resolver, both call sites (rule 2e).
+    const missing = resolveFormFields(stepRef, localState)
       .filter(f => f.optional !== true && isEmpty(values[f.name]))
       .map(f => f.label ?? f.name);
 

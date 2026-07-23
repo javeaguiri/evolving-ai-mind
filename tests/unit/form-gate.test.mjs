@@ -17,7 +17,7 @@
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
 
-import { buildDialog }                      from '../../src/proc/step-executor.mjs';
+import { buildDialog, resolveFormFields }   from '../../src/proc/step-executor.mjs';
 import { collectFormValues, extractFieldValue, FORM_BLOCK_PREFIX }
   from '../../src/ui/slackbot/form-fields.mjs';
 
@@ -139,6 +139,42 @@ describe('buildDialog — form gate', () => {
   it('an unresolvable fields reference yields no inputs rather than throwing', () => {
     const dialog = buildDialog(formStep('{{never_built}}'), {});
     assert.equal(inputs(dialog).length, 0);
+  });
+});
+
+// resolveFormFields is the single resolver shared by buildDialog (render) and run-workflow's
+// form-gate resume validation. Run 730 crashed at the resume site because it filtered the RAW
+// "{{edit_fields}}" string ("(stepRef.fields ?? []).filter is not a function"); one resolver,
+// both call sites (rule 2e), and it always returns an array.
+describe('resolveFormFields — shared by render and resume-validation', () => {
+  it('returns an inline fields array unchanged', () => {
+    const f = [{ name: 'a' }, { name: 'b' }];
+    assert.deepEqual(resolveFormFields({ fields: f }, {}), f);
+  });
+
+  it('resolves a {{template}} reference to the array a js_transform built', () => {
+    const built = [{ name: 'jan', optional: false }, { name: 'feb', optional: true }];
+    assert.deepEqual(resolveFormFields({ fields: '{{edit_fields}}' }, { edit_fields: built }), built);
+  });
+
+  it('returns [] for an unresolvable reference — never a string, so .filter is safe (run 730)', () => {
+    const r = resolveFormFields({ fields: '{{never_built}}' }, {});
+    assert.deepEqual(r, []);
+    assert.doesNotThrow(() => r.filter(x => x));
+  });
+
+  it('returns [] when the reference resolves to a non-array', () => {
+    assert.deepEqual(resolveFormFields({ fields: '{{oops}}' }, { oops: 'not an array' }), []);
+  });
+
+  it('required-field check works on a templated form (regression for run 730)', () => {
+    const built  = [{ name: 'jan', optional: false }, { name: 'feb', optional: false }];
+    const values = { jan: 100 };   // feb left blank
+    const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
+    const missing = resolveFormFields({ fields: '{{edit_fields}}' }, { edit_fields: built })
+      .filter(f => f.optional !== true && isEmpty(values[f.name]))
+      .map(f => f.name);
+    assert.deepEqual(missing, ['feb']);
   });
 });
 
