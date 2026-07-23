@@ -11,7 +11,7 @@ import assert           from 'node:assert/strict';
 
 process.env.SERV_API_URL = 'https://example.execute-api.us-east-2.amazonaws.com/Prod';
 
-const { buildBreakNotification, summariseInputDrift, computeBlastRadius, buildBreakActions } = await import('../../src/proc/run-workflow.mjs');
+const { buildBreakNotification, summariseInputDrift, summariseStateDrift, computeBlastRadius, buildBreakActions } = await import('../../src/proc/run-workflow.mjs');
 
 const run = { id: 812, workflow_name: 'create_workflow', replay_source_run_id: 719 };
 const payload = {
@@ -136,6 +136,45 @@ describe('the break notification carries the input drift', () => {
   it('omits the line when there is no per-key detail (recording predates A6)', () => {
     const { message } = buildBreakNotification(run, { ...payload, input_diff: null }, 't');
     assert.ok(!/^\s+input\s+/m.test(message), 'no empty input line');
+  });
+});
+
+// A6 (diagnostic) — the local_state diff. Unlike input drift it can span the whole accumulated
+// state, so the line names only what moved and COUNTS what held still.
+describe('summariseStateDrift', () => {
+  it('says nothing when nothing diverged (only unchanged keys)', () => {
+    assert.equal(summariseStateDrift(null), '');
+    assert.equal(summariseStateDrift({ added: [], removed: [], changed: [], unchanged: ['a', 'b'] }), '');
+  });
+
+  it('names moved keys and counts what held still — never lists every unchanged key', () => {
+    const s = summariseStateDrift({
+      added: [{ key: 'gap_analysis', chars: 101 }],
+      removed: [], changed: [{ key: 'user_design_notes', chars: 35, was_chars: 4 }],
+      unchanged: new Array(18).fill('k'),
+    });
+    assert.match(s, /changed: user_design_notes \(4→35 chars\)/);
+    assert.match(s, /added: gap_analysis \(101 chars\)/);
+    assert.match(s, /18 unchanged/);
+    assert.ok(!/k, k, k/.test(s), 'must count unchanged keys, not enumerate them');
+  });
+});
+
+describe('the break notification carries the diagnostic local_state diff', () => {
+  it('renders a state line marked diagnostic when local_state diverged', () => {
+    const { message } = buildBreakNotification(run, {
+      ...payload,
+      local_state_diff: { added: [], removed: [], changed: [{ key: 'user_design_notes', chars: 35, was_chars: 4 }], unchanged: ['domain', 'right_brain_research'] },
+    }, 't');
+    assert.match(message, /state\s+changed: user_design_notes \(4→35 chars\)/);
+    assert.match(message, /diagnostic/);
+  });
+
+  it('omits the state line when nothing diverged or no snapshot exists', () => {
+    const a = buildBreakNotification(run, { ...payload, local_state_diff: null }, 't').message;
+    assert.ok(!/^\s+state\s+/m.test(a), 'no state line without a diff');
+    const b = buildBreakNotification(run, { ...payload, local_state_diff: { added: [], removed: [], changed: [], unchanged: ['x'] } }, 't').message;
+    assert.ok(!/^\s+state\s+/m.test(b), 'no state line when only unchanged keys');
   });
 });
 

@@ -114,6 +114,27 @@ describe('computeFingerprint — component isolation', () => {
   });
 });
 
+// A6 (diagnostic) — the local_state snapshot backing the local_state diff. Reuses hashInputKeys,
+// rides alongside the components, and MUST NOT touch the composite hash (it never gates a break).
+describe('computeFingerprint — local_state snapshot (A6, diagnostic)', () => {
+  it('emits stateKeys as a per-key size+hash map of localState', () => {
+    const fp = computeFingerprint({ ...baseCall(), localState: { thing: 'workflow', draft: 'BIG PAYLOAD' } });
+    assert.deepEqual(Object.keys(fp.stateKeys).sort(), ['draft', 'thing']);
+    assert.equal(typeof fp.stateKeys.draft.h, 'string');
+    assert.equal(fp.stateKeys.draft.n, stableStringify('BIG PAYLOAD').length);
+  });
+
+  it('localState does NOT change the composite hash — diagnostic, not a component', () => {
+    const a = computeFingerprint({ ...baseCall(), localState: { x: 1 } });
+    const b = computeFingerprint({ ...baseCall(), localState: { x: 2, y: 'more state' } });
+    assert.equal(a.hash, b.hash);
+  });
+
+  it('stateKeys is empty when localState is absent', () => {
+    assert.deepEqual(computeFingerprint(baseCall()).stateKeys, {});
+  });
+});
+
 describe('selectInjectedContext — the reuse contract', () => {
   const rows = [
     { key: 'always_on',  content: 'A', inject_always: true },

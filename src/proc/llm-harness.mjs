@@ -46,17 +46,32 @@ export const STEP_TYPE_CONTRACT_COLUMNS = [
  * Returns null when either side has no per-key hashes — absent data is unknowable, never
  * "unchanged".
  */
-export function describeInputDrift(currentKeys, candidateFingerprint) {
-  const cand = candidateFingerprint?.input_keys ?? null;
-  const raw  = diffInputKeys(currentKeys ?? null, cand);
+function describeKeyDrift(currentKeys, candidateKeys) {
+  const raw = diffInputKeys(currentKeys ?? null, candidateKeys);
   if (!raw) return null;
   const cur = currentKeys ?? {};
   return {
     added:     raw.added.map(k   => ({ key: k, chars: cur[k]?.n ?? null })),
-    removed:   raw.removed.map(k => ({ key: k, chars: cand[k]?.n ?? null })),
-    changed:   raw.changed.map(k => ({ key: k, chars: cur[k]?.n ?? null, was_chars: cand[k]?.n ?? null })),
+    removed:   raw.removed.map(k => ({ key: k, chars: candidateKeys[k]?.n ?? null })),
+    changed:   raw.changed.map(k => ({ key: k, chars: cur[k]?.n ?? null, was_chars: candidateKeys[k]?.n ?? null })),
     unchanged: raw.unchanged,
   };
+}
+
+export function describeInputDrift(currentKeys, candidateFingerprint) {
+  return describeKeyDrift(currentKeys ?? null, candidateFingerprint?.input_keys ?? null);
+}
+
+/**
+ * Per-key divergence of the full frame `local_state` against the source run at this step — the
+ * diagnostic-only local_state diff (A6, arch-replay.md §8). Same shape and helper as
+ * describeInputDrift, over `local_state_keys` rather than `input_keys`. It is NEVER consulted to
+ * decide whether to break — the fingerprint does that — so it is broader than the input diff on
+ * purpose: it surfaces state that diverged upstream but has not yet reached a prompt (and may reach
+ * a later one). `null` when either side predates the stored snapshot — absent data is unknowable.
+ */
+export function describeStateDrift(currentStateKeys, candidateFingerprint) {
+  return describeKeyDrift(currentStateKeys ?? null, candidateFingerprint?.local_state_keys ?? null);
 }
 
 /**
@@ -282,7 +297,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
   const injectedContext = selectInjectedContext(contextRows, resolvedInput, intentCategory);
   const memoryBlock     = memories.length > 0 ? formatMemoryBlock(memories) : '';
   const fingerprint     = computeFingerprint({
-    promptRow, resolvedInput, userInput, model: resolvedModel, memoryBlock, injectedContext,
+    promptRow, resolvedInput, userInput, model: resolvedModel, memoryBlock, injectedContext, localState,
   });
 
   console.info('step-executor: llm_call', {
@@ -352,6 +367,9 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
       console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
       const breakReason = breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss');
       const inputDiff   = describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint);
+      // A6 (diagnostic) — how the full local_state diverged from the source run at this step. Broader
+      // than inputDiff and never gates the break; the fingerprint decides that.
+      const stateDiff   = describeStateDrift(fingerprint.stateKeys, recording?.candidate?.fingerprint);
       // Keys the harness injected beyond the declared question — the general, name-free signal the
       // disposition uses to judge whether input drift is benign (injected) or material (the question).
       const injectedInputKeys = Object.keys(resolvedInput).filter(k => !declaredInputKeys.has(k));
@@ -373,6 +391,9 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
           // both sides are already in hand; the report and the notification both read it off the
           // frame rather than re-deriving it (checklist rule 2e).
           input_diff:           inputDiff,
+          // A6 (diagnostic) — the full local_state diff, stashed alongside input_diff and read off
+          // the frame by the GET report and the notification. Never consulted by the control path.
+          local_state_diff:     stateDiff,
           // A9 — how use_recorded should be treated given what moved. Computed here (not at render
           // time) so the GET report and the Slack notification read one disposition off the frame
           // rather than each deriving it (checklist rule 2e).
@@ -481,10 +502,10 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
         trace_id:        traceId,
         step_id:         step.step,
         intent_category: intentCategory,
-        // input_keys rides alongside the seven components (A6): a finer view of `input`, not an
-        // eighth component — it is excluded from the composite, so recordings predating it keep
-        // hitting. diffComponents judges COMPONENT_ORDER only and ignores it.
-        request_fingerprint:      { ...fingerprint.components, input_keys: fingerprint.inputKeys },
+        // input_keys and local_state_keys ride alongside the seven components (A6): finer views for
+        // the drift report, not components — both are excluded from the composite, so recordings
+        // predating them keep hitting. diffComponents judges COMPONENT_ORDER only and ignores them.
+        request_fingerprint:      { ...fingerprint.components, input_keys: fingerprint.inputKeys, local_state_keys: fingerprint.stateKeys },
         fingerprint_hash:         fingerprint.hash,
         response_source:          responseSource,
         replayed_from_session_id: servedFromSessionId,

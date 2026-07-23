@@ -1073,6 +1073,23 @@ export function summariseInputDrift(inputDiff) {
   return parts.join('  |  ');
 }
 
+/**
+ * Compact one-line summary of the diagnostic local_state diff (A6). Unlike the input diff, this can
+ * span the whole accumulated state (20+ keys in create_workflow), so it names only what MOVED and
+ * counts what held still — the full detail is on the GET report. Empty when nothing diverged.
+ */
+export function summariseStateDrift(stateDiff) {
+  if (!stateDiff) return '';
+  const fmt = (e) => `${e.key} (${e.chars ?? '?'} chars)`;
+  const parts = [];
+  if (stateDiff.added?.length)   parts.push(`added: ${stateDiff.added.map(fmt).join(', ')}`);
+  if (stateDiff.removed?.length) parts.push(`removed: ${stateDiff.removed.map(fmt).join(', ')}`);
+  if (stateDiff.changed?.length) parts.push(`changed: ${stateDiff.changed.map(e => `${e.key} (${e.was_chars ?? '?'}→${e.chars ?? '?'} chars)`).join(', ')}`);
+  if (!parts.length) return '';   // only unchanged keys — nothing diverged, say nothing
+  if (stateDiff.unchanged?.length) parts.push(`${stateDiff.unchanged.length} unchanged`);
+  return parts.join('  |  ');
+}
+
 /** Recursively collect every string value in a step input (strings may carry {{tokens}}). */
 function collectTemplateStrings(input, acc = []) {
   if (typeof input === 'string')        acc.push(input);
@@ -1170,6 +1187,7 @@ export function buildBreakNotification(run, payload, traceId) {
   const source  = run.replay_source_run_id != null ? `run ${run.replay_source_run_id}` : '(record — no source run)';
   const driftTxt = Array.isArray(payload.drift) && payload.drift.length ? `  (drift: ${payload.drift.join(', ')})` : '';
   const inputTxt = summariseInputDrift(payload.input_diff);
+  const stateTxt = summariseStateDrift(payload.local_state_diff);
 
   const lines = [
     `🛑  Run ${runId} — BROKE at step ${payload.step_id}, awaiting resume`,
@@ -1179,6 +1197,8 @@ export function buildBreakNotification(run, payload, traceId) {
     `    replaying    ${source}`,
     `    reason       ${payload.reason}${driftTxt}`,
     ...(inputTxt ? [`    input        ${inputTxt}`] : []),
+    // Diagnostic only — how the full local_state diverged; never gates the break (A6, arch-replay §8).
+    ...(stateTxt ? [`    state        ${stateTxt}  (diagnostic)`] : []),
     `    policy       ${payload.policy}`,
     ``,
     `Read the break — assembled prompt, drift, local_state diff:`,
