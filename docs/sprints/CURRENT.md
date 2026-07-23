@@ -51,9 +51,14 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
   Perplexity calls. Verified against the LLM call count, not inferred. **Result:** run 721 (replaying 720's
   fingerprinted corpus) — 8 `llm_call`s, 8 `hit`, **0 breaks, 0 live calls**. With run 720: **16 `llm_call`s,
   0 live**, counted in `PGC_Session`. See Session 4.
-- **AC3 — Record mode.** `breakPolicy: always` breaks at every `llm_call`. The assembled prompt is
-  readable over HTTP; a hand-supplied response resumes the run and is validated through
+- **AC3 — Record mode.** ✅ **CLOSED 2026-07-23.** `breakPolicy: always` breaks at every `llm_call`. The
+  assembled prompt is readable over HTTP; a hand-supplied response resumes the run and is validated through
   `review-output` exactly as a live response is. A response that would fail validation **fails the run**.
+  **Result:** run 728 (record replay of 722, policy flipped to `always` mid-run at the step-2 gate) — step 11
+  broke (`reason=always`, 63,016-char prompt served over `GET`), a **valid** `supplied` response passed
+  `review-output` and the run advanced to step 21; an **invalid** `supplied` response there **failed the run**
+  with **0 live calls** (`allowLlmCorrection: !served` ⇒ false for `supplied`, so no correction call).
+  Measured in `PGC_Session`: 3 sessions, `response_source` ∈ {replayed, recorded}, **live = 0**. See Session 10.
 - **AC4 — Drift breaks, and says why.** Changing a downstream `js_transform`, editing a prompt, or
   answering a gate differently produces a break at the next affected `llm_call`, with a component-level
   drift report (which of prompt/input/user_input/model/schema/memory moved, plus a text diff) and a
@@ -102,7 +107,7 @@ Full retro: `docs/sprints/sprint-07.md` §RETRO. The four findings that shape th
 | A5c — `unfingerprinted` is not drift | AC4 | ✅ DONE 2026-07-16 — commit `919e874`. Own verdict; no fabricated drift list |
 | A6 — Drift report: **which `input` keys moved** | AC4 | 🔨 CODE-COMPLETE + deployed 2026-07-16 (`c32102c`) — `hashInputKeys` (hash + serialised size per key) → `request_fingerprint.input_keys`; `describeInputDrift` at the seam; notification renders it; `diffComponents` fixed to judge `COMPONENT_ORDER` (latent bug: it diffed the raw key union, so `input_keys` would have read as an 8th component). **Additive — not in the composite, so 720/721 keep hitting.** 16 new tests, 615 total. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** `input changed: user_design_notes (4→35 chars) | unchanged: domain, …, step_type_contracts, …` — the sentence that cost a scratchpad by hand. `local_state` diff still ⬜ |
 | ~~A7 — fingerprint backfill / assembled-request hash~~ | AC5 | ❌ **STRUCK 2026-07-16 — unnecessary, not merely deferred.** Replay is second by construction: you cannot replay a run that never ran, and every run fingerprints itself. **A fingerprinted corpus is not a goal, it is a byproduct you cannot avoid.** Unfingerprinted corpora are a closed historical set (six pre-A2 runs) that shrinks to zero and never grows; 719 is already superseded by 720. The assembled hash also would **not** have fixed A9 — run 721 detected the drift correctly *with components* and offered `use_recorded` anyway. It adds nothing where components exist. See Session 5 |
-| A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | ⬜ Would have collapsed 2026-07-16's 9 manual curls into one command |
+| A8 — `dev_scripts/replay.mjs` developer loop | AC2, AC3 | 🔨 CODE-COMPLETE + pushed 2026-07-23 — thin wrapper over the three endpoints (start/poll/resume), no logic of its own. Dumps prompt-*.txt + break-*.json off the frame, waits for resume-<runId>.json or a Slack-button resolution, `--auto` for unattended payload-free resolves, `--record`/`--workflow --input` for record-from-scratch, **`--slack-channel`/`--slack-thread`** so a gated workflow's human gates render in Slack (the run 726/727 wedge fix). The three endpoints it wraps were **exercised live driving run 728's AC3 close** (start w/ callback, GET break report, two `supplied` resumes); the script's own file-loop still to be driven end-to-end against a gated run |
 | A12 — **blast radius: name the steps a drifted key reaches** | AC4 | ✅ DONE 2026-07-21 — `computeBlastRadius` (pure over the workflow definition, reuses `extractTemplateRefs`) maps each drifted `input` key → the other `llm_call` steps reading its `local_state` root; stashed on the frame, rendered in the notification + GET report. 6 tests reproduce run 723's 11→{21,21r,21t}. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** notification + GET report both carried `blast_radius: {user_design_notes: [21, 21r, 21t]}`. **New 2026-07-16, proven live on run 723.** The notification offers `use_recorded` as *"free, keeps the suffix free"* — **false whenever the drift originates in a `local_state` key several steps read.** `user_design_notes` changed at the step-9 gate (4→123 chars) and is read by `llm_call` steps **11, 21, 21r, 21t**: accepting at 11 does not free the suffix, it defers the identical decision three more times. Fix: A6's report names the downstream readers — *"user_design_notes (4→123 chars) — also read by steps 21, 21r, 21t"* — computable straight from the workflow definition, no new data. Turns "accept?" into a decision with its cost visible. Feeds A9: a disposition should know a drift's blast radius, not just its component. **Third instance of the day's pattern — see Session 7** |
 | A10 — **a break has no user-reachable exit** | AC3 | ✅ DONE 2026-07-21 — `/shutdown <runId>` now reaches `awaiting_llm_break` when named by id, never in a sweep (`buildActiveRunFilters`, pure + 3 tests). ✅ **CONFIRMED LIVE 2026-07-21 (run 725):** a break at step 11, then `/shutdown 725` → `shutdown: active runs found {count: 1}` → `cancelledCount: 1`. Before A10 the filter excluded `awaiting_llm_break`, so this was `count: 0` and the run wedged. **New 2026-07-16 — a wedge, found live.** `shutdown.mjs:39` filters `status IN ('running','awaiting_human_gate')`, so **`awaiting_llm_break` is invisible to `/shutdown`** — and the id filter is optional, so even a targeted `/shutdown 722` skips it. The only exit is HTTP, and the notification's curls need `$INTERNAL_API_KEY` in the developer's shell, which 403s at the edge when it is absent (silently — zero PROC invocations, see Session 3 finding 6). On 2026-07-16 every abort had to be fired by someone else's shell. **Half is deliberate** (`arch-replay` §7a made the status distinct so a blanket sweep never touches a dev break — right call), but it silently removed the *targeted* case too. Fix: `/shutdown <runId>` covers `awaiting_llm_break` **when named by id**, never in a sweep |
 | A11 — **payload-free resolutions belong in Slack** | AC3 | ✅ DONE 2026-07-21 — Block Kit buttons for `abort`/`call_live`/`use_recorded` (one per candidate, A5b); `supplied` stays curl-only. A9 disposition gates which appear (`refused` → no `use_recorded` button). PROC emits UI-agnostic `breakActions` (`buildBreakActions`, 8 tests); callback.mjs renders; interactive.mjs → new `REPLAY_RESUME` SQS → same resume core as HTTP. Experience tier never writes the stack. ✅ **CONFIRMED LIVE 2026-07-21 (run 724):** break rendered **Call LLM + Abort only, no `use_recorded` button** (A9 `refused`); clicking Abort drove the full new path — `REPLAY_RESUME` SQS → shared resume core → `resume_llm` → run `cancelled`. **New 2026-07-16 — a design over-generalisation.** `arch-replay` §9: *"Resolution is over HTTP, not Slack — an LLM response is far larger than a Slack modal accepts."* True **for `supplied`** — the only resolution that carries a payload. `abort`, `use_recorded` and `call_live` carry **nothing** (`abort` is one word), and generalising from the one resolution that needs HTTP to all four produced a harness that cannot be driven from the interface it posts its own notifications to. Fix: Block Kit buttons for `abort` / `use_recorded` / `call_live` (with one button per candidate when `candidate_ids.length > 1`, per A5b); keep the curl for `supplied` only. **Same shape as the critic's Test 1** — a rule true of its originating case, generalised into an absolute. Sits behind A9, whose disposition decides which buttons are even offered |
@@ -848,6 +853,49 @@ five-feature validation cost **$0**.
 `active runs found {count: 1}` → cancelled. The targeted shutdown now reaches a break; before A10 the filter
 excluded `awaiting_llm_break` and the run had no exit. Both wedges are now proven live. **Track A remaining:** A8 (dev loop), AC3 (record mode, still never
 exercised), the A6 `local_state` diff, `soft_drift` (still never exercised).
+
+### Session 10 — 2026-07-23 — A8 built; AC3 closed live; a gated-replay wedge found and fixed
+
+**A8 (`dev_scripts/replay.mjs`) and AC3 both landed.** A8 is the thin wrapper the sprint has wanted since
+Session 3's nine hand-curls — start / poll / on-break dump prompt+report / wait for a resume file / resume,
+plus `--auto`, `--record`, record-from-scratch, and (added this session) `--slack-channel`. 645 tests still
+pass — the script is pure I/O over the three endpoints, no logic to unit-test (arch-replay §9).
+
+**AC3 closed live on run 728 — record mode, `supplied` both ways, 0 live calls.** Not driven by the script in
+the end (see the wedge below); driven directly against the endpoints A8 wraps, which is the same code path.
+- Step 3 **served** from recording 1086 — because `always` was flipped **mid-run at the step-2 gate** and the
+  flip landed after step 3 had already run. An accidental but clean proof that **the policy is read from the
+  run row on every step** (arch-replay §7a), not cached, not carried in SQS.
+- Step 11 broke (`reason=always`); the **63,016-char assembled prompt was readable over `GET`**; a **valid**
+  `supplied` response (run 722's recorded gap_analysis, guaranteed schema-valid) passed `review-output` and
+  the run advanced to step 21.
+- Step 21: an **invalid** `supplied` response **failed the run** — `allowLlmCorrection: !served` is `false` for
+  `supplied` (`llm-harness.mjs:467`), so an invalid hand-supplied response triggers **no** correction call. The
+  failure test is therefore **free**, and that is the literal AC3 wording ("a response that would fail
+  validation fails the run") proven, not asserted.
+- `PGC_Session` for run 728: 3 llm_call sessions, `response_source` ∈ {replayed, recorded}, **live = 0**.
+
+**The wedge, found by using it (the sprint's recurring pattern, now on its sixth instance).** `create_workflow`
+has human gates at steps 2, 2d, 6, 9 — *before and between* its `llm_call`s — and a replayed run keeps them
+**real** (arch-replay §5). Driving a record run purely from the dev script / HTTP path **cannot answer a human
+gate** (no HTTP path; they render in Slack), and worse: the HTTP `POST /proc/replay` I first used carried **no
+`callback`**, so run 726's gate fired into nothing and the run wedged **invisibly** at `awaiting_human_gate` —
+zero Slack output, no news reading as good news. The fix is two-part: (1) `--slack-channel` on A8 so a gated
+replay's gates render in Slack while the script drives the `llm_call` breaks over HTTP — the hybrid that
+actually works; (2) the AC3 run itself was driven as that hybrid — **user answers the gates in Slack, I resolve
+the `supplied` breaks over HTTP**. This is the intended division (arch-replay §5/§9): gates are experience-tier
+and stay in Slack; `supplied` is the one resolution that needs HTTP because it carries a payload.
+
+**A minor finding, logged not fixed:** in `always` mode `lookupRecording` is not called, so `candidate_session_id`
+is null and no `use_recorded` is offered — correct — but `dispositionForDrift` still produced the headline
+*"✅ recorded response answers the same request — use_recorded is safe"* on the step-11 break. Harmless (no
+button is rendered, per `buildBreakActions`' `candidate_session_id != null` guard), but the headline is
+misleading for record mode where there is no candidate. Backlog candidate: suppress the disposition headline
+when `candidate_session_id == null`.
+
+**Track A remaining:** the A6 `local_state` diff (free system code), `soft_drift` (still never exercised —
+memory has not moved between corpora), and driving A8's own file-loop end-to-end against a gated run via
+`--slack-channel`. Then sprint close (merge, docs, retro, **spend re-measure**).
 
 **Deferred (backlog):** `21c` redesign gate keeps the stale warning instead of a `🔄 Regenerating…` message —
 confirmed to be D4 (sprint-07 §515) working as designed, not a flaw; needs an opt-in per-option confirmation

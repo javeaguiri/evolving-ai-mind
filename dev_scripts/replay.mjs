@@ -28,6 +28,12 @@
 //                       this never fires — a $0 regression assertion (arch-replay.md §10).
 //   --dir <path>        working directory for break/prompt/resume files. Default: ./.replay
 //   --interval <ms>     poll interval. Default: 3000.
+//   --slack-channel <id> [--slack-thread <ts>]
+//                       render this run's human gates in Slack. A replayed run keeps its
+//                       human_gate steps real (arch-replay.md §5) — without a callback they
+//                       fire into nothing and the run wedges at awaiting_human_gate with no
+//                       way to answer. Pass a channel so the gate posts there and is answered
+//                       in Slack while this script drives the llm_call breaks over HTTP.
 //
 // Resolving a break by hand (when --auto is not set): the script writes
 //   <dir>/prompt-<runId>-step<step>.txt   the assembled prompt, verbatim
@@ -111,7 +117,13 @@ async function api(method, path, body) {
   return data;
 }
 
-const startReplay  = (bodyExtra) => api('POST', '/api/v1/proc/replay', { breakPolicy: policy, ...bodyExtra });
+// A callback lets a replayed run's real human_gate steps render in Slack (arch-replay.md §5);
+// without one a gated workflow wedges at awaiting_human_gate with nowhere to post the question.
+const callback = flags['slack-channel']
+  ? { provider: 'slack', channel: flags['slack-channel'], ...(flags['slack-thread'] ? { threadId: flags['slack-thread'] } : {}) }
+  : null;
+
+const startReplay  = (bodyExtra) => api('POST', '/api/v1/proc/replay', { breakPolicy: policy, ...(callback ? { callback } : {}), ...bodyExtra });
 const getReplay    = (runId)     => api('GET',  `/api/v1/proc/replay/${runId}`);
 const resumeReplay = (runId, b)  => api('POST', `/api/v1/proc/replay/${runId}/resume`, b);
 
@@ -210,7 +222,12 @@ async function main() {
   }
 
   const runId = start.runId;
+  if (callback) console.log(`   human gates render in Slack channel ${callback.channel}`);
+  else          console.log('   no --slack-channel: a gated workflow will wedge at awaiting_human_gate (gates need Slack)');
   let phase = 'polling';   // 'polling' | 'resuming' — after a resume, ignore the break until the run moves
+
+  // awaiting_human_gate is answered in Slack, not here — surface it once so the wait is not silent.
+  let gateAnnounced = false;
 
   for (;;) {
     const { status, break: report } = await getReplay(runId);
@@ -231,7 +248,9 @@ async function main() {
     }
 
     if (status === 'awaiting_human_gate') {
-      process.stdout.write('⌛ awaiting human gate (answer in Slack)\r');
+      if (!gateAnnounced) { console.log('⌛ awaiting human gate — answer it in Slack'); gateAnnounced = true; }
+    } else {
+      gateAnnounced = false;   // reset so the next gate is announced too
     }
 
     await sleep(interval);
