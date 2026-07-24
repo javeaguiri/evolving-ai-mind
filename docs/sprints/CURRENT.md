@@ -969,3 +969,60 @@ create_workflow defect the sprint said the free loop exists to catch — found f
 **Remaining before close:** AC10 second half (run `edit_budget` from Slack — the generated workflow's own
 end-to-end test), `soft_drift` (unexercised), A8 file-loop live via `--slack-channel`, then **spend re-measure +
 merge + retro**.
+
+---
+
+### Session 12 — 2026-07-24 — run 731 diagnosed; the experience/procedure partition swept clean
+
+Run 731 **persisted correctly** (Medical → $130, `PGD_Budgets` row 16) and **presented wrongly**. Three
+independent defects, three fault domains, all now fixed and deployed:
+
+| # | Domain | Defect | Fix |
+|---|---|---|---|
+| 1 | Execution | form-gate resume crashed on a templated `fields` | `resolveFormFields`, one resolver for render + resume (`a632e6b`) |
+| 2 | Execution | standard `**bold**` reached a `mrkdwn` block and rendered literally | `toSlackMrkdwn` (`af1e8dc`) |
+| 3 | Instruction | the loop rebuilt its view from a key loaded before the write, so the save looked reverted | `design_workflow_process` v24, routing rule 6b (`76880a2`) |
+
+**The root cause of the comma-separated reveal was an instruction contradicting itself.**
+`markdown_formatting_syntax` v5 told `design_workflow_dialogs` that tables do not render in reveal content and
+that bold must be hand-written single-asterisk. Both were false against `callback.mjs` — `buildRevealBlock` →
+`splitMarkdownTableSegments` → `buildTableBlock` renders pipe tables natively, and `chunkTextBlocks` converts
+`**bold**`. The designer was simultaneously told to build a table and told tables do not work.
+
+**Then the fix repeated the mistake it was fixing.** v6 was written as *"never Slack's single-character
+forms"* — a `/proc` instruction naming the renderer. The correction generalised: **every gap between standard
+markdown and this renderer is closed in code at the boundary, and the instruction describing it is deleted, not
+reworded.** `toSlackMrkdwn` now also converts headings, task lists, `[text](url)` → `<url|text>` and images;
+applied at two label sites (`:1330`, `:1473`) that never had it. Four artifacts lost their carve-outs
+(`markdown_formatting_syntax` v10, `design_workflow_dialogs` v18, `design_workflow_process` v25,
+`review_workflow_redundancy` v3 — the 50-block limit restated as a ~40-field budget). **A sweep of all 24
+prompts and 36 context rows now reports zero references to Slack, mrkdwn or Block Kit.** Done in one pass
+deliberately: incremental prompt edits churn replay fingerprints.
+
+**Two follow-ons from that sweep:**
+
+- **L1 gate-size check** (`60311ca`) — the ~40-field budget was an instruction with nothing behind it, so an
+  oversized gate reached production and was found at runtime by a user watching the run wedge
+  (`refuseOversizedGate` posts and returns; the run sits at `awaiting_human_gate` forever). `MAX_GATE_FIELDS`
+  now fails L1. Counts statically-declared `fields` only — a `{{template}}` reference is skipped rather than
+  guessed, since a guess either false-positives or gives false assurance; an estimate belongs in L2's data-flow
+  trace. Catches the run 719 class (63 fields).
+- **`design_workflow_dialogs` v19** (`92e0c7c`) — run 731's step 14 rendered every category **twice**:
+  `{{display_text}}` (step 12, one prose line per category) inline above `{{edit_fields}}` (step 13, one input
+  per category with the same amount as `default`). Nothing caused this and nothing prevented it — the prompt's
+  own examples show the right shape without ever stating it. New rule: **the fields are the display; the
+  message body carries scope and instruction only.** Scoped to the message body — a reveal is collapsed and
+  opened on demand, so a summations table there beside editable fields is a sound partition, not duplication;
+  existing reveal guidance governs it unchanged.
+
+**Not deployed as code, no code fix warranted:** the harness cannot know `display_text` restates `edit_fields`.
+That is design intent, and encoding it in the renderer is the `if`-branch the bug-fix philosophy forbids.
+
+**State at session close:** working tree clean, branch pushed, `sam deploy` succeeded, all four seed types
+report current in the DB (24 prompts, 36 context rows, 11 workflows, 19 step types).
+
+**Next session — regenerate `edit_budget` and re-run it from Slack.** One run exercises all of today's work:
+the L1 size check, v19's message/field partition, v18's table reveals, v25's save-and-continue reload, and
+routing rule 6b. Note it is a **full-price `create_workflow` run** (~$1.42 at run 729's rate) — replay will not
+rescue much, since four prompts in that chain changed today and will fingerprint-miss from
+`design_workflow_process` onward.
