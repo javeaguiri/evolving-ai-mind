@@ -426,6 +426,61 @@ describe('runSimulation — error_summary', () => {
 // needed, and the harness did not have it. L1 correctly rejected the workflow.
 // ---------------------------------------------------------------------------
 
+// A gate past the field ceiling cannot be rendered at all — the run wedges waiting for
+// a message that was never posted. Before this check the only detection was at runtime,
+// with a user already waiting; run 719 shipped a 63-field form (21 rows x 3 fields, two
+// of the three never requested) and was found that way.
+describe('L1 — gate size', () => {
+  const formGate = fields => [
+    {
+      step: '1', type: 'human_gate', gate_type: 'form',
+      message_template: 'Edit them all', fields, output_key: 'edits',
+      options: [
+        { label: 'Save',   action: 'save',   on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+      on_cancel: 'cancel', on_success: 'next',
+    },
+    { step: '2', type: 'end' },
+  ];
+  const nFields = n =>
+    Array.from({ length: n }, (_, i) => ({ name: `f_${i}`, type: 'text', label: `Field ${i}` }));
+
+  const sizeIssue = steps =>
+    runSimulation({ steps, traceId: 't' })
+      .static_analysis.issues.find(i => i.check === 'gate_too_many_fields');
+
+  it('rejects a form that declares more fields than one gate can present (run 719)', () => {
+    const issue = sizeIssue(formGate(nFields(63)));
+    assert.ok(issue, 'a 63-field form must be caught before registration');
+    assert.match(issue.detail, /63 fields/);
+    assert.match(issue.detail, /picks ONE record/i, 'the fix must be named, not just the fault');
+    assert.equal(issue.step, '1');
+  });
+
+  it('accepts a form at the ceiling — the limit is inclusive', () => {
+    assert.equal(sizeIssue(formGate(nFields(40))), undefined);
+  });
+
+  it('accepts an ordinary small form', () => {
+    assert.equal(sizeIssue(formGate(nFields(3))), undefined);
+  });
+
+  it('skips a {{template}} fields reference rather than guessing its length', () => {
+    // Built by a preceding js_transform — the count is unknowable at L1, and a guess
+    // here would either false-positive or give false assurance.
+    assert.equal(sizeIssue(formGate('{{edit_fields}}')), undefined);
+  });
+
+  it('does not fire in skeleton mode, where fields are not yet designed', () => {
+    const result = runSimulation({ steps: formGate(nFields(63)), skeleton: true, traceId: 't' });
+    assert.equal(
+      result.static_analysis.issues.find(i => i.check === 'gate_too_many_fields'),
+      undefined,
+    );
+  });
+});
+
 describe('L1 state flow — action_key records the gate outcome', () => {
   // Run 719's shape: form gate -> transform -> upsert -> condition on the button pressed.
   const saveAndContinueLoop = actionKey => [
