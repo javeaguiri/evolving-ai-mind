@@ -16,7 +16,8 @@ import assert from 'node:assert/strict';
 import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn } from '../../src/ui/slackbot/callback.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
-// **bold** / __bold__ to Slack mrkdwn *bold* for section/reveal text (run 731).
+// **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
+// section/reveal text (run 731).
 describe('toSlackMrkdwn', () => {
   it('converts **bold** to *bold*', () => {
     assert.equal(toSlackMrkdwn('**Income**'), '*Income*');
@@ -39,6 +40,27 @@ describe('toSlackMrkdwn', () => {
   });
   it('ignores an unbalanced ** (no false conversion)', () => {
     assert.equal(toSlackMrkdwn('a ** b'), 'a ** b');
+  });
+  it('converts GFM ~~strike~~ to Slack ~strike~', () => {
+    assert.equal(toSlackMrkdwn('~~cancelled~~'), '~cancelled~');
+  });
+  it('leaves a lone ~ (Slack strikethrough) untouched', () => {
+    assert.equal(toSlackMrkdwn('~already~'), '~already~');
+  });
+  it('ignores an unbalanced ~~ (no false conversion)', () => {
+    assert.equal(toSlackMrkdwn('a ~~ b'), 'a ~~ b');
+  });
+  it('does not touch ~~ inside inline code', () => {
+    assert.equal(toSlackMrkdwn('use `~~literal~~` here'), 'use `~~literal~~` here');
+  });
+  it('converts bold and strikethrough together in one string', () => {
+    assert.equal(
+      toSlackMrkdwn('**Income** and ~~Medical~~'),
+      '*Income* and ~Medical~',
+    );
+  });
+  it('returns strike-free, bold-free text unchanged (early exit still correct)', () => {
+    assert.equal(toSlackMrkdwn('plain ~ text'), 'plain ~ text');
   });
 });
 
