@@ -193,25 +193,42 @@ async function processRecord(record) {
 // is provided. All notification handlers call this — the limit is never missed.
 // ---------------------------------------------------------------------------
 
-// toSlackMrkdwn — normalize standard/CommonMark emphasis to Slack's `mrkdwn` flavor.
-// A `mrkdwn` block (section text, reveal text) renders bold as *single* asterisks and
-// strikethrough as a ~single~ tilde, but the procedure layer and LLMs naturally emit
-// standard **double**-asterisk bold (and `__bold__`) and GFM ~~strikethrough~~, so left
-// unconverted `**Income**` shows literally (run 731). This converts `**x**` / `__x__`
-// -> `*x*` and `~~x~~` -> `~x~`, leaves inline/fenced code untouched, and never touches
-// a lone `*`/`_`/`~` (Slack's own bold/italic/strike). The `markdown` block path is NOT
-// normalized — it already wants `**` (docs/slack-block-kit.md), so converting there
-// would turn bold into italic. Experience-tier translation of standard output, not a
-// new format rule for the procedure layer.
+// toSlackMrkdwn — translate standard markdown into Slack's `mrkdwn` flavor.
+//
+// The procedure layer authors standard markdown and must stay ignorant of how any
+// experience layer renders it (CLAUDE.md, experience/procedure partition). `mrkdwn`
+// supports a narrower and differently-spelled set than standard markdown
+// (docs/slack-block-kit.md "mrkdwn vs markdown syntax"), so every gap is closed here
+// rather than by a prompt rule teaching /proc this layer's syntax:
+//
+//   **bold** / __bold__  -> *bold*        ~~strike~~   -> ~strike~
+//   # Heading            -> *Heading*     - [ ] item   -> ☐ item  (- [x] -> ☑)
+//   [text](url)          -> <url|text>    ![alt](url)  -> <url|alt>  (never embedded)
+//
+// Order matters: headings normalise to standard `**`, so the bold pass then spells them
+// for this layer — one place that knows `mrkdwn` bold is a single asterisk. Inline and
+// fenced code are split out first and passed through literally. A lone `*`/`_`/`~` is
+// left alone, since those are already Slack's own marks.
+//
+// The `markdown` block path is NOT normalized — it accepts standard markdown as-is, so
+// converting there would turn bold into italic.
 export function toSlackMrkdwn(text) {
   if (typeof text !== 'string') return text;
-  if (!text.includes('**') && !text.includes('__') && !text.includes('~~')) return text;
+  if (!/[*_~#[]/.test(text)) return text;                // no mark of any kind
   return text.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
     if (i % 2 === 1) return seg;                         // a code span/block — leave literal
     return seg
+      // ATX heading -> a bold line. Emitted as standard `**` so the bold pass below
+      // spells it; already-bold heading text is passed through rather than double-wrapped.
+      .replace(/^ {0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm,
+        (_, h) => (/^\*\*[\s\S]*\*\*$/.test(h.trim()) ? h.trim() : `**${h.trim()}**`))
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '*$1*')    // **bold** -> *bold*
       .replace(/__(?=\S)([\s\S]*?\S)__/g, '*$1*')        // __bold__ -> *bold*
-      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '~$1~');       // ~~strike~~ -> ~strike~
+      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '~$1~')        // ~~strike~~ -> ~strike~
+      .replace(/^(\s*)[-*+][ \t]+\[([ xX])\][ \t]+/gm,   // - [ ] / - [x] -> ☐ / ☑
+        (_, indent, mark) => `${indent}${mark === ' ' ? '☐' : '☑'} `)
+      .replace(/!?\[([^\]]*)\]\(([^)\s]+)\)/g,           // [text](url) -> <url|text>
+        (m, label, url) => (label ? `<${url}|${label}>` : `<${url}>`));
   }).join('');
 }
 
@@ -1327,7 +1344,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         if (field.label) {
           blocks.push({
             type: 'section',
-            text: { type: 'mrkdwn', text: `*${field.label}*` },
+            text: { type: 'mrkdwn', text: `*${toSlackMrkdwn(field.label)}*` },
           });
         }
         const items = field.items ?? [];
@@ -1470,7 +1487,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         }));
         blocks.push({
           type: 'section',
-          text: { type: 'mrkdwn', text: field.label ?? 'Select one:' },
+          text: { type: 'mrkdwn', text: toSlackMrkdwn(field.label) ?? 'Select one:' },
           accessory: {
             type:      'radio_buttons',
             action_id: field.name ?? 'radio',

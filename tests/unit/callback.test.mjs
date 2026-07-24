@@ -62,6 +62,53 @@ describe('toSlackMrkdwn', () => {
   it('returns strike-free, bold-free text unchanged (early exit still correct)', () => {
     assert.equal(toSlackMrkdwn('plain ~ text'), 'plain ~ text');
   });
+
+  // Every remaining gap between standard markdown and mrkdwn is closed here rather
+  // than by a /proc prompt rule — the procedure layer must not know this layer's
+  // syntax (experience/procedure partition).
+  it('converts a standard link to <url|text>', () => {
+    assert.equal(
+      toSlackMrkdwn('see [the docs](https://example.com/a)'),
+      'see <https://example.com/a|the docs>',
+    );
+  });
+  it('converts an image to a plain link — mrkdwn never embeds one', () => {
+    assert.equal(toSlackMrkdwn('![chart](https://x.com/c.png)'), '<https://x.com/c.png|chart>');
+  });
+  it('emits a bare <url> when the link text is empty', () => {
+    assert.equal(toSlackMrkdwn('[](https://example.com)'), '<https://example.com>');
+  });
+  it('converts an ATX heading to a bold line, at every level', () => {
+    assert.equal(toSlackMrkdwn('# Summary'), '*Summary*');
+    assert.equal(toSlackMrkdwn('### Details'), '*Details*');
+  });
+  it('does not double-wrap a heading whose text is already bold', () => {
+    assert.equal(toSlackMrkdwn('## **Totals**'), '*Totals*');
+  });
+  it('leaves a mid-line # alone (only ATX headings convert)', () => {
+    assert.equal(toSlackMrkdwn('issue #42 filed'), 'issue #42 filed');
+  });
+  it('converts task-list checkboxes, preserving indentation', () => {
+    assert.equal(
+      toSlackMrkdwn('- [ ] open\n- [x] done\n  - [ ] nested'),
+      '☐ open\n☑ done\n  ☐ nested',
+    );
+  });
+  it('leaves an ordinary bullet untouched', () => {
+    assert.equal(toSlackMrkdwn('- just a bullet'), '- just a bullet');
+  });
+  it('does not touch links or headings inside code', () => {
+    assert.equal(
+      toSlackMrkdwn('use `[text](url)` and\n```\n# not a heading\n```'),
+      'use `[text](url)` and\n```\n# not a heading\n```',
+    );
+  });
+  it('converts a realistic mixed reveal in one pass', () => {
+    assert.equal(
+      toSlackMrkdwn('## Budget\n**Medical** was ~~$120~~ $130.\n- [x] saved\nSee [detail](https://x.com/b).'),
+      '*Budget*\n*Medical* was ~$120~ $130.\n☑ saved\nSee <https://x.com/b|detail>.',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
