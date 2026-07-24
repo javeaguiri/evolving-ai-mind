@@ -193,23 +193,25 @@ async function processRecord(record) {
 // is provided. All notification handlers call this — the limit is never missed.
 // ---------------------------------------------------------------------------
 
-// toSlackMrkdwn — normalize standard/CommonMark bold to Slack's `mrkdwn` flavor.
-// A `mrkdwn` block (section text, reveal text) renders bold as *single* asterisks,
-// but the procedure layer and LLMs naturally emit standard **double**-asterisk bold
-// (and `__bold__`), so left unconverted `**Income**` shows literally (run 731). This
-// converts `**x**` / `__x__` -> `*x*`, leaves inline/fenced code untouched, and never
-// touches a lone `*`/`_` (Slack's own bold/italic). The `markdown` block path is NOT
+// toSlackMrkdwn — normalize standard/CommonMark emphasis to Slack's `mrkdwn` flavor.
+// A `mrkdwn` block (section text, reveal text) renders bold as *single* asterisks and
+// strikethrough as a ~single~ tilde, but the procedure layer and LLMs naturally emit
+// standard **double**-asterisk bold (and `__bold__`) and GFM ~~strikethrough~~, so left
+// unconverted `**Income**` shows literally (run 731). This converts `**x**` / `__x__`
+// -> `*x*` and `~~x~~` -> `~x~`, leaves inline/fenced code untouched, and never touches
+// a lone `*`/`_`/`~` (Slack's own bold/italic/strike). The `markdown` block path is NOT
 // normalized — it already wants `**` (docs/slack-block-kit.md), so converting there
 // would turn bold into italic. Experience-tier translation of standard output, not a
 // new format rule for the procedure layer.
 export function toSlackMrkdwn(text) {
   if (typeof text !== 'string') return text;
-  if (!text.includes('**') && !text.includes('__')) return text;
+  if (!text.includes('**') && !text.includes('__') && !text.includes('~~')) return text;
   return text.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
     if (i % 2 === 1) return seg;                         // a code span/block — leave literal
     return seg
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '*$1*')    // **bold** -> *bold*
-      .replace(/__(?=\S)([\s\S]*?\S)__/g, '*$1*');       // __bold__ -> *bold*
+      .replace(/__(?=\S)([\s\S]*?\S)__/g, '*$1*')        // __bold__ -> *bold*
+      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '~$1~');       // ~~strike~~ -> ~strike~
   }).join('');
 }
 
