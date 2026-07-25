@@ -14,12 +14,17 @@
     { "name": "intent_category", "type": "varchar(100)",  "nullable": true },
     { "name": "created_at",      "type": "timestamptz",   "nullable": false, "default": "now()" },
     { "name": "minds_eye_turn_count",   "type": "integer", "nullable": true },
-    { "name": "minds_eye_action_count", "type": "integer", "nullable": true }
+    { "name": "minds_eye_action_count", "type": "integer", "nullable": true },
+    { "name": "request_fingerprint",      "type": "jsonb",   "nullable": true },
+    { "name": "fingerprint_hash",         "type": "text",    "nullable": true },
+    { "name": "response_source",          "type": "text",    "nullable": true },
+    { "name": "replayed_from_session_id", "type": "integer", "nullable": true }
   ],
   "foreign_keys": [],
   "constraints": [
     { "type": "check", "name": "chk_pgc_session_type", "expression": "session_type IN ('general_chat', 'llm_call_diagnostic', 'minds_eye')" },
-    { "type": "check", "name": "chk_pgc_session_turn_ceiling", "expression": "minds_eye_turn_count IS NULL OR minds_eye_turn_count <= 100" }
+    { "type": "check", "name": "chk_pgc_session_turn_ceiling", "expression": "minds_eye_turn_count IS NULL OR minds_eye_turn_count <= 100" },
+    { "type": "check", "name": "chk_pgc_session_response_source", "expression": "response_source IS NULL OR response_source IN ('live', 'replayed', 'recorded')" }
   ],
   "triggers": []
 }

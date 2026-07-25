@@ -193,9 +193,49 @@ async function processRecord(record) {
 // is provided. All notification handlers call this — the limit is never missed.
 // ---------------------------------------------------------------------------
 
+// toSlackMrkdwn — translate standard markdown into Slack's `mrkdwn` flavor.
+//
+// The procedure layer authors standard markdown and must stay ignorant of how any
+// experience layer renders it (CLAUDE.md, experience/procedure partition). `mrkdwn`
+// supports a narrower and differently-spelled set than standard markdown
+// (docs/slack-block-kit.md "mrkdwn vs markdown syntax"), so every gap is closed here
+// rather than by a prompt rule teaching /proc this layer's syntax:
+//
+//   **bold** / __bold__  -> *bold*        ~~strike~~   -> ~strike~
+//   # Heading            -> *Heading*     - [ ] item   -> ☐ item  (- [x] -> ☑)
+//   [text](url)          -> <url|text>    ![alt](url)  -> <url|alt>  (never embedded)
+//
+// Order matters: headings normalise to standard `**`, so the bold pass then spells them
+// for this layer — one place that knows `mrkdwn` bold is a single asterisk. Inline and
+// fenced code are split out first and passed through literally. A lone `*`/`_`/`~` is
+// left alone, since those are already Slack's own marks.
+//
+// The `markdown` block path is NOT normalized — it accepts standard markdown as-is, so
+// converting there would turn bold into italic.
+export function toSlackMrkdwn(text) {
+  if (typeof text !== 'string') return text;
+  if (!/[*_~#[]/.test(text)) return text;                // no mark of any kind
+  return text.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
+    if (i % 2 === 1) return seg;                         // a code span/block — leave literal
+    return seg
+      // ATX heading -> a bold line. Emitted as standard `**` so the bold pass below
+      // spells it; already-bold heading text is passed through rather than double-wrapped.
+      .replace(/^ {0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm,
+        (_, h) => (/^\*\*[\s\S]*\*\*$/.test(h.trim()) ? h.trim() : `**${h.trim()}**`))
+      .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '*$1*')    // **bold** -> *bold*
+      .replace(/__(?=\S)([\s\S]*?\S)__/g, '*$1*')        // __bold__ -> *bold*
+      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '~$1~')        // ~~strike~~ -> ~strike~
+      .replace(/^(\s*)[-*+][ \t]+\[([ xX])\][ \t]+/gm,   // - [ ] / - [x] -> ☐ / ☑
+        (_, indent, mark) => `${indent}${mark === ' ' ? '☐' : '☑'} `)
+      .replace(/!?\[([^\]]*)\]\(([^)\s]+)\)/g,           // [text](url) -> <url|text>
+        (m, label, url) => (label ? `<${url}|${label}>` : `<${url}>`));
+  }).join('');
+}
+
 function textToBlocks(text, contextText) {
   const BLOCK_CHAR_LIMIT = 2800;
   const blocks = [];
+  text = toSlackMrkdwn(text);
 
   if (text.length <= BLOCK_CHAR_LIMIT) {
     blocks.push({ type: 'section', text: { type: 'mrkdwn', text } });
@@ -375,7 +415,7 @@ async function postPingE2eResult(message) {
 // ---------------------------------------------------------------------------
 
 async function postHumanNotification(message) {
-  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals } = message;
+  const { callback, traceId, workflowRunId, queryId, format, sessionId, reveals, breakActions } = message;
   const text = message.message ?? 'No message provided.';
   const contextText = workflowRunId
     ? `runId: ${workflowRunId} | traceId: ${traceId}`
@@ -414,6 +454,29 @@ async function postHumanNotification(message) {
         value:     JSON.stringify({ action: 'explain_followup', queryId }),
       }],
     });
+  }
+
+  // A11 — a replay break's payload-free resolutions, rendered as buttons so a break is
+  // resolvable from Slack without a shell. PROC supplies UI-agnostic descriptors; this layer only
+  // maps them to Block Kit and never decides which are offered. The click routes via the
+  // action.value (llm_break_resolution), not the action_id — indexed only to stay unique. Slack
+  // caps an actions block at 5 elements, so overflow spills into further blocks.
+  if (Array.isArray(breakActions) && breakActions.length > 0 && workflowRunId) {
+    const buttons = breakActions.map((a, i) => ({
+      type:      'button',
+      text:      { type: 'plain_text', text: a.label },
+      action_id: `llm_break_resolution_${i}`,
+      ...(a.style ? { style: a.style } : {}),
+      value:     JSON.stringify({
+        action:        'llm_break_resolution',
+        workflowRunId,
+        resolution:    a.resolution,
+        ...(a.sessionId != null ? { sessionId: a.sessionId } : {}),
+      }),
+    }));
+    for (let i = 0; i < buttons.length; i += 5) {
+      suffixBlocks.push({ type: 'actions', elements: buttons.slice(i, i + 5) });
+    }
   }
 
   const chunkSize = SLACK_BLOCK_LIMIT - suffixBlocks.length;
@@ -879,7 +942,9 @@ function splitMarkdownTableSegments(text) {
 // `section`/`mrkdwn` blocks, capped at REVEAL_MAX_CHILD_BLOCKS with a trailing
 // truncation note merged into the last kept chunk.
 function chunkTextBlocks(text) {
-  const lines = text ? text.split('\n') : [];
+  // Reveal prose renders as `mrkdwn`, so standard **bold** must be converted to
+  // Slack's *bold* here — the reveal path is where a summary with type headers lands.
+  const lines = text ? toSlackMrkdwn(text).split('\n') : [];
   const chunks = [];
   let chunk = '';
   for (const line of lines) {
@@ -1279,7 +1344,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         if (field.label) {
           blocks.push({
             type: 'section',
-            text: { type: 'mrkdwn', text: `*${field.label}*` },
+            text: { type: 'mrkdwn', text: `*${toSlackMrkdwn(field.label)}*` },
           });
         }
         const items = field.items ?? [];
@@ -1422,7 +1487,7 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         }));
         blocks.push({
           type: 'section',
-          text: { type: 'mrkdwn', text: field.label ?? 'Select one:' },
+          text: { type: 'mrkdwn', text: toSlackMrkdwn(field.label) ?? 'Select one:' },
           accessory: {
             type:      'radio_buttons',
             action_id: field.name ?? 'radio',

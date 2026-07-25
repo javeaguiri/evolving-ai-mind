@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.6
-Status: Active development — Sprint 6 closed; Sprint 7 upcoming
-Last updated: 2026-06-29 (Sprint 6 close — Track P complete; Expenses/Recipe domains; entity resolution chain on add/get/list_entity; reveal/reveals contract; SHUTDOWN SQS type; RecursiveLoop: Allow; ProcFunction MemorySize 1024; listPhysicalTables + dropConstraint endpoints; vm.runInNewContext timeouts; embed_source auto-inference in schema.mjs)
+Version: 3.7
+Status: Active development — Sprint 8 closed; Sprint 9 upcoming
+Last updated: 2026-07-25 (Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts)
+Previously: 3.6 — 2026-06-29 — Sprint 6 close (Sprint 7 close did not bump this header); Track P; Expenses/Recipe domains; reveal/reveals; SHUTDOWN SQS; RecursiveLoop: Allow; listPhysicalTables + dropConstraint
 Previously: 3.5 — 2026-06-18 — Sprint 5 close; Novia Phase 1; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live
 
 ---
@@ -42,7 +43,11 @@ For authoritative detail follow the section references in each row.
 | `src/proc/classify-intent-tiers.mjs` | PROC | Pure classification functions — matchIntentMap, matchDomainAlias, matchWorkflowByKeywords | 50+ unit tests cover these; changes must re-run `node --test tests/unit/*.test.mjs` |
 | `src/proc/run-workflow.mjs` | PROC | Step Processor outer loop — loads run, checks idempotency, dispatches to step-executor, enqueues next SQS. See Section 6.5 | Changes affect execution of ALL workflows |
 | `src/proc/step-executor.mjs` | PROC | Step type dispatch — one case per step type, zero workflow-specific logic. See Section 6.5.1 | Adding a case = new step type; changing a case = affects every workflow using that type |
-| `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. See Section 6.13 | Changes affect every `llm_call` step in the system |
+| `src/proc/llm-harness.mjs` | PROC | LLM call assembly — memory retrieval, prompt injection, save_to_memory extraction. `selectInjectedContext` is the single source of truth for which PGC_SystemContext rows a prompt injects (shared with the request fingerprint). See Section 6.13 | Changes affect every `llm_call` step in the system |
+| `src/proc/fingerprint.mjs` | PROC | Pure request fingerprint for the LLM replay harness — per-`llm_call` component hashes (prompt/input/user_input/model/schema/memory/system_context) + composite, computed at the seam and written to PGC_Session. See `docs/arch-replay.md` §3 | Changes affect replay corpus keying — a fingerprint change invalidates prior recordings |
+| `src/proc/replay-corpus.mjs` | PROC | Replay corpus read — looks up a recorded response by `fingerprint_hash` (source-run-first, then global) and classifies drift (hit/soft/hard/miss); `decideReplayAction` maps break policy × lookup status → call/serve/break. SERV reads only. Imported by `llm-harness` (the serve/break decision) and `replay.mjs` (break report). See `docs/arch-replay.md` §3-§8 | Changes affect which recordings a replay serves and when it breaks |
+| `src/proc/replay.mjs` | PROC | Replay harness endpoints — `POST /proc/replay` (start/record, a fourth run-entry point), `GET /proc/replay/{runId}` (status + break report), `POST /proc/replay/{runId}/resume` (write resolution → `resume_llm`). Also the `REPLAY` (start/list) and `REPLAY_RESUME` (payload-free break resolution, A11) SQS handlers. HTTP-dispatched by proxy segments. See `docs/arch-replay.md` §9 | Changes affect how replays are started and resumed |
+| `src/ui/slackbot/replay.mjs` | EXP | `/replay` Slack command → `REPLAY` SQS enqueue (list, replay, or record). Posts the thread the break notifications reply under | Changes affect the Slack entry to the replay harness |
 | `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
 | `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
@@ -231,8 +236,11 @@ entry messages, which carry no run ID and are consumed once.
 | `MINDS_EYE` | — | 1 — fire-and-forget | SlackbotFunction (minds-eye.mjs `/novia`), interactive.mjs (Continue/Follow-up modal) | proc/minds-eye.mjs |
 | `MINDS_EYE_RESUME` | — | 1 — fire-and-forget | interactive.mjs (gate approval or turn-limit Continue) | proc/minds-eye.mjs |
 | `SHUTDOWN` | — | 1 — fire-and-forget | SlackbotFunction (`/shutdown`) | proc/shutdown.mjs — cancels all running/awaiting runs; notifies via HUMAN_NOTIFICATION |
+| `REPLAY` | — | 1 — fire-and-forget | SlackbotFunction (`/replay`) | proc/replay.mjs — starts a replay run (`sourceRunId`) or lists recent runs (none) |
+| `REPLAY_RESUME` | — | 1 — fire-and-forget | interactive.mjs (break-resolution button) | proc/replay.mjs — resumes a broken replay with a payload-free resolution (`abort`/`call_live`/`use_recorded`); routes to the same resume core as the HTTP endpoint. `supplied` carries a response body and stays HTTP-only (A11, `docs/arch-replay.md` §5/§9) |
 | `WORKFLOW_STEP` | `execute_top` | 2 — workflow execution | ProcFunction | proc/run-workflow.mjs |
 | `WORKFLOW_STEP` | `resume_gate` | 2 — workflow execution | interactive.mjs | proc/run-workflow.mjs |
+| `WORKFLOW_STEP` | `resume_llm` | 2 — workflow execution | proc/replay.mjs resume (HTTP endpoint A5, or `REPLAY_RESUME` button A11) | proc/run-workflow.mjs — resumes a suspended replay break (`docs/arch-replay.md` §5) |
 | `WORKFLOW_STEP` | `cancel` | 2 — workflow execution | ProcFunction /shutdown | proc/run-workflow.mjs |
 
 **Design decisions:**
@@ -333,6 +341,7 @@ src/
     minds-eye.mjs      /novia slash command — enqueues MINDS_EYE to WorkflowQueue
     chat.mjs           /chat slash command — enqueues CHAT_MESSAGE to WorkflowQueue
     explain.mjs        /explain slash command — enqueues EXPLAIN_QUERY to WorkflowQueue
+    replay.mjs         /replay slash command — enqueues REPLAY to WorkflowQueue
   proc/               Process tier — all business logic. No AWS SDK in endpoint modules.
     handler.mjs        Dual dispatch: HTTP (httpMethod) vs SQS (Records)
     run-workflow.mjs   Step Processor outer loop
@@ -341,6 +350,9 @@ src/
     classify-intent-tiers.mjs  Pure classification functions — unit-testable, no I/O
     simulation-engine.mjs  Pure L1/L2 simulator — no I/O, imported by step-executor + dev_scripts
     llm-harness.mjs    LLM call assembly + memory injection
+    fingerprint.mjs    Pure request fingerprint for the replay harness (arch-replay.md §3)
+    replay-corpus.mjs  Replay corpus lookup + drift classification (arch-replay.md §3-§8)
+    replay.mjs         Replay harness endpoints + REPLAY SQS handler (arch-replay.md §9)
     review-output.mjs  Ajv + semantic + routing validation of all LLM output
     minds-eye.mjs      Novia agentic loop — MINDS_EYE + MINDS_EYE_RESUME SQS handler
     shutdown.mjs       /shutdown — SHUTDOWN SQS handler; ack-and-notify pattern; cancels all active runs
@@ -617,15 +629,19 @@ POST /proc/review-output       review-output.mjs   — right-brain validation (a
 POST /proc/create-domain       create-domain.mjs   — direct /create-domain command entry point
 POST /proc/create-workflow     create-workflow.mjs — Phase 2
 POST /proc/shutdown            shutdown.mjs        — emergency stop
+POST /proc/replay              replay.mjs          — start a replay/record run (LLM replay harness)
+GET  /proc/replay/{runId}      replay.mjs          — replay status + break report
+POST /proc/replay/{runId}/resume  replay.mjs       — supply a break resolution → resume_llm
 ```
 
 #### SQS message types (WorkflowQueue)
 
 ```
 CLASSIFY_INTENT    → classify-intent.mjs
-WORKFLOW_STEP      → run-workflow.mjs       (actions: execute_top | resume_gate | cancel)
+WORKFLOW_STEP      → run-workflow.mjs       (actions: execute_top | resume_gate | resume_llm | cancel)
 CREATE_DOMAIN      → create-domain.mjs
 CREATE_WORKFLOW    → create-workflow.mjs
+REPLAY             → replay.mjs             (start a replay run, or list recent runs)
 ```
 
 #### SQS message format (WORKFLOW_STEP)

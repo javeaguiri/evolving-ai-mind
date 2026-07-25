@@ -10,7 +10,25 @@
 
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
-import { assembleInstructions } from '../../src/proc/llm-harness.mjs';
+import { assembleInstructions, STEP_TYPE_CONTRACT_COLUMNS, describeStateDrift } from '../../src/proc/llm-harness.mjs';
+import { computeFingerprint }                               from '../../src/proc/fingerprint.mjs';
+
+// A6 (diagnostic) — the local_state diff reads local_state_keys off the candidate fingerprint,
+// mirroring describeInputDrift over input_keys. Broader than input drift, never gates a break.
+describe('describeStateDrift', () => {
+  it('reads local_state_keys from the candidate and sizes the keys that moved', () => {
+    const current      = { gap_analysis: { h: 'h1', n: 101 }, domain: { h: 'hd', n: 8 } };
+    const candidateFp  = { local_state_keys: { domain: { h: 'hd', n: 8 } } };  // gap_analysis is new state
+    const d = describeStateDrift(current, candidateFp);
+    assert.deepEqual(d.added, [{ key: 'gap_analysis', chars: 101 }]);
+    assert.deepEqual(d.unchanged, ['domain']);
+  });
+
+  it('returns null when the candidate predates the snapshot (no local_state_keys)', () => {
+    assert.equal(describeStateDrift({ a: { h: 'x', n: 1 } }, { input_keys: {} }), null);
+    assert.equal(describeStateDrift({ a: { h: 'x', n: 1 } }, null), null);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -143,5 +161,39 @@ describe('assembleInstructions — memory block injection', () => {
     const promptRow = makePromptRow({ prompt_text: 'Base.' });
     const result    = assembleInstructions(promptRow, {}, [], null, 'test_intent');
     assert.equal(result, 'Base.');
+  });
+});
+
+// Sprint 8 — step_type_contracts is injected into the prompt and hashed into the `input`
+// fingerprint component, so the injection must be a function of the contracts alone.
+// Run 720 broke at step 11 against run 719 because human_gate's row had been updated: the
+// heap relocated it, the unordered read reshuffled the array, and updated_at moved with it.
+describe('step_type_contracts injection is stable', () => {
+  const contract = (step_type) => ({ step_type, description: `${step_type} does a thing`, input_contract: [] });
+  const fp = (rows) => computeFingerprint({
+    promptRow: { version: 1, prompt_text: 'p', output_schema: null },
+    resolvedInput: { step_type_contracts: rows }, userInput: '', model: 'm', memoryBlock: '', injectedContext: {},
+  }).components.input;
+
+  it('row ORDER changes the input hash — so the read must be ordered', () => {
+    const a = fp([contract('human_gate'), contract('llm_call')]);
+    const b = fp([contract('llm_call'), contract('human_gate')]);
+    assert.notEqual(a, b, 'arrays are order-significant: an unordered read is a moving fingerprint');
+  });
+
+  it('the same contracts in the same order hash identically', () => {
+    assert.equal(fp([contract('human_gate'), contract('llm_call')]), fp([contract('human_gate'), contract('llm_call')]));
+  });
+
+  it('excludes row bookkeeping — a touched row must not look like a new request', () => {
+    for (const col of ['id', 'status', 'created_at', 'updated_at']) {
+      assert.ok(!STEP_TYPE_CONTRACT_COLUMNS.includes(col), `${col} is not contract and must not reach the prompt`);
+    }
+  });
+
+  it('carries the fields an LLM needs to author a step', () => {
+    for (const col of ['step_type', 'description', 'input_contract', 'output_contract']) {
+      assert.ok(STEP_TYPE_CONTRACT_COLUMNS.includes(col), `${col} is contract`);
+    }
   });
 });

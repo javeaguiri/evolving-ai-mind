@@ -17,6 +17,15 @@ import { resolveInput, resolvePath } from './template-resolver.mjs';
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
 const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 
+// MAX_GATE_FIELDS — the most fields one gate may ask for in a single presentation.
+// Past this a gate does not degrade, it fails to render at all, and the run wedges
+// waiting for a message that was never posted. Enforcing it here catches the design
+// before the workflow is registered; without this check the only detection is at
+// runtime, with a user already waiting. Mirrors the design budget stated in
+// design_workflow_process — a form over this size must become a selection gate that
+// picks one record followed by a small form to edit it.
+const MAX_GATE_FIELDS = 40;
+
 // ---------------------------------------------------------------------------
 // runSimulation — exported for the HTTP simulate-workflow endpoint.
 // Called identically from executeSimulate (step type) and simulate-workflow.mjs
@@ -377,6 +386,21 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
             detail:        `human_gate step "${stepKey}" has a reveal field but reveal.content is missing or empty.`,
           });
         }
+      }
+
+      // Gate size — a statically-declared fields array is countable here. A
+      // "{{template}}" reference is built by a preceding js_transform and its length
+      // is unknown until then, so it is skipped rather than guessed at; L2's
+      // data-flow trace is where a row-count estimate could come from. Skipped in
+      // skeleton mode for the same reason as the cancel-option check above: fields
+      // are dialog-layer content, added after routing topology is validated.
+      if (!skeleton && Array.isArray(s.fields) && s.fields.length > MAX_GATE_FIELDS) {
+        issues.push({
+          check:         'gate_too_many_fields',
+          step:          stepKey,
+          failure_class: 'gate_too_many_fields',
+          detail:        `human_gate step "${stepKey}" declares ${s.fields.length} fields; a single gate can present at most ${MAX_GATE_FIELDS}. Past that the gate cannot be rendered at all and the run stalls waiting for it. Redesign as a selection gate that picks ONE record, followed by a small form to edit that record — or drop fields the user did not ask for.`,
+        });
       }
 
       // review_object never writes output_key.
@@ -1419,7 +1443,7 @@ function isHardSmokeFailure(issue) {
  * Extract all {{ref}} template variable names from a string.
  * Returns base paths only — "proposed_scaffold.domain" for "{{proposed_scaffold.domain}}".
  */
-function extractTemplateRefs(template) {
+export function extractTemplateRefs(template) {
   if (typeof template !== 'string') return [];
   const refs = [];
   const re   = /\{\{([^}]+)\}\}/g;
