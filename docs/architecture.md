@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.6
-Status: Active development — Sprint 6 closed; Sprint 7 upcoming
-Last updated: 2026-06-29 (Sprint 6 close — Track P complete; Expenses/Recipe domains; entity resolution chain on add/get/list_entity; reveal/reveals contract; SHUTDOWN SQS type; RecursiveLoop: Allow; ProcFunction MemorySize 1024; listPhysicalTables + dropConstraint endpoints; vm.runInNewContext timeouts; embed_source auto-inference in schema.mjs)
+Version: 3.7
+Status: Active development — Sprint 8 closed; Sprint 9 upcoming
+Last updated: 2026-07-25 (Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts)
+Previously: 3.6 — 2026-06-29 — Sprint 6 close (Sprint 7 close did not bump this header); Track P; Expenses/Recipe domains; reveal/reveals; SHUTDOWN SQS; RecursiveLoop: Allow; listPhysicalTables + dropConstraint
 Previously: 3.5 — 2026-06-18 — Sprint 5 close; Novia Phase 1; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live
 
 ---
