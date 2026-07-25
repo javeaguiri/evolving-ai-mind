@@ -16,10 +16,63 @@ import { validate, logPromptError }                               from './review
 import { getRows, insertRow }                                     from '../shared/serv-client.mjs';
 import { resolveInput, resolveTemplate }                          from './template-resolver.mjs';
 import { retrieveMemories, formatMemoryBlock }                    from './memory-client.mjs';
+import { computeFingerprint, diffInputKeys }                      from './fingerprint.mjs';
+import { lookupRecording, decideReplayAction, getRecordedResponse, dispositionForDrift } from './replay-corpus.mjs';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The PGC_StepType columns that constitute a step type's contract — what an LLM needs to
+ * know to author a step. Excludes row bookkeeping (id, status, created_at, updated_at):
+ * it is not contract, and injecting it makes an unrelated row edit look like request drift.
+ * Exported for the fingerprint-stability test.
+ */
+export const STEP_TYPE_CONTRACT_COLUMNS = [
+  'step_type', 'description', 'input_contract', 'output_contract',
+  'on_success_options', 'on_failure_options', 'requires_capability',
+];
+
+/**
+ * A6 — turn `drift: ['input']` into a sentence a developer can act on.
+ *
+ * `input` is ambiguous: `step_type_contracts` moving is benign (an injected contract changed;
+ * accepting the recording is right), while the question keys moving means a materially different
+ * question was asked (accepting it discards the difference). Opposite correct answers, identical
+ * component-level signal — so the disposition (A9) cannot fire without knowing which keys moved.
+ *
+ * Sizes are carried so the report says WHAT arrived, not merely that something did.
+ * Returns null when either side has no per-key hashes — absent data is unknowable, never
+ * "unchanged".
+ */
+function describeKeyDrift(currentKeys, candidateKeys) {
+  const raw = diffInputKeys(currentKeys ?? null, candidateKeys);
+  if (!raw) return null;
+  const cur = currentKeys ?? {};
+  return {
+    added:     raw.added.map(k   => ({ key: k, chars: cur[k]?.n ?? null })),
+    removed:   raw.removed.map(k => ({ key: k, chars: candidateKeys[k]?.n ?? null })),
+    changed:   raw.changed.map(k => ({ key: k, chars: cur[k]?.n ?? null, was_chars: candidateKeys[k]?.n ?? null })),
+    unchanged: raw.unchanged,
+  };
+}
+
+export function describeInputDrift(currentKeys, candidateFingerprint) {
+  return describeKeyDrift(currentKeys ?? null, candidateFingerprint?.input_keys ?? null);
+}
+
+/**
+ * Per-key divergence of the full frame `local_state` against the source run at this step — the
+ * diagnostic-only local_state diff (A6, arch-replay.md §8). Same shape and helper as
+ * describeInputDrift, over `local_state_keys` rather than `input_keys`. It is NEVER consulted to
+ * decide whether to break — the fingerprint does that — so it is broader than the input diff on
+ * purpose: it surfaces state that diverged upstream but has not yet reached a prompt (and may reach
+ * a later one). `null` when either side predates the stored snapshot — absent data is unknowable.
+ */
+export function describeStateDrift(currentStateKeys, candidateFingerprint) {
+  return describeKeyDrift(currentStateKeys ?? null, candidateFingerprint?.local_state_keys ?? null);
+}
 
 /**
  * Resolve a model alias (e.g. 'smart', 'cheap') to a concrete model ID using
@@ -62,6 +115,28 @@ function resolveNextAction(onSuccess) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Select the PGC_SystemContext subset injected into a prompt for this call.
+ * A row is injected when it is inject_always or its inject_for list names this
+ * intentCategory, AND its key is not already supplied by resolvedInput (step
+ * input takes precedence). Returns { key: content }.
+ *
+ * The single source of truth for "what system context is injected" — used by
+ * assembleInstructions (to substitute it) and by the request fingerprint (to hash
+ * the system_context component). One function so the two cannot drift.
+ */
+export function selectInjectedContext(contextRows, resolvedInput, intentCategory) {
+  const contextMap = {};
+  for (const row of contextRows ?? []) {
+    const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
+    const injectAlways = row.inject_always === true;
+    if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
+      contextMap[row.key] = row.content;
+    }
+  }
+  return contextMap;
+}
+
+/**
  * Assemble the system instructions string for an LLM call.
  *
  * Order of assembly:
@@ -81,14 +156,7 @@ function resolveNextAction(onSuccess) {
  * @returns {string}                 Final instructions string
  */
 export function assembleInstructions(promptRow, resolvedInput, contextRows, memories, intentCategory) {
-  const contextMap = {};
-  for (const row of contextRows ?? []) {
-    const injectFor = Array.isArray(row.inject_for) ? row.inject_for : [];
-    const injectAlways = row.inject_always === true;
-    if ((injectAlways || injectFor.includes(intentCategory)) && !(row.key in resolvedInput)) {
-      contextMap[row.key] = row.content;
-    }
-  }
+  const contextMap = selectInjectedContext(contextRows, resolvedInput, intentCategory);
 
   const allSubstitutions = { ...contextMap, ...resolvedInput };
   let instructions = Object.entries(allSubstitutions).reduce((text, [key, val]) => {
@@ -126,9 +194,12 @@ export function assembleInstructions(promptRow, resolvedInput, contextRows, memo
  * @param {object} params.localState  Current frame local_state
  * @param {object} params.run         PGC_WorkflowRun row (read-only)
  * @param {string} params.traceId
+ * @param {object} [params.breakResolution]  present only on resume after a replay break
+ *   was resolved (docs/arch-replay.md §5): { resolution, response?, fingerprint,
+ *   candidate_session_id }. Overrides the break policy for this one call.
  * @returns {Promise<StepResult>}
  */
-export async function executeLlmCall({ step, localState, run, traceId }) {
+export async function executeLlmCall({ step, localState, run, traceId, breakResolution = null }) {
   const intentCategory = step.input?.prompt;
   if (!intentCategory) throw new Error('llm_call step missing input.prompt');
 
@@ -145,13 +216,35 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   let resolvedInput = resolveInput(step.input ?? {}, localState);
 
+  // The workflow's DECLARED input keys — the question, exactly as authored in step.input. Any key
+  // the harness adds beyond these (step_type_contracts, below, and any future auto-injection) is
+  // system-injected knowledge, not part of the question. The drift disposition (A9) uses this
+  // general split — never a hard-coded key name — to tell a benign injected-content change from a
+  // materially different question.
+  const declaredInputKeys = new Set(Object.keys(resolvedInput));
+
   const contextResp = await getRows('PGC_SystemContext');
   const contextRows = contextResp.success ? (contextResp.rows ?? []) : [];
 
   // Auto-inject step_type_contracts when the prompt references it.
   // Fetched fresh from PGC_StepType at call time — not stored in local_state.
+  //
+  // Ordered and column-scoped so the assembled prompt is a function of the contracts alone.
+  // Without ORDER BY, row order is whatever the heap returns: updating any step type
+  // relocates its row and silently reorders the array, which reaches the prompt (arrays are
+  // order-significant to both JSON.stringify and stableStringify) and changes the `input`
+  // fingerprint with no semantic change behind it. STEP_TYPE_CONTRACT_COLUMNS excludes id,
+  // status (already filtered to 'live'), created_at and updated_at — row bookkeeping the
+  // LLM has no use for, and which would otherwise make a touched row look like a new request.
   if (!('step_type_contracts' in resolvedInput) && promptRow.prompt_text?.includes('{{step_type_contracts}}')) {
-    const stResp = await getRows('PGC_StepType', [{ column: 'status', op: 'eq', value: 'live' }]);
+    const stResp = await getRows(
+      'PGC_StepType',
+      [{ column: 'status', op: 'eq', value: 'live' }],
+      { column: 'step_type', direction: 'asc' },
+      undefined,
+      undefined,
+      STEP_TYPE_CONTRACT_COLUMNS,
+    );
     if (stResp.success && stResp.rows?.length > 0) {
       resolvedInput = { ...resolvedInput, step_type_contracts: stResp.rows };
     }
@@ -196,6 +289,17 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   const userInput = resolveTemplate(step.input?.user_input ?? '', localState);
 
+  // Request fingerprint (docs/arch-replay.md §3) — computed at the seam from the
+  // assembled request, before the LLM is called. Hashes the same injected context
+  // and memory block that assembleInstructions used, so the fingerprint and the
+  // prompt cannot disagree. Written to PGC_Session below; a live run populates the
+  // corpus for the next replay.
+  const injectedContext = selectInjectedContext(contextRows, resolvedInput, intentCategory);
+  const memoryBlock     = memories.length > 0 ? formatMemoryBlock(memories) : '';
+  const fingerprint     = computeFingerprint({
+    promptRow, resolvedInput, userInput, model: resolvedModel, memoryBlock, injectedContext, localState,
+  });
+
   console.info('step-executor: llm_call', {
     intentCategory,
     promptVersion:    promptRow.version,
@@ -204,10 +308,116 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
     traceId,
   });
 
+  // Replay decision (docs/arch-replay.md §4-§5). Two entries: a fresh call reads the
+  // break policy off the run row (null ⇒ 'never' ⇒ today's live behaviour); a resume
+  // carries breakResolution, which overrides the policy for this one call.
+  const breakPolicy = run?.llm_break_policy ?? 'never';
+  let served              = false;
+  let servedResponse      = undefined;
+  let servedFromSessionId = null;
+  let responseSource      = 'live';
+
+  if (breakResolution) {
+    // Resuming a resolved break (§5). Assembly re-ran above; verify the fingerprint
+    // matches the one stashed at break time — local_state is frozen while suspended, so
+    // a mismatch is an anomaly, surfaced not swallowed.
+    if (breakResolution.fingerprint?.hash && breakResolution.fingerprint.hash !== fingerprint.hash) {
+      console.warn('step-executor: llm_call resume fingerprint mismatch — re-assembly differs from break', {
+        intentCategory, stashed: breakResolution.fingerprint.hash, reassembled: fingerprint.hash, traceId,
+      });
+    }
+    const res = breakResolution.resolution;
+    if (res === 'use_recorded') {
+      // An explicit session_id names the recording to accept; it overrides the lookup's pick,
+      // which is arbitrary when a step recorded more than once and nothing distinguishes the
+      // passes (arch-replay.md §5). Validated against the break's candidate_ids at the endpoint.
+      const acceptedSessionId = breakResolution.session_id ?? breakResolution.candidate_session_id;
+      if (acceptedSessionId == null) {
+        throw new Error('llm_call resume use_recorded: no candidate recording to accept');
+      }
+      servedResponse      = await getRecordedResponse(acceptedSessionId);
+      served              = true;
+      servedFromSessionId = acceptedSessionId;
+      responseSource      = 'replayed';
+    } else if (res === 'supplied') {
+      servedResponse = breakResolution.response;
+      served         = true;
+      responseSource = 'recorded';
+    } else if (res === 'call_live') {
+      responseSource = 'live';   // fall through to callLlm below; no re-break
+    } else {
+      throw new Error(`llm_call resume: unsupported resolution "${res}"`);
+    }
+    console.info('step-executor: llm_call resumed from break', { intentCategory, resolution: res, responseSource, traceId });
+  } else if (breakPolicy !== 'never') {
+    let recording = null;
+    if (breakPolicy === 'on_miss') {
+      recording = await lookupRecording({
+        compositeHash: fingerprint.hash,
+        components:    fingerprint.components,
+        sourceRunId:   run.replay_source_run_id ?? null,
+        stepId:        step.step,
+      });
+    }
+    const action = decideReplayAction(breakPolicy, recording?.status ?? 'miss');
+    if (action === 'break') {
+      // Suspend for a developer. run-workflow (A4) pushes a break frame, sets
+      // awaiting_llm_break, notifies Slack with a runnable-curl pointer, and resumes via
+      // resume_llm. A hard halt — no auto-resume, same property as a human_gate.
+      console.info('step-executor: llm_call break', { intentCategory, policy: breakPolicy, reason: recording?.status ?? breakPolicy, traceId });
+      const breakReason = breakPolicy === 'always' ? 'always' : (recording?.status ?? 'miss');
+      const inputDiff   = describeInputDrift(fingerprint.inputKeys, recording?.candidate?.fingerprint);
+      // A6 (diagnostic) — how the full local_state diverged from the source run at this step. Broader
+      // than inputDiff and never gates the break; the fingerprint decides that.
+      const stateDiff   = describeStateDrift(fingerprint.stateKeys, recording?.candidate?.fingerprint);
+      // Keys the harness injected beyond the declared question — the general, name-free signal the
+      // disposition uses to judge whether input drift is benign (injected) or material (the question).
+      const injectedInputKeys = Object.keys(resolvedInput).filter(k => !declaredInputKeys.has(k));
+      return {
+        outputValue: null,
+        nextAction:  'llm_break',
+        breakPayload: {
+          step_id:              step.step,
+          intent_category:      intentCategory,
+          policy:               breakPolicy,
+          reason:               breakReason,
+          fingerprint,
+          instructions,
+          userInput,
+          drift:                recording?.drift ?? null,
+          candidate_session_id: recording?.candidate?.sessionId ?? null,
+          candidate_ids:        recording?.candidateIds ?? null,
+          // A6 — WHICH keys within `input` moved. Computed here because this is the only place
+          // both sides are already in hand; the report and the notification both read it off the
+          // frame rather than re-deriving it (checklist rule 2e).
+          input_diff:           inputDiff,
+          // A6 (diagnostic) — the full local_state diff, stashed alongside input_diff and read off
+          // the frame by the GET report and the notification. Never consulted by the control path.
+          local_state_diff:     stateDiff,
+          // A9 — how use_recorded should be treated given what moved. Computed here (not at render
+          // time) so the GET report and the Slack notification read one disposition off the frame
+          // rather than each deriving it (checklist rule 2e).
+          disposition:          dispositionForDrift({ drift: recording?.drift ?? null, inputDiff, reason: breakReason, injectedInputKeys }),
+        },
+      };
+    }
+    if (action === 'serve') {
+      served              = true;
+      servedResponse      = recording.candidate.response;
+      servedFromSessionId = recording.candidate.sessionId;
+      responseSource      = 'replayed';
+      console.info('step-executor: llm_call served from recording', {
+        intentCategory, status: recording.status, drift: recording.drift ?? null, servedFromSessionId, traceId,
+      });
+    }
+  }
+
   const t0 = Date.now();
   let rawOutput;
   let priorErrorType;
-  try {
+  if (served) {
+    rawOutput = servedResponse;
+  } else try {
     rawOutput = await callLlm(
       resolvedModel,
       instructions,
@@ -266,11 +476,16 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
 
   console.info('step-executor: llm_call completed', { llmMs, traceId });
 
+  // On a served (replayed) response, forbid LLM correction — a recorded response must
+  // never trigger a Perplexity call (AC2). A hit means schema matched, so a valid
+  // recording re-validates on attempt 1; a failure means review-output's own rules
+  // (code, not fingerprinted) changed since recording, which surfaces as invalid.
   const validationResult = await validate({
     intentCategory,
     output: rawOutput,
     traceId,
     priorErrorType,
+    allowLlmCorrection: !served,
   });
 
   const finalOutput = validationResult.correctedOutput ?? rawOutput;
@@ -287,6 +502,13 @@ export async function executeLlmCall({ step, localState, run, traceId }) {
         trace_id:        traceId,
         step_id:         step.step,
         intent_category: intentCategory,
+        // input_keys and local_state_keys ride alongside the seven components (A6): finer views for
+        // the drift report, not components — both are excluded from the composite, so recordings
+        // predating them keep hitting. diffComponents judges COMPONENT_ORDER only and ignores them.
+        request_fingerprint:      { ...fingerprint.components, input_keys: fingerprint.inputKeys, local_state_keys: fingerprint.stateKeys },
+        fingerprint_hash:         fingerprint.hash,
+        response_source:          responseSource,
+        replayed_from_session_id: servedFromSessionId,
       });
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;

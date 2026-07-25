@@ -13,7 +13,103 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { oversizedGateMessage, isPermanentRenderFailure } from '../../src/ui/slackbot/callback.mjs';
+import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn } from '../../src/ui/slackbot/callback.mjs';
+
+// toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
+// **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
+// section/reveal text (run 731).
+describe('toSlackMrkdwn', () => {
+  it('converts **bold** to *bold*', () => {
+    assert.equal(toSlackMrkdwn('**Income**'), '*Income*');
+  });
+  it('converts __bold__ to *bold*', () => {
+    assert.equal(toSlackMrkdwn('__Income__'), '*Income*');
+  });
+  it('converts each bold span independently, preserving surrounding text', () => {
+    assert.equal(toSlackMrkdwn('**Income**\nMedical: $130\n**Net: $-50**'), '*Income*\nMedical: $130\n*Net: $-50*');
+  });
+  it('leaves a lone * or _ (Slack bold/italic) untouched', () => {
+    assert.equal(toSlackMrkdwn('*already* and _italic_'), '*already* and _italic_');
+  });
+  it('does not touch bold inside inline code', () => {
+    assert.equal(toSlackMrkdwn('use `**literal**` here'), 'use `**literal**` here');
+  });
+  it('returns non-strings and bold-free text unchanged', () => {
+    assert.equal(toSlackMrkdwn('no bold here'), 'no bold here');
+    assert.equal(toSlackMrkdwn(null), null);
+  });
+  it('ignores an unbalanced ** (no false conversion)', () => {
+    assert.equal(toSlackMrkdwn('a ** b'), 'a ** b');
+  });
+  it('converts GFM ~~strike~~ to Slack ~strike~', () => {
+    assert.equal(toSlackMrkdwn('~~cancelled~~'), '~cancelled~');
+  });
+  it('leaves a lone ~ (Slack strikethrough) untouched', () => {
+    assert.equal(toSlackMrkdwn('~already~'), '~already~');
+  });
+  it('ignores an unbalanced ~~ (no false conversion)', () => {
+    assert.equal(toSlackMrkdwn('a ~~ b'), 'a ~~ b');
+  });
+  it('does not touch ~~ inside inline code', () => {
+    assert.equal(toSlackMrkdwn('use `~~literal~~` here'), 'use `~~literal~~` here');
+  });
+  it('converts bold and strikethrough together in one string', () => {
+    assert.equal(
+      toSlackMrkdwn('**Income** and ~~Medical~~'),
+      '*Income* and ~Medical~',
+    );
+  });
+  it('returns strike-free, bold-free text unchanged (early exit still correct)', () => {
+    assert.equal(toSlackMrkdwn('plain ~ text'), 'plain ~ text');
+  });
+
+  // Every remaining gap between standard markdown and mrkdwn is closed here rather
+  // than by a /proc prompt rule — the procedure layer must not know this layer's
+  // syntax (experience/procedure partition).
+  it('converts a standard link to <url|text>', () => {
+    assert.equal(
+      toSlackMrkdwn('see [the docs](https://example.com/a)'),
+      'see <https://example.com/a|the docs>',
+    );
+  });
+  it('converts an image to a plain link — mrkdwn never embeds one', () => {
+    assert.equal(toSlackMrkdwn('![chart](https://x.com/c.png)'), '<https://x.com/c.png|chart>');
+  });
+  it('emits a bare <url> when the link text is empty', () => {
+    assert.equal(toSlackMrkdwn('[](https://example.com)'), '<https://example.com>');
+  });
+  it('converts an ATX heading to a bold line, at every level', () => {
+    assert.equal(toSlackMrkdwn('# Summary'), '*Summary*');
+    assert.equal(toSlackMrkdwn('### Details'), '*Details*');
+  });
+  it('does not double-wrap a heading whose text is already bold', () => {
+    assert.equal(toSlackMrkdwn('## **Totals**'), '*Totals*');
+  });
+  it('leaves a mid-line # alone (only ATX headings convert)', () => {
+    assert.equal(toSlackMrkdwn('issue #42 filed'), 'issue #42 filed');
+  });
+  it('converts task-list checkboxes, preserving indentation', () => {
+    assert.equal(
+      toSlackMrkdwn('- [ ] open\n- [x] done\n  - [ ] nested'),
+      '☐ open\n☑ done\n  ☐ nested',
+    );
+  });
+  it('leaves an ordinary bullet untouched', () => {
+    assert.equal(toSlackMrkdwn('- just a bullet'), '- just a bullet');
+  });
+  it('does not touch links or headings inside code', () => {
+    assert.equal(
+      toSlackMrkdwn('use `[text](url)` and\n```\n# not a heading\n```'),
+      'use `[text](url)` and\n```\n# not a heading\n```',
+    );
+  });
+  it('converts a realistic mixed reveal in one pass', () => {
+    assert.equal(
+      toSlackMrkdwn('## Budget\n**Medical** was ~~$120~~ $130.\n- [x] saved\nSee [detail](https://x.com/b).'),
+      '*Budget*\n*Medical* was ~$120~ $130.\n☑ saved\nSee <https://x.com/b|detail>.',
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Module extraction

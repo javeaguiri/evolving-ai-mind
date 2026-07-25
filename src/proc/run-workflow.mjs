@@ -35,9 +35,10 @@ import { enqueueCallback, enqueueWorkflow }
                                 from '../shared/sqs-callback.mjs';
 import { getRows, insertRow, updateRows }
                                 from '../shared/serv-client.mjs';
-import { executeStep, buildDialog, resolveGateOptions }
+import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
+import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ async function dispatch({ action, workflowRunId, userResponse, responseData, mes
   switch (action) {
     case 'execute_top': return executeTop({ workflowRunId, traceId, source, stepExecutionId });
     case 'resume_gate': return resumeGate({ workflowRunId, userResponse, responseData, message_ts, traceId, source });
+    case 'resume_llm':  return resumeLlm({ workflowRunId, traceId });
     case 'cancel':      return cancelRun({ workflowRunId, traceId });
     default:
       throw new Error(`run-workflow: unknown action "${action}"`);
@@ -138,6 +140,16 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     return { skipped: true, reason: 'awaiting_human_gate' };
   }
 
+  // Same shield for a replay break (docs/arch-replay.md §5). A break suspends the run at
+  // a developer, exactly like a human_gate suspends at a user. A redelivered execute_top
+  // that arrives while suspended must not re-execute the seam and break (or serve) a
+  // second time. resume_llm transitions the run to 'running' before re-enqueuing, so a
+  // legitimate resume passes this guard; only stray redeliveries are discarded.
+  if (run.status === 'awaiting_llm_break') {
+    console.info('run-workflow: run awaiting llm break — discarding execute_top', { workflowRunId, traceId });
+    return { skipped: true, reason: 'awaiting_llm_break' };
+  }
+
   // Initialise root frame on first call
   if (run.stack.length === 0) {
     const rootFrame = {
@@ -160,7 +172,38 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     return executeIteratorItem({ run, traceId });
   }
 
-  const frame = top;
+  // If top is a resolved replay break frame — resume it (docs/arch-replay.md §5). The
+  // resolution (and any supplied response) were written onto the frame by the resume
+  // endpoint (A5). Thread them into re-execution of the underlying llm_call step: the
+  // break wrote no audit row, so the step re-runs rather than being idempotency-blocked.
+  let breakResolution = null;
+  if (top.type === 'llm_break') {
+    const resolution = top.resolution;
+    if (!resolution) {
+      console.warn('run-workflow: llm_break frame has no resolution — skipping', { workflowRunId: run.id, traceId });
+      return { skipped: true, reason: 'llm_break_unresolved' };
+    }
+    if (resolution === 'abort') {
+      run.stack.pop();
+      await updateRows('PGC_WorkflowRun',
+        [{ column: 'id', op: 'eq', value: run.id }],
+        { status: 'cancelled', stack: [], completed_at: new Date().toISOString() }
+      );
+      if (run.callback) {
+        await enqueueCallback(run.callback, {
+          type: 'HUMAN_NOTIFICATION', workflowRunId: run.id,
+          message: `Replay run ${run.id} aborted at the break.`, traceId,
+        });
+      }
+      console.info('run-workflow: llm_break aborted', { workflowRunId: run.id, traceId });
+      return { action: 'cancelled' };
+    }
+    breakResolution = { ...(top.break ?? {}), resolution, response: top.response, session_id: top.session_id ?? null };
+    run.stack.pop();
+    await persistStack(run);
+  }
+
+  const frame = topFrame(run);
   const steps = await loadSteps(run.workflow_name, traceId);
   const step  = findStep(steps, frame.current_step);
 
@@ -271,7 +314,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
   let result;
 
   try {
-    result = await executeStep({ step, localState: frame.local_state, run, traceId });
+    result = await executeStep({ step, localState: frame.local_state, run, traceId, breakResolution });
   } catch (stepError) {
     await recordStepAudit(run.id, frame.frame_id, frame.current_step, step.type,
       'failed', null, null, stepError.message, Date.now() - stepStart);
@@ -331,6 +374,51 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
       });
     }
     throw stepError;
+  }
+
+  // ── Handle replay break (docs/arch-replay.md §5) ───────────────────────────
+  // MUST run before the audit write: a break leaves NO 'completed' audit row, so on
+  // resume the step re-executes rather than being idempotency-blocked (unlike a
+  // human_gate, which records its audit before suspending because it never re-runs).
+  // Reuses the human_gate suspension machinery — push a frame, set status, notify,
+  // return without enqueuing a continuation. A hard halt: only resume_llm moves it.
+  if (result.nextAction === 'llm_break' && result.breakPayload) {
+    // A12 — name the downstream llm_call steps a drifted key also reaches, so the notification
+    // does not promise "keeps the suffix free" for a key several later steps read. Computed here
+    // because `steps` (the workflow definition) is in scope only in run-workflow; stashed on the
+    // payload so the notification and the GET report both read it off the frame (checklist 2e).
+    result.breakPayload.blast_radius = computeBlastRadius(
+      steps, frame.current_step, drivenInputKeys(result.breakPayload.input_diff)
+    );
+    const breakFrame = {
+      frame_id:      randomUUID(),
+      type:          'llm_break',
+      status:        'awaiting',
+      step_number:   frame.current_step,
+      workflow_name: run.workflow_name,
+      break:         result.breakPayload,
+      local_state:   frame.local_state,
+      pushed_at:     new Date().toISOString(),
+    };
+    run.stack.push(breakFrame);
+
+    await updateRows('PGC_WorkflowRun',
+      [{ column: 'id', op: 'eq', value: run.id }],
+      {
+        status:     'awaiting_llm_break',
+        stack:      run.stack,
+        step_count: (run.step_count ?? 0) + 1,
+      }
+    );
+
+    if (run.callback) {
+      await enqueueCallback(run.callback, buildBreakNotification(run, result.breakPayload, traceId));
+    }
+
+    console.info('run-workflow: llm_call break suspended', {
+      workflowRunId: run.id, step: frame.current_step, reason: result.breakPayload.reason, traceId,
+    });
+    return { action: 'llm_break', step: frame.current_step };
   }
 
   const durationMs = Date.now() - stepStart;
@@ -698,7 +786,10 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
   if (gateType === 'form' && userResponse !== 'cancel') {
     const values  = responseData?.formValues ?? {};
     const isEmpty = v => v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0);
-    const missing = (stepRef.fields ?? [])
+    // Resolve `fields` the same way buildDialog does — a form's fields may be a {{template}}
+    // reference to an array a js_transform built, so filtering the raw step (a string) crashed
+    // with ".filter is not a function" (run 730). One resolver, both call sites (rule 2e).
+    const missing = resolveFormFields(stepRef, localState)
       .filter(f => f.optional !== true && isEmpty(values[f.name]))
       .map(f => f.label ?? f.name);
 
@@ -915,6 +1006,263 @@ async function resumeGate({ workflowRunId, userResponse, responseData, message_t
     workflowRunId: run.id, onSelect, traceId,
   });
   return { action: 'confirmed', onSelect };
+}
+
+// ---------------------------------------------------------------------------
+// resume_llm — resume a suspended replay break (docs/arch-replay.md §5)
+// ---------------------------------------------------------------------------
+
+// The resume endpoint (A5) writes { resolution, response? } onto the top llm_break
+// frame, then enqueues resume_llm carrying only workflowRunId. This handler transitions
+// the run out of suspension; executeTop's llm_break path then consumes the resolution
+// from the frame and re-executes the step. Thin by design — the re-execution is
+// executeTop's job, exactly as a normal step's is.
+async function resumeLlm({ workflowRunId, traceId }) {
+  const run = await loadRun(workflowRunId, traceId);
+
+  if (run.status !== 'awaiting_llm_break') {
+    console.warn('run-workflow: resume_llm — not awaiting llm break (duplicate?)', {
+      workflowRunId, status: run.status, traceId,
+    });
+    return { skipped: true, reason: 'not_awaiting_llm_break' };
+  }
+
+  const frame = topFrame(run);
+  if (!frame || frame.type !== 'llm_break') {
+    console.warn('run-workflow: resume_llm — no llm_break frame on top', {
+      workflowRunId, topType: frame?.type, traceId,
+    });
+    return { skipped: true, reason: 'no_break_frame' };
+  }
+
+  await updateRows('PGC_WorkflowRun',
+    [{ column: 'id', op: 'eq', value: run.id }],
+    { status: 'running' }
+  );
+  await enqueueWorkflow({
+    type: 'WORKFLOW_STEP', action: 'execute_top', workflowRunId: run.id, traceId,
+  });
+
+  console.info('run-workflow: resume_llm — transitioned to running', {
+    workflowRunId, resolution: frame.resolution, traceId,
+  });
+  return { action: 'resumed_llm', resolution: frame.resolution };
+}
+
+// Build the break notification (docs/arch-replay.md §5) — the developer interface, not a
+// status report. Carries a literal, runnable curl for every resolution: base URL from
+// SERV_API_URL (the API Gateway host also serving /proc), $INTERNAL_API_KEY referenced as
+// an env var so no key material is ever rendered, and both run IDs labelled. use_recorded
+// is offered only when a candidate recording exists (a miss has nothing to accept).
+/**
+ * A6 — one line naming which `input` keys moved, so the drift is legible without a curl.
+ * "drift: input" alone cannot be acted on: a changed step_type_contracts and a materially
+ * different question look identical at component level and have opposite right answers.
+ * Returns '' when there is nothing useful to say, so the line is omitted rather than empty.
+ */
+export function summariseInputDrift(inputDiff) {
+  if (!inputDiff) return '';
+  const fmt = (e) => `${e.key} (${e.chars ?? '?'} chars)`;
+  const parts = [];
+  if (inputDiff.added?.length)   parts.push(`added: ${inputDiff.added.map(fmt).join(', ')}`);
+  if (inputDiff.removed?.length) parts.push(`removed: ${inputDiff.removed.map(fmt).join(', ')}`);
+  if (inputDiff.changed?.length) {
+    parts.push(`changed: ${inputDiff.changed.map(e => `${e.key} (${e.was_chars ?? '?'}→${e.chars ?? '?'} chars)`).join(', ')}`);
+  }
+  if (!parts.length) return '';
+  // Naming what held still is as load-bearing as naming what moved: "step_type_contracts
+  // unchanged" is what tells a developer this is a different question, not a contract edit.
+  if (inputDiff.unchanged?.length) parts.push(`unchanged: ${inputDiff.unchanged.join(', ')}`);
+  return parts.join('  |  ');
+}
+
+/**
+ * Compact one-line summary of the diagnostic local_state diff (A6). Unlike the input diff, this can
+ * span the whole accumulated state (20+ keys in create_workflow), so it names only what MOVED and
+ * counts what held still — the full detail is on the GET report. Empty when nothing diverged.
+ */
+export function summariseStateDrift(stateDiff) {
+  if (!stateDiff) return '';
+  const fmt = (e) => `${e.key} (${e.chars ?? '?'} chars)`;
+  const parts = [];
+  if (stateDiff.added?.length)   parts.push(`added: ${stateDiff.added.map(fmt).join(', ')}`);
+  if (stateDiff.removed?.length) parts.push(`removed: ${stateDiff.removed.map(fmt).join(', ')}`);
+  if (stateDiff.changed?.length) parts.push(`changed: ${stateDiff.changed.map(e => `${e.key} (${e.was_chars ?? '?'}→${e.chars ?? '?'} chars)`).join(', ')}`);
+  if (!parts.length) return '';   // only unchanged keys — nothing diverged, say nothing
+  if (stateDiff.unchanged?.length) parts.push(`${stateDiff.unchanged.length} unchanged`);
+  return parts.join('  |  ');
+}
+
+/** Recursively collect every string value in a step input (strings may carry {{tokens}}). */
+function collectTemplateStrings(input, acc = []) {
+  if (typeof input === 'string')        acc.push(input);
+  else if (Array.isArray(input))        for (const v of input) collectTemplateStrings(v, acc);
+  else if (input && typeof input === 'object') for (const v of Object.values(input)) collectTemplateStrings(v, acc);
+  return acc;
+}
+
+/** The local_state source roots a step's input references (base key of each {{token}}). */
+function inputSourceRoots(input) {
+  const roots = new Set();
+  for (const str of collectTemplateStrings(input)) {
+    for (const ref of extractTemplateRefs(str)) roots.add(ref.split('.')[0].replace(/\[.*/, ''));
+  }
+  return roots;
+}
+
+/** Input keys whose value differs from the recording (added or changed) — the ones that drive
+ *  this step's answer differently and may propagate downstream. Empty when input_diff is absent. */
+function drivenInputKeys(inputDiff) {
+  if (!inputDiff) return [];
+  return [...(inputDiff.added ?? []).map(e => e.key), ...(inputDiff.changed ?? []).map(e => e.key)];
+}
+
+/**
+ * A12 — the downstream reach of a drifted key. `use_recorded` is offered as "keeps the suffix
+ * free", which is false when a drifted local_state value also feeds later llm_call steps:
+ * accepting the recording here just defers the identical decision to each of them.
+ *
+ * Pure graph analysis over the workflow definition — no new data, and nothing specific to any one
+ * workflow. For each drifted input key it finds the local_state source root the key resolves from
+ * at the breaking step, then names every OTHER llm_call step whose input references that same root.
+ * Returns { key: [stepId, …] } in step-array order; a key with no other reader is omitted.
+ * Exported for unit testing.
+ */
+export function computeBlastRadius(steps, currentStepId, driftedKeys) {
+  if (!Array.isArray(steps) || !Array.isArray(driftedKeys) || driftedKeys.length === 0) return {};
+  const current = steps.find(s => String(s.step) === String(currentStepId));
+  if (!current) return {};
+
+  const out = {};
+  for (const key of driftedKeys) {
+    const sourceRoots = inputSourceRoots(current.input?.[key]);
+    if (sourceRoots.size === 0) continue;
+    const readers = [];
+    for (const s of steps) {
+      if (s.type !== 'llm_call' || String(s.step) === String(currentStepId)) continue;
+      const stepRoots = inputSourceRoots(s.input);
+      if ([...sourceRoots].some(r => stepRoots.has(r))) readers.push(String(s.step));
+    }
+    if (readers.length) out[key] = readers;
+  }
+  return out;
+}
+
+/**
+ * A11 — the UI-agnostic set of break resolutions a user can drive from a button. The procedure
+ * tier decides WHICH are offered (the experience tier only renders them), governed by the A9
+ * disposition. Only PAYLOAD-FREE resolutions are here: `abort` (one word), `call_live` (nothing),
+ * `use_recorded` (a sessionId at most). `supplied` is never a button — it carries a response body
+ * too large for a Slack interaction — so it stays the curl in the message text. Pure; exported for
+ * unit testing. Returns [{ resolution, label, style?, sessionId? }].
+ */
+export function buildBreakActions(payload) {
+  const actions = [];
+  const verdict = payload.disposition?.verdict ?? null;
+  const ids     = Array.isArray(payload.candidate_ids) ? payload.candidate_ids : [];
+
+  // use_recorded — offered only when a candidate exists AND the disposition does not refuse it.
+  // A `refused` verdict means a materially different question was asked; withholding the easy
+  // accept is the point of A9 (the curl remains for a developer who insists). One button per
+  // candidate when the step recorded more than once (A5b) — the pick is otherwise arbitrary.
+  if (payload.candidate_session_id != null && verdict !== 'refused') {
+    const style = verdict === 'intended' ? 'primary' : undefined;
+    if (ids.length > 1) {
+      for (const id of ids) actions.push({ resolution: 'use_recorded', sessionId: id, label: `Use recording ${id}`, ...(style ? { style } : {}) });
+    } else {
+      actions.push({ resolution: 'use_recorded', label: 'Use recording', ...(style ? { style } : {}) });
+    }
+  }
+
+  // call_live — always a valid escape; costs one call.
+  actions.push({ resolution: 'call_live', label: 'Call the LLM (1 call)' });
+  // abort — always; ends the run.
+  actions.push({ resolution: 'abort', label: 'Abort run', style: 'danger' });
+
+  return actions;
+}
+
+export function buildBreakNotification(run, payload, traceId) {
+  const base    = process.env.SERV_API_URL ?? '';
+  const runId   = run.id;
+  const resume  = `${base}/api/v1/proc/replay/${runId}/resume`;
+  const read    = `${base}/api/v1/proc/replay/${runId}`;
+  const source  = run.replay_source_run_id != null ? `run ${run.replay_source_run_id}` : '(record — no source run)';
+  const driftTxt = Array.isArray(payload.drift) && payload.drift.length ? `  (drift: ${payload.drift.join(', ')})` : '';
+  const inputTxt = summariseInputDrift(payload.input_diff);
+  const stateTxt = summariseStateDrift(payload.local_state_diff);
+
+  const lines = [
+    `🛑  Run ${runId} — BROKE at step ${payload.step_id}, awaiting resume`,
+    ``,
+    `    workflow     ${run.workflow_name}`,
+    `    step         ${payload.step_id} · ${payload.intent_category}`,
+    `    replaying    ${source}`,
+    `    reason       ${payload.reason}${driftTxt}`,
+    ...(inputTxt ? [`    input        ${inputTxt}`] : []),
+    // Diagnostic only — how the full local_state diverged; never gates the break (A6, arch-replay §8).
+    ...(stateTxt ? [`    state        ${stateTxt}  (diagnostic)`] : []),
+    `    policy       ${payload.policy}`,
+    ``,
+    `Read the break — assembled prompt, drift, local_state diff:`,
+    `  curl -s -H "x-api-key: $INTERNAL_API_KEY" "${read}"`,
+  ];
+  if (payload.candidate_session_id != null) {
+    // A9 — one disposition line governing use_recorded, so its framing reflects what actually
+    // moved (a reworded prompt vs. a different question), not an unconditional "free".
+    const dispoLines = payload.disposition?.headline ? [payload.disposition.headline] : [];
+    // A12 — where a drifted key is read downstream, "keeps the suffix free" is false: name the
+    // later readers so accepting is a decision with its real cost visible.
+    const blastLines = Object.entries(payload.blast_radius ?? {}).map(
+      ([k, readers]) => `   ⤷ ${k} is also read by step${readers.length > 1 ? 's' : ''} ${readers.join(', ')} — accepting here defers that decision, it does not resolve it`,
+    );
+    const ids = Array.isArray(payload.candidate_ids) ? payload.candidate_ids : [];
+    if (ids.length > 1) {
+      // Several passes recorded under one step_id and nothing distinguishes them, so the pick is
+      // arbitrary (newest first) — offer each by name rather than present a coin flip as a default.
+      lines.push(
+        ``,
+        ...dispoLines,
+        `⚠  ${ids.length} recordings for this step — the default pick (${payload.candidate_session_id}) is the newest,`,
+        `   not necessarily the one this pass corresponds to. Name the recording:`,
+        ...blastLines,
+        ...ids.map(id =>
+          `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded","sessionId":${id}}' "${resume}"`),
+      );
+    } else {
+      lines.push(
+        ``,
+        ...dispoLines,
+        ...blastLines,
+        `Resume with the recorded response:`,
+        `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"use_recorded"}' "${resume}"`,
+      );
+    }
+  }
+  lines.push(
+    ``,
+    `Resume by calling the LLM for this step only — costs one call:`,
+    `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d '{"resolution":"call_live"}' "${resume}"`,
+    ``,
+    `Resume with a response you write — free:`,
+    `  curl -s -X POST -H "x-api-key: $INTERNAL_API_KEY" -H 'content-type: application/json' -d @resume.json "${resume}"`,
+    `  resume.json:  { "resolution": "supplied", "response": { ... } }`,
+    ``,
+    `Record the rest: add  "breakPolicy": "always"  to any resume body.`,
+    `Abandon:  -d '{"resolution":"abort"}'`,
+  );
+
+  return {
+    type:          'HUMAN_NOTIFICATION',
+    workflowRunId: runId,
+    message:       lines.join('\n'),
+    format:        'text',
+    // A11 — payload-free resolutions the experience tier renders as buttons; the curls above stay
+    // for `supplied` and as a fallback. UI-agnostic: the tier turns these into Block Kit, nothing
+    // more (it never decides which are offered — that is the A9-governed logic above).
+    breakActions:  buildBreakActions(payload),
+    traceId,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1267,7 +1615,10 @@ async function cancelRun({ workflowRunId, traceId }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error'];
+// replay_source_run_id + llm_break_policy MUST be here: the replay harness reads the
+// break policy off the run row at the seam (docs/arch-replay.md §7a). Omit them and they
+// arrive undefined — failing closed to `never` and silently billing a run meant to replay.
+export const LOAD_RUN_COLUMNS = ['id', 'workflow_id', 'status', 'input', 'stack', 'callback', 'step_count', 'error', 'replay_source_run_id', 'llm_break_policy'];
 
 async function loadRun(workflowRunId, traceId) {
   const resp = await getRows(

@@ -570,6 +570,16 @@
         "nullable": true
       },
       {
+        "name": "replay_source_run_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "llm_break_policy",
+        "type": "text",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -597,7 +607,12 @@
       {
         "type": "check",
         "name": "chk_run_status",
-        "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'completed', 'failed', 'cancelled')"
+        "expression": "status IN ('pending', 'running', 'awaiting_confirmation', 'awaiting_human_gate', 'awaiting_llm_break', 'completed', 'failed', 'cancelled')"
+      },
+      {
+        "type": "check",
+        "name": "chk_run_break_policy",
+        "expression": "llm_break_policy IS NULL OR llm_break_policy IN ('never', 'on_miss', 'always')"
       },
       {
         "type": "check",
@@ -1265,6 +1280,26 @@
         "nullable": true
       },
       {
+        "name": "request_fingerprint",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "fingerprint_hash",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "response_source",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "replayed_from_session_id",
+        "type": "integer",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -1277,6 +1312,11 @@
         "type": "check",
         "name": "chk_pgc_session_type",
         "expression": "session_type IN ('general_chat', 'llm_call_diagnostic', 'minds_eye')"
+      },
+      {
+        "type": "check",
+        "name": "chk_pgc_session_response_source",
+        "expression": "response_source IS NULL OR response_source IN ('live', 'replayed', 'recorded')"
       }
     ],
     "triggers": []

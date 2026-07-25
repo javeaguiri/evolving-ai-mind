@@ -166,7 +166,7 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | workflow_id | integer FK | → PGC_Workflow.id |
 | trace_id | text | Correlation ID carried end-to-end from Slack message through all hops. Replaces `workflowId` in SQS payloads |
 | triggered_by | text | `slack`, `api`, `workflow`, `system` — who initiated this run |
-| status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `completed`, `failed`, `cancelled` |
+| status | text | `pending`, `running`, `awaiting_confirmation`, `awaiting_human_gate`, `awaiting_llm_break`, `completed`, `failed`, `cancelled`. `awaiting_llm_break` = suspended for a developer at an `llm_call` seam (replay harness, `docs/arch-replay.md`) — distinct from `awaiting_human_gate` so a break for a developer is never mistaken for a gate for a user |
 | input | jsonb | Original user intent + parameters |
 | stack | jsonb | Execution stack — array of FrameDefinition (see Section 6.3). Controls frame flow only |
 | state | jsonb | **Deprecated.** Previously mirrored `stack[top].local_state` on every write. Now written only at workflow completion (`{ local_state: finalState }`). Do not read or write `state.local_state` during execution — use `stack[top].local_state` directly |
@@ -178,6 +178,8 @@ Lambda response limit or exhaust available memory — always pass an explicit
 | window_started_at | timestamptz | Timestamp when current velocity window started. Reset with `steps_in_window`. Used by Guard 1 |
 | error | jsonb | Last error details |
 | session_id | integer FK | ✦ → PGC_Session.id nullable — set when a Novia session triggers a sub-workflow run via `run_workflow` tool |
+| replay_source_run_id | integer | Nullable, no FK — the run whose corpus + input this run replays (`docs/arch-replay.md` §7a). Not an FK: the source run is a corpus being read and may be deleted by replay cleanup |
+| llm_break_policy | text | Nullable — `never` \| `on_miss` \| `always`; null ⇒ `never`. Read at the `llm_call` seam via `LOAD_RUN_COLUMNS`; drives replay/record break behaviour. Mutable at a break |
 | started_at | timestamptz | |
 | completed_at | timestamptz | |
 | created_at | timestamptz | |
@@ -542,6 +544,10 @@ CREATE TABLE "PGC_Session" (
   intent_category       VARCHAR(100)  NULL,        -- llm_call_diagnostic
   minds_eye_turn_count  INTEGER       NOT NULL DEFAULT 0,  -- turns consumed in this Novia session
   minds_eye_action_count INTEGER      NOT NULL DEFAULT 0,  -- write-tool actions consumed
+  request_fingerprint   JSONB         NULL,        -- replay harness: component hashes of the assembled request
+  fingerprint_hash      TEXT          NULL,        -- replay harness: composite lookup key (indexed)
+  response_source       TEXT          NULL,        -- replay harness: 'live' | 'replayed' | 'recorded'
+  replayed_from_session_id INTEGER    NULL,        -- replay harness: which recording was served (provenance)
   created_at            TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 ```
@@ -559,11 +565,16 @@ CREATE TABLE "PGC_Session" (
 | intent_category | varchar(100) NULL | `llm_call_diagnostic` only |
 | minds_eye_turn_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — reasoning turns consumed; compared against `minds_eye_preferences.turn_limit` |
 | minds_eye_action_count | integer NOT NULL DEFAULT 0 | ✦ `minds_eye` sessions only — write-tool actions consumed; compared against `minds_eye_preferences.max_actions_per_session` |
+| request_fingerprint | jsonb NULL | Replay harness (`docs/arch-replay.md` §3) — the seven per-component request hashes (`prompt`, `input`, `user_input`, `model`, `schema`, `memory`, `system_context`), plus two diagnostic per-key size+hash maps used only for the drift report: `input_keys` (A6) and `local_state_keys` (A6 local_state diff). Both are excluded from the composite (`fingerprint_hash`), so recordings predating them keep matching. `llm_call_diagnostic` sessions |
+| fingerprint_hash | text NULL | Composite of the component hashes — the corpus lookup key. Indexed |
+| response_source | text NULL | `live` \| `replayed` \| `recorded` — where this call's response came from |
+| replayed_from_session_id | integer NULL | Provenance — the `PGC_Session.id` whose recording was served on a replayed call |
 | created_at | timestamp | |
 
-Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`
+Indexes: `(slack_thread_ts)`, `(query_id)`, `(run_id)`, `(fingerprint_hash)`
 
 **`chk_pgc_session_type` constraint:** `session_type IN ('minds_eye', 'general_chat', 'llm_call_diagnostic')`
+**`chk_pgc_session_response_source` constraint:** `response_source IS NULL OR response_source IN ('live', 'replayed', 'recorded')`
 
 **Field rules:** `minds_eye_turn_count` and `minds_eye_action_count` are only meaningful for `minds_eye` sessions. `llm_call_diagnostic` fields are NULL for other session types.
 
@@ -650,7 +661,7 @@ GROUP BY workflow_id;
 | 3 | PGC_EntitySchema | `upsert_key` column added |
 | 4 | PGC_DomainHelp | aliases human-confirmed at domain creation (see Section 6.8) |
 | 5 | PGC_Workflow | `domain`, `max_execution_ms`, `max_steps_per_window`, `window_seconds` added |
-| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4 |
+| 6 | PGC_WorkflowRun | `trace_id`, `triggered_by`, `state`, `total_execution_ms`, `step_count`, `steps_in_window`, `window_started_at` added; `session_id` nullable integer added Sprint 4; `replay_source_run_id`, `llm_break_policy` + `awaiting_llm_break` status added Sprint 8 (replay harness) |
 | 7 | PGC_WorkflowRunStep | `capability_key`, `retry_count` added |
 | 8 | PGC_Prompt | `input_variables`, `output_schema`, `output_sample`, `error_log`, `memory_config` added |
 | 9 | PGC_IntentMap | written at runtime by create_workflow completion |
@@ -659,7 +670,7 @@ GROUP BY workflow_id;
 | 12 | PGC_StepType | new |
 | 13 | PGC_Capability | new |
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
-| 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md` |
+| 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 

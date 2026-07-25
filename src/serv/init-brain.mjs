@@ -157,6 +157,9 @@ export async function bootstrap(req) {
     // Step 3a — install PGC_Memory indexes (GIN + btree; CREATE INDEX IF NOT EXISTS)
     await installPGCMemoryIndexes(client);
 
+    // Step 3b — install PGC_Session replay-corpus index (CREATE INDEX IF NOT EXISTS)
+    await installPGCSessionIndexes(client);
+
     // Step 4 — seed PGC_Schema self-referential rows
     await seedPGCSchema(client);
 
@@ -280,6 +283,20 @@ async function installPGCMemoryIndexes(client) {
     await client.query(sql);
   }
   console.info('init-brain: PGC_Memory indexes installed');
+}
+
+/**
+ * Install the PGC_Session replay-corpus index.
+ * CREATE INDEX IF NOT EXISTS — safe to call on every bootstrap.
+ * fingerprint_hash is the lookup key for the LLM replay harness corpus read
+ * (docs/arch-replay.md §3). Interim bespoke install — see backlog item
+ * "Declarative indexes in PGC table templates" for the consolidation.
+ */
+async function installPGCSessionIndexes(client) {
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS idx_pgc_session_fingerprint_hash ON "PGC_Session" (fingerprint_hash)`
+  );
+  console.info('init-brain: PGC_Session indexes installed');
 }
 
 /**

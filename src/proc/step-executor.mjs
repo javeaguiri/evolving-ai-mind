@@ -63,11 +63,14 @@ import { pickLabelColumn }              from '../shared/schema-utils.mjs';
  * @param {object} params.localState  Current frame local_state (may be mutated)
  * @param {object} params.run         PGC_WorkflowRun row (read-only in executor)
  * @param {string} params.traceId
+ * @param {object} [params.breakResolution]  present only when re-executing an llm_call
+ *   step after a replay break was resolved (docs/arch-replay.md §5) — forwarded to
+ *   executeLlmCall, ignored by every other step type.
  * @returns {Promise<StepResult>}
  */
-export async function executeStep({ step, localState, run, traceId }) {
+export async function executeStep({ step, localState, run, traceId, breakResolution = null }) {
   switch (step.type) {
-    case 'llm_call':     return executeLlmCall({ step, localState, run, traceId });
+    case 'llm_call':     return executeLlmCall({ step, localState, run, traceId, breakResolution });
     case 'js_transform': return executeJsTransform({ step, localState, traceId });
     case 'human_gate':   return executeHumanGate({ step, localState, run, traceId });
     case 'serv_schema':  return executeServSchema({ step, localState, traceId });
@@ -302,6 +305,22 @@ export function resolveGateOptions(step, localState) {
 }
 
 /**
+ * Resolve a form gate's `fields` — authored inline as an array, or given as a {{template}}
+ * reference to an array a preceding js_transform built (one field per data row, e.g. an amount
+ * box per budget category). Always returns an array. Shared by buildDialog (render) and by
+ * run-workflow's form-gate resume validation (required-field check) so the two cannot drift on
+ * how a templated `fields` is resolved — the resume path once filtered the raw "{{...}}" string
+ * and crashed with ".filter is not a function" (rule 2e).
+ */
+export function resolveFormFields(step, localState) {
+  const f = step?.fields;
+  const resolved = typeof f === 'string'
+    ? (resolvePath(localState, f.replace(/^\{\{|\}\}$/g, '')) ?? [])
+    : (f ?? []);
+  return Array.isArray(resolved) ? resolved : [];
+}
+
+/**
  * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
  * Called by executeHumanGate, and by resume_gate both to resolve a list_selection
  * click back to its row and to re-render a gate that stays suspended.
@@ -407,11 +426,9 @@ export function buildDialog(step, localState) {
       // already accept. That is what lets a form carry one field per data row (an
       // amount box and a type dropdown for each budget category, say), which a fixed
       // field list cannot express.
-      const formFields = typeof step.fields === 'string'
-        ? (resolvePath(localState, step.fields.replace(/^\{\{|\}\}$/g, '')) ?? [])
-        : (step.fields ?? []);
+      const formFields = resolveFormFields(step, localState);
 
-      for (const field of (Array.isArray(formFields) ? formFields : [])) {
+      for (const field of formFields) {
         // Options may be authored inline, or pulled from local_state so a dropdown's
         // choices can be data the workflow just queried (the categories it loaded)
         // rather than a hardcoded list — this is what lets a workflow offer a

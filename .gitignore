@@ -4,6 +4,9 @@ node_modules/
 .env
 .DS_Store
 
+# Replay harness developer loop working files (dev_scripts/replay.mjs)
+.replay/
+
 .aws-sam/
 samconfig.toml
 # If you have private environment variables
