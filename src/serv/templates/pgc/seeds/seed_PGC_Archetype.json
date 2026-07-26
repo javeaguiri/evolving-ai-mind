@@ -1,0 +1,103 @@
+[
+  {
+    "name": "scoped_row_editor",
+    "description": "Pick a scope, list the rows in it, edit one, save, and return to the refreshed list.",
+    "aliases": ["edit rows", "update records", "change values", "adjust entries", "amend a record", "edit and save", "modify a list", "correct data", "revise entries", "maintain records"],
+    "preconditions": {
+      "requires_existing_populated_table": true,
+      "writes": true,
+      "returns_to_a_view_after_write": true
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "A screen the user must see again after a change is a LOOP, not a copy. Design one build-and-show chain and route the step that changes the data back to the step that builds the view. Do not design a second build/format/show chain. The tell that this is wrong: a pair of state keys named X and updated_X, or two gates whose messages describe the same screen.\n\nSave-and-continue must re-read what it just wrote. The back-edge must land on a step that re-queries the written table BEFORE the build step, or the build must consume the rows the write itself returned. If the back-edge lands on a build step that reads a key loaded once before the loop, the re-displayed view shows pre-edit values: the user watches the value they just saved revert, and saving again writes the stale defaults back over the change.\n\nWhen two buttons run the SAME write and diverge only after it, the gate needs an action key recording which option was clicked, and every option must carry a distinct action. Two buttons sharing a conventional confirm action are indistinguishable to every downstream step.\n\nDo not put a row limit on the query that loads the rows to edit unless the limit is justified against the shape of the data. A limit smaller than the data silently drops rows, and the rows it drops are invisible to the user.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  },
+  {
+    "name": "bulk_row_form",
+    "description": "One form gate presenting a field per row of data, pre-filled with current values.",
+    "aliases": ["edit all at once", "bulk edit", "edit every row", "one field per row", "fill in a table", "update many values", "grid of inputs", "mass update form"],
+    "preconditions": {
+      "requires_existing_populated_table": true,
+      "one_field_per_row": true,
+      "row_count_must_be_bounded": true,
+      "max_total_fields": 40
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "The field list is not known at design time, so the form's fields is a state key reference rather than a literal list. A js_transform step immediately before the gate builds the field array - one field object per row, each with a unique name, the right type, and its default taken from that row's current value. That step is part of the design and must be listed explicitly.\n\nDo the size arithmetic before choosing this archetype: total fields = number of rows x fields per row. A gate can present roughly the configured maximum before it exceeds what one message can hold, and it does not degrade past that - it fails to render at all. If the product can exceed the maximum, or the row count is unbounded, this archetype does not apply: select one row with a selection gate and follow it with a small form for that row.\n\nKeep fields per row to exactly what was asked for. Every unrequested column consumes the field budget and can break the gate outright.\n\nThe fields ARE the display. A field carrying a default already shows the user its current value, labeled, in an editable box. Do not restate those values in the message body - it prints the same data twice, immediately above the inputs that repeat it. The message body carries only which record or set is being edited and what to do with it. Derived figures the user cannot edit belong with the breakdown, not inline above the fields. A per-item grouping belongs in the field's own label, not in a parallel list.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  },
+  {
+    "name": "hierarchical_selector",
+    "description": "Selection from a one-level parent/child structure - parents as expandable panels, leaves as buttons.",
+    "aliases": ["pick from categories", "choose from a tree", "nested selection", "parent and child list", "expandable list", "drill down and pick", "grouped choices", "select a leaf"],
+    "preconditions": {
+      "requires_self_referential_fk": true,
+      "hierarchy_depth": 1
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "Trigger: the source table has a self-referential foreign key - a column referencing the same table's primary key. That is what makes the data a parent/child structure.\n\nParent rows (self-referential FK is null) become the reveals feed: one panel per parent, content an array of the children's label strings, which renders as a bulleted list. Content must be a real array, never a joined string.\n\nChild and leaf rows (FK is set) become the options feed: one button per child. Selectable leaves are ALWAYS in options and never inside reveal content.\n\nBuild the options feed from the data that represents the selectable items - the leaves. The query that fetches leaf data must appear before the js_transform that builds the feed. Do not build the options feed from parent rows simply because they were queried first.\n\nNever pass raw query results, nested objects, or tree structures straight to a gate. Extract flat feeds first.\n\nDo not flatten a self-referential table into a single-level list when the hierarchy is meaningful to the user's choice.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  },
+  {
+    "name": "reveal_and_rate",
+    "description": "Present a stimulus, let the user reveal more on demand, then capture their response - all in one gate.",
+    "aliases": ["quiz me", "test me", "show and grade", "attempt then verify", "self assessment", "practice session", "review and rate", "flash through items", "score my answers"],
+    "preconditions": {
+      "requires_per_item_iteration": true,
+      "writes": true,
+      "response_follows_reveal": true
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "Viewing and responding are the same cognitive act here, so this is ONE gate with a reveal - not two consecutive gates. The stimulus is shown, the user reveals additional context on demand, then selects their response, all within the same gate. This is the default for attempt-then-verify-then-decide patterns.\n\nUse two consecutive gates ONLY when a structural boundary is genuinely required: a step must run between display and response (fetching or computing something the user must not see first), the revealed content requires an LLM or external call to generate, or separate state recording for display and response is explicitly required.\n\nDo not use a gate to record when an item was first shown. Write the timestamp in a js_transform immediately before the gate, and compute elapsed time in a js_transform after it.\n\nReveal content must reference a pre-formatted string key written by a preceding js_transform. Referencing a raw array or object key directly renders as object placeholders at runtime.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  },
+  {
+    "name": "paste_parse_resolve_insert",
+    "description": "Accept pasted or scanned data, parse it to rows, resolve missing reference records with the user, then bulk insert.",
+    "aliases": ["import data", "paste a spreadsheet", "load a table", "bulk import", "scan and record", "upload records", "copy paste entry", "ingest a list", "capture a receipt"],
+    "preconditions": {
+      "input_is_pasted_or_scanned": true,
+      "requires_bulk_insert": true
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "Pasted or scanned input may originate from a pivot table or aggregated view, where row group labels act as dimension values for the rows beneath them rather than as records in their own right. Copy-paste collapses that structure into flat text, so group labels and column headers arrive as ordinary lines mixed with the data. The parsing step owns the un-pivot, and its instructions should describe the transformation using the actual target column names rather than generic structural words like heading or sub-heading.\n\nThe parse step extracts only. It preserves user input verbatim. Reference data supplied to it is context only - it must not filter, match, or skip entries against a reference list. Reference validation and gap resolution belong to the steps below, and duplicating that work in the parse step produces silent data loss.\n\nFor every REQUIRED (non-nullable) foreign key the insert depends on, place a resolution block before the primary insert, one block per dependency, in topological order - referenced tables with no inbound FKs first. The block loads existing reference rows, extracts the FK values the parsed input needs and diffs them against what was loaded, branches on whether any are missing, confirms the new reference records with the user, and inserts the confirmed ones, skipping any that already exist.\n\nDo not apply this block to optional (nullable) FK columns.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  },
+  {
+    "name": "aggregate_report",
+    "description": "Query, aggregate, format deterministically, and present a read-only report.",
+    "aliases": ["show me a report", "summarise", "compare totals", "breakdown by category", "how much did I", "monthly summary", "totals by group", "analysis of my data", "plan versus actual"],
+    "preconditions": {
+      "read_only": true,
+      "requires_aggregation": true,
+      "writes": false
+    },
+    "slots": [],
+    "topology": [],
+    "design_rules": "Formatting already-aggregated, fixed-shape rows is deterministic work: currency formatting, sign-based symbols or emphasis, grouping by a known enum column, an em dash for nulls. Use a js_transform, not an LLM, even though the output looks like prose. Reach for an LLM only when the input shape or wording is genuinely unpredictable - not merely because the output is textual.\n\nAnything the user reads by comparing values across rows - a per-item breakdown, planned against actual, before against after, a quantity per period - must be built as a GitHub-flavored markdown pipe table: a header row, a separator row, then one row per record, joined by newlines. A comma- or newline-joined string arrives as a flat run-on list the user has to parse by eye. Use a joined string only for a genuinely one-dimensional list where there is nothing to line up in columns.\n\nPrefer markdown headers, bold and bullet lists over manually aligned plain-text columns.\n\nDo not put a row limit on the query that feeds the aggregation unless the limit is justified against the shape of the data. A limit smaller than the data silently drops rows, and the report is wrong in a way that looks correct.",
+    "source_workflow": null,
+    "status": "draft",
+    "version": 1,
+    "created_by": "seed"
+  }
+]

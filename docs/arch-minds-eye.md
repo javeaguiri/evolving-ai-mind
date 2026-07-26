@@ -163,6 +163,10 @@ All single-table lookups use `SERV getRows` directly — no new endpoints requir
 | `read_workflow` | SERV `getRows` on PGC_Workflow | Returns steps JSON for inspection |
 | `read_prompt` | SERV `getRows` on PGC_Prompt | Returns prompt text + output schema; filter by intent_category + version DESC limit 1 |
 | `simulate_workflow` | `POST /proc/simulate-workflow` | Existing PROC endpoint — takes steps array, returns L1/L2 results synchronously. No new endpoint needed. |
+| `search_domain_help` | SERV `getRows` on PGC_DomainHelp | Alias and semantic domain resolution |
+| `list_tables` | SERV `listTables` | Registered tables per PGC_TableMap |
+| `list_physical_tables` | SERV `listPhysicalTables` | What the database actually holds — the registry may not assert it |
+| `run_sql` | SERV | Direct read of live data — the tool that lets Novia see what a workflow will operate on |
 | `get_run_history` | Three `getRows` calls chained via session_id FK | See §3.3. **Requires X1 applied.** Shape of step-level call depends on W1 decision. |
 
 **FK join paths (documented in `minds_eye_context_index` seed):**
@@ -179,19 +183,15 @@ PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow
 
 **Gate policy:** Only destructive operations require a confirmation gate. Change / add / modify / update operations execute immediately — permission is implicit from the request.
 
-| Tool | Mechanism | Scope | Phase | Gate |
-|---|---|---|---|---|
-| `update_data` | SERV `updateRows` on any PGD table | User data | 1 | None — executes immediately |
-| `insert_data` | SERV `insertRow` on any PGD table | User data | 1 | None — executes immediately |
-| `delete_data` | SERV `deleteRows` on any PGD table | User data | 1 | **Delete gate** — shows table, filter, row count; requires explicit approval |
-| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | PGC config | 1 | None — executes immediately |
-| `invoke_workflow` | `enqueueWorkflow` | Extension | 1 | None for read workflows; gate for destructive workflows (delete_domain etc.) |
-| `write_memory` | `memory-client.mjs` | Memory | 1 | None — silent episodic write |
-| `fix_prompt` | SERV `updateRows` on PGC_Prompt | PGC config | 2 | **Confirmation gate** — shows full prompt diff; human confirms wording |
-| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Schema | 2 | **Confirmation gate** — shows DDL + downstream impact |
-| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | PGC config | 2 | None — executes immediately |
-| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | PGC config | 2 | None — executes immediately |
-| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | PGC config | 2 | None — takes effect next session |
+As built, tools are partitioned into four sets in `minds-eye.mjs`. Housekeeping tools do not
+count against `max_actions_per_session`.
+
+| Set | Tools | Gate |
+|---|---|---|
+| Inline write | `update_data`, `insert_data`, `upsert_data` | None — executes immediately |
+| Gated write | `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
+| Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
+| Housekeeping | `write_memory` | None — silent episodic write |
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
@@ -498,3 +498,243 @@ Sprint 5 build order:
 8. UC-1 (improve workflow, Generation domain) validated end-to-end from Slack
 9. UC-5 (inspect data) validated — highest-frequency use case
 10. Remaining use cases in priority order
+
+---
+
+## 12. Proposal — workflow generation as a Novia toolkit
+
+> **Status: PROPOSAL — under evaluation. Not scoped, not decided, no implementation.**
+> Measurements in this section were taken 2026-07-26 against the live database and the
+> `seed_PGC_Prompt` / `seed_PGC_SystemContext` seed files. They are point-in-time findings,
+> not configuration.
+
+The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
+into a set of tools Novia orchestrates, with workflow design patterns held as searchable
+entities rather than as prose inside prompts.
+
+### 12.1 The measured problem
+
+| Signal | Value |
+|---|---|
+| `create_workflow` runs, all time | 98 — 23 completed, 23 failed, 52 cancelled |
+| Domain workflows surviving from those runs | 4 |
+| `create_workflow` itself | v85, 73 steps, 44 KB of step JSON |
+| `create_domain` (declarative output, for contrast) | 39 runs, 22 completed |
+
+The 52 cancellations are the load-bearing number: they are runs abandoned mid-flight. A fixed
+pipeline's only response to a mid-run correction is to re-enter the generator with a feedback
+string; it cannot inspect, ask, and adjust.
+
+Assembled static instruction per LLM call, before any run-specific input:
+
+| Prompt | Own text | Injected context | Total |
+|---|---|---|---|
+| `analyze_workflow_gaps` v16 | 7.0 KB | 23.8 KB | 30.7 KB |
+| `design_workflow_process` v25 | 18.6 KB | 24.7 KB | 43.3 KB |
+| `design_workflow_dialogs` v19 | 14.6 KB | 3.1 KB | 17.7 KB |
+| `generate_workflow_steps` v49 | 22.9 KB | 59.6 KB | 82.5 KB |
+
+`step_type_contracts` (22 KB) is injected into three of the four. `generate_workflow_steps`
+has gone from v11 to v49 since 2026-05-09 without the defect rate falling — the defect *class*
+moved from structural (routing graphs, caught by the simulation engine) to semantic (a row
+limit that drops data, a value derived after the step that consumes it), which no validator
+reaches.
+
+### 12.2 Four kinds of content are fused in each prompt
+
+The prompts do not have a size problem; they have a partitioning problem. Measured by section
+in `generate_workflow_steps`, 23% of the prompt performs the task the prompt is named for.
+
+| Category | Present as | Belongs |
+|---|---|---|
+| **Archetype knowledge** | `RAW INPUT PARSING STEPS` (64 lines, pivot tables), `FLAT LOOP PATTERN`, the FK-dependency block, the options/reveals feed rules, the reveal-vs-two-gate boundary, all 16.6 KB of `step_usage_patterns` | Retrieved on relevance |
+| **Orchestration** | `CORRECTION MODE` (59 lines); the revision, consolidation and routing-repair passes in `design_workflow_process`; `PREPARATION-STEP RULE` | Deleted — the agentic loop is the orchestrator |
+| **Registry transcribed as prose** | A hand-maintained list of 20 prompt names; `step_type_contracts` resident in three prompts; a literal CHECK-constraint enum | Queried at need |
+| **Capability instruction** | `TRANSLATION RULES`, `DATA PROVENANCE CHECK`, `SCOPE`, `ECONOMY`, Guards 1 and 3 | Retained |
+
+Corroboration: `analyze_workflow_gaps` is the shortest of the four (75 lines), carries almost
+no archetype content, does one job, and is not a source of recurring defects.
+
+### 12.3 Archetype registry
+
+Six archetypes are recoverable from the existing prompt text — they are already written there,
+as prose, where they cannot be searched, versioned, or selectively retrieved. Four correspond
+to workflows that survive in `PGC_Workflow` today.
+
+| Archetype | Stated today in | Specimen |
+|---|---|---|
+| Select-scope → list → edit-one → save → re-list | `design_workflow_process` (save-and-continue rules), `design_workflow_dialogs` (`action_key`), `workflow_routing_rules` 6b | `edit_budget` |
+| Per-row form, bounded by a gate field ceiling | `design_workflow_process` (data-driven form rule), `design_workflow_dialogs` (data-driven field lists) | `edit_budget` |
+| Hierarchical select — self-referential FK, reveals per parent, options per leaf | `design_workflow_process` (hierarchical trigger), `design_workflow_dialogs` (accordion) | flashcard decks |
+| Stimulus → reveal → rate, one gate | `design_workflow_process` (reveal vs two-gate), `design_workflow_dialogs` (summary-with-details) | `flashcard_quiz_session` |
+| Paste → parse → FK-gap resolve → bulk insert | `design_workflow_process` FK-dependency block; `generate_workflow_steps` raw-input section | `import_budget_spreadsheet` |
+| Query → aggregate → format → report | `analyze_workflow_gaps` (deterministic formatting test), `design_workflow_dialogs` (tabular reveal) | `budget_vs_expense_report` |
+
+The FK-dependency block in `design_workflow_process` is already a parameterised template with
+slots (`load_<ref>_records` → `check_missing_refs` → `has_missing_refs` → `confirm_new_refs` →
+`insert_ref_records`). The system has independently arrived at archetypes and stored them in
+the one place they cannot be used selectively — every generation pays for them, including
+generations with no FK dependency.
+
+**Storage.** An archetype table with a vector column carrying `embed_source` gains semantic
+search with no code change (`architecture.md` §10) and is reachable through the existing
+`vectorSearch` descriptor on `getRows`. Archetypes are data, so Novia adding one is a row
+insert, not a deploy — consistent with the Static System vs Evolving Artifacts boundary and
+with her Extender role (§1.2).
+
+**Effect on the phases.** On a matched archetype, process design narrows to binding schema
+columns to declared slots, and translation may reduce to a deterministic template fill with
+no LLM call at all.
+
+### 12.4 Phase tools
+
+| Phase in `create_workflow` today | Becomes | Status |
+|---|---|---|
+| `research_workflow_domain` | `research_domain` — invoked only when the domain is new | prompt exists |
+| `analyze_workflow_gaps` | `analyze_gaps` | prompt exists |
+| `design_workflow_process` | `design_process`, or archetype binding | prompt exists |
+| `design_workflow_dialogs` | `design_dialogs` | prompt exists |
+| `generate_workflow_steps` | `translate_steps`, or deterministic fill on a matched archetype | prompt exists |
+| skeleton L1, L1 gate, L2 gate | `simulate_workflow` | **already a read tool** |
+| — | `query_table` / `run_sql` — inspect the data the workflow will operate on | **already read tools** |
+| `serv_insert PGC_Workflow` + `PGC_IntentMap` | `register_workflow` | the one new gated write tool |
+| preference gates, review gate, registration gate | Novia asks in thread | machinery removed |
+
+Heavy instruction stays behind tool boundaries. Novia's transcript is re-flattened into `input`
+on every turn (§6.4), so content that lives in her reasoning context is paid for on every turn
+of the session; content inside a single-shot tool call is paid for once.
+
+### 12.5 What is removed rather than migrated
+
+- The three correction passes in `design_workflow_process` and `CORRECTION MODE` in
+  `generate_workflow_steps` — the loop is the orchestrator.
+- The routing skeleton lock, and with it `PREPARATION-STEP RULE`, whose stated justification
+  is that translation may not add a step. That constraint exists to make a rigid pipeline safe.
+- The correction-state bookkeeping steps and the L1/L2 failure branches in the workflow itself.
+
+### 12.6 Properties of Novia this proposal depends on
+
+- `minds-eye.mjs` calls `callLlm` from `llm-client.mjs` directly. The replay fingerprint and
+  corpus machinery lives in `llm-harness.mjs`, so Novia's reasoning turns are not fingerprinted
+  and not replayable. Her full turn history is written to `PGC_SessionEntry` (tool, params,
+  result per turn), so a session is readable after the fact but not re-executable.
+- Phase tool calls carry the shape `computeFingerprint` expects — prompt category, resolved
+  input, output schema, model — so they are candidates for fingerprinting independently of
+  Novia's own turns.
+- `turn_limit` and `max_actions_per_session` are `PGC_SystemContext` preferences, adjustable
+  without a deploy (§6.3). Their current defaults are far below what a workflow build requires.
+
+### 12.7 Open questions
+
+1. Sequencing — archetype registry first, or phase-tool decomposition proved on one specimen first.
+2. Whether `create_workflow` is dissolved outright, or retained as a cheap deterministic path for
+   archetype-matched requests with Novia as the escape hatch for everything else.
+3. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
+   baseline. Unmeasured today for either approach.
+4. Whether the extraction in §12.2 should be validated on its own — stripping one prompt to its
+   capability content and generating against a retrieved archetype — before any orchestration
+   change is committed.
+5. Which of the six archetypes are genuinely distinct versus parameterisations of one another.
+
+### 12.8 Defects surfaced by the prompt sweep
+
+Independent of this proposal, and unfixed as of 2026-07-26:
+
+- **`design_workflow_dialogs` v19 is spliced and partly duplicated.** A JavaScript fragment is
+  welded onto the sentence `Return ONLY a valid JSON object …` at line 68 of 138. Seventy lines
+  of instruction — including every `form` gate rule — follow the prompt's own terminating
+  instruction. Lines 126–136 duplicate 56–66 verbatim and re-inject `human_gate_dialog_rules`
+  a second time.
+- **Live user-domain data in system prompts**, against the rule in `CLAUDE.md`: a literal
+  budget CHECK-constraint enum in `design_workflow_process`; budget-domain state keys and step
+  labels in `design_workflow_dialogs`; recipe and pantry tokens in `generate_workflow_steps`;
+  flashcard identifiers in `step_usage_patterns`.
+- **The gate field ceiling is stated three times** across two prompts in three phrasings.
+- **The list of 20 known prompt names in `generate_workflow_steps` is hand-maintained and
+  stale** — it still names a prompt from the v3 design.
+
+### 12.9 `PGC_Archetype` — implementation outline
+
+A seventeenth PGC table. System config, so `PGC_` prefixed, `target: pgc`, and subject to the
+same bootstrap-and-seed treatment as the existing sixteen.
+
+#### Shape
+
+Modelled on `PGC_DomainHelp`, which is the existing table that combines a registry with
+semantic retrieval.
+
+| Column | Type | Purpose |
+|---|---|---|
+| `id` | serial PK | |
+| `name` | text, not null, unique | Stable identifier, snake_case |
+| `description` | text | One line — what shape of workflow this is |
+| `aliases` | jsonb, default `'[]'` | Retrieval vocabulary. **This is what the embedding is built from** |
+| `preconditions` | jsonb, default `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK, or the request names an existing populated table |
+| `slots` | jsonb, not null, default `'[]'` | Declared bindings the archetype needs — table, columns, labels, ceilings. One entry per slot: name, type, how it is resolved |
+| `topology` | jsonb, not null, default `'[]'` | The step skeleton — step_labels, step types, routing fields, slot tokens. Same shape as the `routing_skeleton` the current pipeline builds at step 21a |
+| `design_rules` | text | The archetype-scoped prose extracted from the four prompts. Injected **only** when this archetype is selected |
+| `source_workflow` | text, nullable | Provenance — the specimen it was derived from |
+| `status` | text, default `'live'` | `live` / `draft`, mirroring `PGC_StepType` |
+| `version` | integer, default 1 | |
+| `created_by` | text | `seed` or `novia` |
+| `embedding` | vector, nullable | `embed_source: ["aliases"]` |
+| `created_at` / `updated_at` | timestamptz, default `now()` | With the standard `set_updated_at()` trigger |
+
+**`embed_source` must name array columns.** `resolveEmbedding` in `table.mjs` uses only
+array-type source fields — scalar columns listed there contribute nothing, because generic
+description text pulls the centroid away from user vocabulary (`architecture.md` §10). So
+`aliases` has to carry the retrieval terms; listing `name` or `description` alongside it would
+be inert.
+
+**`design_rules` is the destination for the extracted category-1 content** in §12.2. Its value
+is that it is *conditional*: the FK-dependency block is loaded when the FK archetype matches
+and not otherwise, which is the whole difference from the prose-in-prompt arrangement.
+
+#### Creation path — one path, not two
+
+`createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, so bootstrap is idempotent and
+re-running it on the live instance creates only the table that is missing. There is no need
+for a separate `schema/createTable` call, and none should be made — the table is created the
+same way the other sixteen were:
+
+1. `src/serv/templates/pgc/PGC_Archetype.json` — a static ES module import in `init-brain.mjs`,
+   appended to `PGC_TEMPLATES`. Bundled by esbuild, never read via `fs`.
+2. Registration rows appended to `seed_PGC_Schema.json` and `seed_PGC_TableMap.json`.
+   `PGC_TableMap` is not optional: `table.mjs` gates all row access on it, and `seedPGCTableMap`
+   skips any table with no `PGC_Schema` row, so both are required.
+3. `POST /api/v1/serv/bootstrap` after deploy. Existing tables report as already present.
+
+#### Seeding and maintenance
+
+- `src/serv/templates/pgc/seeds/seed_PGC_Archetype.json`, one row per archetype in §12.3,
+  seeded by `seedPGCArchetype` as bootstrap step 12.
+- `ON CONFLICT (name) DO UPDATE` on the seeded columns. `created_by` is deliberately excluded
+  so an archetype Novia authored keeps its provenance if it is later moved into the seed file.
+  Rows Novia writes are not in the seed file and are never touched by bootstrap.
+- `dev_scripts/upsert-archetype.mjs`, following the `upsert-step-type.mjs` pattern —
+  content-fingerprint comparison, then `updateRows` or `insertRow`. Seeded rows are never
+  edited by direct `updateRows`.
+- The script never writes `embedding`. SERV computes it from `embed_source` on insert, and on
+  any update whose payload touches `aliases`. Rows inserted before the column was populated
+  need `dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only and
+  would need extending.
+
+#### Access
+
+- **Read** — no new endpoint. `getRows` on `PGC_Archetype` with a `vectorSearch` descriptor
+  against `embedding`. Vector columns are stripped from `getRows` responses, so the payload
+  stays small. Surfaced to Novia as a `search_archetypes` read tool, alongside the existing
+  `query_table` / `run_sql`.
+- **Write** — `insertRow` / `updateRows`. Novia adding an archetype is a system-config change,
+  so it belongs in `GATED_WRITE_TOOLS` (§4.2) rather than executing inline.
+- **Threshold** — `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against domain
+  aliases. Archetype aliases describe workflow shapes rather than domain nouns, so the
+  threshold needs its own calibration against real requests and should not be assumed to carry
+  over.
+
+#### Documentation required at implementation
+
+- `docs/arch-data.md` — new PGC table definition and any curl additions to §5.5.
+- `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing if a dev script is added.
+- `openapi.yaml` — no change expected; the table is reached through the generic `getRows` /
+  `insertRow` routes.

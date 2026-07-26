@@ -147,5 +147,14 @@
     "allow_update": true,
     "allow_delete": true,
     "views": []
+  },
+  {
+    "table_name": "PGC_Archetype",
+    "target": "pgc",
+    "domain": null,
+    "allow_insert": true,
+    "allow_update": true,
+    "allow_delete": true,
+    "views": []
   }
 ]

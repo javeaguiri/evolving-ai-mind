@@ -1500,5 +1500,132 @@
         "function": "set_updated_at()"
       }
     ]
+  },
+  {
+    "table_name": "PGC_Archetype",
+    "target": "pgc",
+    "domain": null,
+    "description": "Workflow design archetypes - reusable step topologies with declared binding slots, retrieved by semantic match on aliases. Holds the pattern knowledge that would otherwise sit as prose inside design prompts, so it is loaded only when the archetype is selected.",
+    "columns": [
+      {
+        "name": "id",
+        "type": "serial",
+        "primaryKey": true
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "nullable": false,
+        "unique": true
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": true,
+        "comment": "One line - the shape of workflow this archetype describes."
+      },
+      {
+        "name": "aliases",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb",
+        "comment": "Retrieval vocabulary. This is the only column that reaches the embedding - resolveEmbedding uses array-type embed_source fields only."
+      },
+      {
+        "name": "preconditions",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'{}'::jsonb",
+        "comment": "Machine-checkable applicability tests, so archetype match is not purely semantic."
+      },
+      {
+        "name": "slots",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb",
+        "comment": "Declared bindings the archetype requires: [{ name, type, resolved_from, required }]."
+      },
+      {
+        "name": "topology",
+        "type": "jsonb",
+        "nullable": false,
+        "default": "'[]'::jsonb",
+        "comment": "Step skeleton - step_label, step_type, routing fields, slot tokens. Same shape as the routing_skeleton built during workflow generation."
+      },
+      {
+        "name": "design_rules",
+        "type": "text",
+        "nullable": true,
+        "comment": "Archetype-scoped design guidance, injected only when this archetype is selected."
+      },
+      {
+        "name": "source_workflow",
+        "type": "text",
+        "nullable": true,
+        "comment": "Provenance - the specimen workflow this archetype was derived from."
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": false,
+        "default": "'draft'"
+      },
+      {
+        "name": "version",
+        "type": "integer",
+        "nullable": false,
+        "default": "1"
+      },
+      {
+        "name": "created_by",
+        "type": "text",
+        "nullable": false,
+        "default": "'seed'",
+        "comment": "seed or novia - who authored this archetype."
+      },
+      {
+        "name": "embedding",
+        "type": "vector",
+        "nullable": true,
+        "embed_source": [
+          "aliases"
+        ],
+        "comment": "pgvector embedding computed by SERV from aliases. NULL until backfill-embeddings.mjs runs on existing rows."
+      },
+      {
+        "name": "created_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamptz",
+        "nullable": false,
+        "default": "now()"
+      }
+    ],
+    "foreign_keys": [],
+    "constraints": [
+      {
+        "type": "unique",
+        "name": "uq_archetype_name",
+        "columns": [
+          "name"
+        ]
+      },
+      {
+        "type": "check",
+        "name": "chk_archetype_status",
+        "expression": "status IN ('draft', 'live', 'retired')"
+      }
+    ],
+    "triggers": [
+      {
+        "name": "trg_pgc_archetype_updated_at",
+        "timing": "BEFORE UPDATE",
+        "function": "set_updated_at()"
+      }
+    ]
   }
 ]
