@@ -647,6 +647,19 @@ rows first.
 - **What the engine will accept** — queried, not transcribed: `PGC_StepType`, `PGC_Prompt`,
   `PGC_Schema`.
 
+Dialog design is the clearest case, because the current prompt fuses all three:
+
+| Knowledge | Source | Loaded |
+|---|---|---|
+| Gate types; `form` is the only type that collects input; `output_key` writes only on form, confirm-with-`context_key`, and choice; a field `type` names what is collected, never a widget; option-count caps; `list_selection` requires `item_action` | `PGC_StepType` `human_gate` contract | Queried |
+| Reveal versus two gates; hierarchy as reveals-per-parent with options-per-leaf; per-option `iterator` for data-driven buttons; per-row form and its field ceiling | `PGC_Archetype.design_rules` | On match |
+| The fields are the display — do not restate field values in the message body | `PGC_SystemContext` | Always |
+
+Gate mechanics are currently asserted in three places — the `human_gate` contract in
+`PGC_StepType`, `workflow_constraints`, and `design_workflow_dialogs` prose — and have already
+drifted between them. Collapsing them to a single queried source removes a standing instance of
+the two-consumers-of-one-truth failure (checklist rule 2e).
+
 #### What this gives up
 
 Intermediate artifacts stop being schema-validated. `design_workflow_process` today carries an
@@ -695,13 +708,20 @@ intermediate checking and is the first thing to watch in any trial.
 
 ### 12.8 Defects surfaced by the prompt sweep
 
-Independent of this proposal, and unfixed as of 2026-07-26:
+Recorded as evidence for §12.2, not as a repair list. Under this proposal all four prompts are
+partitioned and retired, so repairing them in place would be work on documents with no future —
+and editing prompt text churns the replay fingerprint of every recording made against it. The
+one operational consequence is that `create_workflow` should not be run while these stand.
+
+Found 2026-07-26:
 
 - **`design_workflow_dialogs` v19 is spliced and partly duplicated.** A JavaScript fragment is
   welded onto the sentence `Return ONLY a valid JSON object …` at line 68 of 138. Seventy lines
   of instruction — including every `form` gate rule — follow the prompt's own terminating
   instruction. Lines 126–136 duplicate 56–66 verbatim and re-inject `human_gate_dialog_rules`
-  a second time.
+  a second time. The severed fragment is the tail of a worked example, not of a rule: the
+  `REVEAL CONTENT RULE` it illustrates survives intact at line 53 and is already carried into
+  `reveal_and_rate.design_rules`, so extraction loses nothing.
 - **Live user-domain data in system prompts**, against the rule in `CLAUDE.md`: a literal
   budget CHECK-constraint enum in `design_workflow_process`; budget-domain state keys and step
   labels in `design_workflow_dialogs`; recipe and pantry tokens in `generate_workflow_steps`;
