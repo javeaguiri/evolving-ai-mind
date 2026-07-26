@@ -255,12 +255,23 @@ This is the baseline Novia data interaction — no fault domain analysis require
 
 **Note:** Schema changes are high-risk. Novia must explain the downstream impact (any rows that violate the new constraint) before the gate.
 
-### UC-4: Start or chain workflows (Extension)
-> "Novia, recreate the flashcard domain and run create_workflow for the quiz"
+### UC-4: Chain workflows around a decision (Extension)
+> "Novia, show me where I overspent last month and adjust this month for it"
 
-1. Novia sequences: `invoke_workflow delete_domain` → confirm → `invoke_workflow create_domain flashcards` → observe completion → `invoke_workflow create_workflow quiz_flashcards`
-2. At each step, Novia observes the WorkflowRun result before proceeding
-3. On failure at any step, Novia surfaces the failure and asks how to proceed rather than attempting an autonomous fix
+1. Novia runs the reporting workflow with `run_workflow` and waits for the run to reach a terminal state
+2. Reads the run's output, identifies which categories exceeded plan, and presents them
+3. Asks the user what to carry into the current period — the decision neither workflow can make alone
+4. Runs the editing workflow with that decision as its input
+5. Reads back what was written to confirm the result
+
+The value is step 3. Either workflow alone leaves the user carrying the finding between them by
+hand; a chain is worth building only where an observation or a decision sits between the links.
+On failure at any link, Novia surfaces it and asks how to proceed rather than attempting an
+autonomous fix.
+
+**Boundary:** `run_workflow` dispatches registered `PGC_Workflow` rows to the step-executor.
+Operations implemented as PROC endpoints rather than workflows — `delete_domain`, `create_domain`
+— are not reachable through it and are not chainable this way.
 
 ### UC-5: Inspect and return structured data
 > "Novia, show me all my flashcard decks with their card counts"
@@ -606,7 +617,8 @@ and the phases can go back to being what they describe: an order of work.
 | `simulate_workflow` — L1/L2 over a candidate step array | research and option-framing |
 | `query_table`, `run_sql` — read the data the workflow will operate on | gap analysis |
 | `search_archetypes` — match a shape (new) | process design |
-| `register_workflow` — write `PGC_Workflow` + `PGC_IntentMap` (new, gated) | dialog design |
+| `validate_workflow_shape` — L0 structural validation (new) | dialog design |
+| `register_workflow` — write `PGC_Workflow` + `PGC_IntentMap` (new, gated) | |
 
 Removed outright: the sonar research call (it re-derives what `PGC_Schema` already holds), the
 preference-gate iterator, the review and registration gates, and the correction loops. All
@@ -660,13 +672,32 @@ Gate mechanics are currently asserted in three places — the `human_gate` contr
 drifted between them. Collapsing them to a single queried source removes a standing instance of
 the two-consumers-of-one-truth failure (checklist rule 2e).
 
-#### What this gives up
+#### L0 — structural validation as a gate before simulation
 
-Intermediate artifacts stop being schema-validated. `design_workflow_process` today carries an
-Ajv `output_schema` enforced by `review-output.mjs`; in a conversational build the only
-structurally gated artifact is the final step array, checked by `simulate_workflow` and
-`register_workflow`. That is the correct artifact to gate, but it is a genuine reduction in
-intermediate checking and is the first thing to watch in any trial.
+Retiring the `llm_call` steps also retires their Ajv gate: `review-output.mjs` validates LLM
+output against `PGC_Prompt.output_schema`, and in a conversational build there is no prompt row
+to validate against. Structural checking is restored as a **level below L1 in the existing
+simulation engine**, run twice — once on the skeleton, once on the filled array — before any
+simulation:
+
+| Level | Question |
+|---|---|
+| **L0** | Is this a well-formed step array? Required fields present, types correct, no unknown fields |
+| L1 | Does the routing form a reachable, terminating graph with resolvable templates? |
+| L2 | Does data flow correctly along the paths? |
+
+Two constraints on the implementation:
+
+- **The schema is composed from `PGC_StepType.input_contract`, never hand-authored.** A separate
+  step-array schema would restate what the step type registry already asserts, and the two would
+  drift — the same failure as the gate mechanics above. Composing it also keeps L0 correct
+  automatically when a step type changes.
+- **It extends `simulation-engine.mjs` rather than sitting beside it.** A parallel Ajv validator
+  would overlap L1's existing `serv_step_missing_required_input` content-completeness check;
+  that check is a shape assertion and belongs in L0. Two schemas — skeleton and filled — also
+  replace the current `skeleton: true` flag threaded through `runSimulation` to suppress it.
+
+L0 belongs to the Validation fault domain and is system code, consistent with the triage map.
 
 ### 12.5 What is removed rather than migrated
 
@@ -690,21 +721,29 @@ intermediate checking and is the first thing to watch in any trial.
 
 ### 12.7 Open questions
 
-1. Whether `create_workflow` is dissolved outright, or retained as a cheap deterministic path for
-   archetype-matched requests with Novia as the escape hatch for everything else.
-2. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
-   baseline. Unmeasured today for either approach.
-3. Which of the six archetypes are genuinely distinct versus parameterisations of one another,
+**Direction set — `create_workflow` is dissolved outright**, rather than retained as a
+deterministic path for archetype-matched requests. Gated on evaluating Novia's capability first:
+the hybrid stays available as a fallback only if that evaluation fails, and is not designed for
+in advance.
+
+Remaining open:
+
+1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
+   baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
+   gated on.
+2. Which of the six archetypes are genuinely distinct versus parameterisations of one another,
    and what `topology` and `slots` actually hold — both are empty in the seed pending distillation
    of the four surviving generated workflows.
-4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
+3. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
    a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
    matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
    whose side of the tool/guidance line is undecided.
-5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
+4. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
    requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
    than incidental.
-6. What replaces per-phase Ajv validation for intermediate artifacts, if anything.
+5. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
+   `/proc/simulate-workflow` endpoint. A distinct tool makes "validate, then simulate" a legible
+   two-step for a reasoning agent and yields sharper errors; a selector avoids a new endpoint.
 
 ### 12.8 Defects surfaced by the prompt sweep
 
