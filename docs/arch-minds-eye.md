@@ -587,6 +587,45 @@ slots (`load_<ref>_records` → `check_missing_refs` → `has_missing_refs` → 
 the one place they cannot be used selectively — every generation pays for them, including
 generations with no FK dependency.
 
+#### The seeded six conflate two kinds of thing (2026-07-26)
+
+The table above, and the six rows seeded from it, mix **procedures** with **presentation
+strategies**. The seed's own text gives it away: `bulk_row_form.design_rules` states that when
+the field product exceeds the gate ceiling *"this archetype does not apply: design a
+list_selection gate to pick ONE row followed by a small form to edit that row"* — which is
+`scoped_row_editor`. One archetype degrading into another on a row count is not two archetypes.
+It is one procedure with two presentations, selected by a computable condition.
+
+| Kind | Definition | Present in the seeded six as |
+|---|---|---|
+| **Procedure** | What the workflow does. Has a verb, a topology, and slots | edit tabular data; iterate and capture per item; ingest, parse, resolve references, insert; query, aggregate, report |
+| **Dialog strategy** | How the user interacts at one interaction point | one-row selector; per-row bulk form; hierarchy as reveals-per-parent with options-per-leaf; one gate with reveal versus two gates; `list_selection` with `item_action`; `choice` with a per-option iterator |
+
+`hierarchical_selector` has no verb — it is a way of presenting a selection that plugs into any
+procedure needing the user to pick a row. `reveal_and_rate` carries a presentation choice in its
+name while its own rules state when two gates should replace the reveal.
+
+An archetype must describe the shape of *editing a table of data*, not of editing one particular
+kind of record. The domain belongs in the slot bindings, never in the archetype.
+
+**Composition:** a procedure declares that an interaction happens at a point in its topology; a
+dialog strategy fills that point. The relationship is compositional rather than taxonomic, which
+argues for separating them rather than discriminating within one table.
+
+**Consequence for the preference conversation.** Which dialog strategies are *available* is
+computable from the data — a row count against the gate field ceiling, an option count against
+the threshold past which `choice` renders as a dropdown. Which of the feasible ones is *wanted*
+is genuine user preference: all values as buttons or a dropdown, detail revealed on demand or
+shown inline, one row at a time or the whole table. This is where the preference questions in
+step 2 of the build procedure come from — the applicable templates given the live data — rather
+than from domain research. Model selection for any generated `llm_call` step (`cheap` versus
+`smart`) is the same kind of user-visible preference and should be surfaced, not decided
+silently.
+
+The seeded rows are provisionally miscategorised against this split and the §12.9 schema does
+not yet carry it. Both are pending the restructure; the seed rows are `status: draft` and no
+consumer reads them.
+
 **Storage.** An archetype table with a vector column carrying `embed_source` gains semantic
 search with no code change (`architecture.md` §10) and is reachable through the existing
 `vectorSearch` descriptor on `getRows`. Archetypes are data, so Novia adding one is a row
@@ -751,17 +790,22 @@ Remaining open:
 1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
    gated on.
-2. Which of the six archetypes are genuinely distinct versus parameterisations of one another,
-   and what `topology` and `slots` actually hold — both are empty in the seed pending distillation
-   of the four surviving generated workflows.
-3. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
+2. Whether procedures and dialog strategies are two tables or one table with a `kind`
+   discriminator (§12.3). They compose rather than classify — a procedure declares an
+   interaction point, a strategy fills it — and their columns differ: a procedure carries
+   `topology` and `slots`, a strategy carries gate shape and computable applicability bounds.
+   Blocks the restructure of the seeded six and the §12.9 schema.
+3. What `topology` and `slots` actually hold, once the procedures are separated out. Both are
+   empty in the seed pending distillation of the four surviving generated workflows — which is
+   also what will settle how many procedures there really are.
+4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
    a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
    matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
    whose side of the tool/guidance line is undecided.
-4. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
+5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
    requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
    than incidental.
-5. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
+6. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
    `/proc/simulate-workflow` endpoint. A distinct tool makes "validate, then simulate" a legible
    two-step for a reasoning agent and yields sharper errors; a selector avoids a new endpoint.
 
