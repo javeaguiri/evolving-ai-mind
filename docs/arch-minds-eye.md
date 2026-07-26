@@ -586,23 +586,74 @@ with her Extender role (§1.2).
 columns to declared slots, and translation may reduce to a deterministic template fill with
 no LLM call at all.
 
-### 12.4 Phase tools
+### 12.4 The phases become guidelines, not tools
 
-| Phase in `create_workflow` today | Becomes | Status |
-|---|---|---|
-| `research_workflow_domain` | `research_domain` — invoked only when the domain is new | prompt exists |
-| `analyze_workflow_gaps` | `analyze_gaps` | prompt exists |
-| `design_workflow_process` | `design_process`, or archetype binding | prompt exists |
-| `design_workflow_dialogs` | `design_dialogs` | prompt exists |
-| `generate_workflow_steps` | `translate_steps`, or deterministic fill on a matched archetype | prompt exists |
-| skeleton L1, L1 gate, L2 gate | `simulate_workflow` | **already a read tool** |
-| — | `query_table` / `run_sql` — inspect the data the workflow will operate on | **already read tools** |
-| `serv_insert PGC_Workflow` + `PGC_IntentMap` | `register_workflow` | the one new gated write tool |
-| preference gates, review gate, registration gate | Novia asks in thread | machinery removed |
+`create_workflow` is not stepped through and not wrapped. The phase sequence is a sound
+decomposition of the *work* and survives as **procedural guidance**; what does not survive is
+each phase being a prompted single-shot call that emits a whole structured document.
 
-Heavy instruction stays behind tool boundaries. Novia's transcript is re-flattened into `input`
-on every turn (§6.4), so content that lives in her reasoning context is paid for on every turn
-of the session; content inside a single-shot tool call is paid for once.
+The phase split was introduced because one LLM call asked to hold gap classification, process
+design and dialog design at once had to satisfy incompatible output schemas simultaneously,
+and produced schema violations on every run. That failure is a property of single-shot document
+generation, not of the decomposition. A turn-based loop emits one `{action, params, reasoning}`
+decision per turn and never holds two output schemas at once, so the constraint does not apply
+and the phases can go back to being what they describe: an order of work.
+
+**The dividing line: a tool is for something that acts. Guidance is for reasoning.**
+
+| Remains a tool | Becomes guidance |
+|---|---|
+| `simulate_workflow` — L1/L2 over a candidate step array | research and option-framing |
+| `query_table`, `run_sql` — read the data the workflow will operate on | gap analysis |
+| `search_archetypes` — match a shape (new) | process design |
+| `register_workflow` — write `PGC_Workflow` + `PGC_IntentMap` (new, gated) | dialog design |
+
+Removed outright: the sonar research call (it re-derives what `PGC_Schema` already holds), the
+preference-gate iterator, the review and registration gates, and the correction loops. All
+become conversation in the thread.
+
+#### The build procedure
+
+Written as guidance, not as a routing graph. The order is a default a reasoning agent may
+depart from with cause, not a topology:
+
+1. **Ground in what exists.** Read the domain schema. Then read the *data* — row counts,
+   distinct values on enum columns, the actual span of a date column. Schema says what may be
+   there; only the data says what is.
+2. **Propose and choose, with the user.** Surface the options that materially change the shape
+   of the workflow, framed against what the data showed, and settle them in conversation. Only
+   raise a question whose answer changes the design.
+3. **Match an archetype.** On a match, its `design_rules` and `topology` load; on no match,
+   design the sequence from the capability instruction.
+4. **Skeleton first, and test its assumptions against the data as it is built.** Every
+   assumption the shape depends on — that a list fits one gate, that a value the user picks can
+   be decomposed before the step that queries on it, that a query without a limit returns what
+   the report needs — is checkable against rows that already exist, before any content is
+   generated.
+5. **Fill, simulate, register.** `simulate_workflow` gates the step array; `register_workflow`
+   writes it.
+
+Step 4 is the point of the whole design. The defects that motivated it — a row limit smaller
+than the data, a composite gate value consumed before it was decomposed — are invisible to a
+single-shot designer that receives the schema as text, and obvious to one that can count the
+rows first.
+
+#### Where the guidance lives
+
+- **How to build any workflow** — a `PGC_SystemContext` row injected into
+  `minds_eye_system_prompt`. Always resident, so it must stay small.
+- **How this shape of workflow behaves** — `PGC_Archetype.design_rules`, loaded only on a
+  match (§12.9).
+- **What the engine will accept** — queried, not transcribed: `PGC_StepType`, `PGC_Prompt`,
+  `PGC_Schema`.
+
+#### What this gives up
+
+Intermediate artifacts stop being schema-validated. `design_workflow_process` today carries an
+Ajv `output_schema` enforced by `review-output.mjs`; in a conversational build the only
+structurally gated artifact is the final step array, checked by `simulate_workflow` and
+`register_workflow`. That is the correct artifact to gate, but it is a genuine reduction in
+intermediate checking and is the first thing to watch in any trial.
 
 ### 12.5 What is removed rather than migrated
 
@@ -626,15 +677,21 @@ of the session; content inside a single-shot tool call is paid for once.
 
 ### 12.7 Open questions
 
-1. Sequencing — archetype registry first, or phase-tool decomposition proved on one specimen first.
-2. Whether `create_workflow` is dissolved outright, or retained as a cheap deterministic path for
+1. Whether `create_workflow` is dissolved outright, or retained as a cheap deterministic path for
    archetype-matched requests with Novia as the escape hatch for everything else.
-3. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
+2. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach.
-4. Whether the extraction in §12.2 should be validated on its own — stripping one prompt to its
-   capability content and generating against a retrieved archetype — before any orchestration
-   change is committed.
-5. Which of the six archetypes are genuinely distinct versus parameterisations of one another.
+3. Which of the six archetypes are genuinely distinct versus parameterisations of one another,
+   and what `topology` and `slots` actually hold — both are empty in the seed pending distillation
+   of the four surviving generated workflows.
+4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
+   a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
+   matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
+   whose side of the tool/guidance line is undecided.
+5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
+   requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
+   than incidental.
+6. What replaces per-phase Ajv validation for intermediate artifacts, if anything.
 
 ### 12.8 Defects surfaced by the prompt sweep
 
