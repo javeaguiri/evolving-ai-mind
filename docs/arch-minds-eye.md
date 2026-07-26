@@ -637,18 +637,38 @@ depart from with cause, not a topology:
    raise a question whose answer changes the design.
 3. **Match an archetype.** On a match, its `design_rules` and `topology` load; on no match,
    design the sequence from the capability instruction.
-4. **Skeleton first, and test its assumptions against the data as it is built.** Every
-   assumption the shape depends on — that a list fits one gate, that a value the user picks can
-   be decomposed before the step that queries on it, that a query without a limit returns what
-   the report needs — is checkable against rows that already exist, before any content is
-   generated.
+4. **Settle the shape, and test its assumptions against the data.** Where the topology comes
+   from depends on step 3:
+   - **Archetype matched** — there is no skeleton to build. `topology` is retrieved and was
+     validated when the archetype was authored. Bind slots and move to content.
+   - **No match** — sketch the flow and run L0 and L1 on the sketch immediately. Both are
+     deterministic, need no LLM, and cost nothing to repeat. Then **describe the shape to the
+     user in plain language before investing in content.** A workflow whose save button routes
+     forward instead of back is a perfectly well-formed graph — reachable, terminating, no dead
+     ends — so L1 and L2 both pass it. Validity is not correctness, and the sketch is the last
+     point at which a non-expert can referee the flow.
+   - **Short and linear** — the distinction is noise. Iterate whole.
+
+   In every case, the assumptions the shape rests on are checkable against rows that already
+   exist, before content is generated: that a list fits within one gate, that a value the user
+   picks can be decomposed before the step that queries on it, that a query without a limit
+   returns what the report needs.
 5. **Fill, simulate, register.** `simulate_workflow` gates the step array; `register_workflow`
    writes it.
 
-Step 4 is the point of the whole design. The defects that motivated it — a row limit smaller
-than the data, a composite gate value consumed before it was decomposed — are invisible to a
-single-shot designer that receives the schema as text, and obvious to one that can count the
-rows first.
+Testing assumptions against live data is the point of the whole design. The defects that
+motivated it — a row limit smaller than the data, a composite gate value consumed before it was
+decomposed — are invisible to a single-shot designer that receives the schema as text, and
+obvious to one that can count the rows first.
+
+A skeleton-first phase is deliberately **not** mandated. Its justification in the current
+pipeline is that content generation is one expensive call discarded whole when routing proves
+wrong, and that a single call cannot design routing and content at once; neither holds for an
+agent that edits in place and reasons one turn at a time. What survives is a preference for
+settling topology before content where topology errors are expensive — branches and loops,
+where a wrong shape invalidates the content written against it — and that is a judgment call,
+not a stage. Mandating it would reintroduce a fixed pipeline through the back door, and would
+be a rule generalised from the workflows that happened to have loops.
 
 #### Where the guidance lives
 
