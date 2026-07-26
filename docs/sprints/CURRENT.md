@@ -1,9 +1,37 @@
 # Sprint 9 — create_workflow Design/Translation Quality
 
-**Status: SCOPING PENDING** — Sprint 8 closed 2026-07-25.
+**Status: SCOPING PENDING — theme under active reconsideration (2026-07-26).**
 
 > Read `docs/sprints/sprint-08.md` §RETRO before scoping. Full scope, ACs, and test
 > scenarios are written at **"start sprint"**; this file is the carry-forward seed only.
+
+> ## ⚠️ Read `docs/arch-minds-eye.md` §12 before scoping this sprint
+>
+> A 2026-07-26 session re-evaluated whether `create_workflow` is converging and concluded
+> it is not: 98 runs have yielded 4 surviving workflows, `generate_workflow_steps` has gone
+> v11 → v49 in ten weeks, and the defect class has moved from structural (a validator
+> catches it) to semantic (none does). A prompt sweep measured ~174 KB of static instruction
+> across the four design prompts, of which only ~23% of `generate_workflow_steps` performs
+> the task it is named for; the rest is archetype knowledge, correction-loop orchestration,
+> and registries transcribed as prose.
+>
+> **Direction set:** dissolve `create_workflow` into a Novia-driven toolkit with design
+> archetypes as searchable entities — gated on first evaluating Novia's capability.
+> Full proposal, evidence, and open questions: `docs/arch-minds-eye.md` §12.
+>
+> **Consequence for the candidate scope below:** the lead item (bounded translation drift)
+> is likely **moot** — it relaxes a translation-stage constraint that exists only because the
+> routing skeleton locks, and the skeleton lock does not survive the proposal. The two
+> `create_workflow` design defects are addressed structurally rather than by prompt edits.
+> Do not scope the items below without reading §12 first.
+>
+> Work in progress on branch `design/archetype-registry` (5 commits): `PGC_Archetype` table
+> template, seed of six draft archetypes, `init-brain.mjs` wiring, `dev_scripts/upsert-archetype.mjs`,
+> and the §12 design record. **Nothing is live** — requires deploy + `POST /api/v1/serv/bootstrap`.
+>
+> **Do not run `create_workflow`** meanwhile: `design_workflow_dialogs` v19 carries a splice
+> that terminates the prompt halfway through, so its `form` gate rules may not be in force
+> (`arch-minds-eye.md` §12.8). Deliberately unrepaired — the prompt is retired by the proposal.
 
 ---
 
