@@ -1,6 +1,7 @@
 # Sprint 9 — Novia Builds Workflows
 
-**Status: SCOPED 2026-07-29. Branch not yet cut.**
+**Status: IN PROGRESS. Scoped and branched 2026-07-29 — `sprint/09-novia-builds-workflows`.**
+Prep partially done (A2/A3 ✅); A1 and A4 are the next work.
 
 > Read before implementing: `docs/sprints/sprint-08.md` §RETRO, and `docs/arch-minds-eye.md`
 > §12 (the dissolution proposal) — specifically §12.7 for what is settled and what is open.
@@ -34,7 +35,7 @@ structure, an ordering she must follow, or a syntax she must emit — we have ov
 that line comes out. Templates and archetypes are explicitly parked (see Out of Scope): they
 would commit to a shape before there is any evidence she needs one.
 
-**Provisional branch:** `sprint/09-novia-builds-workflows`
+**Branch:** `sprint/09-novia-builds-workflows` (cut from main 2026-07-29)
 
 ---
 
