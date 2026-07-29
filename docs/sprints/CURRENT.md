@@ -79,12 +79,23 @@ whether conventions alone are enough.
   Always resident, so it stays small. Covers: what a workflow is (step array, routing fields,
   terminal steps), how `local_state` carries values, `{{token}}` resolution, and where the
   Procedure/Experience boundary falls.
-- **A2** — Gate mechanics come from the `human_gate` `input_contract` in `PGC_StepType`, queried.
-  They are currently asserted in three places (`PGC_StepType`, `workflow_constraints`,
-  `design_workflow_dialogs` prose) and have already drifted. Collapse to the queried source and
-  retire the duplicates — a standing instance of checklist rule 2e.
-- **A3** — Step type knowledge is queried from `PGC_StepType`, never transcribed. `step_usage_patterns`
-  (16.6 KB) and `step_type_contracts` (22 KB) do not migrate into the bridge.
+- **A2** ✅ **DONE** — Gate mechanics come from the `human_gate` `input_contract` in
+  `PGC_StepType`, queried. Four rules that existed only in the duplicates are now in the contract:
+  the 40-field ceiling (an engine render limit, previously only in prompt prose); the
+  `action` vs `on_select` distinction and `on_select`'s valid tokens; that a `reveal` does not
+  route and must not be paired with a matching option; and that bare and `step:`-prefixed keys
+  are both accepted. The `iterator` `item_step` already carried its choice-only rule — no edit
+  needed.
+- **A3** ✅ **DONE (audit)** — Step type knowledge is queried from `PGC_StepType`, never
+  transcribed. `step_usage_patterns` (16.6 KB) and `step_type_contracts` (22 KB) do not migrate
+  into the bridge. Audit result recorded in `arch-minds-eye.md` §12.8.
+- **A2/A3 sequencing — the duplicates are not deleted yet, deliberately.** Deleting a
+  `PGC_SystemContext` row whose `{{token}}` still appears in a prompt hands the LLM the literal
+  token text (the standing backlog defect), and removing the token means editing the four design
+  prompts — out of scope this sprint, and prompt edits churn every replay fingerprint recorded
+  against them. `step_type_contracts`, `human_gate_dialog_rules` and the `human_gate` block in
+  `workflow_constraints` are `inject_for` the create_workflow family only, so they are inert for
+  Novia. **They die with the prompts.** Confirm removal at the point those prompts are retired.
 - **A4** — Apply the overstepping test to every line, and record what was cut. The cut list is
   evidence for whether archetypes are needed at all.
 
@@ -204,3 +215,19 @@ fragment is not about foreign keys — but they are evidence, not a design to bu
 Three scoping decisions taken: registry out of scope (bridge only), minimal L0 in
 `simulation-engine`, and the broken specimens used as Novia's capability evaluation rather than
 hand-repaired.
+
+### Session 2 — 2026-07-29 — A2/A3 prep
+
+`step_type_contracts` turned out to be a hand-maintained *copy* of the `PGC_StepType` rows —
+identical field names, transcribed rather than referenced — carrying 17 of 19 step types and a
+`human_gate` entry missing three fields the live row declares, one of them required. The
+argument for querying the registry did not need making; it was already measurable. Full audit in
+`arch-minds-eye.md` §12.8.
+
+The `human_gate` and `condition` contracts were updated and upserted (`upsert-step-type.mjs`:
+17 ok, 2 updated). 687 unit tests pass. The routing-format contradiction between
+`workflow_constraints` (`step:N`) and the `condition` contract (bare keys) was resolved by
+describing what the engine does — `step-executor.mjs:1637` and `run-workflow.mjs:1711` strip the
+prefix, so both forms are identical after normalisation. Picking a canonical form would have
+invented a constraint the engine does not have, which is the bridge's failure mode rather than
+its job. Closes the backlog item "Condition step routing format".

@@ -906,6 +906,15 @@ Found 2026-07-26:
 - **The gate field ceiling is stated three times** across two prompts in three phrasings.
 - **The list of 20 known prompt names in `generate_workflow_steps` is hand-maintained and
   stale** — it still names a prompt from the v3 design.
+- **`step_type_contracts` is a hand-maintained copy of the `PGC_StepType` rows** — same field
+  names (`step_type`, `description`, `input_contract`, `output_contract`, `on_success_options`,
+  `on_failure_options`), transcribed rather than referenced, and measurably stale. It carries
+  **17 of the 19** step types, so `serv_entity_insert` and `write_memory` are invisible to every
+  prompt that reads it. Its `human_gate` entry omits three fields the live row declares —
+  `fields` (which `form` gates require, and `form` is the only gate that collects input),
+  `action_key`, and `on_cancel` (**required**). This is §12.2's registry-as-prose category
+  measured rather than argued, and the strongest single case for the bridge querying
+  `PGC_StepType` instead of restating it.
 
 Found 2026-07-29, in the gate contract rather than the design prompts:
 
