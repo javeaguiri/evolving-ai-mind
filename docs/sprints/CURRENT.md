@@ -225,9 +225,29 @@ argument for querying the registry did not need making; it was already measurabl
 `arch-minds-eye.md` §12.8.
 
 The `human_gate` and `condition` contracts were updated and upserted (`upsert-step-type.mjs`:
-17 ok, 2 updated). 687 unit tests pass. The routing-format contradiction between
+17 ok, 2 updated). 687 unit tests pass. Note the DB is ahead of any branch that lacks this seed
+change — re-running `upsert-step-type.mjs` from an older tree would revert those two rows.
+The routing-format contradiction between
 `workflow_constraints` (`step:N`) and the `condition` contract (bare keys) was resolved by
 describing what the engine does — `step-executor.mjs:1637` and `run-workflow.mjs:1711` strip the
 prefix, so both forms are identical after normalisation. Picking a canonical form would have
 invented a constraint the engine does not have, which is the bridge's failure mode rather than
 its job. Closes the backlog item "Condition step routing format".
+
+### Session 3 — 2026-07-29 — Merge, branch, and section 12 status
+
+`design/archetype-registry` merged to main (`--no-ff`, 687 tests passing), and
+`sprint/09-novia-builds-workflows` cut from it. Sprint 9 is formally started: Retro ✅, Scope ✅,
+Prep ◐ (A2/A3 done, A1/A4 remain), Branch ✅.
+
+`arch-minds-eye.md` §12's header still read "Not scoped, not decided, no implementation" — false
+on all three counts and the first thing a reader met. Replaced with a dated status and a
+per-subsection map so settled, parked, direction-only and register content are distinguishable.
+The bridge-don't-template constraint moved there too: it governs how §12.11 and §12.12 are read,
+and would otherwise have been archived with this sprint doc.
+
+**Next:** A1 — write the convention bridge as a `PGC_SystemContext` row injected into
+`minds_eye_system_prompt` — with A4's cut list kept alongside it. A1 is smaller than it looked at
+scoping time: gate mechanics and step contracts are now queryable from `PGC_StepType`, so the
+bridge covers only what is not already a row — what a workflow is, how `local_state` carries
+values, `{{token}}` resolution, and where the Procedure/Experience boundary falls.
