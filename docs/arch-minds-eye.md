@@ -514,10 +514,30 @@ Sprint 5 build order:
 
 ## 12. Proposal — workflow generation as a Novia toolkit
 
-> **Status: PROPOSAL — under evaluation. Not scoped, not decided, no implementation.**
-> Measurements in this section were taken 2026-07-26 against the live database and the
-> `seed_PGC_Prompt` / `seed_PGC_SystemContext` seed files. They are point-in-time findings,
-> not configuration.
+> **Status (2026-07-29).** Direction set — `create_workflow` is dissolved into Novia, gated on
+> evaluating her capability first (§12.7). **Sprint 9 is scoped and branched against this
+> section**: `docs/sprints/CURRENT.md`, branch `sprint/09-novia-builds-workflows`.
+>
+> Measurements throughout are point-in-time findings against the live database and seed files,
+> not configuration. Each carries the date it was taken.
+>
+> **The governing constraint, and the reason most of this section is not being built:** Novia can
+> already write code. What she lacks is *this system's conventions*. So what gets written for her
+> states **what the engine accepts** and **what each tier owns** — never a fill-in-the-blank
+> structure, a required ordering, or a syntax she must emit. Sprint 9 writes a convention bridge
+> on that basis and lets archetypes follow from what real builds turn out to need.
+>
+> | Subsection | Status |
+> |---|---|
+> | 12.1–12.2 the measured problem | Evidence, 2026-07-26 |
+> | 12.3 the two registries | **Settled** — procedures and dialog strategies are two tables |
+> | 12.4 phases become guidelines | Direction; not built |
+> | 12.5–12.6 removals, dependencies | Direction |
+> | 12.7 open questions | Three remain; OQ2 closed 2026-07-29 |
+> | 12.8 defects | Register. **Do not run `create_workflow` while these stand** |
+> | 12.9 table schemas | Templates committed, **not bootstrapped**; no consumer reads them |
+> | 12.10 distillation | **Settled** — four procedures + one fragment, three interaction points |
+> | 12.11–12.12 worked specimens | Findings stand; **notation parked** — see the banner in §12.11 |
 
 The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
 into a set of tools Novia orchestrates, with workflow design patterns held as searchable
