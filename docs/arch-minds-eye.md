@@ -864,9 +864,10 @@ Remaining open:
 1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
    gated on.
-2. The notation for a nested procedure reference inside `topology`. `scoped_row_editor` is
-   written out in full (§12.11) and settles the rest of the notation, but needs no nesting, so
-   the one construct §12.10 identified is still unexercised.
+2. Whether `reconcile_missing_rows` earns its place as a shared fragment. Its two instances
+   share a topology but differ in gap computation, target count and whether the inserted ids are
+   needed, so its `gap` slot is an expression rather than a table or column binding (§12.12).
+   Revisit once a third instance exists.
 3. Whether a generated gate names the strategy that produced it or declares the properties that
    strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
    experience layer a consumer of the registry; declaring properties keeps the registry a
@@ -1079,8 +1080,10 @@ One sub-shape appears inside two unrelated procedures, in the same order both ti
 This is the FK-dependency block §12.3 identified as already being a parameterised template,
 confirmed live. It has a verb, a topology and slots, so it satisfies the definition of a
 procedure — it simply is not a whole workflow. **A procedure's `topology` may therefore reference
-another procedure**, and `resolve_missing_references` is the first shared one. Composition stays
-within `PGC_Archetype`; no third table is needed.
+another procedure.** Composition stays within `PGC_Archetype`; no third table is needed. Written
+out in §12.12 the reference resolves to a build-time `include` rather than a call, and the
+fragment is named `reconcile_missing_rows` — the second instance has no foreign key in it, so the
+FK framing inherited from `design_workflow_process` is too narrow.
 
 #### How many procedures there are
 
@@ -1092,7 +1095,7 @@ Four top-level, one nested — against six seeded rows:
 | `iterate_and_capture` — select a scope, walk its items, capture a response per item, write it | `flashcard_quiz_session` |
 | `ingest_and_insert` — accept pasted data, parse it, resolve references, bulk insert | `import_budget_spreadsheet` |
 | `aggregate_report` — query, aggregate, format deterministically, present | `budget_vs_expense_report` |
-| `resolve_missing_references` — nested; referenced by the two above that need it | `import_budget_spreadsheet` 5–11 |
+| `reconcile_missing_rows` — nested; inlined by the two above that need it | `import_budget_spreadsheet` 5–11 |
 
 `hierarchical_selector` and `bulk_row_form` move to `PGC_DialogStrategy` whole.
 `reveal_and_rate` splits: its procedure half becomes `iterate_and_capture`, its presentation half
@@ -1109,7 +1112,7 @@ Recurring data bindings, from what the four actually bind:
 | `label_column` | The column standing in for a row in a picker or table |
 | `grouping_column` | `type` in both budget workflows — drives both display grouping and subtotals |
 | `write_target` + `natural_key` | `serv_upsert` matched on `(year, month, category_id)` |
-| `reference_table` + `reference_key` | `resolve_missing_references` only — the table whose rows may be missing, and the column matched on |
+| `reference_table` + `reference_key` | `reconcile_missing_rows` callers only — the table whose rows may be missing, and the column matched on |
 
 `grouping_column` is the one that carries into presentation as well as data: it groups the
 `edit_budget` form, the report's subtotals, and the quiz's parent/child reveal panels. Whether it
@@ -1291,3 +1294,176 @@ noted.
   discipline item already carried from Sprint 8.
 - **Step 3 emits no `action` on its iterated option**, so `action_key` could not be added to that
   gate without ambiguity. Not currently reached, since scope is chosen once.
+
+### 12.12 `ingest_and_insert` written out
+
+Derived from `import_budget_spreadsheet` v1, the specimen that exercises the shared sub-shape
+§12.10 identified. Writing it out refines that finding in two ways.
+
+#### The shared sub-shape is not about foreign keys
+
+§12.10 named it `resolve_missing_references`, inherited from the FK-dependency framing in
+`design_workflow_process`. The second instance does not involve a foreign key at all:
+`budget_vs_expense_report` steps 3–9a materialise budget and expense rows from recurring
+templates into the data tables the report then reads. Nothing is being resolved for an FK; rows
+are being made to exist before something depends on them.
+
+What the two instances actually share is the topology — load what exists, compute the gap, gate
+on whether there is one, confirm, insert — so it is renamed **`reconcile_missing_rows`**.
+
+| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
+|---|---|---|
+| Target of the insert | A reference table | The data tables read downstream |
+| How the gap is computed | Set difference on a name column | Derivation from recurring templates for a period |
+| Insert targets under one gate | 1 | 2 |
+| Needs the inserted ids afterwards | Yes — steps 10, 11 reload and bind | No |
+
+#### Nesting is inlining, not calling
+
+Only the topology is genuinely shared. The gap computation differs materially between the two
+instances, the target count differs, and one instance needs an id-binding tail the other does
+not. A call-and-return contract — a `returns` binding, a resolved set handed back — is heavier
+than that evidence supports, and it would put a runtime indirection in the way of what §12.4
+wants to be a deterministic template fill.
+
+So a nested procedure is **inlined at build time**. The fragment declares the `local_state` keys
+it writes; the caller reads them directly, as it reads any other step's output. There is no
+return value and no call frame.
+
+```json
+{ "include": "reconcile_missing_rows",
+  "bind": {
+    "existing_source": "{{slot:reference_table}}",
+    "gap":             "{{slot:reference_gap}}",
+    "targets":         ["{{slot:reference_table}}"]
+  },
+  "on_success": "bind_reference_ids", "on_cancel": "abort" }
+```
+
+Three consequences the exercise forces:
+
+- **`targets` is a list, and the gate covers all of it.** `budget_vs_expense_report` has one
+  confirm gate and two `serv_insert` steps. The fragment's insert entry expands once per bound
+  target; its interaction point does not.
+- **A fragment carries its own interaction point.** `approve_additions` belongs to
+  `reconcile_missing_rows`, not to either caller, and surfaces to the build alongside the
+  caller's own points so a strategy can be bound to it.
+- **`gap` is a slot of type `expression`.** This is a weaker parameterisation than
+  `scoped_row_editor`'s slots, which are all tables and columns. Whether two instances differing
+  this much earn a shared fragment, or are better left as two whole topologies, is worth
+  revisiting once a third instance exists.
+
+#### `reconcile_missing_rows`
+
+Slots: `existing_source` (table), `gap` (expression), `targets` (list of table).
+Writes: `existing_rows`, `gap_rows`, `inserted_rows`, `resolved_rows`.
+
+```json
+[
+  { "step_label": "load_existing", "step_type": "serv_query",
+    "input": { "tableName": "{{slot:existing_source}}" },
+    "output_key": "existing_rows",
+    "on_success": "compute_gap", "on_else": "abort" },
+
+  { "step_label": "compute_gap", "step_type": "js_transform",
+    "expression": "{{slot:gap}}",
+    "output_key": "gap_rows",
+    "on_success": "has_gap" },
+
+  { "step_label": "has_gap", "step_type": "condition",
+    "expression": "{{gap_rows.length}} > 0",
+    "on_success": "approve_additions", "on_else": "reload_resolved" },
+
+  { "interaction_point": "approve_additions",
+    "on_success": "insert_missing", "on_cancel": "abort" },
+
+  { "step_label": "insert_missing", "step_type": "serv_insert",
+    "for_each": "{{slot:targets}}",
+    "input": { "tableName": "{{each}}", "rows": "{{gap_rows}}" },
+    "output_key": "inserted_rows",
+    "on_success": "reload_resolved", "on_else": "abort" },
+
+  { "step_label": "reload_resolved", "step_type": "serv_query",
+    "input": { "tableName": "{{slot:existing_source}}" },
+    "output_key": "resolved_rows",
+    "on_success": "return", "on_else": "abort" }
+]
+```
+
+`reload_resolved` runs on both branches so `resolved_rows` is populated whether or not anything
+was inserted — a caller that needs the ids gets them, and one that does not pays a single query.
+`budget_vs_expense_report` omits this step; keeping it in the fragment is what makes the two
+instances one shape.
+
+#### `ingest_and_insert`
+
+Slots: `target_table`, `natural_key`, `parse_prompt`, `reference_table`, `reference_key`,
+`reference_gap`.
+
+```json
+[
+  { "step_label": "derive_parse_defaults", "step_type": "js_transform",
+    "expression": "runtime date decomposed into the units {{slot:parse_prompt}} declares",
+    "output_key": "parse_defaults",
+    "on_success": "parse_input" },
+
+  { "step_label": "parse_input", "step_type": "llm_call",
+    "input": { "prompt": "{{slot:parse_prompt}}", "user_input": "{{input.userInput}}",
+               "defaults": "{{parse_defaults}}" },
+    "output_key": "parsed",
+    "on_success": "check_parse_errors", "on_else": "abort" },
+
+  { "step_label": "check_parse_errors", "step_type": "condition",
+    "expression": "{{parsed.validation_errors.length}} > 0",
+    "on_success": "report_parse_errors", "on_else": "resolve_references" },
+
+  { "step_label": "report_parse_errors", "step_type": "notify",
+    "on_success": "abort" },
+
+  { "include": "reconcile_missing_rows",
+    "bind": { "existing_source": "{{slot:reference_table}}",
+              "gap":             "{{slot:reference_gap}}",
+              "targets":         ["{{slot:reference_table}}"] },
+    "on_success": "bind_reference_ids", "on_cancel": "abort" },
+
+  { "step_label": "bind_reference_ids", "step_type": "js_transform",
+    "expression": "join {{parsed}} to {{resolved_rows}} on {{slot:reference_key}}",
+    "output_key": "write_payload",
+    "on_success": "approve_writes" },
+
+  { "interaction_point": "approve_writes",
+    "on_success": "write_rows", "on_cancel": "abort" },
+
+  { "step_label": "write_rows", "step_type": "serv_upsert",
+    "input": { "tableName": "{{slot:target_table}}", "rows": "{{write_payload}}",
+               "matchColumns": "{{slot:natural_key}}" },
+    "output_key": "write_result",
+    "on_success": "notify_done", "on_else": "abort" },
+
+  { "step_label": "notify_done", "step_type": "notify", "on_success": "end" },
+  { "step_label": "end",   "step_type": "end" },
+  { "step_label": "abort", "step_type": "end" }
+]
+```
+
+Notation added beyond §12.11: `include` with `bind`; `for_each` over a list-valued slot with
+`{{each}}` inside the entry; and two named terminals, `end` and `abort`, since `on_else` on every
+step needs somewhere to land that is not the success path. `import_budget_spreadsheet` already
+has both terminals (steps 15 and 16) — it just numbers them.
+
+`approve_writes` is the same interaction point as in `budget_vs_expense_report` step 8, filled by
+`confirm` in both, which is the third point from §12.10 appearing in a second procedure.
+
+#### Defects in the specimen, not carried into the topology
+
+- **Step 9 inserts strings where rows are required.** `missing_category_names` is an array of
+  names from step 6, passed as `input.row` to a `serv_insert` on `PGD_SpendingCategories`. The
+  column is `name`; an array of bare strings cannot populate it. The gap computation returns
+  identifiers where the insert needs row objects — which is why `reconcile_missing_rows` above
+  keeps `gap_rows` and the insert payload as the same shape.
+- **The current date is frozen at generation time**, twice: step 1 computes defaults from
+  `new Date('2026-07-02')` and step 2 passes the literal string `"Thursday, July 2, 2026"` to the
+  parse prompt. Same class as `edit_budget` step 2 (§12.11) — a third instance, so it is a
+  generation habit rather than a one-off.
+- **Step 3 branches on a bare length.** `{{parsed_data.validation_errors.length}}` routes on
+  truthiness rather than a comparison. It behaves correctly, but only because `0` is falsy.
