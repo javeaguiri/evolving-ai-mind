@@ -163,6 +163,10 @@ All single-table lookups use `SERV getRows` directly — no new endpoints requir
 | `read_workflow` | SERV `getRows` on PGC_Workflow | Returns steps JSON for inspection |
 | `read_prompt` | SERV `getRows` on PGC_Prompt | Returns prompt text + output schema; filter by intent_category + version DESC limit 1 |
 | `simulate_workflow` | `POST /proc/simulate-workflow` | Existing PROC endpoint — takes steps array, returns L1/L2 results synchronously. No new endpoint needed. |
+| `search_domain_help` | SERV `getRows` on PGC_DomainHelp | Alias and semantic domain resolution |
+| `list_tables` | SERV `listTables` | Registered tables per PGC_TableMap |
+| `list_physical_tables` | SERV `listPhysicalTables` | What the database actually holds — the registry may not assert it |
+| `run_sql` | SERV | Direct read of live data — the tool that lets Novia see what a workflow will operate on |
 | `get_run_history` | Three `getRows` calls chained via session_id FK | See §3.3. **Requires X1 applied.** Shape of step-level call depends on W1 decision. |
 
 **FK join paths (documented in `minds_eye_context_index` seed):**
@@ -179,19 +183,15 @@ PGC_WorkflowRun.workflow_id →  PGC_Workflow.id               (run → workflow
 
 **Gate policy:** Only destructive operations require a confirmation gate. Change / add / modify / update operations execute immediately — permission is implicit from the request.
 
-| Tool | Mechanism | Scope | Phase | Gate |
-|---|---|---|---|---|
-| `update_data` | SERV `updateRows` on any PGD table | User data | 1 | None — executes immediately |
-| `insert_data` | SERV `insertRow` on any PGD table | User data | 1 | None — executes immediately |
-| `delete_data` | SERV `deleteRows` on any PGD table | User data | 1 | **Delete gate** — shows table, filter, row count; requires explicit approval |
-| `fix_workflow_steps` | SERV `updateRows` on PGC_Workflow | PGC config | 1 | None — executes immediately |
-| `invoke_workflow` | `enqueueWorkflow` | Extension | 1 | None for read workflows; gate for destructive workflows (delete_domain etc.) |
-| `write_memory` | `memory-client.mjs` | Memory | 1 | None — silent episodic write |
-| `fix_prompt` | SERV `updateRows` on PGC_Prompt | PGC config | 2 | **Confirmation gate** — shows full prompt diff; human confirms wording |
-| `fix_schema` | SERV DDL `addColumn` / `modifyColumn` | Schema | 2 | **Confirmation gate** — shows DDL + downstream impact |
-| `update_intent_map` | SERV `updateRows` / `insertRow` on PGC_IntentMap | PGC config | 2 | None — executes immediately |
-| `update_domain_help` | SERV `updateRows` on PGC_DomainHelp | PGC config | 2 | None — executes immediately |
-| `update_preferences` | SERV `updateRows` on PGC_SystemContext (`minds_eye_preferences`) | PGC config | 2 | None — takes effect next session |
+As built, tools are partitioned into four sets in `minds-eye.mjs`. Housekeeping tools do not
+count against `max_actions_per_session`.
+
+| Set | Tools | Gate |
+|---|---|---|
+| Inline write | `update_data`, `insert_data`, `upsert_data` | None — executes immediately |
+| Gated write | `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
+| Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
+| Housekeeping | `write_memory` | None — silent episodic write |
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
@@ -255,12 +255,23 @@ This is the baseline Novia data interaction — no fault domain analysis require
 
 **Note:** Schema changes are high-risk. Novia must explain the downstream impact (any rows that violate the new constraint) before the gate.
 
-### UC-4: Start or chain workflows (Extension)
-> "Novia, recreate the flashcard domain and run create_workflow for the quiz"
+### UC-4: Chain workflows around a decision (Extension)
+> "Novia, show me where I overspent last month and adjust this month for it"
 
-1. Novia sequences: `invoke_workflow delete_domain` → confirm → `invoke_workflow create_domain flashcards` → observe completion → `invoke_workflow create_workflow quiz_flashcards`
-2. At each step, Novia observes the WorkflowRun result before proceeding
-3. On failure at any step, Novia surfaces the failure and asks how to proceed rather than attempting an autonomous fix
+1. Novia runs the reporting workflow with `run_workflow` and waits for the run to reach a terminal state
+2. Reads the run's output, identifies which categories exceeded plan, and presents them
+3. Asks the user what to carry into the current period — the decision neither workflow can make alone
+4. Runs the editing workflow with that decision as its input
+5. Reads back what was written to confirm the result
+
+The value is step 3. Either workflow alone leaves the user carrying the finding between them by
+hand; a chain is worth building only where an observation or a decision sits between the links.
+On failure at any link, Novia surfaces it and asks how to proceed rather than attempting an
+autonomous fix.
+
+**Boundary:** `run_workflow` dispatches registered `PGC_Workflow` rows to the step-executor.
+Operations implemented as PROC endpoints rather than workflows — `delete_domain`, `create_domain`
+— are not reachable through it and are not chainable this way.
 
 ### UC-5: Inspect and return structured data
 > "Novia, show me all my flashcard decks with their card counts"
@@ -498,3 +509,978 @@ Sprint 5 build order:
 8. UC-1 (improve workflow, Generation domain) validated end-to-end from Slack
 9. UC-5 (inspect data) validated — highest-frequency use case
 10. Remaining use cases in priority order
+
+---
+
+## 12. Proposal — workflow generation as a Novia toolkit
+
+> **Status: PROPOSAL — under evaluation. Not scoped, not decided, no implementation.**
+> Measurements in this section were taken 2026-07-26 against the live database and the
+> `seed_PGC_Prompt` / `seed_PGC_SystemContext` seed files. They are point-in-time findings,
+> not configuration.
+
+The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
+into a set of tools Novia orchestrates, with workflow design patterns held as searchable
+entities rather than as prose inside prompts.
+
+### 12.1 The measured problem
+
+| Signal | Value |
+|---|---|
+| `create_workflow` runs, all time | 98 — 23 completed, 23 failed, 52 cancelled |
+| Domain workflows surviving from those runs | 4 |
+| `create_workflow` itself | v85, 73 steps, 44 KB of step JSON |
+| `create_domain` (declarative output, for contrast) | 39 runs, 22 completed |
+
+The 52 cancellations are the load-bearing number: they are runs abandoned mid-flight. A fixed
+pipeline's only response to a mid-run correction is to re-enter the generator with a feedback
+string; it cannot inspect, ask, and adjust.
+
+Assembled static instruction per LLM call, before any run-specific input:
+
+| Prompt | Own text | Injected context | Total |
+|---|---|---|---|
+| `analyze_workflow_gaps` v16 | 7.0 KB | 23.8 KB | 30.7 KB |
+| `design_workflow_process` v25 | 18.6 KB | 24.7 KB | 43.3 KB |
+| `design_workflow_dialogs` v19 | 14.6 KB | 3.1 KB | 17.7 KB |
+| `generate_workflow_steps` v49 | 22.9 KB | 59.6 KB | 82.5 KB |
+
+`step_type_contracts` (22 KB) is injected into three of the four. `generate_workflow_steps`
+has gone from v11 to v49 since 2026-05-09 without the defect rate falling — the defect *class*
+moved from structural (routing graphs, caught by the simulation engine) to semantic (a row
+limit that drops data, a value derived after the step that consumes it), which no validator
+reaches.
+
+### 12.2 Four kinds of content are fused in each prompt
+
+The prompts do not have a size problem; they have a partitioning problem. Measured by section
+in `generate_workflow_steps`, 23% of the prompt performs the task the prompt is named for.
+
+| Category | Present as | Belongs |
+|---|---|---|
+| **Archetype knowledge** | `RAW INPUT PARSING STEPS` (64 lines, pivot tables), `FLAT LOOP PATTERN`, the FK-dependency block, the options/reveals feed rules, the reveal-vs-two-gate boundary, all 16.6 KB of `step_usage_patterns` | Retrieved on relevance |
+| **Orchestration** | `CORRECTION MODE` (59 lines); the revision, consolidation and routing-repair passes in `design_workflow_process`; `PREPARATION-STEP RULE` | Deleted — the agentic loop is the orchestrator |
+| **Registry transcribed as prose** | A hand-maintained list of 20 prompt names; `step_type_contracts` resident in three prompts; a literal CHECK-constraint enum | Queried at need |
+| **Capability instruction** | `TRANSLATION RULES`, `DATA PROVENANCE CHECK`, `SCOPE`, `ECONOMY`, Guards 1 and 3 | Retained |
+
+Corroboration: `analyze_workflow_gaps` is the shortest of the four (75 lines), carries almost
+no archetype content, does one job, and is not a source of recurring defects.
+
+### 12.3 Archetype registry
+
+Six archetypes are recoverable from the existing prompt text — they are already written there,
+as prose, where they cannot be searched, versioned, or selectively retrieved. Four correspond
+to workflows that survive in `PGC_Workflow` today.
+
+| Archetype | Stated today in | Specimen |
+|---|---|---|
+| Select-scope → list → edit-one → save → re-list | `design_workflow_process` (save-and-continue rules), `design_workflow_dialogs` (`action_key`), `workflow_routing_rules` 6b | `edit_budget` |
+| Per-row form, bounded by a gate field ceiling | `design_workflow_process` (data-driven form rule), `design_workflow_dialogs` (data-driven field lists) | `edit_budget` |
+| Hierarchical select — self-referential FK, reveals per parent, options per leaf | `design_workflow_process` (hierarchical trigger), `design_workflow_dialogs` (accordion) | flashcard decks |
+| Stimulus → reveal → rate, one gate | `design_workflow_process` (reveal vs two-gate), `design_workflow_dialogs` (summary-with-details) | `flashcard_quiz_session` |
+| Paste → parse → FK-gap resolve → bulk insert | `design_workflow_process` FK-dependency block; `generate_workflow_steps` raw-input section | `import_budget_spreadsheet` |
+| Query → aggregate → format → report | `analyze_workflow_gaps` (deterministic formatting test), `design_workflow_dialogs` (tabular reveal) | `budget_vs_expense_report` |
+
+The FK-dependency block in `design_workflow_process` is already a parameterised template with
+slots (`load_<ref>_records` → `check_missing_refs` → `has_missing_refs` → `confirm_new_refs` →
+`insert_ref_records`). The system has independently arrived at archetypes and stored them in
+the one place they cannot be used selectively — every generation pays for them, including
+generations with no FK dependency.
+
+#### Procedures and dialog strategies are two tables
+
+The table above, and the six rows seeded from it, mix **procedures** with **presentation
+strategies**. The seed's own text gives it away: `bulk_row_form.design_rules` states that when
+the field product exceeds the gate ceiling *"this archetype does not apply: design a
+list_selection gate to pick ONE row followed by a small form to edit that row"* — which is
+`scoped_row_editor`. One archetype degrading into another on a row count is not two archetypes.
+It is one procedure with two presentations, selected by a computable condition.
+
+| Kind | Definition | Present in the seeded six as |
+|---|---|---|
+| **Procedure** | What the workflow does. Has a verb, a topology, and slots | edit tabular data; iterate and capture per item; ingest, parse, resolve references, insert; query, aggregate, report |
+| **Dialog strategy** | How the user interacts at one interaction point | one-row selector; per-row bulk form; hierarchy as reveals-per-parent with options-per-leaf; one gate with reveal versus two gates; `list_selection` with `item_action`; `choice` with a per-option iterator |
+
+`hierarchical_selector` has no verb — it is a way of presenting a selection that plugs into any
+procedure needing the user to pick a row. `reveal_and_rate` carries a presentation choice in its
+name while its own rules state when two gates should replace the reveal.
+
+An archetype must describe the shape of *editing a table of data*, not of editing one particular
+kind of record. The domain belongs in the slot bindings, never in the archetype.
+
+**Composition:** a procedure declares that an interaction happens at a point in its topology; a
+dialog strategy fills that point. The relationship is compositional rather than taxonomic, so
+they are two tables — `PGC_Archetype` holds procedures, `PGC_DialogStrategy` holds strategies —
+rather than one table with a `kind` discriminator. A discriminator column can record that a row
+is one kind or the other, but it cannot express that a procedure *has* interaction points and a
+strategy *fills one*: the composition would live nowhere. Their columns differ accordingly — a
+procedure carries `topology` and `slots`, a strategy carries the gate shape it emits and
+computable applicability bounds.
+
+`flashcard_quiz_session` v3 is the specimen that makes the composition concrete. It is **one**
+procedure — iterate over items, present a stimulus, capture a response per item, write it — with
+**two different strategies at two different interaction points**:
+
+| Point | Step | Strategy | Emitted gate |
+|---|---|---|---|
+| Select the scope to iterate over | 3 | hierarchy as reveals-per-parent with options-per-leaf | `choice` + `reveals`, options from an `iterator` |
+| Capture the response for one item | 12 | fixed ordered scale, all values visible | `choice`, six authored options |
+
+Neither strategy is derivable from the procedure, and the same two plug into unrelated
+procedures: the step 3 strategy is the same one `edit_budget` uses to pick a period, inside a
+procedure that edits tabular data rather than iterating. One workflow, one procedure, two
+strategies is not representable in one table without the composition becoming implicit.
+
+**Consequence for the preference conversation.** Which dialog strategies are *available* is
+computable from the data — a row count against the gate field ceiling, an option count against
+the threshold past which `choice` renders as a dropdown. Which of the feasible ones is *wanted*
+is genuine user preference: all values as buttons or a dropdown, detail revealed on demand or
+shown inline, one row at a time or the whole table. This is where the preference questions in
+step 2 of the build procedure come from — the applicable templates given the live data — rather
+than from domain research. Model selection for any generated `llm_call` step (`cheap` versus
+`smart`) is the same kind of user-visible preference and should be surfaced, not decided
+silently.
+
+Of the seeded six, `scoped_row_editor`, `paste_parse_resolve_insert` and `aggregate_report` are
+procedures; `hierarchical_selector` and `bulk_row_form` are dialog strategies; `reveal_and_rate`
+is a procedure (iterate and capture per item) fused with the strategy its name carries. The
+rows are `status: draft` and no consumer reads them, so the restructure is a seed rewrite with
+no migration.
+
+#### What a dialog strategy declares — show, ask, draw
+
+An interaction point resolves three separate questions, which `gate_type` currently answers with
+one enum value:
+
+| | Question | Owner |
+|---|---|---|
+| **Show** | What does the user read in order to decide? | Procedure layer — markdown, tables, `reveal`/`reveals`, key-value pairs. No `output_key`, no routing |
+| **Ask** | What is collected, and what does it route to? | Procedure layer — carries `output_key` and/or `on_select` |
+| **Draw** | Which widget carries it? | Experience layer |
+
+Decomposed this way the six gate types stop being types. Three of them exist mostly to describe
+**show**, and the enum is five frozen (show, ask) pairings:
+
+| `gate_type` | Show | Ask |
+|---|---|---|
+| `confirm` | — | acknowledge |
+| `review_object` | key-value pairs | acknowledge |
+| `list_selection` | markdown table | one row from a set |
+| `choice` (+ `reveals`) | reveal panels | one value from a set |
+| `form` | — | n typed values |
+
+**Draw stays in the experience layer** — that half of the partition rule is correct. What is
+missing is its input. `human_gate` gives a workflow no way to characterise an option set beyond
+how many options it holds, so `callback.mjs` renders from a count, and a count cannot separate a
+six-point rating scale from a twelve-month picker (§12.8). The distinguishing property is
+whether the option set is **authored** at design time or **derived** from data at runtime: a
+derived set may hold three entries or three hundred, so collapsing it past a handful is a fair
+trade; an authored ordered scale has a count that is a property of the design, and the
+simultaneous visibility of every value *is* the interaction.
+
+So a strategy declares the properties its emitted gate carries — `option_source`,
+`ordered`, and the bounds below — and the renderer applies mechanics to them: *derived and
+numerous → collapse to a single control; authored and ordered → always inline*. No domain
+vocabulary crosses the boundary; the renderer never learns what a flashcard is. This is the same
+correction Sprint 7 already applied one level down, where a `form` field's `type` names what is
+collected and never a widget — applied there to `form.fields[]` and not to `choice.options[]`.
+
+A `PGC_DialogStrategy` row therefore holds:
+
+| Column | Purpose |
+|---|---|
+| `name`, `description`, `aliases` | Identity and retrieval, as for a procedure |
+| `applicability` | Computable bounds deciding whether this strategy is *feasible* on the live data — option count, field product against the gate ceiling, hierarchy depth |
+| `emits` | The gate shape produced: `gate_type`, and the declared properties the renderer reads |
+| `design_rules` | The strategy-scoped prose extracted from `design_workflow_dialogs`, loaded only on selection |
+
+Feasibility is computed; which feasible strategy is *wanted* is the preference question above.
+
+**Storage.** Both tables carry a vector column with `embed_source`, which gains semantic
+search with no code change (`architecture.md` §10) and is reachable through the existing
+`vectorSearch` descriptor on `getRows`. Both are data, so Novia adding a row is an insert, not a
+deploy — consistent with the Static System vs Evolving Artifacts boundary and with her Extender
+role (§1.2).
+
+**Effect on the phases.** On a matched archetype, process design narrows to binding schema
+columns to declared slots, and translation may reduce to a deterministic template fill with
+no LLM call at all.
+
+### 12.4 The phases become guidelines, not tools
+
+`create_workflow` is not stepped through and not wrapped. The phase sequence is a sound
+decomposition of the *work* and survives as **procedural guidance**; what does not survive is
+each phase being a prompted single-shot call that emits a whole structured document.
+
+The phase split was introduced because one LLM call asked to hold gap classification, process
+design and dialog design at once had to satisfy incompatible output schemas simultaneously,
+and produced schema violations on every run. That failure is a property of single-shot document
+generation, not of the decomposition. A turn-based loop emits one `{action, params, reasoning}`
+decision per turn and never holds two output schemas at once, so the constraint does not apply
+and the phases can go back to being what they describe: an order of work.
+
+**The dividing line: a tool is for something that acts. Guidance is for reasoning.**
+
+| Remains a tool | Becomes guidance |
+|---|---|
+| `simulate_workflow` — L1/L2 over a candidate step array | research and option-framing |
+| `query_table`, `run_sql` — read the data the workflow will operate on | gap analysis |
+| `search_archetypes` — match a shape (new) | process design |
+| `validate_workflow_shape` — L0 structural validation (new) | dialog design |
+| `register_workflow` — write `PGC_Workflow` + `PGC_IntentMap` (new, gated) | |
+
+Removed outright: the sonar research call (it re-derives what `PGC_Schema` already holds), the
+preference-gate iterator, the review and registration gates, and the correction loops. All
+become conversation in the thread.
+
+#### The build procedure
+
+Written as guidance, not as a routing graph. The order is a default a reasoning agent may
+depart from with cause, not a topology:
+
+1. **Ground in what exists.** Read the domain schema. Then read the *data* — row counts,
+   distinct values on enum columns, the actual span of a date column. Schema says what may be
+   there; only the data says what is.
+2. **Propose and choose, with the user.** Surface the options that materially change the shape
+   of the workflow, framed against what the data showed, and settle them in conversation. Only
+   raise a question whose answer changes the design.
+3. **Match an archetype.** On a match, its `design_rules` and `topology` load; on no match,
+   design the sequence from the capability instruction.
+4. **Settle the shape, and test its assumptions against the data.** Where the topology comes
+   from depends on step 3:
+   - **Archetype matched** — there is no skeleton to build. `topology` is retrieved and was
+     validated when the archetype was authored. Bind slots and move to content.
+   - **No match** — sketch the flow and run L0 and L1 on the sketch immediately. Both are
+     deterministic, need no LLM, and cost nothing to repeat. Then **describe the shape to the
+     user in plain language before investing in content.** A workflow whose save button routes
+     forward instead of back is a perfectly well-formed graph — reachable, terminating, no dead
+     ends — so L1 and L2 both pass it. Validity is not correctness, and the sketch is the last
+     point at which a non-expert can referee the flow.
+   - **Short and linear** — the distinction is noise. Iterate whole.
+
+   In every case, the assumptions the shape rests on are checkable against rows that already
+   exist, before content is generated: that a list fits within one gate, that a value the user
+   picks can be decomposed before the step that queries on it, that a query without a limit
+   returns what the report needs.
+5. **Fill, simulate, register.** `simulate_workflow` gates the step array; `register_workflow`
+   writes it.
+
+Testing assumptions against live data is the point of the whole design. The defects that
+motivated it — a row limit smaller than the data, a composite gate value consumed before it was
+decomposed — are invisible to a single-shot designer that receives the schema as text, and
+obvious to one that can count the rows first.
+
+A skeleton-first phase is deliberately **not** mandated. Its justification in the current
+pipeline is that content generation is one expensive call discarded whole when routing proves
+wrong, and that a single call cannot design routing and content at once; neither holds for an
+agent that edits in place and reasons one turn at a time. What survives is a preference for
+settling topology before content where topology errors are expensive — branches and loops,
+where a wrong shape invalidates the content written against it — and that is a judgment call,
+not a stage. Mandating it would reintroduce a fixed pipeline through the back door, and would
+be a rule generalised from the workflows that happened to have loops.
+
+#### Where the guidance lives
+
+- **How to build any workflow** — a `PGC_SystemContext` row injected into
+  `minds_eye_system_prompt`. Always resident, so it must stay small.
+- **How this shape of workflow behaves** — `PGC_Archetype.design_rules`, loaded only on a
+  match (§12.9).
+- **What the engine will accept** — queried, not transcribed: `PGC_StepType`, `PGC_Prompt`,
+  `PGC_Schema`.
+
+Dialog design is the clearest case, because the current prompt fuses all three:
+
+| Knowledge | Source | Loaded |
+|---|---|---|
+| Gate types; `form` is the only type that collects input; `output_key` writes only on form, confirm-with-`context_key`, and choice; a field `type` names what is collected, never a widget; option-count caps; `list_selection` requires `item_action` | `PGC_StepType` `human_gate` contract | Queried |
+| Reveal versus two gates; hierarchy as reveals-per-parent with options-per-leaf; per-option `iterator` for data-driven buttons; per-row form and its field ceiling | `PGC_Archetype.design_rules` | On match |
+| The fields are the display — do not restate field values in the message body | `PGC_SystemContext` | Always |
+
+Gate mechanics are currently asserted in three places — the `human_gate` contract in
+`PGC_StepType`, `workflow_constraints`, and `design_workflow_dialogs` prose — and have already
+drifted between them. Collapsing them to a single queried source removes a standing instance of
+the two-consumers-of-one-truth failure (checklist rule 2e).
+
+#### L0 — structural validation as a gate before simulation
+
+Retiring the `llm_call` steps also retires their Ajv gate: `review-output.mjs` validates LLM
+output against `PGC_Prompt.output_schema`, and in a conversational build there is no prompt row
+to validate against. Structural checking is restored as a **level below L1 in the existing
+simulation engine**, run twice — once on the skeleton, once on the filled array — before any
+simulation:
+
+| Level | Question |
+|---|---|
+| **L0** | Is this a well-formed step array? Required fields present, types correct, no unknown fields |
+| L1 | Does the routing form a reachable, terminating graph with resolvable templates? |
+| L2 | Does data flow correctly along the paths? |
+
+Two constraints on the implementation:
+
+- **The schema is composed from `PGC_StepType.input_contract`, never hand-authored.** A separate
+  step-array schema would restate what the step type registry already asserts, and the two would
+  drift — the same failure as the gate mechanics above. Composing it also keeps L0 correct
+  automatically when a step type changes.
+- **It extends `simulation-engine.mjs` rather than sitting beside it.** A parallel Ajv validator
+  would overlap L1's existing `serv_step_missing_required_input` content-completeness check;
+  that check is a shape assertion and belongs in L0. Two schemas — skeleton and filled — also
+  replace the current `skeleton: true` flag threaded through `runSimulation` to suppress it.
+
+L0 belongs to the Validation fault domain and is system code, consistent with the triage map.
+
+### 12.5 What is removed rather than migrated
+
+- The three correction passes in `design_workflow_process` and `CORRECTION MODE` in
+  `generate_workflow_steps` — the loop is the orchestrator.
+- The routing skeleton lock, and with it `PREPARATION-STEP RULE`, whose stated justification
+  is that translation may not add a step. That constraint exists to make a rigid pipeline safe.
+- The correction-state bookkeeping steps and the L1/L2 failure branches in the workflow itself.
+
+### 12.6 Properties of Novia this proposal depends on
+
+- `minds-eye.mjs` calls `callLlm` from `llm-client.mjs` directly. The replay fingerprint and
+  corpus machinery lives in `llm-harness.mjs`, so Novia's reasoning turns are not fingerprinted
+  and not replayable. Her full turn history is written to `PGC_SessionEntry` (tool, params,
+  result per turn), so a session is readable after the fact but not re-executable.
+- Phase tool calls carry the shape `computeFingerprint` expects — prompt category, resolved
+  input, output schema, model — so they are candidates for fingerprinting independently of
+  Novia's own turns.
+- `turn_limit` and `max_actions_per_session` are `PGC_SystemContext` preferences, adjustable
+  without a deploy (§6.3). Their current defaults are far below what a workflow build requires.
+
+### 12.7 Open questions
+
+**Direction set — `create_workflow` is dissolved outright**, rather than retained as a
+deterministic path for archetype-matched requests. Gated on evaluating Novia's capability first:
+the hybrid stays available as a fallback only if that evaluation fails, and is not designed for
+in advance.
+
+**Settled — procedures and dialog strategies are two tables**, `PGC_Archetype` and
+`PGC_DialogStrategy` (§12.3). They compose rather than classify, and a `kind` discriminator on
+one table cannot express the composition.
+
+Remaining open:
+
+1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
+   baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
+   gated on.
+2. Whether `reconcile_missing_rows` earns its place as a shared fragment. Its two instances
+   share a topology but differ in gap computation, target count and whether the inserted ids are
+   needed, so its `gap` slot is an expression rather than a table or column binding (§12.12).
+   Revisit once a third instance exists.
+3. Whether a generated gate names the strategy that produced it or declares the properties that
+   strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
+   experience layer a consumer of the registry; declaring properties keeps the registry a
+   design-time artifact the renderer never needs to know exists.
+4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
+   a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
+   matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
+   whose side of the tool/guidance line is undecided.
+5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
+   requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
+   than incidental.
+6. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
+   `/proc/simulate-workflow` endpoint. A distinct tool makes "validate, then simulate" a legible
+   two-step for a reasoning agent and yields sharper errors; a selector avoids a new endpoint.
+
+### 12.8 Defects surfaced by the prompt sweep
+
+Recorded as evidence for §12.2, not as a repair list. Under this proposal all four prompts are
+partitioned and retired, so repairing them in place would be work on documents with no future —
+and editing prompt text churns the replay fingerprint of every recording made against it. The
+one operational consequence is that `create_workflow` should not be run while these stand.
+
+Found 2026-07-26:
+
+- **`design_workflow_dialogs` v19 is spliced and partly duplicated.** A JavaScript fragment is
+  welded onto the sentence `Return ONLY a valid JSON object …` at line 68 of 138. Seventy lines
+  of instruction — including every `form` gate rule — follow the prompt's own terminating
+  instruction. Lines 126–136 duplicate 56–66 verbatim and re-inject `human_gate_dialog_rules`
+  a second time. The severed fragment is the tail of a worked example, not of a rule: the
+  `REVEAL CONTENT RULE` it illustrates survives intact at line 53 and is already carried into
+  `reveal_and_rate.design_rules`, so extraction loses nothing.
+- **Live user-domain data in system prompts**, against the rule in `CLAUDE.md`: a literal
+  budget CHECK-constraint enum in `design_workflow_process`; budget-domain state keys and step
+  labels in `design_workflow_dialogs`; recipe and pantry tokens in `generate_workflow_steps`;
+  flashcard identifiers in `step_usage_patterns`.
+- **The gate field ceiling is stated three times** across two prompts in three phrasings.
+- **The list of 20 known prompt names in `generate_workflow_steps` is hand-maintained and
+  stale** — it still names a prompt from the v3 design.
+- **`step_type_contracts` is a hand-maintained copy of the `PGC_StepType` rows** — same field
+  names (`step_type`, `description`, `input_contract`, `output_contract`, `on_success_options`,
+  `on_failure_options`), transcribed rather than referenced, and measurably stale. It carries
+  **17 of the 19** step types, so `serv_entity_insert` and `write_memory` are invisible to every
+  prompt that reads it. Its `human_gate` entry omits three fields the live row declares —
+  `fields` (which `form` gates require, and `form` is the only gate that collects input),
+  `action_key`, and `on_cancel` (**required**). This is §12.2's registry-as-prose category
+  measured rather than argued, and the strongest single case for the bridge querying
+  `PGC_StepType` instead of restating it.
+
+Found 2026-07-29, in the gate contract rather than the design prompts:
+
+- **A `choice` gate's options collapse to a dropdown on a count alone.**
+  `CHOICE_DROPDOWN_THRESHOLD` in `callback.mjs` turns lettered buttons into a `static_select`
+  past five real options. It was introduced for `edit_budget` step 3, whose single
+  `iterator: period_options` option expands to twelve month buttons, where collapsing is right.
+  It also catches `flashcard_quiz_session` step 12, six authored rating options on an SM-2
+  scale, where it is wrong: grading a card goes from one click to three interactions, in the
+  workflow whose value is the speed of repetition. **Contract fault domain** — `callback.mjs`
+  behaves reasonably on what it is given, and the `human_gate` contract has no field in which a
+  workflow could say the set is authored and ordered. Raising the threshold to six would be a
+  rule generalised from one specimen and fails at the next one. The discriminating property is
+  already present in the step JSON by accident: the gates that should collapse carry an
+  `iterator` on their options and the one that should not does not (§12.3).
+
+### 12.9 `PGC_Archetype` and `PGC_DialogStrategy` — implementation outline
+
+A seventeenth and eighteenth PGC table. System config, so `PGC_` prefixed, `target: pgc`, and
+subject to the same bootstrap-and-seed treatment as the existing sixteen. `PGC_Archetype` holds
+procedures, `PGC_DialogStrategy` holds the strategies that fill their interaction points
+(§12.3).
+
+#### `PGC_Archetype` shape
+
+Modelled on `PGC_DomainHelp`, which is the existing table that combines a registry with
+semantic retrieval.
+
+| Column | Type | Purpose |
+|---|---|---|
+| `id` | serial PK | |
+| `name` | text, not null, unique | Stable identifier, snake_case |
+| `description` | text | One line — what shape of workflow this is |
+| `aliases` | jsonb, default `'[]'` | Retrieval vocabulary. **This is what the embedding is built from** |
+| `preconditions` | jsonb, default `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK, or the request names an existing populated table |
+| `slots` | jsonb, not null, default `'[]'` | Declared **data** bindings the archetype needs — table, columns, labels, ceilings. One entry per slot: name, type, how it is resolved |
+| `interaction_points` | jsonb, not null, default `'[]'` | The named holes in `topology` where the user interacts. One entry per point: name, what is being decided, which slot supplies its data. A `PGC_DialogStrategy` row fills one |
+| `topology` | jsonb, not null, default `'[]'` | The step skeleton — step_labels, step types, routing fields, slot tokens, and interaction points as holes rather than specified gates. Same shape as the `routing_skeleton` the current pipeline builds at step 21a |
+| `design_rules` | text | The archetype-scoped prose extracted from the four prompts. Injected **only** when this archetype is selected |
+| `source_workflow` | text, nullable | Provenance — the specimen it was derived from |
+| `status` | text, default `'live'` | `live` / `draft`, mirroring `PGC_StepType` |
+| `version` | integer, default 1 | |
+| `created_by` | text | `seed` or `novia` |
+| `embedding` | vector, nullable | `embed_source: ["aliases"]` |
+| `created_at` / `updated_at` | timestamptz, default `now()` | With the standard `set_updated_at()` trigger |
+
+**`embed_source` must name array columns.** `resolveEmbedding` in `table.mjs` uses only
+array-type source fields — scalar columns listed there contribute nothing, because generic
+description text pulls the centroid away from user vocabulary (`architecture.md` §10). So
+`aliases` has to carry the retrieval terms; listing `name` or `description` alongside it would
+be inert.
+
+**`design_rules` is the destination for the extracted category-1 content** in §12.2. Its value
+is that it is *conditional*: the FK-dependency block is loaded when the FK archetype matches
+and not otherwise, which is the whole difference from the prose-in-prompt arrangement.
+
+#### `PGC_DialogStrategy` shape
+
+Identical in its registry and retrieval columns — `id`, `name`, `description`, `aliases`,
+`design_rules`, `source_workflow`, `status`, `version`, `created_by`, `embedding`, timestamps —
+so the same `embed_source: ["aliases"]` rule applies. It differs where the two kinds of thing
+differ (§12.3): no `topology`, no `slots`, no `interaction_points`, and instead —
+
+| Column | Type | Purpose |
+|---|---|---|
+| `applicability` | jsonb, not null, default `'{}'` | Machine-checkable bounds deciding whether this strategy is *feasible* against the live data — option count, field product against the gate ceiling, hierarchy depth. Evaluated after the row counts of step 1 of the build procedure, so feasibility is computed rather than guessed |
+| `emits` | jsonb, not null, default `'{}'` | The gate shape produced: `gate_type`, and the declared properties the experience layer reads to choose a widget (`option_source`, `ordered`) |
+
+`applicability` and `preconditions` on `PGC_Archetype` are the same kind of column serving
+different questions: `preconditions` asks whether a procedure *fits the request*, `applicability`
+asks whether a strategy *fits the data at one point*. A procedure is matched once per build; a
+strategy is matched once per interaction point.
+
+#### Creation path — one path, not two
+
+`createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, so bootstrap is idempotent and
+re-running it on the live instance creates only the tables that are missing. There is no need
+for a separate `schema/createTable` call, and none should be made — both tables are created the
+same way the other sixteen were:
+
+1. `src/serv/templates/pgc/PGC_Archetype.json` and `PGC_DialogStrategy.json` — static ES module
+   imports in `init-brain.mjs`, appended to `PGC_TEMPLATES`. Bundled by esbuild, never read
+   via `fs`.
+2. Registration rows appended to `seed_PGC_Schema.json` and `seed_PGC_TableMap.json`, one pair
+   per table. `PGC_TableMap` is not optional: `table.mjs` gates all row access on it, and
+   `seedPGCTableMap` skips any table with no `PGC_Schema` row, so both are required.
+3. `POST /api/v1/serv/bootstrap` after deploy. Existing tables report as already present.
+
+#### Seeding and maintenance
+
+- `seed_PGC_Archetype.json` (procedures) and `seed_PGC_DialogStrategy.json` (strategies) in
+  `src/serv/templates/pgc/seeds/`, seeded by `seedPGCArchetype` and `seedPGCDialogStrategy` as
+  bootstrap steps 12 and 13.
+- `ON CONFLICT (name) DO UPDATE` on the seeded columns. `created_by` is deliberately excluded
+  so a row Novia authored keeps its provenance if it is later moved into the seed file.
+  Rows Novia writes are not in the seed file and are never touched by bootstrap.
+- `dev_scripts/upsert-archetype.mjs` and `dev_scripts/upsert-dialog-strategy.mjs`, following
+  the `upsert-step-type.mjs` pattern — content-fingerprint comparison, then `updateRows` or
+  `insertRow`. Seeded rows are never edited by direct `updateRows`.
+- The script never writes `embedding`. SERV computes it from `embed_source` on insert, and on
+  any update whose payload touches `aliases`. Rows inserted before the column was populated
+  need `dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only and
+  would need extending.
+
+#### Access
+
+- **Read** — no new endpoint. `getRows` on either table with a `vectorSearch` descriptor against
+  `embedding`. Vector columns are stripped from `getRows` responses, so the payload stays small.
+  Surfaced to Novia as two read tools, `search_archetypes` and `search_dialog_strategies`,
+  alongside the existing `query_table` / `run_sql`. They are separate tools because they are
+  called at different moments — a procedure once per build, a strategy once per interaction
+  point — and a single tool would have to be told which it was searching for.
+- **Write** — `insertRow` / `updateRows`. Novia adding a row to either table is a system-config
+  change, so it belongs in `GATED_WRITE_TOOLS` (§4.2) rather than executing inline.
+- **Threshold** — `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against domain
+  aliases. Both tables' aliases describe workflow shapes and interaction shapes rather than
+  domain nouns, so each needs its own calibration against real requests and neither should be
+  assumed to carry over.
+
+#### Documentation required at implementation
+
+- `docs/arch-data.md` — both PGC table definitions and any curl additions to §5.5.
+- `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing for the two dev scripts.
+- `openapi.yaml` — no change expected; both tables are reached through the generic `getRows` /
+  `insertRow` routes.
+
+### 12.10 Distillation of the four surviving workflows (OQ3)
+
+Read 2026-07-29 from the live `PGC_Workflow` rows: `edit_budget` v1 (12 steps),
+`flashcard_quiz_session` v3 (21), `import_budget_spreadsheet` v1 (16),
+`budget_vs_expense_report` v5 (15). These four are the entire surviving output of 98
+`create_workflow` runs, so they are the whole evidence base for what `topology`, `slots` and
+`interaction_points` hold.
+
+#### Interaction points are real and separable
+
+Eight human gates across the four workflows reduce to **three** interaction points, filled by
+**five** different strategies:
+
+| Interaction point | Instances | Strategies observed |
+|---|---|---|
+| **select_scope** — narrow the data to operate on | `edit_budget` 3, `budget_vs_expense_report` 1, `flashcard_quiz_session` 3 | `choice` with an option `iterator` over twelve periods; `text_input` free prose; `choice` with `iterator` + `reveals` as hierarchy |
+| **approve_writes** — confirm rows before they are written | `import_budget_spreadsheet` 8 and 12, `budget_vs_expense_report` 8 | `confirm` in all three |
+| **capture_values** — collect the user's input for the current scope or item | `edit_budget` 7, `flashcard_quiz_session` 12 | `form`, one field pair per row; `choice`, fixed ordered scale |
+
+One point filled three different ways in three unrelated procedures is the composition model
+working. It also exposes a defect that only becomes visible once the point is named: **the same
+decision is made well in one workflow and badly in another.** `edit_budget` step 3 selects a
+year-month period with a deterministic picker built from rows that already exist.
+`budget_vs_expense_report` step 1 collects the same kind of value as free prose, and step 2
+exists solely to parse it back apart.
+
+That is the derive-before-consume defect in its resolved form, and it shows the defect class is
+**structural rather than instructional**. A composite value only needs decomposing because a
+strategy collected it composite. Bind `select_scope` to a typed picker and step 2 has nothing to
+do — the whole class disappears without a prompt rule, a validator, or the bounded-drift
+relaxation that was Sprint 9's candidate lead item.
+
+#### Procedures nest
+
+One sub-shape appears inside two unrelated procedures, in the same order both times:
+
+| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
+|---|---|---|
+| load existing reference rows | 5 | 3, 4, 5 |
+| compute the gap | 6 | 6 |
+| gate on whether there is one | 7 | 7 |
+| confirm the additions | 8 | 8 |
+| insert them | 9 | 9, 9a |
+| reload and bind ids | 10, 11 | — |
+
+This is the FK-dependency block §12.3 identified as already being a parameterised template,
+confirmed live. It has a verb, a topology and slots, so it satisfies the definition of a
+procedure — it simply is not a whole workflow. **A procedure's `topology` may therefore reference
+another procedure.** Composition stays within `PGC_Archetype`; no third table is needed. Written
+out in §12.12 the reference resolves to a build-time `include` rather than a call, and the
+fragment is named `reconcile_missing_rows` — the second instance has no foreign key in it, so the
+FK framing inherited from `design_workflow_process` is too narrow.
+
+#### How many procedures there are
+
+Four top-level, one nested — against six seeded rows:
+
+| Procedure | Specimen |
+|---|---|
+| `scoped_row_editor` — select a scope, list its rows, edit, save, return to the refreshed list | `edit_budget` |
+| `iterate_and_capture` — select a scope, walk its items, capture a response per item, write it | `flashcard_quiz_session` |
+| `ingest_and_insert` — accept pasted data, parse it, resolve references, bulk insert | `import_budget_spreadsheet` |
+| `aggregate_report` — query, aggregate, format deterministically, present | `budget_vs_expense_report` |
+| `reconcile_missing_rows` — nested; inlined by the two above that need it | `import_budget_spreadsheet` 5–11 |
+
+`hierarchical_selector` and `bulk_row_form` move to `PGC_DialogStrategy` whole.
+`reveal_and_rate` splits: its procedure half becomes `iterate_and_capture`, its presentation half
+becomes a strategy on `capture_values`.
+
+#### Slots
+
+Recurring data bindings, from what the four actually bind:
+
+| Slot | Appears as |
+|---|---|
+| `source_table` + `rows` | Every workflow's opening `serv_query` |
+| `scope_columns` | `year` + `month`; `deck_id` |
+| `label_column` | The column standing in for a row in a picker or table |
+| `grouping_column` | `type` in both budget workflows — drives both display grouping and subtotals |
+| `write_target` + `natural_key` | `serv_upsert` matched on `(year, month, category_id)` |
+| `reference_table` + `reference_key` | `reconcile_missing_rows` callers only — the table whose rows may be missing, and the column matched on |
+
+`grouping_column` is the one that carries into presentation as well as data: it groups the
+`edit_budget` form, the report's subtotals, and the quiz's parent/child reveal panels. Whether it
+is one slot read by two consumers or two slots is unsettled.
+
+#### Variance that is not procedural
+
+Terminal and label conventions differ across all four — `budget_vs_expense_report` labels a step
+`"end"`, `import_budget_spreadsheet` carries two `end` steps (one for the cancel path, one for
+success), `edit_budget` one; step labels include `"9a"`. Routing field usage is consistent:
+`condition` steps route on `on_success` / `on_else` in all four, never `on_true` / `on_false`.
+None of this belongs in `topology` — it is translation-stage noise, and normalising it is L0's
+job (§12.4).
+
+### 12.11 `scoped_row_editor` written out
+
+> **The notation below is parked (2026-07-29).** `{{slot:name}}`, and `include` / `for_each` in
+> §12.12, are an invented mini-language — the violation pattern `CLAUDE.md` names: inventing a
+> custom syntax and then needing rules to make an LLM emit it. Novia can already write code; what
+> she lacks is this system's conventions, so Sprint 9 writes a convention bridge instead and lets
+> archetypes follow from what real builds turn out to need. The **findings** in §12.11 and §12.12
+> stand as evidence — a strategy expands an interaction point, nesting is inlining, the shared
+> fragment is not about foreign keys, and the specimen defects are live. The notation does not.
+
+The worked specimen that settles the `topology` notation, derived from `edit_budget` v1. Written
+from the shape the procedure should have, not transcribed from the specimen — three defects in
+`edit_budget` are recorded at the end and are not carried in.
+
+#### Not every step in a workflow is a procedure step
+
+Mapping `edit_budget`'s twelve steps against the procedure reveals a third category. Four of
+them exist only to build or decode the payload of an adjacent gate:
+
+| Step | Belongs to | Why |
+|---|---|---|
+| 1 `serv_query` summaries | Procedure | The procedure needs the set of scopes to choose from |
+| 2 `js_transform` → `period_options`, `period_summaries_table` | **Strategy** | Builds the option array and the markdown table one particular picker renders |
+| 3 `human_gate` choice | Interaction point | `select_scope` |
+| 4 `serv_query` categories | Procedure | The reference rows that become the editable line items |
+| 5 `serv_query` existing budgets | Procedure | The current values in scope — the loop return target |
+| 6 `js_transform` → `form_fields` | **Strategy** | Emits one `amount_<id>` / `notes_<id>` field pair per reference row |
+| 7 `human_gate` form | Interaction point | `capture_values` |
+| 8 `js_transform` → `upsert_rows` | **Strategy** | Decodes the same invented field names back into rows |
+| 9 `serv_upsert` | Procedure | The write |
+| 10 `condition` on `action_key` | Procedure | Save-and-continue loop |
+| 11 `notify`, 12 `end` | Procedure | Terminal |
+
+Steps 6 and 8 are a matched pair: the field-name convention `amount_<id>` is invented by 6 and
+understood only by 8. Neither is meaningful without the other, and both are meaningless to a
+procedure that binds a different strategy to the same point. **A strategy expands an interaction
+point into prep steps, a gate, and decode steps** — so a procedure's `topology` is materially
+shorter than the workflow built from it. `scoped_row_editor` is nine entries; `edit_budget` is
+twelve.
+
+This is also what the Sprint 9 candidate lead item was fighting. Translation "adding steps" past
+a locked skeleton is a strategy expanding a hole, and the step-count drift that triggered
+rejection is the expansion becoming visible at the wrong stage.
+
+#### Slots
+
+```json
+[
+  { "name": "source_table",      "type": "table",   "resolved_from": "request",        "required": true },
+  { "name": "scope_source",      "type": "table",   "resolved_from": "schema",         "required": true,
+    "note": "Where scope candidates are read from — often a view aggregating source_table" },
+  { "name": "scope_columns",     "type": "columns", "resolved_from": "schema",         "required": true },
+  { "name": "scope_order",       "type": "orderBy", "resolved_from": "schema",         "required": false },
+  { "name": "reference_table",   "type": "table",   "resolved_from": "schema",         "required": true,
+    "note": "One editable line item per row of this table" },
+  { "name": "reference_label",   "type": "column",  "resolved_from": "pickLabelColumn","required": true },
+  { "name": "reference_group",   "type": "column",  "resolved_from": "schema",         "required": false,
+    "note": "Groups the line items for display and any subtotals" },
+  { "name": "editable_columns",  "type": "columns", "resolved_from": "request",        "required": true },
+  { "name": "natural_key",       "type": "columns", "resolved_from": "schema",         "required": true },
+  { "name": "soft_delete_column","type": "column",  "resolved_from": "schema",         "required": false }
+]
+```
+
+`reference_group` is the `grouping_column` §12.10 left unsettled. Written out, it is one slot
+read by two consumers — the procedure never uses it, both the display strategy and any subtotal
+formatting do — which is consistent with it staying a data slot rather than splitting.
+
+#### Interaction points
+
+```json
+[
+  {
+    "name": "select_scope",
+    "decides": "which scope the edit applies to",
+    "data_from": ["scope_candidates"],
+    "produces": [
+      { "key": "selected_scope", "shape": "one value per scope_columns entry" }
+    ],
+    "constraint": "Must yield one value per scope_columns entry. A strategy that returns a single composite value does not satisfy this point."
+  },
+  {
+    "name": "capture_values",
+    "decides": "new values for editable_columns across every reference row in scope",
+    "data_from": ["reference_rows", "scope_rows"],
+    "produces": [
+      { "key": "write_payload", "shape": "array of rows keyed by natural_key" },
+      { "key": "edit_action",   "shape": "which control the user used" }
+    ]
+  }
+]
+```
+
+`produces` is the contract between a strategy and the procedure: the procedure writes
+`{{write_payload}}` without knowing which strategy built it. `constraint` on `select_scope` is
+derive-before-consume made structural — a picker binding one value per scope column satisfies it,
+free prose returning `"YYYY-MM"` does not, and nothing downstream needs a decomposition step
+either way.
+
+#### Topology
+
+```json
+[
+  { "step_label": "load_scope_candidates", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:scope_source}}", "orderBy": "{{slot:scope_order}}" },
+    "output_key": "scope_candidates",
+    "on_success": "select_scope", "on_else": "cancel" },
+
+  { "interaction_point": "select_scope",
+    "on_success": "load_reference_rows", "on_cancel": "cancel" },
+
+  { "step_label": "load_reference_rows", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:reference_table}}" },
+    "output_key": "reference_rows",
+    "on_success": "load_scope_rows", "on_else": "cancel" },
+
+  { "step_label": "load_scope_rows", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:source_table}}", "filters": "{{scope_filters}}" },
+    "output_key": "scope_rows",
+    "on_success": "capture_values", "on_else": "cancel" },
+
+  { "interaction_point": "capture_values",
+    "on_success": "write_rows", "on_cancel": "cancel" },
+
+  { "step_label": "write_rows", "step_type": "serv_upsert",
+    "input":   { "tableName": "{{slot:source_table}}", "rows": "{{write_payload}}",
+                 "matchColumns": "{{slot:natural_key}}" },
+    "output_key": "write_result",
+    "on_success": "continue_or_finish", "on_else": "cancel" },
+
+  { "step_label": "continue_or_finish", "step_type": "condition",
+    "expression": "{{edit_action}} === 'save'",
+    "on_success": "load_scope_rows", "on_else": "notify_saved" },
+
+  { "step_label": "notify_saved", "step_type": "notify", "on_success": "end" },
+
+  { "step_label": "end", "step_type": "end" }
+]
+```
+
+What the notation has to carry, established by writing it:
+
+- **`step_label` is a name, never an ordinal.** The loop target is `load_scope_rows`, not `5`.
+  Ordinals are why `budget_vs_expense_report` has a step called `9a`.
+- **Two token namespaces.** `{{slot:name}}` is filled once at build time from `slots` and never
+  reaches the runtime resolver; `{{name}}` is ordinary `local_state`. The colon cannot occur in a
+  `local_state` path, so the two cannot collide.
+- **An interaction point is an entry, not a step.** It carries routing and nothing else — no
+  `gate_type`, no `output_key`, no `message_template`. All of that arrives with the strategy.
+- **The loop returns to a procedure step, not to a point.** `continue_or_finish` routes to
+  `load_scope_rows` so the re-read happens before the point is re-entered. Scope is chosen once.
+- **No nested procedure reference is exercised here.** `scoped_row_editor` needs none; the
+  notation for one is still open (§12.7).
+
+#### Defects in the specimen, not carried into the topology
+
+Found while writing this out. Artifact repairs to `edit_budget`, not backlog items, except where
+noted.
+
+- **Step 5 queries a scope that cannot match.** `selected_period` is the string `"2026-07"`, and
+  step 5 filters on `{{selected_period.0}}` and `{{selected_period.1}}`. `resolvePath` in
+  `template-resolver.mjs` applies a numeric key to a non-array by falling through to `cur[key]`,
+  so these resolve to `"2"` and `"0"` — the query asks for year 2, month 0 and returns nothing on
+  every run. The form at step 7 is therefore always built from an empty `existing_budgets`, so
+  saved values never reappear on a loop iteration. Steps 6 and 8 split the same value correctly
+  with `.split('-')`. This confirms the proposed L1 check for `{{key.N}}` indexing on non-arrays
+  as a live defect rather than a hypothetical one, and it is a third instance of the
+  `select_scope` composite-value root cause.
+- **Step 1's filter excludes two thirds of the year.** `year lte 2026 AND month lte 7` matches no
+  month after July in any year, and `limit: 13` caps what survives. Both values were frozen at
+  generation time, as is `var currentPeriod = '2026-07'` hard-coded in step 2, so the workflow
+  degrades silently as soon as the date moves. The row-limit half is the query row-limit
+  discipline item already carried from Sprint 8.
+- **Step 3 emits no `action` on its iterated option**, so `action_key` could not be added to that
+  gate without ambiguity. Not currently reached, since scope is chosen once.
+
+### 12.12 `ingest_and_insert` written out
+
+Derived from `import_budget_spreadsheet` v1, the specimen that exercises the shared sub-shape
+§12.10 identified. Writing it out refines that finding in two ways.
+
+#### The shared sub-shape is not about foreign keys
+
+§12.10 named it `resolve_missing_references`, inherited from the FK-dependency framing in
+`design_workflow_process`. The second instance does not involve a foreign key at all:
+`budget_vs_expense_report` steps 3–9a materialise budget and expense rows from recurring
+templates into the data tables the report then reads. Nothing is being resolved for an FK; rows
+are being made to exist before something depends on them.
+
+What the two instances actually share is the topology — load what exists, compute the gap, gate
+on whether there is one, confirm, insert — so it is renamed **`reconcile_missing_rows`**.
+
+| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
+|---|---|---|
+| Target of the insert | A reference table | The data tables read downstream |
+| How the gap is computed | Set difference on a name column | Derivation from recurring templates for a period |
+| Insert targets under one gate | 1 | 2 |
+| Needs the inserted ids afterwards | Yes — steps 10, 11 reload and bind | No |
+
+#### Nesting is inlining, not calling
+
+Only the topology is genuinely shared. The gap computation differs materially between the two
+instances, the target count differs, and one instance needs an id-binding tail the other does
+not. A call-and-return contract — a `returns` binding, a resolved set handed back — is heavier
+than that evidence supports, and it would put a runtime indirection in the way of what §12.4
+wants to be a deterministic template fill.
+
+So a nested procedure is **inlined at build time**. The fragment declares the `local_state` keys
+it writes; the caller reads them directly, as it reads any other step's output. There is no
+return value and no call frame.
+
+```json
+{ "include": "reconcile_missing_rows",
+  "bind": {
+    "existing_source": "{{slot:reference_table}}",
+    "gap":             "{{slot:reference_gap}}",
+    "targets":         ["{{slot:reference_table}}"]
+  },
+  "on_success": "bind_reference_ids", "on_cancel": "abort" }
+```
+
+Three consequences the exercise forces:
+
+- **`targets` is a list, and the gate covers all of it.** `budget_vs_expense_report` has one
+  confirm gate and two `serv_insert` steps. The fragment's insert entry expands once per bound
+  target; its interaction point does not.
+- **A fragment carries its own interaction point.** `approve_additions` belongs to
+  `reconcile_missing_rows`, not to either caller, and surfaces to the build alongside the
+  caller's own points so a strategy can be bound to it.
+- **`gap` is a slot of type `expression`.** This is a weaker parameterisation than
+  `scoped_row_editor`'s slots, which are all tables and columns. Whether two instances differing
+  this much earn a shared fragment, or are better left as two whole topologies, is worth
+  revisiting once a third instance exists.
+
+#### `reconcile_missing_rows`
+
+Slots: `existing_source` (table), `gap` (expression), `targets` (list of table).
+Writes: `existing_rows`, `gap_rows`, `inserted_rows`, `resolved_rows`.
+
+```json
+[
+  { "step_label": "load_existing", "step_type": "serv_query",
+    "input": { "tableName": "{{slot:existing_source}}" },
+    "output_key": "existing_rows",
+    "on_success": "compute_gap", "on_else": "abort" },
+
+  { "step_label": "compute_gap", "step_type": "js_transform",
+    "expression": "{{slot:gap}}",
+    "output_key": "gap_rows",
+    "on_success": "has_gap" },
+
+  { "step_label": "has_gap", "step_type": "condition",
+    "expression": "{{gap_rows.length}} > 0",
+    "on_success": "approve_additions", "on_else": "reload_resolved" },
+
+  { "interaction_point": "approve_additions",
+    "on_success": "insert_missing", "on_cancel": "abort" },
+
+  { "step_label": "insert_missing", "step_type": "serv_insert",
+    "for_each": "{{slot:targets}}",
+    "input": { "tableName": "{{each}}", "rows": "{{gap_rows}}" },
+    "output_key": "inserted_rows",
+    "on_success": "reload_resolved", "on_else": "abort" },
+
+  { "step_label": "reload_resolved", "step_type": "serv_query",
+    "input": { "tableName": "{{slot:existing_source}}" },
+    "output_key": "resolved_rows",
+    "on_success": "return", "on_else": "abort" }
+]
+```
+
+`reload_resolved` runs on both branches so `resolved_rows` is populated whether or not anything
+was inserted — a caller that needs the ids gets them, and one that does not pays a single query.
+`budget_vs_expense_report` omits this step; keeping it in the fragment is what makes the two
+instances one shape.
+
+#### `ingest_and_insert`
+
+Slots: `target_table`, `natural_key`, `parse_prompt`, `reference_table`, `reference_key`,
+`reference_gap`.
+
+```json
+[
+  { "step_label": "derive_parse_defaults", "step_type": "js_transform",
+    "expression": "runtime date decomposed into the units {{slot:parse_prompt}} declares",
+    "output_key": "parse_defaults",
+    "on_success": "parse_input" },
+
+  { "step_label": "parse_input", "step_type": "llm_call",
+    "input": { "prompt": "{{slot:parse_prompt}}", "user_input": "{{input.userInput}}",
+               "defaults": "{{parse_defaults}}" },
+    "output_key": "parsed",
+    "on_success": "check_parse_errors", "on_else": "abort" },
+
+  { "step_label": "check_parse_errors", "step_type": "condition",
+    "expression": "{{parsed.validation_errors.length}} > 0",
+    "on_success": "report_parse_errors", "on_else": "resolve_references" },
+
+  { "step_label": "report_parse_errors", "step_type": "notify",
+    "on_success": "abort" },
+
+  { "include": "reconcile_missing_rows",
+    "bind": { "existing_source": "{{slot:reference_table}}",
+              "gap":             "{{slot:reference_gap}}",
+              "targets":         ["{{slot:reference_table}}"] },
+    "on_success": "bind_reference_ids", "on_cancel": "abort" },
+
+  { "step_label": "bind_reference_ids", "step_type": "js_transform",
+    "expression": "join {{parsed}} to {{resolved_rows}} on {{slot:reference_key}}",
+    "output_key": "write_payload",
+    "on_success": "approve_writes" },
+
+  { "interaction_point": "approve_writes",
+    "on_success": "write_rows", "on_cancel": "abort" },
+
+  { "step_label": "write_rows", "step_type": "serv_upsert",
+    "input": { "tableName": "{{slot:target_table}}", "rows": "{{write_payload}}",
+               "matchColumns": "{{slot:natural_key}}" },
+    "output_key": "write_result",
+    "on_success": "notify_done", "on_else": "abort" },
+
+  { "step_label": "notify_done", "step_type": "notify", "on_success": "end" },
+  { "step_label": "end",   "step_type": "end" },
+  { "step_label": "abort", "step_type": "end" }
+]
+```
+
+Notation added beyond §12.11: `include` with `bind`; `for_each` over a list-valued slot with
+`{{each}}` inside the entry; and two named terminals, `end` and `abort`, since `on_else` on every
+step needs somewhere to land that is not the success path. `import_budget_spreadsheet` already
+has both terminals (steps 15 and 16) — it just numbers them.
+
+`approve_writes` is the same interaction point as in `budget_vs_expense_report` step 8, filled by
+`confirm` in both, which is the third point from §12.10 appearing in a second procedure.
+
+#### Defects in the specimen, not carried into the topology
+
+- **Step 9 inserts strings where rows are required.** `missing_category_names` is an array of
+  names from step 6, passed as `input.row` to a `serv_insert` on `PGD_SpendingCategories`. The
+  column is `name`; an array of bare strings cannot populate it. The gap computation returns
+  identifiers where the insert needs row objects — which is why `reconcile_missing_rows` above
+  keeps `gap_rows` and the insert payload as the same shape.
+- **The current date is frozen at generation time**, twice: step 1 computes defaults from
+  `new Date('2026-07-02')` and step 2 passes the literal string `"Thursday, July 2, 2026"` to the
+  parse prompt. Same class as `edit_budget` step 2 (§12.11) — a third instance, so it is a
+  generation habit rather than a one-off.
+- **Step 3 branches on a bare length.** `{{parsed_data.validation_errors.length}}` routes on
+  truthiness rather than a comparison. It behaves correctly, but only because `0` is falsy.
