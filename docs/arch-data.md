@@ -652,7 +652,85 @@ GROUP BY workflow_id;
 
 ---
 
-#### 4.3.7 Updated PGC Table Count
+#### 4.3.7 PGC Design Registry Tables
+
+Two tables holding workflow design knowledge as retrievable rows rather than as prose inside
+design prompts, so a pattern is loaded only when it is selected. Design reference:
+`docs/arch-minds-eye.md` §12.3 and §12.9.
+
+They compose rather than classify: an **archetype** is a procedure — what a workflow does, with
+a verb, a topology, and slots — and declares named interaction points in that topology. A
+**dialog strategy** is how the user interacts at one such point. One archetype's points may be
+filled by several different strategies, and one strategy plugs into unrelated archetypes, which
+is why they are two tables and not one table with a `kind` discriminator.
+
+> **Not yet bootstrapped.** Both templates and seeds are committed on `design/archetype-registry`
+> and wired into `init-brain.mjs`, but no live instance has run `POST /api/v1/serv/bootstrap`
+> since. Seed rows are `status: 'draft'` and no consumer reads them.
+
+##### PGC_Archetype
+
+Procedures. Retrieved by semantic match on `aliases`, then filtered by `preconditions`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| name | text UNIQUE NOT NULL | Stable snake_case identifier |
+| description | text | One line — the shape of workflow this describes |
+| aliases | jsonb NOT NULL `'[]'` | Retrieval vocabulary — the only column reaching the embedding |
+| preconditions | jsonb NOT NULL `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK |
+| slots | jsonb NOT NULL `'[]'` | Declared **data** bindings: `[{ name, type, resolved_from, required }]` — table, columns, labels, ceilings |
+| interaction_points | jsonb NOT NULL `'[]'` | The named holes in `topology` where the user interacts. One entry per point: name, what is being decided, which slot supplies its data. A `PGC_DialogStrategy` row fills one |
+| topology | jsonb NOT NULL `'[]'` | Step skeleton — `step_label`, `step_type`, routing fields, slot tokens, interaction points as holes rather than specified gates. Same shape as the `routing_skeleton` built during workflow generation |
+| design_rules | text | Archetype-scoped guidance, injected **only** when this archetype is selected |
+| source_workflow | text | Provenance — the specimen it was derived from |
+| status | text NOT NULL `'draft'` | CHECK `draft` / `live` / `retired` |
+| version | integer NOT NULL `1` | |
+| created_by | text NOT NULL `'seed'` | `seed` or `novia` |
+| embedding | vector | ✦ `embed_source: ["aliases"]`. `resolveEmbedding` uses array-type source fields only, so `aliases` must carry the retrieval terms — listing `name` or `description` would be inert |
+| created_at / updated_at | timestamptz | `set_updated_at()` trigger |
+
+##### PGC_DialogStrategy
+
+Dialog strategies. Same registry and retrieval columns; differs where the two kinds of thing
+differ — no `topology`, `slots` or `interaction_points`.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | serial PK | |
+| name | text UNIQUE NOT NULL | Stable snake_case identifier |
+| description | text | One line — how the user interacts at one point |
+| aliases | jsonb NOT NULL `'[]'` | Retrieval vocabulary — the only column reaching the embedding |
+| applicability | jsonb NOT NULL `'{}'` | Machine-checkable bounds deciding whether this strategy is *feasible* against the live data — option count, field product against the gate field ceiling, hierarchy depth. Evaluated after row counts, so feasibility is computed rather than guessed |
+| emits | jsonb NOT NULL `'{}'` | The gate shape produced: `gate_type`, plus the declared properties the experience layer reads to choose a widget (`option_source`, `ordered`) |
+| design_rules | text | Strategy-scoped guidance, injected **only** when this strategy is selected |
+| source_workflow | text | Provenance |
+| status | text NOT NULL `'draft'` | CHECK `draft` / `live` / `retired` |
+| version | integer NOT NULL `1` | |
+| created_by | text NOT NULL `'seed'` | `seed` or `novia` |
+| embedding | vector | ✦ `embed_source: ["aliases"]` |
+| created_at / updated_at | timestamptz | `set_updated_at()` trigger |
+
+`preconditions` and `applicability` are the same kind of column answering different questions:
+`preconditions` asks whether a procedure fits the *request* and is evaluated once per build;
+`applicability` asks whether a strategy fits the *data at one point* and is evaluated once per
+interaction point.
+
+**Similarity threshold.** `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against
+domain nouns. Both tables' aliases describe workflow and interaction shapes instead, so each
+needs its own calibration and neither should be assumed to carry over.
+
+**Access.** No new endpoints — `getRows` with a `vectorSearch` descriptor against `embedding`
+(vector columns are stripped from responses), and `insertRow` / `updateRows` for writes. Seeded
+rows are maintained through `dev_scripts/upsert-archetype.mjs` and
+`dev_scripts/upsert-dialog-strategy.mjs`, never by direct `updateRows`. Neither script writes
+`embedding`: SERV computes it from `embed_source` on insert and on any update touching
+`aliases`. Rows inserted before the column was populated need
+`dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only.
+
+---
+
+#### 4.3.8 Updated PGC Table Count
 
 | # | Table | Status |
 |---|---|---|
@@ -672,14 +750,17 @@ GROUP BY workflow_id;
 | 14 | PGC_Memory | Sprint 3 — episodic/semantic/procedural memory store; GIN indexes on scope + tags; see §4.3.4 |
 | 15 | PGC_Session | v3.2 — `general_chat` and `llm_call_diagnostic` sessions; see `docs/arch-session.md`. Sprint 8 — `request_fingerprint`, `fingerprint_hash` (indexed), `response_source`, `replayed_from_session_id` added (replay corpus, `docs/arch-replay.md`) |
 | 16 | PGC_SessionEntry | v3.2 — per-turn messages array rows; `reasoning` column for diagnostic metadata |
+| 17 | PGC_Archetype | Design registry — workflow procedures; see §4.3.7. **Committed, not yet bootstrapped** |
+| 18 | PGC_DialogStrategy | Design registry — dialog strategies; see §4.3.7. **Committed, not yet bootstrapped** |
 | — | PGC_WorkflowStats | SQL view — not a physical table |
 
-**Total: 16 physical PGC tables (14 bootstrapped + 2 session added in v3.2) + 1 view**
+**Total: 18 physical PGC tables (14 bootstrapped + 2 session added in v3.2 + 2 design registry
+awaiting bootstrap) + 1 view**
 
 
 ---
 
-#### 4.3.8 Dev Scripts — PGC Data Management
+#### 4.3.9 Dev Scripts — PGC Data Management
 
 These scripts in `dev_scripts/` manage the authoritative data that drives the brain's
 intelligence at runtime. They are not part of the Lambda deployment — they run locally
