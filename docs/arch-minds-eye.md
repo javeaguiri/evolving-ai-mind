@@ -1129,6 +1129,14 @@ job (§12.4).
 
 ### 12.11 `scoped_row_editor` written out
 
+> **The notation below is parked (2026-07-29).** `{{slot:name}}`, and `include` / `for_each` in
+> §12.12, are an invented mini-language — the violation pattern `CLAUDE.md` names: inventing a
+> custom syntax and then needing rules to make an LLM emit it. Novia can already write code; what
+> she lacks is this system's conventions, so Sprint 9 writes a convention bridge instead and lets
+> archetypes follow from what real builds turn out to need. The **findings** in §12.11 and §12.12
+> stand as evidence — a strategy expands an interaction point, nesting is inlining, the shared
+> fragment is not about foreign keys, and the specimen defects are live. The notation does not.
+
 The worked specimen that settles the `topology` notation, derived from `edit_budget` v1. Written
 from the shape the procedure should have, not transcribed from the specimen — three defects in
 `edit_budget` are recorded at the end and are not carried in.
