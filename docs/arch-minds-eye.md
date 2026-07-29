@@ -864,9 +864,9 @@ Remaining open:
 1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
    gated on.
-2. What `topology` actually holds. Distillation of the four surviving workflows (§12.10) has
-   settled the procedure count, the interaction points and a first slot list; the step-level
-   contents of `topology` and the shape of a nested procedure reference remain open.
+2. The notation for a nested procedure reference inside `topology`. `scoped_row_editor` is
+   written out in full (§12.11) and settles the rest of the notation, but needs no nesting, so
+   the one construct §12.10 identified is still unexercised.
 3. Whether a generated gate names the strategy that produced it or declares the properties that
    strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
    experience layer a consumer of the registry; declaring properties keeps the registry a
@@ -1123,3 +1123,171 @@ success), `edit_budget` one; step labels include `"9a"`. Routing field usage is 
 `condition` steps route on `on_success` / `on_else` in all four, never `on_true` / `on_false`.
 None of this belongs in `topology` — it is translation-stage noise, and normalising it is L0's
 job (§12.4).
+
+### 12.11 `scoped_row_editor` written out
+
+The worked specimen that settles the `topology` notation, derived from `edit_budget` v1. Written
+from the shape the procedure should have, not transcribed from the specimen — three defects in
+`edit_budget` are recorded at the end and are not carried in.
+
+#### Not every step in a workflow is a procedure step
+
+Mapping `edit_budget`'s twelve steps against the procedure reveals a third category. Four of
+them exist only to build or decode the payload of an adjacent gate:
+
+| Step | Belongs to | Why |
+|---|---|---|
+| 1 `serv_query` summaries | Procedure | The procedure needs the set of scopes to choose from |
+| 2 `js_transform` → `period_options`, `period_summaries_table` | **Strategy** | Builds the option array and the markdown table one particular picker renders |
+| 3 `human_gate` choice | Interaction point | `select_scope` |
+| 4 `serv_query` categories | Procedure | The reference rows that become the editable line items |
+| 5 `serv_query` existing budgets | Procedure | The current values in scope — the loop return target |
+| 6 `js_transform` → `form_fields` | **Strategy** | Emits one `amount_<id>` / `notes_<id>` field pair per reference row |
+| 7 `human_gate` form | Interaction point | `capture_values` |
+| 8 `js_transform` → `upsert_rows` | **Strategy** | Decodes the same invented field names back into rows |
+| 9 `serv_upsert` | Procedure | The write |
+| 10 `condition` on `action_key` | Procedure | Save-and-continue loop |
+| 11 `notify`, 12 `end` | Procedure | Terminal |
+
+Steps 6 and 8 are a matched pair: the field-name convention `amount_<id>` is invented by 6 and
+understood only by 8. Neither is meaningful without the other, and both are meaningless to a
+procedure that binds a different strategy to the same point. **A strategy expands an interaction
+point into prep steps, a gate, and decode steps** — so a procedure's `topology` is materially
+shorter than the workflow built from it. `scoped_row_editor` is nine entries; `edit_budget` is
+twelve.
+
+This is also what the Sprint 9 candidate lead item was fighting. Translation "adding steps" past
+a locked skeleton is a strategy expanding a hole, and the step-count drift that triggered
+rejection is the expansion becoming visible at the wrong stage.
+
+#### Slots
+
+```json
+[
+  { "name": "source_table",      "type": "table",   "resolved_from": "request",        "required": true },
+  { "name": "scope_source",      "type": "table",   "resolved_from": "schema",         "required": true,
+    "note": "Where scope candidates are read from — often a view aggregating source_table" },
+  { "name": "scope_columns",     "type": "columns", "resolved_from": "schema",         "required": true },
+  { "name": "scope_order",       "type": "orderBy", "resolved_from": "schema",         "required": false },
+  { "name": "reference_table",   "type": "table",   "resolved_from": "schema",         "required": true,
+    "note": "One editable line item per row of this table" },
+  { "name": "reference_label",   "type": "column",  "resolved_from": "pickLabelColumn","required": true },
+  { "name": "reference_group",   "type": "column",  "resolved_from": "schema",         "required": false,
+    "note": "Groups the line items for display and any subtotals" },
+  { "name": "editable_columns",  "type": "columns", "resolved_from": "request",        "required": true },
+  { "name": "natural_key",       "type": "columns", "resolved_from": "schema",         "required": true },
+  { "name": "soft_delete_column","type": "column",  "resolved_from": "schema",         "required": false }
+]
+```
+
+`reference_group` is the `grouping_column` §12.10 left unsettled. Written out, it is one slot
+read by two consumers — the procedure never uses it, both the display strategy and any subtotal
+formatting do — which is consistent with it staying a data slot rather than splitting.
+
+#### Interaction points
+
+```json
+[
+  {
+    "name": "select_scope",
+    "decides": "which scope the edit applies to",
+    "data_from": ["scope_candidates"],
+    "produces": [
+      { "key": "selected_scope", "shape": "one value per scope_columns entry" }
+    ],
+    "constraint": "Must yield one value per scope_columns entry. A strategy that returns a single composite value does not satisfy this point."
+  },
+  {
+    "name": "capture_values",
+    "decides": "new values for editable_columns across every reference row in scope",
+    "data_from": ["reference_rows", "scope_rows"],
+    "produces": [
+      { "key": "write_payload", "shape": "array of rows keyed by natural_key" },
+      { "key": "edit_action",   "shape": "which control the user used" }
+    ]
+  }
+]
+```
+
+`produces` is the contract between a strategy and the procedure: the procedure writes
+`{{write_payload}}` without knowing which strategy built it. `constraint` on `select_scope` is
+derive-before-consume made structural — a picker binding one value per scope column satisfies it,
+free prose returning `"YYYY-MM"` does not, and nothing downstream needs a decomposition step
+either way.
+
+#### Topology
+
+```json
+[
+  { "step_label": "load_scope_candidates", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:scope_source}}", "orderBy": "{{slot:scope_order}}" },
+    "output_key": "scope_candidates",
+    "on_success": "select_scope", "on_else": "cancel" },
+
+  { "interaction_point": "select_scope",
+    "on_success": "load_reference_rows", "on_cancel": "cancel" },
+
+  { "step_label": "load_reference_rows", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:reference_table}}" },
+    "output_key": "reference_rows",
+    "on_success": "load_scope_rows", "on_else": "cancel" },
+
+  { "step_label": "load_scope_rows", "step_type": "serv_query",
+    "input":   { "tableName": "{{slot:source_table}}", "filters": "{{scope_filters}}" },
+    "output_key": "scope_rows",
+    "on_success": "capture_values", "on_else": "cancel" },
+
+  { "interaction_point": "capture_values",
+    "on_success": "write_rows", "on_cancel": "cancel" },
+
+  { "step_label": "write_rows", "step_type": "serv_upsert",
+    "input":   { "tableName": "{{slot:source_table}}", "rows": "{{write_payload}}",
+                 "matchColumns": "{{slot:natural_key}}" },
+    "output_key": "write_result",
+    "on_success": "continue_or_finish", "on_else": "cancel" },
+
+  { "step_label": "continue_or_finish", "step_type": "condition",
+    "expression": "{{edit_action}} === 'save'",
+    "on_success": "load_scope_rows", "on_else": "notify_saved" },
+
+  { "step_label": "notify_saved", "step_type": "notify", "on_success": "end" },
+
+  { "step_label": "end", "step_type": "end" }
+]
+```
+
+What the notation has to carry, established by writing it:
+
+- **`step_label` is a name, never an ordinal.** The loop target is `load_scope_rows`, not `5`.
+  Ordinals are why `budget_vs_expense_report` has a step called `9a`.
+- **Two token namespaces.** `{{slot:name}}` is filled once at build time from `slots` and never
+  reaches the runtime resolver; `{{name}}` is ordinary `local_state`. The colon cannot occur in a
+  `local_state` path, so the two cannot collide.
+- **An interaction point is an entry, not a step.** It carries routing and nothing else — no
+  `gate_type`, no `output_key`, no `message_template`. All of that arrives with the strategy.
+- **The loop returns to a procedure step, not to a point.** `continue_or_finish` routes to
+  `load_scope_rows` so the re-read happens before the point is re-entered. Scope is chosen once.
+- **No nested procedure reference is exercised here.** `scoped_row_editor` needs none; the
+  notation for one is still open (§12.7).
+
+#### Defects in the specimen, not carried into the topology
+
+Found while writing this out. Artifact repairs to `edit_budget`, not backlog items, except where
+noted.
+
+- **Step 5 queries a scope that cannot match.** `selected_period` is the string `"2026-07"`, and
+  step 5 filters on `{{selected_period.0}}` and `{{selected_period.1}}`. `resolvePath` in
+  `template-resolver.mjs` applies a numeric key to a non-array by falling through to `cur[key]`,
+  so these resolve to `"2"` and `"0"` — the query asks for year 2, month 0 and returns nothing on
+  every run. The form at step 7 is therefore always built from an empty `existing_budgets`, so
+  saved values never reappear on a loop iteration. Steps 6 and 8 split the same value correctly
+  with `.split('-')`. This confirms the proposed L1 check for `{{key.N}}` indexing on non-arrays
+  as a live defect rather than a hypothetical one, and it is a third instance of the
+  `select_scope` composite-value root cause.
+- **Step 1's filter excludes two thirds of the year.** `year lte 2026 AND month lte 7` matches no
+  month after July in any year, and `limit: 13` caps what survives. Both values were frozen at
+  generation time, as is `var currentPeriod = '2026-07'` hard-coded in step 2, so the workflow
+  degrades silently as soon as the date moves. The row-limit half is the query row-limit
+  discipline item already carried from Sprint 8.
+- **Step 3 emits no `action` on its iterated option**, so `action_key` could not be added to that
+  gate without ambiguity. Not currently reached, since scope is chosen once.
