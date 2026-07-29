@@ -587,7 +587,7 @@ slots (`load_<ref>_records` → `check_missing_refs` → `has_missing_refs` → 
 the one place they cannot be used selectively — every generation pays for them, including
 generations with no FK dependency.
 
-#### The seeded six conflate two kinds of thing (2026-07-26)
+#### Procedures and dialog strategies are two tables
 
 The table above, and the six rows seeded from it, mix **procedures** with **presentation
 strategies**. The seed's own text gives it away: `bulk_row_form.design_rules` states that when
@@ -609,8 +609,27 @@ An archetype must describe the shape of *editing a table of data*, not of editin
 kind of record. The domain belongs in the slot bindings, never in the archetype.
 
 **Composition:** a procedure declares that an interaction happens at a point in its topology; a
-dialog strategy fills that point. The relationship is compositional rather than taxonomic, which
-argues for separating them rather than discriminating within one table.
+dialog strategy fills that point. The relationship is compositional rather than taxonomic, so
+they are two tables — `PGC_Archetype` holds procedures, `PGC_DialogStrategy` holds strategies —
+rather than one table with a `kind` discriminator. A discriminator column can record that a row
+is one kind or the other, but it cannot express that a procedure *has* interaction points and a
+strategy *fills one*: the composition would live nowhere. Their columns differ accordingly — a
+procedure carries `topology` and `slots`, a strategy carries the gate shape it emits and
+computable applicability bounds.
+
+`flashcard_quiz_session` v3 is the specimen that makes the composition concrete. It is **one**
+procedure — iterate over items, present a stimulus, capture a response per item, write it — with
+**two different strategies at two different interaction points**:
+
+| Point | Step | Strategy | Emitted gate |
+|---|---|---|---|
+| Select the scope to iterate over | 3 | hierarchy as reveals-per-parent with options-per-leaf | `choice` + `reveals`, options from an `iterator` |
+| Capture the response for one item | 12 | fixed ordered scale, all values visible | `choice`, six authored options |
+
+Neither strategy is derivable from the procedure, and the same two plug into unrelated
+procedures: the step 3 strategy is the same one `edit_budget` uses to pick a period, inside a
+procedure that edits tabular data rather than iterating. One workflow, one procedure, two
+strategies is not representable in one table without the composition becoming implicit.
 
 **Consequence for the preference conversation.** Which dialog strategies are *available* is
 computable from the data — a row count against the gate field ceiling, an option count against
@@ -622,15 +641,66 @@ than from domain research. Model selection for any generated `llm_call` step (`c
 `smart`) is the same kind of user-visible preference and should be surfaced, not decided
 silently.
 
-The seeded rows are provisionally miscategorised against this split and the §12.9 schema does
-not yet carry it. Both are pending the restructure; the seed rows are `status: draft` and no
-consumer reads them.
+Of the seeded six, `scoped_row_editor`, `paste_parse_resolve_insert` and `aggregate_report` are
+procedures; `hierarchical_selector` and `bulk_row_form` are dialog strategies; `reveal_and_rate`
+is a procedure (iterate and capture per item) fused with the strategy its name carries. The
+rows are `status: draft` and no consumer reads them, so the restructure is a seed rewrite with
+no migration.
 
-**Storage.** An archetype table with a vector column carrying `embed_source` gains semantic
+#### What a dialog strategy declares — show, ask, draw
+
+An interaction point resolves three separate questions, which `gate_type` currently answers with
+one enum value:
+
+| | Question | Owner |
+|---|---|---|
+| **Show** | What does the user read in order to decide? | Procedure layer — markdown, tables, `reveal`/`reveals`, key-value pairs. No `output_key`, no routing |
+| **Ask** | What is collected, and what does it route to? | Procedure layer — carries `output_key` and/or `on_select` |
+| **Draw** | Which widget carries it? | Experience layer |
+
+Decomposed this way the six gate types stop being types. Three of them exist mostly to describe
+**show**, and the enum is five frozen (show, ask) pairings:
+
+| `gate_type` | Show | Ask |
+|---|---|---|
+| `confirm` | — | acknowledge |
+| `review_object` | key-value pairs | acknowledge |
+| `list_selection` | markdown table | one row from a set |
+| `choice` (+ `reveals`) | reveal panels | one value from a set |
+| `form` | — | n typed values |
+
+**Draw stays in the experience layer** — that half of the partition rule is correct. What is
+missing is its input. `human_gate` gives a workflow no way to characterise an option set beyond
+how many options it holds, so `callback.mjs` renders from a count, and a count cannot separate a
+six-point rating scale from a twelve-month picker (§12.8). The distinguishing property is
+whether the option set is **authored** at design time or **derived** from data at runtime: a
+derived set may hold three entries or three hundred, so collapsing it past a handful is a fair
+trade; an authored ordered scale has a count that is a property of the design, and the
+simultaneous visibility of every value *is* the interaction.
+
+So a strategy declares the properties its emitted gate carries — `option_source`,
+`ordered`, and the bounds below — and the renderer applies mechanics to them: *derived and
+numerous → collapse to a single control; authored and ordered → always inline*. No domain
+vocabulary crosses the boundary; the renderer never learns what a flashcard is. This is the same
+correction Sprint 7 already applied one level down, where a `form` field's `type` names what is
+collected and never a widget — applied there to `form.fields[]` and not to `choice.options[]`.
+
+A `PGC_DialogStrategy` row therefore holds:
+
+| Column | Purpose |
+|---|---|
+| `name`, `description`, `aliases` | Identity and retrieval, as for a procedure |
+| `applicability` | Computable bounds deciding whether this strategy is *feasible* on the live data — option count, field product against the gate ceiling, hierarchy depth |
+| `emits` | The gate shape produced: `gate_type`, and the declared properties the renderer reads |
+| `design_rules` | The strategy-scoped prose extracted from `design_workflow_dialogs`, loaded only on selection |
+
+Feasibility is computed; which feasible strategy is *wanted* is the preference question above.
+
+**Storage.** Both tables carry a vector column with `embed_source`, which gains semantic
 search with no code change (`architecture.md` §10) and is reachable through the existing
-`vectorSearch` descriptor on `getRows`. Archetypes are data, so Novia adding one is a row
-insert, not a deploy — consistent with the Static System vs Evolving Artifacts boundary and
-with her Extender role (§1.2).
+`vectorSearch` descriptor on `getRows`. Both are data, so Novia adding a row is an insert, not a
+deploy — consistent with the Static System vs Evolving Artifacts boundary and with her Extender
+role (§1.2).
 
 **Effect on the phases.** On a matched archetype, process design narrows to binding schema
 columns to declared slots, and translation may reduce to a deterministic template fill with
@@ -785,19 +855,24 @@ deterministic path for archetype-matched requests. Gated on evaluating Novia's c
 the hybrid stays available as a fallback only if that evaluation fails, and is not designed for
 in advance.
 
+**Settled — procedures and dialog strategies are two tables**, `PGC_Archetype` and
+`PGC_DialogStrategy` (§12.3). They compose rather than classify, and a `kind` discriminator on
+one table cannot express the composition.
+
 Remaining open:
 
 1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
    gated on.
-2. Whether procedures and dialog strategies are two tables or one table with a `kind`
-   discriminator (§12.3). They compose rather than classify — a procedure declares an
-   interaction point, a strategy fills it — and their columns differ: a procedure carries
-   `topology` and `slots`, a strategy carries gate shape and computable applicability bounds.
-   Blocks the restructure of the seeded six and the §12.9 schema.
-3. What `topology` and `slots` actually hold, once the procedures are separated out. Both are
-   empty in the seed pending distillation of the four surviving generated workflows — which is
-   also what will settle how many procedures there really are.
+2. What `topology`, `slots` and `interaction_points` actually hold, once the procedures are
+   separated out. All are empty in the seed pending distillation of the four surviving generated
+   workflows — which is also what will settle how many procedures there really are. `slots` is
+   not one flat list: data slots bind to schema, while interaction points are named holes a
+   dialog strategy fills, so `topology` carries gates as holes rather than as specified steps.
+3. Whether a generated gate names the strategy that produced it or declares the properties that
+   strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
+   experience layer a consumer of the registry; declaring properties keeps the registry a
+   design-time artifact the renderer never needs to know exists.
 4. Whether producing the final step array stays a tool. It is bulk mechanical output, which suits
    a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
    matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
@@ -833,12 +908,29 @@ Found 2026-07-26:
 - **The list of 20 known prompt names in `generate_workflow_steps` is hand-maintained and
   stale** — it still names a prompt from the v3 design.
 
-### 12.9 `PGC_Archetype` — implementation outline
+Found 2026-07-29, in the gate contract rather than the design prompts:
 
-A seventeenth PGC table. System config, so `PGC_` prefixed, `target: pgc`, and subject to the
-same bootstrap-and-seed treatment as the existing sixteen.
+- **A `choice` gate's options collapse to a dropdown on a count alone.**
+  `CHOICE_DROPDOWN_THRESHOLD` in `callback.mjs` turns lettered buttons into a `static_select`
+  past five real options. It was introduced for `edit_budget` step 3, whose single
+  `iterator: period_options` option expands to twelve month buttons, where collapsing is right.
+  It also catches `flashcard_quiz_session` step 12, six authored rating options on an SM-2
+  scale, where it is wrong: grading a card goes from one click to three interactions, in the
+  workflow whose value is the speed of repetition. **Contract fault domain** — `callback.mjs`
+  behaves reasonably on what it is given, and the `human_gate` contract has no field in which a
+  workflow could say the set is authored and ordered. Raising the threshold to six would be a
+  rule generalised from one specimen and fails at the next one. The discriminating property is
+  already present in the step JSON by accident: the gates that should collapse carry an
+  `iterator` on their options and the one that should not does not (§12.3).
 
-#### Shape
+### 12.9 `PGC_Archetype` and `PGC_DialogStrategy` — implementation outline
+
+A seventeenth and eighteenth PGC table. System config, so `PGC_` prefixed, `target: pgc`, and
+subject to the same bootstrap-and-seed treatment as the existing sixteen. `PGC_Archetype` holds
+procedures, `PGC_DialogStrategy` holds the strategies that fill their interaction points
+(§12.3).
+
+#### `PGC_Archetype` shape
 
 Modelled on `PGC_DomainHelp`, which is the existing table that combines a registry with
 semantic retrieval.
@@ -850,8 +942,9 @@ semantic retrieval.
 | `description` | text | One line — what shape of workflow this is |
 | `aliases` | jsonb, default `'[]'` | Retrieval vocabulary. **This is what the embedding is built from** |
 | `preconditions` | jsonb, default `'{}'` | Machine-checkable applicability, so matching is not purely semantic — e.g. the source table carries a self-referential FK, or the request names an existing populated table |
-| `slots` | jsonb, not null, default `'[]'` | Declared bindings the archetype needs — table, columns, labels, ceilings. One entry per slot: name, type, how it is resolved |
-| `topology` | jsonb, not null, default `'[]'` | The step skeleton — step_labels, step types, routing fields, slot tokens. Same shape as the `routing_skeleton` the current pipeline builds at step 21a |
+| `slots` | jsonb, not null, default `'[]'` | Declared **data** bindings the archetype needs — table, columns, labels, ceilings. One entry per slot: name, type, how it is resolved |
+| `interaction_points` | jsonb, not null, default `'[]'` | The named holes in `topology` where the user interacts. One entry per point: name, what is being decided, which slot supplies its data. A `PGC_DialogStrategy` row fills one |
+| `topology` | jsonb, not null, default `'[]'` | The step skeleton — step_labels, step types, routing fields, slot tokens, and interaction points as holes rather than specified gates. Same shape as the `routing_skeleton` the current pipeline builds at step 21a |
 | `design_rules` | text | The archetype-scoped prose extracted from the four prompts. Injected **only** when this archetype is selected |
 | `source_workflow` | text, nullable | Provenance — the specimen it was derived from |
 | `status` | text, default `'live'` | `live` / `draft`, mirroring `PGC_StepType` |
@@ -870,30 +963,49 @@ be inert.
 is that it is *conditional*: the FK-dependency block is loaded when the FK archetype matches
 and not otherwise, which is the whole difference from the prose-in-prompt arrangement.
 
+#### `PGC_DialogStrategy` shape
+
+Identical in its registry and retrieval columns — `id`, `name`, `description`, `aliases`,
+`design_rules`, `source_workflow`, `status`, `version`, `created_by`, `embedding`, timestamps —
+so the same `embed_source: ["aliases"]` rule applies. It differs where the two kinds of thing
+differ (§12.3): no `topology`, no `slots`, no `interaction_points`, and instead —
+
+| Column | Type | Purpose |
+|---|---|---|
+| `applicability` | jsonb, not null, default `'{}'` | Machine-checkable bounds deciding whether this strategy is *feasible* against the live data — option count, field product against the gate ceiling, hierarchy depth. Evaluated after the row counts of step 1 of the build procedure, so feasibility is computed rather than guessed |
+| `emits` | jsonb, not null, default `'{}'` | The gate shape produced: `gate_type`, and the declared properties the experience layer reads to choose a widget (`option_source`, `ordered`) |
+
+`applicability` and `preconditions` on `PGC_Archetype` are the same kind of column serving
+different questions: `preconditions` asks whether a procedure *fits the request*, `applicability`
+asks whether a strategy *fits the data at one point*. A procedure is matched once per build; a
+strategy is matched once per interaction point.
+
 #### Creation path — one path, not two
 
 `createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, so bootstrap is idempotent and
-re-running it on the live instance creates only the table that is missing. There is no need
-for a separate `schema/createTable` call, and none should be made — the table is created the
+re-running it on the live instance creates only the tables that are missing. There is no need
+for a separate `schema/createTable` call, and none should be made — both tables are created the
 same way the other sixteen were:
 
-1. `src/serv/templates/pgc/PGC_Archetype.json` — a static ES module import in `init-brain.mjs`,
-   appended to `PGC_TEMPLATES`. Bundled by esbuild, never read via `fs`.
-2. Registration rows appended to `seed_PGC_Schema.json` and `seed_PGC_TableMap.json`.
-   `PGC_TableMap` is not optional: `table.mjs` gates all row access on it, and `seedPGCTableMap`
-   skips any table with no `PGC_Schema` row, so both are required.
+1. `src/serv/templates/pgc/PGC_Archetype.json` and `PGC_DialogStrategy.json` — static ES module
+   imports in `init-brain.mjs`, appended to `PGC_TEMPLATES`. Bundled by esbuild, never read
+   via `fs`.
+2. Registration rows appended to `seed_PGC_Schema.json` and `seed_PGC_TableMap.json`, one pair
+   per table. `PGC_TableMap` is not optional: `table.mjs` gates all row access on it, and
+   `seedPGCTableMap` skips any table with no `PGC_Schema` row, so both are required.
 3. `POST /api/v1/serv/bootstrap` after deploy. Existing tables report as already present.
 
 #### Seeding and maintenance
 
-- `src/serv/templates/pgc/seeds/seed_PGC_Archetype.json`, one row per archetype in §12.3,
-  seeded by `seedPGCArchetype` as bootstrap step 12.
+- `seed_PGC_Archetype.json` (procedures) and `seed_PGC_DialogStrategy.json` (strategies) in
+  `src/serv/templates/pgc/seeds/`, seeded by `seedPGCArchetype` and `seedPGCDialogStrategy` as
+  bootstrap steps 12 and 13.
 - `ON CONFLICT (name) DO UPDATE` on the seeded columns. `created_by` is deliberately excluded
-  so an archetype Novia authored keeps its provenance if it is later moved into the seed file.
+  so a row Novia authored keeps its provenance if it is later moved into the seed file.
   Rows Novia writes are not in the seed file and are never touched by bootstrap.
-- `dev_scripts/upsert-archetype.mjs`, following the `upsert-step-type.mjs` pattern —
-  content-fingerprint comparison, then `updateRows` or `insertRow`. Seeded rows are never
-  edited by direct `updateRows`.
+- `dev_scripts/upsert-archetype.mjs` and `dev_scripts/upsert-dialog-strategy.mjs`, following
+  the `upsert-step-type.mjs` pattern — content-fingerprint comparison, then `updateRows` or
+  `insertRow`. Seeded rows are never edited by direct `updateRows`.
 - The script never writes `embedding`. SERV computes it from `embed_source` on insert, and on
   any update whose payload touches `aliases`. Rows inserted before the column was populated
   need `dev_scripts/backfill-embeddings.mjs`, which currently targets `PGC_DomainHelp` only and
@@ -901,20 +1013,22 @@ same way the other sixteen were:
 
 #### Access
 
-- **Read** — no new endpoint. `getRows` on `PGC_Archetype` with a `vectorSearch` descriptor
-  against `embedding`. Vector columns are stripped from `getRows` responses, so the payload
-  stays small. Surfaced to Novia as a `search_archetypes` read tool, alongside the existing
-  `query_table` / `run_sql`.
-- **Write** — `insertRow` / `updateRows`. Novia adding an archetype is a system-config change,
-  so it belongs in `GATED_WRITE_TOOLS` (§4.2) rather than executing inline.
+- **Read** — no new endpoint. `getRows` on either table with a `vectorSearch` descriptor against
+  `embedding`. Vector columns are stripped from `getRows` responses, so the payload stays small.
+  Surfaced to Novia as two read tools, `search_archetypes` and `search_dialog_strategies`,
+  alongside the existing `query_table` / `run_sql`. They are separate tools because they are
+  called at different moments — a procedure once per build, a strategy once per interaction
+  point — and a single tool would have to be told which it was searching for.
+- **Write** — `insertRow` / `updateRows`. Novia adding a row to either table is a system-config
+  change, so it belongs in `GATED_WRITE_TOOLS` (§4.2) rather than executing inline.
 - **Threshold** — `PGC_DomainHelp` uses 0.40 for `pplx-embed-v1-4b`, calibrated against domain
-  aliases. Archetype aliases describe workflow shapes rather than domain nouns, so the
-  threshold needs its own calibration against real requests and should not be assumed to carry
-  over.
+  aliases. Both tables' aliases describe workflow shapes and interaction shapes rather than
+  domain nouns, so each needs its own calibration against real requests and neither should be
+  assumed to carry over.
 
 #### Documentation required at implementation
 
-- `docs/arch-data.md` — new PGC table definition and any curl additions to §5.5.
-- `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing if a dev script is added.
-- `openapi.yaml` — no change expected; the table is reached through the generic `getRows` /
+- `docs/arch-data.md` — both PGC table definitions and any curl additions to §5.5.
+- `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing for the two dev scripts.
+- `openapi.yaml` — no change expected; both tables are reached through the generic `getRows` /
   `insertRow` routes.
