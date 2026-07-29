@@ -864,11 +864,9 @@ Remaining open:
 1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
    baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
    gated on.
-2. What `topology`, `slots` and `interaction_points` actually hold, once the procedures are
-   separated out. All are empty in the seed pending distillation of the four surviving generated
-   workflows — which is also what will settle how many procedures there really are. `slots` is
-   not one flat list: data slots bind to schema, while interaction points are named holes a
-   dialog strategy fills, so `topology` carries gates as holes rather than as specified steps.
+2. What `topology` actually holds. Distillation of the four surviving workflows (§12.10) has
+   settled the procedure count, the interaction points and a first slot list; the step-level
+   contents of `topology` and the shape of a nested procedure reference remain open.
 3. Whether a generated gate names the strategy that produced it or declares the properties that
    strategy implies (§12.3). Naming it couples step JSON to the registry and makes the
    experience layer a consumer of the registry; declaring properties keeps the registry a
@@ -1032,3 +1030,96 @@ same way the other sixteen were:
 - `docs/architecture.md` — §1.5 PGC table groups; §3.4 directory listing for the two dev scripts.
 - `openapi.yaml` — no change expected; both tables are reached through the generic `getRows` /
   `insertRow` routes.
+
+### 12.10 Distillation of the four surviving workflows (OQ3)
+
+Read 2026-07-29 from the live `PGC_Workflow` rows: `edit_budget` v1 (12 steps),
+`flashcard_quiz_session` v3 (21), `import_budget_spreadsheet` v1 (16),
+`budget_vs_expense_report` v5 (15). These four are the entire surviving output of 98
+`create_workflow` runs, so they are the whole evidence base for what `topology`, `slots` and
+`interaction_points` hold.
+
+#### Interaction points are real and separable
+
+Eight human gates across the four workflows reduce to **three** interaction points, filled by
+**five** different strategies:
+
+| Interaction point | Instances | Strategies observed |
+|---|---|---|
+| **select_scope** — narrow the data to operate on | `edit_budget` 3, `budget_vs_expense_report` 1, `flashcard_quiz_session` 3 | `choice` with an option `iterator` over twelve periods; `text_input` free prose; `choice` with `iterator` + `reveals` as hierarchy |
+| **approve_writes** — confirm rows before they are written | `import_budget_spreadsheet` 8 and 12, `budget_vs_expense_report` 8 | `confirm` in all three |
+| **capture_values** — collect the user's input for the current scope or item | `edit_budget` 7, `flashcard_quiz_session` 12 | `form`, one field pair per row; `choice`, fixed ordered scale |
+
+One point filled three different ways in three unrelated procedures is the composition model
+working. It also exposes a defect that only becomes visible once the point is named: **the same
+decision is made well in one workflow and badly in another.** `edit_budget` step 3 selects a
+year-month period with a deterministic picker built from rows that already exist.
+`budget_vs_expense_report` step 1 collects the same kind of value as free prose, and step 2
+exists solely to parse it back apart.
+
+That is the derive-before-consume defect in its resolved form, and it shows the defect class is
+**structural rather than instructional**. A composite value only needs decomposing because a
+strategy collected it composite. Bind `select_scope` to a typed picker and step 2 has nothing to
+do — the whole class disappears without a prompt rule, a validator, or the bounded-drift
+relaxation that was Sprint 9's candidate lead item.
+
+#### Procedures nest
+
+One sub-shape appears inside two unrelated procedures, in the same order both times:
+
+| | `import_budget_spreadsheet` | `budget_vs_expense_report` |
+|---|---|---|
+| load existing reference rows | 5 | 3, 4, 5 |
+| compute the gap | 6 | 6 |
+| gate on whether there is one | 7 | 7 |
+| confirm the additions | 8 | 8 |
+| insert them | 9 | 9, 9a |
+| reload and bind ids | 10, 11 | — |
+
+This is the FK-dependency block §12.3 identified as already being a parameterised template,
+confirmed live. It has a verb, a topology and slots, so it satisfies the definition of a
+procedure — it simply is not a whole workflow. **A procedure's `topology` may therefore reference
+another procedure**, and `resolve_missing_references` is the first shared one. Composition stays
+within `PGC_Archetype`; no third table is needed.
+
+#### How many procedures there are
+
+Four top-level, one nested — against six seeded rows:
+
+| Procedure | Specimen |
+|---|---|
+| `scoped_row_editor` — select a scope, list its rows, edit, save, return to the refreshed list | `edit_budget` |
+| `iterate_and_capture` — select a scope, walk its items, capture a response per item, write it | `flashcard_quiz_session` |
+| `ingest_and_insert` — accept pasted data, parse it, resolve references, bulk insert | `import_budget_spreadsheet` |
+| `aggregate_report` — query, aggregate, format deterministically, present | `budget_vs_expense_report` |
+| `resolve_missing_references` — nested; referenced by the two above that need it | `import_budget_spreadsheet` 5–11 |
+
+`hierarchical_selector` and `bulk_row_form` move to `PGC_DialogStrategy` whole.
+`reveal_and_rate` splits: its procedure half becomes `iterate_and_capture`, its presentation half
+becomes a strategy on `capture_values`.
+
+#### Slots
+
+Recurring data bindings, from what the four actually bind:
+
+| Slot | Appears as |
+|---|---|
+| `source_table` + `rows` | Every workflow's opening `serv_query` |
+| `scope_columns` | `year` + `month`; `deck_id` |
+| `label_column` | The column standing in for a row in a picker or table |
+| `grouping_column` | `type` in both budget workflows — drives both display grouping and subtotals |
+| `write_target` + `natural_key` | `serv_upsert` matched on `(year, month, category_id)` |
+| `reference_table` + `reference_key` | `resolve_missing_references` only — the table whose rows may be missing, and the column matched on |
+
+`grouping_column` is the one that carries into presentation as well as data: it groups the
+`edit_budget` form, the report's subtotals, and the quiz's parent/child reveal panels. Whether it
+is one slot read by two consumers or two slots is unsettled.
+
+#### Variance that is not procedural
+
+Terminal and label conventions differ across all four — `budget_vs_expense_report` labels a step
+`"end"`, `import_budget_spreadsheet` carries two `end` steps (one for the cancel path, one for
+success), `edit_budget` one; step labels include `"9a"`. Routing field usage is consistent:
+`condition` steps route on `on_success` / `on_else` in all four, never `on_true` / `on_false`.
+None of this belongs in `topology` — it is translation-stage noise, and normalising it is L0's
+job (§12.4).
