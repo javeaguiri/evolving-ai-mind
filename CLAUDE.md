@@ -275,7 +275,7 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 | `docs/arch-step-processor.md` | Step Processor execution engine — PGC_WorkflowRun, execution stack, local_state, human gate lifecycle |
 | `docs/arch-simulation-engine.md` | Simulation engine (`simulation-engine.mjs`) — L1/L2a/L2b/L2c validation levels, data-flow trace, result structure, standalone `/proc/simulate-workflow` endpoint. Consumer-agnostic: used by `create_workflow`/`fix_workflow`, Novia's `simulate_workflow` tool, `troubleshoot-workflow.mjs`, and `upsert-workflow.mjs`'s pre-write guard |
 | `docs/arch-workflow-patterns.md` | Output validation, workflow authoring, session, memory layer, self-repair, monitoring |
-| `docs/arch-data.md` | PGC/PGD schema (all 16 tables), SERV API reference, **curl cookbook (§5.5)** |
+| `docs/arch-data.md` | PGC/PGD schema (all 18 tables), SERV API reference, **curl cookbook (§5.5)** |
 | `docs/arch-security.md` | Threat model, Slack signing, PROC/SERV API key enforcement |
 | `docs/arch-create-domain.md` | `create_domain` workflow — annotated step-by-step design reference (live v33) |
 | `docs/arch-create-workflow.md` | `create_workflow` workflow — full design reference, LLM call chain, L1/L2 validation |
