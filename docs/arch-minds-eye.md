@@ -365,7 +365,7 @@ assemble context (Layer 1 + 2; Layer 3 if improvement task)
 if action == "respond":
   post to Slack → end turn (await thread reply)
 if action is read tool:
-  execute → append result to session → loop (reason again)
+  execute → append result to session → report the turn → loop (reason again)
 if action is action tool:
   post HUMAN_GATE (confirm/cancel) → enqueue MINDS_EYE_RESUME
     on approve: execute → append result → loop (reason again)
@@ -376,6 +376,21 @@ if turn_count >= turn_limit:
     Pause    → compress session → post "Session paused. Resume with /novia continue." → end
     Cancel   → close session → end
 ```
+
+**Per-turn progress reporting.** Between the opening request and the final reply the only
+things a user sees are gates. Over a build that is a long silence, so every **successful**
+turn posts a one-line `HUMAN_NOTIFICATION`: the turn number, the tool, and the `reasoning`
+the decision already carried. No second model call — the field exists on every decision and
+until now reached only CloudWatch.
+
+Reported: read tools, housekeeping, inline writes, triggers. Not reported: `respond` and
+gated writes, each of which already produces the message the user is meant to read.
+
+A turn whose tool returned an error is **skipped** — `turnSucceeded()` treats an `error`
+field or `success: false` as a failure. A malformed request the agent is about to correct
+describes flailing rather than progress; the error still reaches the model through the tool
+result, which is what has to act on it. An empty-but-valid result is reported: no rows found
+is an answer.
 
 **Session compression (triggered at turn_limit gate on Continue or Pause):**
 The full `PGC_SessionEntry` history is replayed to the LLM on every turn. As sessions grow long this expands the context window and increases inference cost. At the turn-limit gate, before continuing or pausing, Novia runs a compression step:
@@ -401,8 +416,15 @@ All preferences are read from `PGC_SystemContext.minds_eye_preferences` at sessi
 
 | Preference key | Default | Behaviour at limit |
 |---|---|---|
-| `turn_limit` | `8` | Human gate — Continue / Pause / Cancel |
-| `max_actions_per_session` | `5` | Post summary and end session |
+| `turn_limit` | `12` | Human gate — Continue / Pause / Cancel |
+| `max_actions_per_session` | `8` | Post summary and end session |
+
+`turn_limit` is a **per-invocation** budget, not a per-session one: the Continue button
+starts a fresh round with the transcript intact. Raising it does not remove the boundary,
+it moves it — which is why the system prompt carries a pacing instruction telling Novia to
+choose her own stopping points (something the user can accept or reject, with the state
+that must survive written down first) rather than letting the round end wherever it lands.
+The budget is the backstop; the pacing instruction is what makes the stop legible.
 
 **Tone preferences** — injected into `minds_eye_system_prompt` at session start to shape all responses
 

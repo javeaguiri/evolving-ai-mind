@@ -157,10 +157,23 @@ whether conventions alone are enough.
   `propose_workflow_fix`. A failed intent-map write is reported, not swallowed.
   `minds_eye_system_prompt` v28 → v29 for the tool catalog entry. 13 new unit tests
   (698 → 711), against the real exported `buildIntentMapRows` and `deriveScope`.
-- **B3** — Turn and action budgets. `turn_limit` and `max_actions_per_session` are
-  `PGC_SystemContext` preferences and adjustable without a deploy, but their current defaults are
-  far below what a build requires. Session compression at the turn-limit gate becomes
-  load-bearing (AC6).
+- **B3** ✅ **DONE** — Turn and action budgets (AC6). Three parts.
+  **Budgets raised** — `minds_eye_preferences` v3 → v4: `turn_limit` 8 → 12,
+  `max_actions_per_session` 5 → 8 (`max_lifetime_turns` stays 100 — a DB constraint).
+  **Pacing instruction** — `minds_eye_system_prompt` v29 → v30. `turn_limit` is a
+  *per-invocation* budget, so raising it moves the boundary rather than removing it; the
+  instruction has Novia choose her own stopping points — something the user could accept or
+  reject, with whatever must survive the stop written down first — so the round ends
+  somewhere legible. **Placed in the operating prompt, not the bridge**: how Novia paces
+  herself is her operating protocol, and naming `create_workflow`'s four phases as required
+  stops would have re-imported the pipeline's ordering into the one artifact whose purpose
+  is to carry conventions instead (§12.5 deletes that orchestration content outright).
+  **Per-turn progress line** — every *successful* turn posts a one-line notification built
+  from the `reasoning` the decision already carries, so no second model call. Reported: read,
+  housekeeping, inline-write and trigger tools. Not reported: `respond` and gated writes,
+  which already produce the message the user reads. Failed tool calls are skipped —
+  an attempt about to be corrected describes flailing, not progress; the error still reaches
+  the model through the tool result. 14 new unit tests (711 → 725).
 - **B4** — Drive one build end-to-end from Slack (AC5). **User runs this**, per convention.
 - **B5** — Instrument the cost measurement (AC9). Novia's own turns are not fingerprinted
   (`minds-eye.mjs` calls `callLlm` directly, bypassing `llm-harness.mjs`), so her reasoning is

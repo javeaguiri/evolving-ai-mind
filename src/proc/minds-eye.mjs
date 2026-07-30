@@ -509,6 +509,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
     } else if (HOUSEKEEPING_TOOLS.has(action)) {
@@ -528,6 +529,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
       console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -556,6 +558,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
@@ -583,6 +586,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
       console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
     } else {
@@ -606,6 +610,52 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       await postTurnLimitGate(session.id, callback, traceId);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-turn progress line
+//
+// A build runs for many turns during which the only visible tool output is a
+// gate or the final reply — from Slack it reads as silence. Every decision
+// already carries `reasoning`, which until now went only to CloudWatch, so
+// surfacing it costs no extra tokens: one notification per turn, no second
+// model call.
+//
+// Only successful turns are reported. A tool call that came back with an error
+// is an attempt the agent is about to correct, and narrating both the malformed
+// request and the corrected one describes flailing rather than progress. The
+// error still reaches the model through the tool result, which is what has to
+// act on it.
+//
+// `respond` and gated writes post nothing here — each already produces the
+// message the user is meant to read, and a progress line in front of it is noise.
+// ---------------------------------------------------------------------------
+
+export function turnSucceeded(result) {
+  if (!result || typeof result !== 'object') return true;   // no result object = nothing failed
+  if (result.error) return false;
+  if (result.success === false) return false;
+  return true;
+}
+
+async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, result }) {
+  if (!callback) return;
+  if (!turnSucceeded(result)) {
+    console.info('proc/minds-eye: turn not reported — tool returned an error', { action, turn, traceId });
+    return;
+  }
+
+  const detail = String(reasoning ?? '').trim();
+  const line   = detail
+    ? `_Turn ${turn} · \`${action}\`_ — ${detail}`
+    : `_Turn ${turn} · \`${action}\`_`;
+
+  await enqueueCallback(callback, {
+    type:    'HUMAN_NOTIFICATION',
+    format:  'markdown',
+    traceId,
+    message: line,
+  });
 }
 
 // ---------------------------------------------------------------------------
