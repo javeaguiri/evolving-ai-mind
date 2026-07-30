@@ -538,6 +538,7 @@ Sprint 5 build order:
 > | 12.9 table schemas | Templates committed, **not bootstrapped**; no consumer reads them |
 > | 12.10 distillation | **Settled** — four procedures + one fragment, three interaction points |
 > | 12.11–12.12 worked specimens | Findings stand; **notation parked** — see the banner in §12.11 |
+> | 12.13 the cut list | Register, Sprint 9 A4. The `overstep` rows are the Sprint 10 archetype evidence |
 
 The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
 into a set of tools Novia orchestrates, with workflow design patterns held as searchable
@@ -1504,3 +1505,80 @@ has both terminals (steps 15 and 16) — it just numbers them.
   generation habit rather than a one-off.
 - **Step 3 branches on a bare length.** `{{parsed_data.validation_errors.length}}` routes on
   truthiness rather than a comparison. It behaves correctly, but only because `0` is falsy.
+
+### 12.13 The cut list (Sprint 9 A4)
+
+A register of every rule in the `create_workflow` instruction layer that was considered for the
+convention bridge and not carried, with the reason it failed the overstepping test and a
+disposition. The bridge itself is the record of what *was* carried, so carried lines are not
+listed here.
+
+Source material: the four design prompts and the `PGC_SystemContext` rows injected into them —
+`step_type_contracts`, `step_usage_patterns`, `runtime_bindings`, `template_syntax`,
+`workflow_constraints`, `workflow_routing_rules`, `serv_db_step_shapes`, `flat_loop_example`,
+`human_gate_dialog_rules`.
+
+The overstepping test is a per-line judgement, so without a register "we cut it" is
+unfalsifiable. §12.3 claims six archetypes are recoverable from prompt prose; this is that claim
+measured. A cut rule Novia turned out to need, and that no registry row supplied, is a candidate
+`PGC_Archetype` / `PGC_DialogStrategy` row. A cut rule nothing ever asked for is prose that dies
+with its prompt. **If the `overstep` rows are never missed, archetypes are not needed** — that is
+the evidence AC1 produces and Sprint 10 reads.
+
+| Disposition | Meaning |
+|---|---|
+| `registry` | Already a queryable row. The bridge points at the table instead of restating it. Not evidence of anything — this is AC2 working. |
+| `overstep` | A design instruction: an ordering, a shape to fill, or a "when X, do Y". Not a statement of what the engine accepts. **The archetype candidates.** |
+| `stale` | Measurably wrong against the code today. Recorded so it is not re-copied; dies with its prompt. |
+
+#### `registry` — already a row, the bridge points instead
+
+| Source | Rule | Where it already lives |
+|---|---|---|
+| `step_type_contracts` (whole row, 22 KB) | Per-type field lists transcribed from PGC_StepType | `PGC_StepType` — 19 rows. The copy carries 17, and its `human_gate` entry omits `fields`, `action_key` and the required `on_cancel` (§12.8) |
+| `step_usage_patterns` | "REQUIRED fields" block for each of js_transform, condition, human_gate ×4 gate types, iterator, llm_call | `PGC_StepType.input_contract` per row |
+| `human_gate_dialog_rules` (whole row) | action vs on_select; valid on_select tokens; cancel-option requirement; reveal does not route | The `human_gate` contract — moved there by A2 |
+| `workflow_constraints` § human_gate | gate_type enum; form `fields`; `special_buttons`; which gate types write output_key | The `human_gate` contract |
+| `workflow_constraints` § iterator | `execution_mode: "sequential"`; suspending vs non-suspending; choice-only item_step | The `iterator` contract |
+| `workflow_constraints` § notify, § end | notify has no on_else; end has no routing fields and is last | The `notify` and `end` contracts |
+| `serv_db_step_shapes` | Filter object shape; the ten valid ops; filters required on update/delete | The `serv_*` contracts |
+| `workflow_routing_rules` 1, 3 | on_else on serv_* steps; filter shape restated a third time | `serv_*` contracts — and rule 1 is also `stale`, below |
+
+#### `overstep` — design instruction, not engine acceptance
+
+| Source | Rule | Why it is not a bridge line |
+|---|---|---|
+| `flat_loop_example` (whole row) | Guard at step 9, body 10–13, post-loop 14; last body step routes both fields back to the guard; cancel routes to a terminal | A worked skeleton with slots — the fill-in-the-blank shape the framing rule excludes. The engine fact under it, that a backward edge needs a gate on the path, is carried. |
+| `workflow_routing_rules` 6a | A loop's exit option must name the first step after the loop body, never "next" | A correctness rule about one topology. The engine fact under it — "next" is positional — is carried; the rest is loop design. |
+| `workflow_routing_rules` 6b | A save-and-continue back-edge lands on the re-query step, not the format step | The strongest archetype candidate here: it is `scoped_row_editor`'s defining hazard and a real finding (the saved value appears to revert). Belongs to a procedure, not to the engine. |
+| `workflow_routing_rules` 5 | A condition's false branch must not reach a gate that branch should not encounter | Design rule; the simulator already checks the reachability form of it. |
+| `workflow_routing_rules` 7 | How to interpret "Path X has no decision entry for human_gate step N" | Guidance on reading a simulator error. Belongs with the simulator's error text. |
+| `step_usage_patterns` § iterator + human_gate | The preference-gate pattern: js_transform builds options → condition guards → iterator presents one choice gate per item | A dialog strategy (§12.3), written as a four-step fill-in. |
+| `step_usage_patterns` § choice with option `iterator` | "Do NOT add a preceding js_transform to build the options array" | The engine fact — an option's `iterator` expands it per element — is on the human_gate contract. "Do not add a step" is a design instruction. |
+| `step_usage_patterns` § form | "Never collect a date or an enumerable value as free text and then parse it with an llm_call" | A design judgement about cost and determinism. Correct, and not a statement of what the engine accepts. Already duplicated onto the human_gate contract by an earlier sprint — resolve when those prompts retire. |
+| `workflow_constraints` § suspending iterator vs flat loop | Choose by whether iterations share state | A selection rule between two topologies — archetype territory. |
+| `template_syntax` § message_template | Transform Handlebars into indexed dot-notation | An instruction to a translation stage that does not exist in Novia's path. The engine fact — only double braces are recognised, everything else passes through literally — is carried. |
+| `runtime_bindings` § input.* | What `input` contains for create_workflow runs and for `*_entity` runs | Specimen-specific, not an engine fact. Read the workflow row. |
+
+#### `stale` — wrong against the code today
+
+| Source | Claim | Actual behaviour |
+|---|---|---|
+| `template_syntax` | "If the path does not exist in local_state, the template resolves to an empty string silently" | `resolveTemplate` returns the match unchanged (`template-resolver.mjs:95`) — the literal `{{key}}` is delivered to the model or the user. This is the root of the standing "prompts hand the LLM their own token text" defect. The bridge states the true behaviour. |
+| `runtime_bindings` | A dot-notation output_key requires the parent object to already exist | `setPath` creates intermediate objects (`run-workflow.mjs:1732`). |
+| `step_usage_patterns` | "only top-level keys are reliable write targets; for nested writes, return the full updated object" | Same as above, stated as a workaround for a limitation that is not there. |
+| `workflow_constraints` § condition | "on_success and on_else use step:N format" | Contradicted by `step_usage_patterns` § condition ("Do NOT use step:N here") and by the engine, which normalises both (`run-workflow.mjs:1711`). Resolved in A2 by describing normalisation; both statements are cut. |
+| `workflow_routing_rules` 1, `workflow_constraints` § step array | "Every step that calls an external service MUST set on_else: cancel" | Not a branch the engine takes. serv_* and llm_call steps signal failure by throwing, and a throw fails the run (`run-workflow.mjs:323`); an iterator item failure does the same (`run-workflow.mjs:1351`). Only `condition` and `simulate` read `on_else`. The convention is harmless, but its stated purpose is false and a design relying on it has no recovery path. |
+| `workflow_constraints` § Guard 3 | "the loop exhausts Lambda execution time (~60 seconds)" | A volatile number inside an instruction; the mechanism is what matters, and the stuck-step guard fires first at three hits. |
+
+#### Count
+
+| Disposition | Rows |
+|---|---|
+| `registry` | 8 |
+| `overstep` | 11 |
+| `stale` | 6 |
+
+The eleven `overstep` rows are the Sprint 10 evidence base. Five concern loop and
+save-and-continue topology across four different rows — one procedure (`scoped_row_editor`)
+stated five times in four places, which is §12.10's finding measured from the cut side.
