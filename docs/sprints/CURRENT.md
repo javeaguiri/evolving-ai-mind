@@ -1,7 +1,7 @@
 # Sprint 9 — Novia Builds Workflows
 
 **Status: IN PROGRESS. Scoped and branched 2026-07-29 — `sprint/09-novia-builds-workflows`.**
-Prep partially done (A2/A3 ✅); A1 and A4 are the next work.
+Track A complete (A1–A4 ✅) as of 2026-07-30. Track B is the next work.
 
 > Read before implementing: `docs/sprints/sprint-08.md` §RETRO, and `docs/arch-minds-eye.md`
 > §12 (the dissolution proposal) — specifically §12.7 for what is settled and what is open.
@@ -76,10 +76,24 @@ would commit to a shape before there is any evidence she needs one.
 The prep work. Nothing in Track B can be judged until this exists, because the whole question is
 whether conventions alone are enough.
 
-- **A1** — Write the bridge as `PGC_SystemContext`, injected into `minds_eye_system_prompt`.
-  Always resident, so it stays small. Covers: what a workflow is (step array, routing fields,
-  terminal steps), how `local_state` carries values, `{{token}}` resolution, and where the
+- **A1** ✅ **DONE** — `workflow_convention_bridge` (`PGC_SystemContext` id 45, v1, 7.8 KB).
+  Covers what a workflow is (step array, routing fields, terminal steps), how `local_state`
+  carries values, `{{token}}` resolution, the execution guards, and where the
   Procedure/Experience boundary falls.
+  **Loaded on demand, not resident** — the user's call, taken to keep the baseline Novia prompt
+  concise. Novia fetches it by key exactly as the `sop_*` rows are fetched; `query_table` is a
+  `READ_TOOL`, and read tools do not increment `actionCount` (`minds-eye.mjs:495` vs `:547`), so
+  the fetch costs one turn and zero actions. `loadPrefsAndPrompt` is untouched — **A1 is
+  entirely data**.
+  `minds_eye_system_prompt` v27 → v28, net shorter: a WORKFLOW STEP ARRAYS precondition pointing
+  at the bridge before designing, proposing **or repairing** a step array (the trigger covers
+  `propose_workflow_fix`, since AC8 is a repair task and D1 is itself a token-resolution
+  defect); and the hand-transcribed 13-name step type list deleted in favour of a
+  `PGC_StepType` query — the list was stale by six types (`serv_upsert`, `serv_schema`, all four
+  `serv_entity_*`), the same defect A3 measured in `step_type_contracts`, sitting in the prompt
+  this sprint is judged against.
+  Written from the engine source, not from the prose rows — five of their claims are wrong; see
+  the `stale` block of §12.13.
 - **A2** ✅ **DONE** — Gate mechanics come from the `human_gate` `input_contract` in
   `PGC_StepType`, queried. Four rules that existed only in the duplicates are now in the contract:
   the 40-field ceiling (an engine render limit, previously only in prompt prose); the
@@ -97,8 +111,13 @@ whether conventions alone are enough.
   against them. `step_type_contracts`, `human_gate_dialog_rules` and the `human_gate` block in
   `workflow_constraints` are `inject_for` the create_workflow family only, so they are inert for
   Novia. **They die with the prompts.** Confirm removal at the point those prompts are retired.
-- **A4** — Apply the overstepping test to every line, and record what was cut. The cut list is
-  evidence for whether archetypes are needed at all.
+- **A4** ✅ **DONE** — Overstepping test applied line by line; the cut list is defined and
+  populated in `arch-minds-eye.md` §12.13. A4 did not say what the artifact *is*, so it is
+  defined there: a register of rules considered for the bridge and not carried, each with a
+  disposition — `registry` (already a queryable row), `overstep` (a design instruction, and
+  therefore an archetype candidate), `stale` (wrong against the code). 8 / 11 / 6 rows.
+  Five of the eleven oversteps are loop and save-and-continue topology across four rows — one
+  procedure stated five times in four places. Reopen if a real build needs a cut rule.
 
 ### Track B — Novia builds a workflow
 
