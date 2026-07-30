@@ -21,15 +21,20 @@
 import { randomUUID }      from 'crypto';
 import { ok, err }         from '../shared/lambda-utils.mjs';
 import { runSimulation }   from './simulation-engine.mjs';
+import { loadStepTypeContracts } from './step-type-registry.mjs';
 
 export async function handle(req) {
   const body    = req.body ?? {};
   const traceId = body.traceId ?? req.correlationId ?? randomUUID();
 
-  const { steps, mockOutputs, simulationPaths, runInput } = body;
+  const { steps, mockOutputs, simulationPaths, runInput, level } = body;
 
   if (!Array.isArray(steps) || steps.length === 0) {
     return err(400, 'steps is required and must be a non-empty array', req.correlationId);
+  }
+
+  if (level !== undefined && ![0, 1, 2].includes(level)) {
+    return err(400, 'level must be 0 (shape), 1 (static analysis) or 2 (full)', req.correlationId);
   }
 
   // simulationPaths is required by the openapi spec (minItems: 1) but the
@@ -43,14 +48,17 @@ export async function handle(req) {
     stepCount:  steps.length,
     hasMocks:   !!mockOutputs,
     pathCount:  Array.isArray(simulationPaths) ? simulationPaths.length : 0,
+    level:      level ?? 2,
     traceId,
   });
 
   const result = runSimulation({
     steps,
-    mockOutputs:      mockOutputs      ?? null,
-    simulationPaths:  simulationPaths  ?? null,
-    runInput:         runInput         ?? {},
+    mockOutputs:       mockOutputs      ?? null,
+    simulationPaths:   simulationPaths  ?? null,
+    runInput:          runInput         ?? {},
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    level:             level            ?? 2,
     traceId,
   });
 

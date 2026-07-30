@@ -7,7 +7,8 @@
 // Pure module — no I/O, no AWS SDK, no Slack SDK.
 //
 // Exports:
-//   runSimulation          — full Level 1 + Level 2 validation
+//   runLevel0ShapeCheck     — per-step shape against PGC_StepType, composed not hand-authored
+//   runSimulation           — full Level 0 + Level 1 + Level 2 validation
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 import vm from 'vm';
@@ -53,7 +54,7 @@ const MAX_GATE_FIELDS = 40;
 // wants them, but they never block a workflow, so they are not "why it failed".
 // ---------------------------------------------------------------------------
 
-function buildErrorSummary({ staticIssues = [], routingMatrix = null, smokeTest = null }) {
+function buildErrorSummary({ shapeIssues = [], staticIssues = [], routingMatrix = null, smokeTest = null }) {
   const lines = [];
 
   const push = (list, cap, prefix) => {
@@ -63,6 +64,7 @@ function buildErrorSummary({ staticIssues = [], routingMatrix = null, smokeTest 
     if (list.length > cap) lines.push(`- ...and ${list.length - cap} more`);
   };
 
+  push(shapeIssues, 8, '[shape] ');
   push(staticIssues, 8, '');
   if (routingMatrix && !routingMatrix.passed) {
     push(routingMatrix.issues ?? [], 5, '[routing] ');
@@ -74,17 +76,171 @@ function buildErrorSummary({ staticIssues = [], routingMatrix = null, smokeTest 
   return lines.join('\n');
 }
 
-export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, skeleton = false, lockedSkeleton = null, traceId }) {
+// ---------------------------------------------------------------------------
+// Level 0 — shape
+//
+// The level below L1. L1 asks whether a step array is a coherent program;
+// L0 asks whether each element is a step of the type it claims to be. That
+// question is answerable on a sketch — a routing topology with no content yet —
+// which is why it is the level that replaced the `skeleton` flag: instead of
+// running L1 with four checks switched off, a sketch is validated at L0 and a
+// filled array at L0+L1+L2.
+//
+// Every assertion is composed from `PGC_StepType.input_contract` and none is
+// written here. The contract's `field` names already encode placement —
+// "input.tableName" sits under the step's input object, "gate_type" at the step
+// root — so a required field is a dot path resolved against the step. Adding a
+// step type, or making one of its fields required, changes what L0 enforces
+// with no edit to this file. The hand-authored 5-type `servRequired` map this
+// replaces was the same assertion for a fifth of the registry.
+//
+// The contracts are passed in, never fetched: this module is pure. When they
+// are absent L0 reports `ran: false` rather than passing — a validator that
+// silently no-ops when its input is missing is worse than no validator, because
+// its silence reads as a pass.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object[]} steps
+ * @param {object[]|null} stepTypeContracts  PGC_StepType rows — { step_type, input_contract }
+ * @returns {{ ran: boolean, passed: boolean, issues: object[], reason?: string }}
+ */
+export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
+  if (!Array.isArray(stepTypeContracts) || stepTypeContracts.length === 0) {
+    return {
+      ran:    false,
+      passed: false,
+      issues: [],
+      reason: 'PGC_StepType contracts were not supplied — shape was not checked',
+    };
+  }
+
+  const contractByType = new Map(stepTypeContracts.map(c => [c.step_type, c]));
+  const issues = [];
+
+  const checkOne = (step, stepKey, { nested = false } = {}) => {
+    const contract = contractByType.get(step?.type);
+    if (!contract) {
+      issues.push({
+        check:         'unknown_step_type',
+        step:          stepKey,
+        failure_class: 'unknown_step_type',
+        detail:        `Step "${stepKey}" has type "${step?.type}", which is not a live step type. Valid types: ${[...contractByType.keys()].sort().join(', ')}`,
+      });
+      return;
+    }
+
+    for (const field of contract.input_contract ?? []) {
+      if (!field.required) continue;
+      // "input.*" (llm_call's open token set) names a family, not a field.
+      if (String(field.field).includes('*')) continue;
+
+      // An item_step's own output_key is never read: the iterator collects each
+      // item's return value into frame.results and writes THAT array to its own
+      // output_key on the parent frame (run-workflow.mjs:1425, :1434). So a
+      // contract requiring output_key states a truth about the step type in
+      // top-level position only. This is a rule about nesting, applied once —
+      // not a per-type exception list.
+      if (nested && field.field === 'output_key') continue;
+
+      const val = resolvePath(step, field.field);
+      if (val === undefined || val === null || val === '') {
+        issues.push({
+          check:         'missing_required_field',
+          step:          stepKey,
+          failure_class: 'missing_required_field',
+          detail:        `${step.type} step "${stepKey}" is missing required field "${field.field}". ${field.description ?? ''}`.trim(),
+        });
+      }
+    }
+  };
+
+  for (const s of steps) {
+    const stepKey = String(s?.step);
+    checkOne(s, stepKey);
+    // An iterator's item_step is a step definition and is held to the same
+    // contract. It carries no `step` key of its own, so it is reported against
+    // its parent's.
+    if (s?.type === 'iterator' && s.item_step && typeof s.item_step === 'object') {
+      checkOne(s.item_step, `${stepKey}.item_step`, { nested: true });
+    }
+  }
+
+  return { ran: true, passed: issues.length === 0, issues };
+}
+
+export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = {}, stepTypeContracts = null, level = 2, lockedSkeleton = null, traceId }) {
   console.info('simulation-engine: runSimulation — starting', {
     stepCount: steps.length,
     hasMocks:  !!mockOutputs,
     pathCount: Array.isArray(simulationPaths) ? simulationPaths.length : 0,
-    skeleton,
+    level,
+    hasContracts: Array.isArray(stepTypeContracts) && stepTypeContracts.length > 0,
     traceId,
   });
 
+  // ── Level 0 — Shape ──────────────────────────────────────────────────────
+  const shapeResult = runLevel0ShapeCheck(steps, { stepTypeContracts });
+
+  // Asking for level 0 and supplying no contracts is a caller error, not a pass:
+  // the only thing requested is the one thing that could not run.
+  if (level === 0 && !shapeResult.ran) {
+    return {
+      passed:              false,
+      level,
+      total_issues:        1,
+      error_summary:       `- ${shapeResult.reason}`,
+      paths_run:           0,
+      paths_passed:        0,
+      paths_failed:        0,
+      shape_analysis:      shapeResult,
+      static_analysis:     null,
+      state_flow:          {},
+      unreferenced_writes: [],
+      path_results:        [],
+    };
+  }
+
+  if (shapeResult.ran && !shapeResult.passed) {
+    console.info('simulation-engine: runSimulation — Level 0 failed', {
+      issueCount: shapeResult.issues.length, traceId,
+    });
+    return {
+      passed:              false,
+      level,
+      total_issues:        shapeResult.issues.length,
+      error_summary:       buildErrorSummary({ shapeIssues: shapeResult.issues }),
+      paths_run:           0,
+      paths_passed:        0,
+      paths_failed:        0,
+      shape_analysis:      shapeResult,
+      static_analysis:     null,
+      state_flow:          {},
+      unreferenced_writes: [],
+      path_results:        [],
+    };
+  }
+
+  if (level === 0) {
+    console.info('simulation-engine: runSimulation — Level 0 passed, stopping at requested level', { traceId });
+    return {
+      passed:              true,
+      level,
+      total_issues:        0,
+      error_summary:       '',
+      paths_run:           0,
+      paths_passed:        0,
+      paths_failed:        0,
+      shape_analysis:      shapeResult,
+      static_analysis:     null,
+      state_flow:          {},
+      unreferenced_writes: [],
+      path_results:        [],
+    };
+  }
+
   // ── Level 1 — Static analysis ────────────────────────────────────────────
-  const level1Result  = runLevel1StaticAnalysis(steps, { skeleton });
+  const level1Result  = runLevel1StaticAnalysis(steps);
   const staticIssues  = [...level1Result.issues, ...checkSkeletonDrift(steps, lockedSkeleton)];
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
@@ -95,11 +251,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              false,
+      level,
       total_issues:        staticIssues.length,
       error_summary:       buildErrorSummary({ staticIssues }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
+      shape_analysis:      shapeResult,
       static_analysis:     { passed: false, issues: staticIssues },
       state_flow:          stateFlow,
       unreferenced_writes: unrefWrites,
@@ -125,11 +283,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     });
     return {
       passed:              l2Passed,
+      level,
       total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
       error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
+      shape_analysis:      shapeResult,
       static_analysis:     { passed: true, issues: [] },
       state_flow:          stateFlow,
       unreferenced_writes: unrefWrites,
@@ -156,11 +316,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
 
   const result = {
     passed:              l2Passed,
+    level,
     total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
     error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
+    shape_analysis:      shapeResult,
     static_analysis:     { passed: true, issues: [] },
     state_flow:          stateFlow,
     unreferenced_writes: unrefWrites,
@@ -241,7 +403,10 @@ function checkSkeletonDrift(steps, lockedSkeleton) {
 // Level 1 — Static analysis
 // ---------------------------------------------------------------------------
 
-export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
+// L1 runs on a filled step array only. A sketch is validated at L0, which is why
+// this function no longer takes a `skeleton` flag: the four checks that flag used
+// to switch off are unconditional here.
+export function runLevel1StaticAnalysis(steps) {
   const issues = [];
 
   // Build a set of all step keys for dead-target checking
@@ -327,7 +492,7 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
           detail:        `Iterator step "${stepKey}" items_key "${s.items_key}" — base key "${baseKey}" has not been written by any prior step. Available keys: ${[...outputKeysSoFar].join(', ')}`,
         });
       }
-      if (!skeleton && (!s.item_step || typeof s.item_step !== 'object')) {
+      if (!s.item_step || typeof s.item_step !== 'object') {
         issues.push({
           check:         'iterator_missing_item_step',
           step:          stepKey,
@@ -337,26 +502,23 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Check gate has at least one cancel option — skipped in skeleton mode because
-    // options are dialog-layer content added after routing topology is validated.
+    // Check gate has at least one cancel option.
     if (s.type === 'human_gate') {
-      if (!skeleton) {
-        // options/special_buttons may be a {{template}} reference resolved at
-        // runtime from local_state (e.g. a level-dependent button set) — static
-        // analysis can't inspect its eventual contents, so the cancel-option
-        // check is skipped for either field once dynamic; on_cancel (checked
-        // unconditionally below) still guarantees a cancel path exists.
-        const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
-        const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
-        const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
-        if (!hasCancel) {
-          issues.push({
-            check:         'missing_cancel_option',
-            step:          stepKey,
-            failure_class: 'missing_cancel_option',
-            detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
-          });
-        }
+      // options/special_buttons may be a {{template}} reference resolved at
+      // runtime from local_state (e.g. a level-dependent button set) — static
+      // analysis can't inspect its eventual contents, so the cancel-option
+      // check is skipped for either field once dynamic; on_cancel (checked
+      // unconditionally below) still guarantees a cancel path exists.
+      const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
+      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+      const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
+      if (!hasCancel) {
+        issues.push({
+          check:         'missing_cancel_option',
+          step:          stepKey,
+          failure_class: 'missing_cancel_option',
+          detail:        `human_gate step "${stepKey}" has no option with action "cancel"`,
+        });
       }
 
       if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
@@ -391,10 +553,8 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       // Gate size — a statically-declared fields array is countable here. A
       // "{{template}}" reference is built by a preceding js_transform and its length
       // is unknown until then, so it is skipped rather than guessed at; L2's
-      // data-flow trace is where a row-count estimate could come from. Skipped in
-      // skeleton mode for the same reason as the cancel-option check above: fields
-      // are dialog-layer content, added after routing topology is validated.
-      if (!skeleton && Array.isArray(s.fields) && s.fields.length > MAX_GATE_FIELDS) {
+      // data-flow trace is where a row-count estimate could come from.
+      if (Array.isArray(s.fields) && s.fields.length > MAX_GATE_FIELDS) {
         issues.push({
           check:         'gate_too_many_fields',
           step:          stepKey,
@@ -510,31 +670,10 @@ export function runLevel1StaticAnalysis(steps, { skeleton = false } = {}) {
       }
     }
 
-    // Check required input fields for serv_* step types.
-    // Skipped in skeleton mode — skeleton steps are routing-topology only and carry no
-    // input fields by design. Content completeness is checked in the final pre-write L1.
-    // Template references (e.g. "{{item.tableName}}") are valid — only absent/null/empty fails.
-    const servRequired = {
-      serv_query:  ['tableName'],
-      serv_insert: ['tableName', 'row'],
-      serv_update: ['tableName', 'filters', 'updates'],
-      serv_delete: ['tableName', 'filters'],
-      serv_upsert: ['tableName', 'matchColumns', 'rows'],
-    };
-    if (!skeleton && servRequired[s.type]) {
-      const inputObj = s.input ?? {};
-      for (const field of servRequired[s.type]) {
-        const val = inputObj[field];
-        if (val === undefined || val === null || val === '') {
-          issues.push({
-            check:         'serv_step_missing_required_input',
-            step:          stepKey,
-            failure_class: 'serv_step_missing_required_input',
-            detail:        `${s.type} step "${stepKey}" is missing required input field "${field}". Provide input.${field} as a literal value or a {{template}} reference.`,
-          });
-        }
-      }
-    }
+    // Required input fields for serv_* steps were checked here, from a hand-written
+    // map of five of the nineteen step types. That is a shape assertion, so it moved
+    // to L0 (runLevel0ShapeCheck), where it is composed from PGC_StepType.input_contract
+    // and covers every type.
 
     // Validate filter array element shape and op values for serv_* steps.
     // Skips validation when filters is a template reference string (resolved at runtime).

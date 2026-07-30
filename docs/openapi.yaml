@@ -658,6 +658,17 @@ components:
             enforces this minimum coverage.
           items:
             $ref: '#/components/schemas/SimulationPath'
+        level:
+          type: integer
+          enum: [0, 1, 2]
+          default: 2
+          description: >
+            How far validation runs. 0 — shape only: is each element a step of the
+            type it claims to be, with every field its PGC_StepType contract marks
+            required. Validates a sketch, which is the case the retired `skeleton`
+            flag existed for. 1 — adds static analysis (routing, state flow).
+            2 — adds the routing matrix and js_transform data-flow trace. A level
+            fails fast: level 2 does not run if the shape check failed.
         runInput:
           type: object
           description: >
@@ -684,8 +695,32 @@ components:
         pathsFailed:
           type: integer
           example: 0
+        level:
+          type: integer
+          description: The level this run was asked to reach — echoed from the request.
+        shapeAnalysis:
+          type: object
+          description: >
+            Level 0 result. `ran` is false when PGC_StepType contracts were not
+            supplied — that is reported rather than treated as a pass, since a
+            validator that silently no-ops reads as one.
+          properties:
+            ran:
+              type: boolean
+            passed:
+              type: boolean
+            reason:
+              type: string
+            issues:
+              type: array
+              items:
+                $ref: '#/components/schemas/StaticAnalysisIssue'
         staticAnalysis:
           type: object
+          nullable: true
+          description: >
+            Level 1 result, or null when Level 0 failed and Level 1 never ran.
+            A consumer reading only this field must treat null as a failure.
           properties:
             passed:
               type: boolean
