@@ -315,3 +315,45 @@ and would otherwise have been archived with this sprint doc.
 scoping time: gate mechanics and step contracts are now queryable from `PGC_StepType`, so the
 bridge covers only what is not already a row — what a workflow is, how `local_state` carries
 values, `{{token}}` resolution, and where the Procedure/Experience boundary falls.
+
+### Session 4 — 2026-07-30 — Track A closed, Track B built, deployed
+
+Track A (A1, A4) and Track B's three code items (B1, B2, B3) all landed. Deployed to prod;
+L0 verified live through `POST /proc/simulate-workflow` with `level: 0`. **B4 — the
+end-to-end build from Slack — is the only Track B item left, and the user runs it.**
+
+Two decisions taken in session that changed what was scoped:
+
+**The bridge is loaded on demand, not always resident.** The user's call, to keep the
+baseline Novia prompt concise. Novia fetches it by key like the `sop_*` rows; `query_table`
+is a `READ_TOOL` and read tools do not increment `actionCount`, so it costs one turn and
+zero actions. `loadPrefsAndPrompt` never changed — A1 came out as pure data. The trigger was
+widened past new builds to cover repairs, since `propose_workflow_fix` writes step arrays too
+and AC8 is a repair task whose defect (D1) is itself a token-resolution bug.
+
+**Pacing went into the operating prompt, not the bridge.** The user proposed stopping at each
+`create_workflow` phase; naming those phases as required stops would have re-imported the
+dissolved pipeline's ordering into the artifact whose purpose is to avoid exactly that. Agreed
+and rewritten as a principle — stop when holding something the user could accept or reject —
+and placed in `minds_eye_system_prompt`, where an operating protocol belongs.
+
+Three defects surfaced by the work rather than looked for:
+
+1. **`write_memory`'s contract misstated the engine** — eight fields declared at the step root
+   that `buildMemoryRow` reads from `step.input`. Found the moment L0 was pointed at the
+   existing seeds. Contract fault; fixed and upserted.
+2. **Five prose claims in the `create_workflow` context rows are wrong against the code** —
+   most consequentially that an unresolved `{{token}}` "resolves to an empty string", when
+   `resolveTemplate` returns the literal token text. Recorded in the §12.13 `stale` block; the
+   bridge states the true behaviour.
+3. **`on_else` on a `serv_*` or `llm_call` step is not a branch the engine takes.** Only
+   `condition` and `simulate` read it; everything else throws and fails the run. Four prose
+   rows say or imply otherwise.
+
+Live seed state: `minds_eye_system_prompt` v30, `minds_eye_preferences` v4,
+`workflow_convention_bridge` v1 (id 45), `PGC_StepType` `write_memory` + `simulate` updated.
+725 unit tests pass.
+
+**Next:** B4 (user-run). Watch whether Novia fetches `workflow_convention_bridge` unprompted
+before designing — that single observation tests A1's precondition wording and is the cheapest
+read available on whether archetypes are needed at all (§12.13's `overstep` rows).
