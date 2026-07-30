@@ -147,7 +147,16 @@ whether conventions alone are enough.
   frame (`run-workflow.mjs:1425`). One structural rule about nesting, not a per-type
   exception list.
   11 new unit tests (687 → 698). All 11 seed workflows pass L0.
-- **B2** — `register_workflow` gated write tool (AC4).
+- **B2** ✅ **DONE** — `register_workflow` gated write tool (AC4).
+  `{ name, domain?, description, steps, intentPhrases?, intentKeywords? }` → one
+  `PGC_Workflow` row at v1 + one `PGC_IntentMap` row per phrase, plus one for the
+  workflow's own name (`source`: `name` vs `auto`). Two boundaries: it **refuses to
+  write a step array that fails L0+L1+L2** (one verdict computed once, shown in the
+  gate and re-checked at execution; issues returned so the next turn can correct), and
+  it **creates but never updates** — an existing name is an error naming
+  `propose_workflow_fix`. A failed intent-map write is reported, not swallowed.
+  `minds_eye_system_prompt` v28 → v29 for the tool catalog entry. 13 new unit tests
+  (698 → 711), against the real exported `buildIntentMapRows` and `deriveScope`.
 - **B3** — Turn and action budgets. `turn_limit` and `max_actions_per_session` are
   `PGC_SystemContext` preferences and adjustable without a deploy, but their current defaults are
   far below what a build requires. Session compression at the turn-limit gate becomes

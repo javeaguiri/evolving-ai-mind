@@ -30,6 +30,8 @@ import { ok, err }                                         from '../shared/lambd
 import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
+import { runSimulation }                                  from './simulation-engine.mjs';
+import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -70,6 +72,7 @@ const INLINE_WRITE_TOOLS = new Set([
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
+  'register_workflow',
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
   'create_view', 'drop_view',
 ]);
@@ -614,6 +617,7 @@ function gateButtonConfig(action, params = {}) {
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
+  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
@@ -654,12 +658,96 @@ async function postActionGate({ session, action, params, callback, traceId, curr
 }
 
 // ---------------------------------------------------------------------------
+// PGC_IntentMap rows for a newly registered workflow — one row per phrase
+// (the Sprint 7 shape), plus the workflow's own name, since the phrase a user is
+// most likely to type is the thing the workflow is called. `source` records which
+// of the two a row came from. Pure — exported for test.
+// ---------------------------------------------------------------------------
+
+export function buildIntentMapRows(name, intentPhrases = [], workflowId = null) {
+  const seen    = new Set([name]);
+  const phrases = [{ pattern: name, source: 'name' }];
+
+  for (const raw of Array.isArray(intentPhrases) ? intentPhrases : []) {
+    if (typeof raw !== 'string') continue;
+    const pattern = raw.trim();
+    if (!pattern || seen.has(pattern)) continue;
+    seen.add(pattern);
+    phrases.push({ pattern, source: 'auto' });
+  }
+
+  return phrases.map(({ pattern, source }) => ({
+    pattern,
+    intent_category: name,
+    action_type:     'workflow',
+    workflow_id:     workflowId,
+    source,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Validation shared by the register_workflow gate and its write
+//
+// The gate tells the user whether the array validates; the write refuses if it
+// does not. Both need the same verdict, and deriving it twice is how a gate ends
+// up promising something the write then declines to do.
+// ---------------------------------------------------------------------------
+
+async function simulateForRegistration(steps, traceId) {
+  const result = runSimulation({
+    steps,
+    mockOutputs:       null,
+    simulationPaths:   null,
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    traceId,
+  });
+  return {
+    passed:        result.passed,
+    error_summary: result.error_summary,
+    issues: [
+      ...(result.shape_analysis?.issues  ?? []),
+      ...(result.static_analysis?.issues ?? []),
+      ...(result.routing_matrix?.issues  ?? []),
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Build human-readable gate text for gated write tools
 // ---------------------------------------------------------------------------
 
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
+
+      case 'register_workflow': {
+        const { name, domain = null, description = '', steps = [], intentPhrases = [], intentKeywords = null } = params;
+
+        // The gate is where a human decides whether this workflow should exist. What
+        // makes that decision possible is not the step JSON — it is whether the array
+        // validates and what the workflow will answer to. Both go in the message.
+        const sim = await simulateForRegistration(steps, traceId);
+
+        const lines = [
+          `**Register workflow: \`${name}\`**`,
+          domain ? `Domain: \`${domain}\`` : 'Domain: _(none — standalone workflow)_',
+          `${steps.length} steps`,
+          '',
+          description ? `${description}\n` : '',
+          sim.passed
+            ? `Validation: **passed** (L0 shape, L1 static, L2 routing + data flow)`
+            : `Validation: **FAILED** — registration will be refused:\n${sim.error_summary}`,
+          '',
+          intentPhrases.length
+            ? `Invoked by: ${intentPhrases.map(p => `\`${p}\``).join(', ')}`
+            : '_No invocation phrases supplied — the workflow will only be reachable by its exact name._',
+          intentKeywords?.length
+            ? `Routing keywords: ${intentKeywords.map(k => `\`${k}\``).join(', ')}`
+            : '_No intent_keywords — Pass 2 keyword routing will not match this workflow._',
+        ].filter(l => l !== '');
+
+        return lines.join('\n');
+      }
 
       case 'propose_workflow_fix': {
         const { workflowName, steps: proposedSteps = [] } = params;
@@ -853,6 +941,67 @@ async function executeWriteTool(action, params, traceId) {
         return { success: resp.success, scope };
       }
 
+      case 'register_workflow': {
+        const { name, domain = null, description = '', steps, intentPhrases = [], intentKeywords = null } = params;
+        if (!name || !Array.isArray(steps) || steps.length === 0) {
+          return { error: 'name and a non-empty steps array are required' };
+        }
+
+        // Registration creates a workflow; changing one is propose_workflow_fix. Keeping
+        // them separate means neither tool can silently do the other's job — a name
+        // collision here is a mistake to report, not an update to perform.
+        const existing = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: name }], null, 1);
+        if (existing.rows?.length > 0) {
+          return {
+            error: `A workflow named "${name}" already exists (id ${existing.rows[0].id}, v${existing.rows[0].version}). ` +
+                   'Use propose_workflow_fix to change it, or register under a different name.',
+          };
+        }
+
+        // The pre-write guard. dev_scripts/upsert-workflow.mjs refuses to ship a seed
+        // that fails validation; a workflow arriving from a conversation gets the same
+        // gate. An approved-but-broken registration is worse than a refused one: it is
+        // discovered by a user running it.
+        const sim = await simulateForRegistration(steps, traceId);
+        if (!sim.passed) {
+          return {
+            error: 'Workflow failed validation — not registered.',
+            validation: sim.error_summary,
+            issues: sim.issues,
+          };
+        }
+
+        const wfResp = await insertRow('PGC_Workflow', {
+          name,
+          domain,
+          description,
+          steps,
+          version: 1,
+          state_strategy: 'sequential_with_confirmation',
+          intent_keywords: intentKeywords,
+        });
+        if (!wfResp.success) return { error: `PGC_Workflow insert failed: ${wfResp.error}` };
+
+        const workflowId = wfResp.row?.id ?? wfResp.rows?.[0]?.id ?? null;
+
+        const intentRows = buildIntentMapRows(name, intentPhrases, workflowId);
+        const imResp     = await insertRows('PGC_IntentMap', intentRows);
+
+        return {
+          success:            wfResp.success,
+          workflow_id:        workflowId,
+          name,
+          domain,
+          version:            1,
+          step_count:         steps.length,
+          intent_rows_written: imResp.success ? intentRows.length : 0,
+          // A failed intent map write leaves a registered workflow that routing cannot
+          // reach by phrase. Reported rather than swallowed, so the next turn can fix it.
+          intent_map_error:   imResp.success ? null : imResp.error,
+          validation:         'passed',
+        };
+      }
+
       case 'propose_workflow_fix': {
         const { workflowName, steps } = params;
         if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
@@ -992,13 +1141,15 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
 // Derive memory scope from session tool call history (pure — no I/O)
 // ---------------------------------------------------------------------------
 
-function deriveScope(workingHistory) {
+export function deriveScope(workingHistory) {
   const scope = {};
   for (const entry of workingHistory) {
     if (entry.role !== 'tool') continue;
     let parsed;
     try { parsed = JSON.parse(entry.content); } catch { continue; }
     const { tool, params = {}, result = {} } = parsed;
+    if (tool === 'register_workflow'    && params.name)                   scope.workflow = params.name;
+    if (tool === 'register_workflow'    && params.domain)                 scope.domain   = params.domain;
     if (tool === 'propose_workflow_fix' && params.workflowName)           scope.workflow = params.workflowName;
     if (tool === 'read_workflow'         && params.workflowName && !scope.workflow) scope.workflow = params.workflowName;
     if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
@@ -1036,6 +1187,15 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
         ? ` (step count changed: ${result.stepCountBefore} → ${result.stepCountAfter})`
         : '';
       content = `Session ${sessionId}: fixed ${workflowName} v${(result.newVersion ?? 1) - 1}→v${result.newVersion ?? '?'}. ${diffSummary}${countNote}. Outcome: ${result.success ? 'success' : 'failed'}.`;
+
+    } else if (action === 'register_workflow') {
+      const { name, domain = null } = params;
+      scope   = domain ? { workflow: name, domain } : { workflow: name };
+      content = `Session ${sessionId}: registered workflow ${name}` +
+                `${domain ? ` in domain ${domain}` : ' (standalone)'} — ` +
+                `${result.step_count ?? '?'} steps, ${result.intent_rows_written ?? 0} intent phrase(s). ` +
+                `Outcome: ${result.success ? 'success' : 'failed'}` +
+                `${result.intent_map_error ? `; intent map write failed: ${result.intent_map_error}` : ''}.`;
 
     } else if (action === 'propose_schema_fix') {
       const { operation, tableName } = params;
