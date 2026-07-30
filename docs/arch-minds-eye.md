@@ -189,9 +189,29 @@ count against `max_actions_per_session`.
 | Set | Tools | Gate |
 |---|---|---|
 | Inline write | `update_data`, `insert_data`, `upsert_data` | None — executes immediately |
-| Gated write | `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
+| Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
+
+**`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
+intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
+`PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`
+distinguishes `name` from `auto`). It is the write end of the path the convention bridge opens —
+Novia designs a step array in conversation, simulates it, and registers it, with no
+`create_workflow` involvement.
+
+Two boundaries hold it in place:
+
+- **It refuses to write a step array that does not validate.** The same L0+L1+L2 verdict is
+  computed once and used twice — shown in the gate so the human is approving a known-good
+  array, and re-checked at execution. The issues come back on refusal so the next turn can
+  correct and re-propose. `dev_scripts/upsert-workflow.mjs` refuses to ship a seed that fails
+  validation; a workflow arriving from a conversation gets the same gate.
+- **It creates, it never updates.** A name that already exists is an error naming
+  `propose_workflow_fix`, so neither tool can silently do the other's job.
+
+A failed `PGC_IntentMap` write is reported rather than swallowed: the workflow exists but no
+phrase reaches it, and that is a state the next turn has to know about.
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
