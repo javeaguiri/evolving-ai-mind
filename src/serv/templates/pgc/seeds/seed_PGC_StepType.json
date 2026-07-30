@@ -826,10 +826,10 @@
         "description": "Dot-path to simulation_paths array \u2014 required for Level 2. If absent, runs Level 1 only."
       },
       {
-        "type": "boolean",
-        "field": "input.skeleton",
+        "type": "integer",
+        "field": "input.level",
         "required": false,
-        "description": "Set to true when simulating a routing skeleton (content-free steps). Skips serv_step_missing_required_input checks \u2014 those apply only to fully-formed steps. All routing topology checks still run. Do not set on the final pre-write simulate step."
+        "description": "How far validation runs \u2014 0 shape only, 1 adds static analysis, 2 (default) adds the routing matrix and data-flow trace. Level 0 answers whether each element is a step of the type it claims to be, with every field its contract marks required, which is the question a content-free routing sketch can answer. The retired boolean `input.skeleton` is still accepted and means level 0."
       },
       {
         "type": "string",
@@ -989,43 +989,43 @@
     "input_contract": [
       {
         "type": "string",
-        "field": "memory_type",
+        "field": "input.memory_type",
         "required": true,
         "description": "episodic | semantic | procedural"
       },
       {
         "type": "object",
-        "field": "scope",
+        "field": "input.scope",
         "required": true,
         "description": "JSONB scope object \u2014 values support {{template}} substitution. e.g. {\"domain\": \"{{input.domain}}\"}"
       },
       {
         "type": "string",
-        "field": "content_key",
+        "field": "input.content_key",
         "required": true,
         "description": "local_state key containing the plain-text content string to persist"
       },
       {
         "type": "array",
-        "field": "tags",
+        "field": "input.tags",
         "required": false,
         "description": "Array of string tags for filtering. e.g. [\"schema\", \"design_decision\"]"
       },
       {
         "type": "integer",
-        "field": "priority",
+        "field": "input.priority",
         "required": false,
         "description": "Integer priority \u2014 lower = higher priority. Default 5."
       },
       {
         "type": "string",
-        "field": "source_workflow",
+        "field": "input.source_workflow",
         "required": false,
         "description": "Name of the workflow writing this memory (for attribution)"
       },
       {
         "type": "string",
-        "field": "source_step",
+        "field": "input.source_step",
         "required": false,
         "description": "Step key inside the workflow (for attribution)"
       },
@@ -1037,7 +1037,7 @@
       },
       {
         "type": "boolean",
-        "field": "expire_prior",
+        "field": "input.expire_prior",
         "required": false,
         "description": "If true, sets expires_at = now() on all existing PGC_Memory rows with matching scope and tags before writing the new row. Use for singleton memories (e.g. schema snapshots) that should replace prior versions."
       }

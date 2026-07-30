@@ -16,7 +16,15 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runSimulation } from '../../src/proc/simulation-engine.mjs';
+import { readFileSync } from 'node:fs';
+import { runSimulation, runLevel0ShapeCheck } from '../../src/proc/simulation-engine.mjs';
+
+// L0 composes its assertions from PGC_StepType. The seed file is the same content
+// the live rows hold, so the tests exercise the real contracts rather than a
+// fixture that can quietly disagree with the registry.
+const CONTRACTS = JSON.parse(
+  readFileSync(new URL('../../src/serv/templates/pgc/seeds/seed_PGC_StepType.json', import.meta.url), 'utf8'),
+);
 
 describe('L2b data-flow trace — serv_query.filters shape (run 623 reproduction)', () => {
   it('flags a nested array-of-filter-groups fed into serv_query.filters', () => {
@@ -472,12 +480,115 @@ describe('L1 — gate size', () => {
     assert.equal(sizeIssue(formGate('{{edit_fields}}')), undefined);
   });
 
-  it('does not fire in skeleton mode, where fields are not yet designed', () => {
-    const result = runSimulation({ steps: formGate(nFields(63)), skeleton: true, traceId: 't' });
-    assert.equal(
-      result.static_analysis.issues.find(i => i.check === 'gate_too_many_fields'),
-      undefined,
-    );
+  it('is not reached at level 0, where fields are not yet designed', () => {
+    // Replaces the retired `skeleton: true` flag. A sketch is validated at L0,
+    // which asks only whether each element is a step of the type it claims to be;
+    // the gate ceiling is an L1 question and L1 does not run.
+    const result = runSimulation({
+      steps: formGate(nFields(63)),
+      level: 0,
+      stepTypeContracts: CONTRACTS,
+      traceId: 't',
+    });
+    assert.equal(result.passed, true);
+    assert.equal(result.static_analysis, null);
+  });
+
+  it('still fires on the same steps at the default level', () => {
+    const result = runSimulation({ steps: formGate(nFields(63)), stepTypeContracts: CONTRACTS, traceId: 't' });
+    assert.ok(result.static_analysis.issues.find(i => i.check === 'gate_too_many_fields'));
+  });
+});
+
+describe('L0 — shape, composed from PGC_StepType', () => {
+  const gate = extra => [
+    { step: '1', type: 'human_gate', gate_type: 'confirm', message_template: 'ok?', on_cancel: 'cancel',
+      options: [{ label: 'Cancel', action: 'cancel', on_select: 'cancel' }], on_success: 'next', ...extra },
+    { step: '2', type: 'end' },
+  ];
+
+  it('reports not-run, and does not claim a pass, when contracts are absent', () => {
+    const shape = runLevel0ShapeCheck(gate(), {});
+    assert.equal(shape.ran, false);
+    assert.equal(shape.passed, false);
+    assert.match(shape.reason, /not supplied/);
+  });
+
+  it('fails a level 0 request that supplied no contracts, rather than passing silently', () => {
+    const result = runSimulation({ steps: gate(), level: 0, traceId: 't' });
+    assert.equal(result.passed, false);
+    assert.match(result.error_summary, /not supplied/);
+  });
+
+  it('catches a step type that is not in the registry', () => {
+    const steps = [{ step: '1', type: 'serv_qeury', input: { tableName: 'PGD_X' }, output_key: 'r', on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    const shape = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS });
+    const issue = shape.issues.find(i => i.check === 'unknown_step_type');
+    assert.ok(issue);
+    // The detail enumerates every live type, which beats guessing at one.
+    assert.match(issue.detail, /serv_query/);
+  });
+
+  it('catches a required field missing from the step root', () => {
+    const steps = [{ step: '1', type: 'condition', expression: '{{flag}}', on_success: '2' }, { step: '2', type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'missing_required_field');
+    assert.ok(issue);
+    assert.match(issue.detail, /on_else/);
+  });
+
+  it('catches a required field missing from the step input object', () => {
+    const steps = [{ step: '1', type: 'serv_update', input: { tableName: 'PGD_X', updates: { a: 1 } }, on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'missing_required_field');
+    assert.ok(issue);
+    assert.match(issue.detail, /input\.filters/);
+  });
+
+  it('accepts a {{template}} reference as a present value', () => {
+    const steps = [{ step: '1', type: 'serv_delete', input: { tableName: '{{t}}', filters: '{{f}}' }, on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
+  it('holds an iterator item_step to the same contract', () => {
+    const steps = [
+      { step: '1', type: 'iterator', items_key: 'rows', execution_mode: 'sequential', on_complete: 'next',
+        item_step: { type: 'serv_insert', input: { tableName: 'PGD_X' } } },
+      { step: '2', type: 'end' },
+    ];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.step === '1.item_step');
+    assert.ok(issue);
+    assert.match(issue.detail, /input\.row/);
+  });
+
+  it('does not require output_key on an item_step — the iterator collects the results', () => {
+    const steps = [
+      { step: '1', type: 'iterator', items_key: 'rows', execution_mode: 'sequential', on_complete: 'next', output_key: 'out',
+        item_step: { type: 'serv_query', input: { tableName: 'PGD_X' } } },
+      { step: '2', type: 'end' },
+    ];
+    assert.equal(runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
+  it('short-circuits before L1, so a shape failure never reports as a clean static pass', () => {
+    const steps = [{ step: '1', type: 'condition', expression: '{{flag}}', on_success: '2' }, { step: '2', type: 'end' }];
+    const result = runSimulation({ steps, stepTypeContracts: CONTRACTS, traceId: 't' });
+    assert.equal(result.passed, false);
+    assert.equal(result.static_analysis, null);
+    assert.equal(result.shape_analysis.passed, false);
+    assert.match(result.error_summary, /\[shape\]/);
+  });
+
+  it('enforces write_memory fields where the engine actually reads them', () => {
+    // buildMemoryRow (step-executor.mjs) destructures step.input, so the contract
+    // names input.memory_type / input.scope / input.content_key. A row declaring
+    // them at the step root is the shape the engine ignores.
+    const rootLevel = [{ step: '1', type: 'write_memory', memory_type: 'semantic', scope: {}, content_key: 'c', on_success: 'next' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(rootLevel, { stepTypeContracts: CONTRACTS }).passed, false);
+
+    const underInput = [{ step: '1', type: 'write_memory', input: { memory_type: 'semantic', scope: { domain: 'd' }, content_key: 'c' }, on_success: 'next' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(underInput, { stepTypeContracts: CONTRACTS }).passed, true);
   });
 });
 

@@ -1232,10 +1232,10 @@ async function executeReadTool(action, params, traceId) {
       }
 
       case 'simulate_workflow': {
-        const { steps } = params;
+        const { steps, level } = params;
         if (!steps) return { error: 'steps is required' };
         const { servPost } = await import('../shared/serv-client.mjs');
-        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps });
+        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps, ...(level !== undefined ? { level } : {}) });
         return resp;
       }
 

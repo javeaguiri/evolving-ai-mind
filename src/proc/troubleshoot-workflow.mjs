@@ -22,6 +22,7 @@ import { ok, err }              from '../shared/lambda-utils.mjs';
 import { enqueueWorkflow, enqueueCallback } from '../shared/sqs-callback.mjs';
 import { getRows }              from '../shared/serv-client.mjs';
 import { runSimulation }        from './simulation-engine.mjs';
+import { loadStepTypeContracts } from './step-type-registry.mjs';
 
 export async function handle(req) {
   const body         = req.body ?? {};
@@ -69,11 +70,22 @@ export async function handle(req) {
     return;
   }
 
-  // ── Run Level 1 static analysis ───────────────────────────────────────────
-  // runSimulation with no simulationPaths runs Level 1 only.
-  const simResult = runSimulation({ steps, mockOutputs: null, simulationPaths: null, traceId });
-  const issues    = simResult.static_analysis?.issues ?? [];
-  const passed    = simResult.static_analysis?.passed ?? issues.length === 0;
+  // ── Run Level 0 + Level 1 static analysis ─────────────────────────────────
+  // runSimulation with no simulationPaths stops after Level 1.
+  const simResult = runSimulation({
+    steps,
+    mockOutputs:       null,
+    simulationPaths:   null,
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    traceId,
+  });
+  // A Level 0 failure short-circuits before Level 1 runs, leaving static_analysis
+  // null — reading only that field would report a shape failure as a clean pass.
+  const issues = [
+    ...(simResult.shape_analysis?.issues  ?? []),
+    ...(simResult.static_analysis?.issues ?? []),
+  ];
+  const passed = issues.length === 0 && simResult.static_analysis !== null;
 
   // ── Build human-readable Slack summary ───────────────────────────────────
   const label = workflowName

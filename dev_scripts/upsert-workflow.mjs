@@ -22,6 +22,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { runSimulation } from '../src/proc/simulation-engine.mjs';
+import { loadStepTypeContracts } from '../src/proc/step-type-registry.mjs';
 
 const SERV_API_URL = process.env.SERV_API_URL;
 const WORKFLOW_NAME = process.argv[2] ?? null;
@@ -89,18 +90,34 @@ function fingerprint(entry) {
 // ---------------------------------------------------------------------------
 const counts = { ok: 0, updated: 0, inserted: 0, l1Failed: 0 };
 
+// L0 composes its assertions from these; without them it reports not-run and the
+// pre-write guard silently drops to L1 only. Fetched once for the whole batch.
+const stepTypeContracts = await loadStepTypeContracts();
+if (!stepTypeContracts) {
+  console.error('ERROR: could not read PGC_StepType — L0 shape checks would be skipped. Aborting.');
+  process.exit(1);
+}
+
 for (const workflow of targets) {
   const seedFp = fingerprint(workflow);
   const label  = workflow.name;
 
-  // L1 static analysis \u2014 suppress simulation-engine info logs in upsert context.
+  // L0 shape + L1 static analysis \u2014 suppress simulation-engine info logs in upsert context.
   const origInfo = console.info;
   console.info = () => {};
-  const l1Result = runSimulation({ steps: workflow.steps, mockOutputs: null, simulationPaths: null, runInput: {} });
+  const l1Result = runSimulation({
+    steps: workflow.steps, mockOutputs: null, simulationPaths: null, runInput: {},
+    stepTypeContracts,
+  });
   console.info = origInfo;
-  if (!l1Result.static_analysis.passed) {
-    console.error(`  ${label}  L1 FAILED \u2014 ${l1Result.static_analysis.issues.length} issue(s):`);
-    for (const issue of l1Result.static_analysis.issues) {
+  // A Level 0 failure returns static_analysis: null \u2014 both levels are gates here.
+  const preWriteIssues = [
+    ...(l1Result.shape_analysis?.issues  ?? []),
+    ...(l1Result.static_analysis?.issues ?? []),
+  ];
+  if (preWriteIssues.length > 0) {
+    console.error(`  ${label}  L0/L1 FAILED \u2014 ${preWriteIssues.length} issue(s):`);
+    for (const issue of preWriteIssues) {
       console.error(`    [${issue.check}] step ${issue.step}: ${issue.detail}`);
     }
     counts.l1Failed++;

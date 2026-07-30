@@ -121,10 +121,32 @@ whether conventions alone are enough.
 
 ### Track B — Novia builds a workflow
 
-- **B1** — **L0** in `simulation-engine.mjs` (AC3). Schema composed from
-  `PGC_StepType.input_contract`. Replaces the `skeleton: true` flag; absorbs L1's
-  `serv_step_missing_required_input`, which is a shape assertion in the wrong level.
-  Fault domain: Validation.
+- **B1** ✅ **DONE** — **L0** in `simulation-engine.mjs` (AC3). `runLevel0ShapeCheck`
+  composes every assertion from `PGC_StepType.input_contract`: the contract's `field`
+  names already encode placement (`input.tableName` vs `gate_type`), so a required field
+  is a dot path resolved against the step, and adding a step type changes what L0
+  enforces with no code change. Absorbs L1's `serv_step_missing_required_input` — a
+  hand-written map of 5 of the 19 types — and adds `unknown_step_type`.
+  **`skeleton` is gone.** §12.7 **OQ6 closed**: L0 is a `level` selector (0/1/2, default
+  2) on `runSimulation` and the existing endpoint, not a new tool — Novia gets
+  "validate, then simulate" as `simulate_workflow { steps, level: 0 }` with no new
+  surface. `input.skeleton: true` is accepted in `step-executor` as the retired spelling
+  of `level: 0`. L1's four `!skeleton` branches are now unconditional.
+  Contracts are passed in, never fetched — the engine stays pure.
+  **New file** `src/proc/step-type-registry.mjs` is the single `PGC_StepType` read for
+  all four consumers; deliberately not shared with `llm-harness.mjs`'s own read, which
+  is fingerprint-load-bearing for the replay corpus. Absent contracts → `ran: false`,
+  never a silent pass.
+  **Two defects found by pointing L0 at the existing seeds**, both fixed:
+  (a) **Contract fault** — the `write_memory` contract declared `memory_type`, `scope`,
+  `content_key` and five others at the step root, but `buildMemoryRow`
+  (`step-executor.mjs:1742`) reads every one from `step.input`. The registry was
+  misstating the engine; `create_domain` step 16c was right all along.
+  (b) L0's own false positive — `output_key` is not required inside an `item_step`,
+  since the iterator collects return values into its own `output_key` on the parent
+  frame (`run-workflow.mjs:1425`). One structural rule about nesting, not a per-type
+  exception list.
+  11 new unit tests (687 → 698). All 11 seed workflows pass L0.
 - **B2** — `register_workflow` gated write tool (AC4).
 - **B3** — Turn and action budgets. `turn_limit` and `max_actions_per_session` are
   `PGC_SystemContext` preferences and adjustable without a deploy, but their current defaults are

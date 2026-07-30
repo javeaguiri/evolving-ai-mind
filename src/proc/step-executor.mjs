@@ -49,6 +49,7 @@ import {
   evalItemCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
+import { loadStepTypeContracts } from './step-type-registry.mjs';
 import { pickLabelColumn }              from '../shared/schema-utils.mjs';
 
 // ---------------------------------------------------------------------------
@@ -1548,7 +1549,12 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const stepsKey       = step.input?.steps_key;
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
-  const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
+  // `level` selects how far validation runs: 0 shape only, 1 adds static analysis,
+  // 2 adds the routing matrix and data-flow trace. `skeleton: true` is the retired
+  // spelling of level 0 — it used to mean "run L1 with the content checks switched
+  // off", which is the question L0 now answers directly. Accepted here so workflow
+  // rows written against the old flag keep validating their sketches.
+  const level = step.input?.level ?? (step.input?.skeleton === true ? 0 : 2);
   // optional — path to the routing skeleton this step array was translated from. When
   // present, L1 checks that translation emitted exactly one step per design item and
   // invented none of its own (see checkSkeletonDrift).
@@ -1572,7 +1578,8 @@ async function executeSimulate({ step, localState, run, traceId }) {
     mockOutputs,
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
-    skeleton,
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    level,
     lockedSkeleton,
     traceId,
   });
