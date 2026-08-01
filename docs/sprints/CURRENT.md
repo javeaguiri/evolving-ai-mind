@@ -47,11 +47,11 @@ would commit to a shape before there is any evidence she needs one.
 | **AC2** | The bridge sources registry facts **by query, not transcription** — step types from `PGC_StepType`, gate mechanics from the `human_gate` contract, prompt names from `PGC_Prompt`. No hand-maintained list of anything that already exists as a row. | ✅ **MET** — confirmed live: `PGC_StepType` queried before designing, then three targeted re-queries (`serv_upsert`, `human_gate`, `js_transform`) as the design tightened. |
 | **AC3** | **L0** runs inside `simulation-engine.mjs` as a level below L1, with its schema composed from `PGC_StepType.input_contract` and never hand-authored. Runs on both a sketch and a filled array, replacing the `skeleton: true` flag threaded through `runSimulation`. | ✅ **MET** (B1) — verified live through `POST /proc/simulate-workflow` with `level: 0`. |
 | **AC4** | `register_workflow` exists as a gated Novia tool (`GATED_WRITE_TOOLS`), writing `PGC_Workflow` + `PGC_IntentMap`. | ✅ **MET** (B2) — not yet exercised on a real build; that is AC5. |
-| **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. | ◐ **IN FLIGHT** — session 1121, design proposed and under review at turn 9. Not registered, not run. |
+| **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. | ◐ **BUILD HALF MET** — `edit_budget` (id 357, 25 steps) designed in conversation across sessions 1121/1122, simulated to a clean L0+L1+L2 pass, and registered via `register_workflow`. No `create_workflow` at any point. **The runtime half did not come free**: the generated workflow needed repairs before a run completed, and those were made outside the Novia path. Counting this as met would be counting the build and ignoring the AC's second clause. |
 | **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. | ⬜ **NOT MET — and the budget that binds was the wrong one.** Turns 12, actions 8, output 10240 are all raised, but the round runs inside one 240s Lambda and each turn costs 7–100s, so it dies at turn 3–4 and `turn_limit: 12` is unreachable. The timeout is silent: no notification, no session write, no retry. Compression cannot be exercised until a round can reach the gate. See backlog. |
 | **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. | ◐ **CODE COMPLETE** (C1/C2, deployed) — awaiting the live two-gate check (C3). No workflow edit needed. |
 | **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. | ⬜ Not started. |
-| **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. | ◐ **DATA ACCUMULATING** — $0.8372 over 14 calls in session 1121, workflow not yet designed. See the cost-shape finding in Session 5. |
+| **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. | ✅ **MEASURED, and it does not favour the Novia path yet.** **$2.73** to build and register (session 1121, 26 calls) — roughly **2× the $1.42 baseline** — plus **$3.40** for the repair session (1122) that followed. ~$0.39 of the build was lost to harness defects since fixed, so a clean rebuild would be cheaper; the dominant structural cost is re-emitting the step array every turn, which is a known fix, not a mystery. See Session 6. |
 
 ---
 
@@ -438,3 +438,76 @@ menu was already moved into `minds_eye_system_prompt`.
 
 **Next:** C3 (live two-gate check), then resume session 1121 via **Ask follow-up** on Novia's
 design message — a fresh `/novia` would start a new session and lose the 14 entries.
+
+### Session 6 — 2026-08-01 — B4 driven to registration; six harness defects closed
+
+Novia designed, simulated and registered a workflow from a Slack conversation with no
+`create_workflow` involvement (AC5's build half). Everything else this session was found *by*
+that build rather than looked for — the sprint's premise was that a real build would surface
+what a review could not, and it did.
+
+**Six defects, all found live, all fixed and deployed:**
+
+1. **Output ceiling.** `max_output_tokens` was never in `minds_eye_preferences` and fell
+   through to the default; a turn was severed at 8192 and the round exited with nothing
+   written. Raised to 10240 and **no further** — the ceiling is coupled to `LLM_TIMEOUT_MS`
+   (170s), and at the observed generation rate doubling it would trade truncations for
+   timeouts, which carry no `isTruncated` flag and so get no recovery.
+2. **Truncation is not malformation.** `classifyLlmFailure` returns `reask | correct | fail`:
+   a severed response gets the question again with the cut-off stated, never its own raw
+   output echoed back — that output is what exhausted the budget.
+3. **The round budget.** The loop runs its turns inside ONE Lambda invocation, so
+   `turn_limit` was never the budget that bound; a round died at the 240s ceiling with no
+   notification, no session write and no retry. `roundBudgetExhausted` now stops before a
+   turn there is no room to finish, estimating from the longest turn seen. Verified live:
+   it ended a round at 143s elapsed / 96s longest, within a second of where the Lambda
+   would have died. **AC6 moved from PARTIAL to NOT MET on this finding** — three budgets
+   had been raised and none was the one that binds.
+4. **`turnCount` was never persisted on a turn-limit exit**, so every such round was
+   invisible to `max_lifetime_turns` — the exact leak that ceiling exists to stop.
+5. **L0 did not check the step envelope.** A 19-step array keyed `step_label` passed shape,
+   then produced seven `Step "undefined"` routing errors for one repeated field-name
+   mistake. `step` and `type` are what a contract is selected *by*, so composing assertions
+   from `input_contract` alone left the field the engine routes on unchecked. Four
+   structural rules added; the maintenance-free property holds. Bridge v2 names the fields.
+6. **A doomed registration was put to a human.** `postActionGate` fired unconditionally and
+   the simulation verdict was computed only to *describe* the action. Since a gate ends the
+   round, Novia stopped on a defect she could have corrected next turn. `preGateRefusal`
+   now returns the issues instead, and the gate goes back to deciding whether a *valid*
+   workflow should exist.
+
+**The finding that subsumes several others: Novia could not see her own work.**
+`buildUserMessage` rendered a tool entry's `result` and dropped its `params`, so every step
+array she submitted was persisted to `PGC_SessionEntry` and invisible to her. She rebuilt all
+23 steps from reasoning each turn — which is why the array drifted 19 → 21 → 23 and why a
+corrected field name reappeared two turns later. The newest submitted array now renders as
+the current draft; earlier ones collapse to the verdict they earned. `sequence_number`
+already ordered them, so **persistence and versioning both already existed — only the load
+was missing.**
+
+**A form gate could not be pre-filled, and the contract was why.** `step-executor.mjs:490`
+carries a field's `default` through to the dialog; the `human_gate.fields` contract never
+documented it. Reaching for pre-filling twice and inventing a mechanism both times is what a
+correct registry read looks like when the registry is incomplete — the same class as the
+`write_memory` contract found in B1. Contract now documents `default` and states the trap:
+`placeholder` is hint text that submits nothing, and an empty non-`optional` field
+re-renders the gate rather than advancing. Note the name is `default`, not `initial` —
+`initial` is the Experience tier's spelling and was explicitly rejected in run 695.
+
+**Cost, the AC9 answer.** $2.73 to build and register, ~2× the $1.42 `create_workflow`
+baseline, plus $3.40 for the repair session that followed. Cost per call grew 12× within a
+session, tracking transcript length: `cache_read` pinned at 4041 tokens while
+`cache_creation` climbed past 54,000. The transcript item moved from a cost observation to
+the item blocking the work, and is sequenced ahead of the rest of Sprint 9.
+
+**Four backlog entries added:** `register_workflow` accepting a domain workflow with no
+`intent_keywords` (the consequence is misrouting to generic `update_entity`, not silence);
+`run_sql` having no route to physical table names (7 of ~12 calls failed on identifiers);
+thin post-mortem evidence for cancelled runs plus the three-way rule for where `local_state`
+actually lives; and the transcript cost, updated with the numbers.
+
+725 → 766 unit tests. Live seed state: `minds_eye_preferences` v6, `minds_eye_system_prompt`
+v30, `workflow_convention_bridge` v2, `PGC_StepType` `human_gate` updated.
+
+**Next:** C3 (the live two-gate check, user-run) is the only Track C item outstanding. Track D
+is untouched. The transcript fix should come before either.
