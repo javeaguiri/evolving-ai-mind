@@ -41,17 +41,17 @@ would commit to a shape before there is any evidence she needs one.
 
 ## Acceptance Criteria
 
-| # | Criterion |
-|---|---|
-| **AC1** | A convention bridge exists as `PGC_SystemContext`, injected into `minds_eye_system_prompt`, and passes the overstepping test line by line. |
-| **AC2** | The bridge sources registry facts **by query, not transcription** — step types from `PGC_StepType`, gate mechanics from the `human_gate` contract, prompt names from `PGC_Prompt`. No hand-maintained list of anything that already exists as a row. |
-| **AC3** | **L0** runs inside `simulation-engine.mjs` as a level below L1, with its schema composed from `PGC_StepType.input_contract` and never hand-authored. Runs on both a sketch and a filled array, replacing the `skeleton: true` flag threaded through `runSimulation`. |
-| **AC4** | `register_workflow` exists as a gated Novia tool (`GATED_WRITE_TOOLS`), writing `PGC_Workflow` + `PGC_IntentMap`. |
-| **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. |
-| **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. |
-| **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. |
-| **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. |
-| **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. |
+| # | Criterion | Status |
+|---|---|---|
+| **AC1** | A convention bridge exists as `PGC_SystemContext`, injected into `minds_eye_system_prompt`, and passes the overstepping test line by line. | ✅ **MET** — and confirmed live: session 1121's *first* action, unprompted, was `query_table` for `workflow_convention_bridge`. That was the single observation session 4 named as the cheapest read on whether archetypes are needed. |
+| **AC2** | The bridge sources registry facts **by query, not transcription** — step types from `PGC_StepType`, gate mechanics from the `human_gate` contract, prompt names from `PGC_Prompt`. No hand-maintained list of anything that already exists as a row. | ✅ **MET** — confirmed live: `PGC_StepType` queried before designing, then three targeted re-queries (`serv_upsert`, `human_gate`, `js_transform`) as the design tightened. |
+| **AC3** | **L0** runs inside `simulation-engine.mjs` as a level below L1, with its schema composed from `PGC_StepType.input_contract` and never hand-authored. Runs on both a sketch and a filled array, replacing the `skeleton: true` flag threaded through `runSimulation`. | ✅ **MET** (B1) — verified live through `POST /proc/simulate-workflow` with `level: 0`. |
+| **AC4** | `register_workflow` exists as a gated Novia tool (`GATED_WRITE_TOOLS`), writing `PGC_Workflow` + `PGC_IntentMap`. | ✅ **MET** (B2) — not yet exercised on a real build; that is AC5. |
+| **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. | ◐ **IN FLIGHT** — session 1121, design proposed and under review at turn 9. Not registered, not run. |
+| **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. | ◐ **PARTIAL** — three budgets now: turns 12, actions 8 (B3), output 10240 (session 5). A truncated turn no longer ends the round. Compression still unexercised. |
+| **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. | ◐ **CODE COMPLETE** (C1/C2, deployed) — awaiting the live two-gate check (C3). No workflow edit needed. |
+| **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. | ⬜ Not started. |
+| **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. | ◐ **DATA ACCUMULATING** — $0.8372 over 14 calls in session 1121, workflow not yet designed. See the cost-shape finding in Session 5. |
 
 ---
 
@@ -386,3 +386,55 @@ Live seed state: `minds_eye_system_prompt` v30, `minds_eye_preferences` v4,
 **Next:** B4 (user-run). Watch whether Novia fetches `workflow_convention_bridge` unprompted
 before designing — that single observation tests A1's precondition wording and is the cheapest
 read available on whether archetypes are needed at all (§12.13's `overstep` rows).
+
+### Session 5 — 2026-08-01 — Track C landed; B4 started and diagnosed
+
+Track C (C1, C2) built and deployed. **AC1 and AC2 confirmed live** rather than by inspection,
+which is the session's most valuable outcome: B4 started, and the first thing Novia did —
+unprompted, turn 1 — was fetch `workflow_convention_bridge`, then query `PGC_StepType` before
+designing. The precondition wording works and the registry is being read, not recited.
+
+**C1/C2 — `option_source` on the `human_gate` contract.** The vocabulary is the user's:
+`static | dynamic`, not §12.3's `authored | derived` — standard, and what an LLM reaches for
+unprompted, which is the point of a field Novia must set without reading its description. The
+rename also settled infer-vs-declare. C1 was scoped treating the `iterator` signal as an
+accident (§12.8) and the inference as a proxy for intent; under static/dynamic it is neither,
+because there is **no way to build a dynamic set except through runtime mechanics**. The engine
+reads the property, not a stand-in for it. Explicit declaration overrides, for the one shape
+that misreads: a fixed scale assembled in a `js_transform` rather than typed out.
+`ordered` was not carried — nothing in the rendering rule reads it.
+`dialogToBlocks` is exported and tested directly; the 214-line "faithful copy" in
+`callback.test.mjs` and four copied helpers are gone. AC7 needs no workflow edit.
+
+**Three defects found by running B4, not by looking for them.**
+
+1. **A Generation miss, cleanly isolated.** Novia proposed an `iterator` over `serv_update`
+   to save 20 budget rows, asserting *"this is the correct pattern"* — having queried all 19
+   step types beforehand, `serv_upsert` among them, whose description names this exact case.
+   Correct instructions, structurally valid output, wrong call: the definition of the
+   Generation domain, and Novia-correctable. The user corrected it in one turn.
+2. **A truncated turn ended the session.** She wrote 8192 output tokens of prose and was cut
+   mid-sentence; the parse failed and the round exited with "Agent reasoning failed", writing
+   nothing to `PGC_SessionEntry`. Format was not the fault — `llm-client` already finds the
+   first `{` after a prose preamble. **Contract fault:** `max_output_tokens` was never in
+   `minds_eye_preferences` at all, falling through to the default. B3 raised turns and actions
+   and left the third budget untouched, and the output budget is the one a build strains.
+   v4 → v5 raises it to 10240, and `classifyLlmFailure` now re-asks a severed turn once
+   instead of ending the round. **Not raised further on purpose:** the ceiling is coupled to
+   `LLM_TIMEOUT_MS` (170s) — 8192 tokens took ~104s, so the timeout permits ~13.4k, and a
+   timeout carries no `isTruncated` flag and so gets no re-ask. Raising output alone would
+   trade a recoverable failure for an unrecoverable one.
+3. **The cost shape, which is the AC9 finding.** $0.8372 over 14 calls before the workflow was
+   designed, against a $1.42 baseline for a *finished* build. The cause is visible in the usage
+   logs: `cache_read` pinned at 4041 tokens every turn while `cache_creation` climbs 4473 →
+   21525. Novia's history is re-sent whole every turn as one flat `input` string — deliberate,
+   since the gateway's `messages` field is ignored for `anthropic/*` (`llm-client.mjs:172`) —
+   so the transcript is re-cached at *creation* price each turn, and the transcript is
+   dominated by tool results, not reasoning. Written up in the backlog with the numbers;
+   the first move proposed there is narrowing registry reads, which is data, not code.
+
+Also resolved a stale backlog item found while writing the above: the `buildUserMessage` action
+menu was already moved into `minds_eye_system_prompt`.
+
+**Next:** C3 (live two-gate check), then resume session 1121 via **Ask follow-up** on Novia's
+design message — a fresh `/novia` would start a new session and lose the 14 entries.
