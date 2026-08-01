@@ -1195,7 +1195,19 @@ const OPTION_TEXT_LIMIT   = 75;
 
 // Above this many real choices, a choice gate's lettered buttons become a dropdown.
 // Below it, buttons are the friendlier control — one click, no submit.
+//
+// Which count applies depends on where the option set came from, which the gate declares
+// as `option_source` and this tier reads (it never reads what to draw). A DERIVED set is
+// built from runtime data and may hold three entries or three hundred, so collapsing it
+// past a handful is a fair trade — that is the twelve-month picker this threshold was
+// introduced for. An AUTHORED set's length is a property of the design and the
+// simultaneous visibility of every value is the interaction — a fixed rating scale is one
+// click to answer, three interactions once it is a dropdown — so it stays inline until
+// Slack's own cap on one actions block forces the issue. Both bounds are this layer's, and
+// the workflow can raise neither: a declared property cannot ask for a message Slack
+// rejects.
 const CHOICE_DROPDOWN_THRESHOLD = 5;
+const ACTIONS_ELEMENT_LIMIT     = 25;
 
 function truncateOption(text) {
   const s = String(text ?? '');
@@ -1296,7 +1308,7 @@ function buildObjectArrayTable(items) {
   return [header, sep, ...rows].join('\n');
 }
 
-function dialogToBlocks(dialog, workflowRunId, gateType) {
+export function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
   // Decided once, up front, because two cases below depend on it: a choice gate with
@@ -1307,8 +1319,14 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
   const choiceButtons  = gateType === 'choice'
     ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
     : [];
+  // A gate built by buildDialog always declares option_source. A payload that does not
+  // carry one is read as authored, which is the reading that leaves a hand-authored gate
+  // drawn the way it was written.
+  const collapseAbove = dialog?.option_source === 'derived'
+    ? CHOICE_DROPDOWN_THRESHOLD
+    : ACTIONS_ELEMENT_LIMIT;
   const choiceAsDropdown =
-    choiceButtons.length > CHOICE_DROPDOWN_THRESHOLD && choiceButtons.length <= SELECT_OPTION_LIMIT;
+    choiceButtons.length > collapseAbove && choiceButtons.length <= SELECT_OPTION_LIMIT;
 
   for (const field of (dialog?.fields ?? [])) {
     switch (field.type) {
@@ -1507,7 +1525,8 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         // A choice gate is "pick one value, and the click routes". Up to a handful of
         // options, lettered buttons read well. Past that they wrap into an unusable wall —
         // a 12-month picker rendered 13 buttons. Slack's static_select is the same
-        // interaction drawn better, so past the threshold the options become a dropdown
+        // interaction drawn better, so past the bound that applies to this gate's declared
+        // option_source (see the constants above) the options become a dropdown
         // with a Select button. The gate's BEHAVIOUR is untouched (on_select still routes);
         // only how the options are drawn changes, which is this layer's call. Existing
         // choice gates with a few options are unaffected.
