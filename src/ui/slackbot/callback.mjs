@@ -1196,16 +1196,22 @@ const OPTION_TEXT_LIMIT   = 75;
 // Above this many real choices, a choice gate's lettered buttons become a dropdown.
 // Below it, buttons are the friendlier control — one click, no submit.
 //
-// Which count applies depends on where the option set came from, which the gate declares
-// as `option_source` and this tier reads (it never reads what to draw). A DERIVED set is
-// built from runtime data and may hold three entries or three hundred, so collapsing it
-// past a handful is a fair trade — that is the twelve-month picker this threshold was
-// introduced for. An AUTHORED set's length is a property of the design and the
-// simultaneous visibility of every value is the interaction — a fixed rating scale is one
-// click to answer, three interactions once it is a dropdown — so it stays inline until
-// Slack's own cap on one actions block forces the issue. Both bounds are this layer's, and
-// the workflow can raise neither: a declared property cannot ask for a message Slack
-// rejects.
+// Which count applies depends on whether the choice set is static or dynamic, which the
+// gate states as `option_source` and this tier reads (it never reads what to draw).
+//
+// A DYNAMIC set is computed at runtime — the twelve-month trailing window this threshold
+// was introduced for. Choosing from one takes thought either way, so the extra click a
+// dropdown costs is not what makes it slow, and the dropdown is the control that survives
+// the set growing: a window that widens to twenty-four months degrades a wall of buttons
+// and leaves a dropdown untouched. Collapse it early.
+//
+// A STATIC set was written out at design time, and the case that matters is a workflow run
+// over and over: grading a card is one click while every value is visible and three
+// interactions once they are behind a dropdown. Its length cannot grow behind our backs,
+// so it stays inline until Slack's own cap on one actions block forces the issue.
+//
+// Both bounds are this layer's and the workflow can raise neither — a stated property
+// cannot ask for a message Slack rejects.
 const CHOICE_DROPDOWN_THRESHOLD = 5;
 const ACTIONS_ELEMENT_LIMIT     = 25;
 
@@ -1319,10 +1325,9 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
   const choiceButtons  = gateType === 'choice'
     ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
     : [];
-  // A gate built by buildDialog always declares option_source. A payload that does not
-  // carry one is read as authored, which is the reading that leaves a hand-authored gate
-  // drawn the way it was written.
-  const collapseAbove = dialog?.option_source === 'derived'
+  // A gate built by buildDialog always carries option_source. A payload without one is
+  // read as static, the reading that leaves a hand-written option list drawn as written.
+  const collapseAbove = dialog?.option_source === 'dynamic'
     ? CHOICE_DROPDOWN_THRESHOLD
     : ACTIONS_ELEMENT_LIMIT;
   const choiceAsDropdown =

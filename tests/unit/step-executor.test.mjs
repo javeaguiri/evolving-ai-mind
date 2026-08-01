@@ -1946,7 +1946,7 @@ describe('cancel option routing — on_select wins over the action name', () => 
 // experience layer's call.
 
 describe('resolveOptionSource', () => {
-  it('reads an inline option list as authored', () => {
+  it('reads an inline option list as static', () => {
     assert.equal(resolveOptionSource({
       gate_type: 'choice',
       options: [
@@ -1954,47 +1954,47 @@ describe('resolveOptionSource', () => {
         { value: '1', label: 'B', on_select: 'next' },
         { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
       ],
-    }), 'authored');
+    }), 'static');
   });
 
-  it('reads an option carrying iterator as derived', () => {
+  it('reads an option carrying iterator as dynamic', () => {
     assert.equal(resolveOptionSource({
       gate_type: 'choice',
       options: [
         { value: '{{value}}', label: '{{label}}', iterator: 'period_options', on_select: 'next' },
         { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
       ],
-    }), 'derived');
+    }), 'dynamic');
   });
 
-  it('reads a templated option list as derived — the entries come from local_state either way', () => {
-    assert.equal(resolveOptionSource({ gate_type: 'choice', options: '{{card_options}}' }), 'derived');
+  it('reads a templated option list as dynamic — the entries come from local_state either way', () => {
+    assert.equal(resolveOptionSource({ gate_type: 'choice', options: '{{card_options}}' }), 'dynamic');
   });
 
   it('an explicit declaration overrides the inference in both directions', () => {
     assert.equal(resolveOptionSource({
-      option_source: 'authored',
+      option_source: 'static',
       options: [{ value: '{{v}}', label: '{{l}}', iterator: 'rows' }],
-    }), 'authored');
+    }), 'static');
     assert.equal(resolveOptionSource({
-      option_source: 'derived',
+      option_source: 'dynamic',
       options: [{ value: '0', label: 'A' }],
-    }), 'derived');
+    }), 'dynamic');
   });
 
   it('ignores an unrecognised declaration and falls back to the inference', () => {
     assert.equal(resolveOptionSource({
       option_source: 'dropdown',
       options: [{ value: '{{v}}', label: '{{l}}', iterator: 'rows' }],
-    }), 'derived');
+    }), 'dynamic');
   });
 
-  it('reads a gate with no options at all as authored', () => {
-    assert.equal(resolveOptionSource({ gate_type: 'form' }), 'authored');
+  it('reads a gate with no options at all as static', () => {
+    assert.equal(resolveOptionSource({ gate_type: 'form' }), 'static');
   });
 
   it('buildDialog carries the resolved source on the dialog it returns', () => {
-    const authored = buildDialog({
+    const staticSet = buildDialog({
       gate_type: 'choice',
       message_template: 'How well did you recall it?',
       options: [
@@ -2003,9 +2003,9 @@ describe('resolveOptionSource', () => {
         { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
       ],
     }, {});
-    assert.equal(authored.option_source, 'authored');
+    assert.equal(staticSet.option_source, 'static');
 
-    const derived = buildDialog({
+    const dynamicSet = buildDialog({
       gate_type: 'choice',
       message_template: 'Which period?',
       options: [
@@ -2013,6 +2013,6 @@ describe('resolveOptionSource', () => {
         { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
       ],
     }, { period_options: [{ period: '2026-06' }, { period: '2026-07' }] });
-    assert.equal(derived.option_source, 'derived');
+    assert.equal(dynamicSet.option_source, 'dynamic');
   });
 });
