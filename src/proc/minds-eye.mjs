@@ -384,6 +384,26 @@ async function handleGateResume(body, callback, traceId, req) {
 // refuses before spending an LLM call) and after a round ends without a
 // response (so a session can't slip past it one continue-gate at a time).
 /**
+ * The notification for a round that ended on a failed reasoning turn.
+ *
+ * A failure exit skips the loop-exit block, so no continue gate is posted and the thread
+ * ends on an error with no way back in — twice the user has had to hunt an older message to
+ * resume. `format: 'markdown'` plus a `sessionId` is all the renderer needs to attach the
+ * follow-up button it already builds (`callback.mjs:437`), so the session stays reachable
+ * without a second gate type or a new mechanism. The session itself was never damaged: every
+ * completed turn is already written to PGC_SessionEntry.
+ */
+function buildFailureNotification(sessionId, traceId, llmError) {
+  return {
+    type:      'HUMAN_NOTIFICATION',
+    format:    'markdown',
+    sessionId,
+    traceId,
+    message:   `Agent reasoning failed: ${llmError.message}\n\nEverything up to this point is saved — use **Ask follow-up** to pick the session back up.`,
+  };
+}
+
+/**
  * Whether there is room for another turn inside this round's wall-clock budget.
  *
  * The loop runs its turns inside ONE Lambda invocation, so `turn_limit` is not the budget
@@ -519,20 +539,28 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           turnsThisRound += 1;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
+          // The correction's OWN failure was previously terminal — no classification, no
+          // retry — so a transport blip while repairing a recoverable parse error ended the
+          // session (`fetch failed`, session 1122 11:06:53, after two corrections in the
+          // same round had succeeded). Classify it the same way as any other failed call:
+          // a truncated correction gets re-asked, and anything else still ends the round.
+          if (classifyLlmFailure(corrErr, lastTurnTruncated) === 'reask') {
+            console.warn('proc/minds-eye: correction truncated — re-asking', { traceId });
+            truncationNotice  = TRUNCATION_NOTICE;
+            lastTurnTruncated = true;
+            longestTurnMs     = Math.max(longestTurnMs, Date.now() - turnStart);
+            turnCount      += 1;
+            turnsThisRound += 1;
+            continue;
+          }
           console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
-          if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: `Agent reasoning failed: ${llmError.message}` });
+          if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
           earlyExit = true;
           break;
         }
       } else {
         console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
-        if (callback) {
-          await enqueueCallback(callback, {
-            type:    'HUMAN_NOTIFICATION',
-            traceId,
-            message: `Agent reasoning failed: ${llmError.message}`,
-          });
-        }
+        if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
         earlyExit = true;
         break;
       }
