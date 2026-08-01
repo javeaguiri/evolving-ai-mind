@@ -254,27 +254,32 @@ L1 counts `action_key` as a **write** in the state-flow trace, so a downstream
 `{{edit_action}}` resolves. Without that it would be rejected as never written — which is
 exactly how run 719 failed before this existed.
 
-###### `option_source` — where the option set came from
+###### `option_source` — a static or a dynamic choice set
 
-`authored | derived`. A statement about the set, not about the widget that draws it.
+`static | dynamic`. A statement about the set, not about the widget that draws it.
 
-An **authored** set was written at design time: its length is a property of the design,
-and the simultaneous visibility of every value *is* the interaction — a fixed rating scale
-is one click to answer and three interactions once it is a dropdown. A **derived** set is
-built from runtime data and may hold three entries or three hundred, so collapsing it into
-one control past a handful is a fair trade.
+A **static** set was written out at design time. Its length cannot grow behind the
+renderer's back, and the case that matters is a workflow run over and over: grading a card
+is one click while every value is visible and three interactions once they sit behind a
+dropdown. A **dynamic** set is computed at runtime — a trailing twelve-month window, the
+rows of a query. Choosing from one takes thought either way, so the extra click costs
+little, and a single control is what survives the set growing.
+
+It describes the **choice set** — what the user picks between. A Cancel or other control
+button alongside a dynamic option list does not make the set static; the renderer keeps
+control buttons out of whatever it collapses, so Cancel stays a button in both shapes.
 
 `buildDialog` resolves this onto every dialog it emits, so the experience layer always has
-it. Absent an explicit declaration it is read off the step, where the fact is already
-stated: `options` given as a `{{template}}` reference, or an option carrying `iterator`,
-are derived by definition of where their entries come from. Declare it only to override
-that reading.
+it. Absent an explicit value it is read off the step, because the mechanism *is* the
+property: `options` given as a `{{template}}` reference, or an option carrying `iterator`,
+are the only ways a set gets built at runtime. Declare it only to override that reading —
+for a fixed scale assembled in a `js_transform` rather than typed out, say.
 
-The renderer applies its own mechanics and its own limits to the answer — *derived and
-numerous collapses; authored stays inline until Slack's cap on one actions block forces
-it* — and a workflow can raise neither bound. This is the `form` rule below applied one
-level up: a field's `type` names what is collected, an option set's `option_source` names
-where it came from, and neither names a widget.
+The renderer applies its own mechanics and its own limits to the answer — *dynamic and
+numerous collapses; static stays inline until Slack's cap on one actions block forces it* —
+and a workflow can raise neither bound. This is the `form` rule below applied one level up:
+a field's `type` names what is collected, a choice set's `option_source` names what kind of
+set it is, and neither names a widget.
 
 ###### `form` gate_type
 

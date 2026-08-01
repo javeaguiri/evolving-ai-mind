@@ -1595,11 +1595,11 @@ describe('groupBlocksForSlack', () => {
 // choice gate — buttons below the threshold, dropdown above it
 // ---------------------------------------------------------------------------
 
-describe('dialogToBlocks — a derived choice set collapses on option count', () => {
+describe('dialogToBlocks — a dynamic choice set collapses on option count', () => {
   // The live 12-month picker: its options are expanded from a local_state array, so
-  // buildDialog marks the set derived and this layer collapses it past a handful.
+  // buildDialog marks the set dynamic and this layer collapses it past a handful.
   const choiceDialog = n => ({
-    option_source: 'derived',
+    option_source: 'dynamic',
     fields: [
       { type: 'typography', value: "Which month's budget would you like to edit?" },
       {
@@ -1661,7 +1661,7 @@ describe('dialogToBlocks — choice dropdown suppresses the duplicate descriptio
   // markdown table already shows. Rendered as a description_list beneath it, it read as
   // a plain-text second copy of the table.
   const monthDialog = n => ({
-    option_source: 'derived',
+    option_source: 'dynamic',
     fields: [
       { type: 'typography', value: '| Month | Net |\n|---|---|\n| 07/2026 | 100 |' },
       {
@@ -1762,7 +1762,7 @@ describe('every button payload carries its label', () => {
   // that omits it degrades to showing the raw action name.
   it('choice-dropdown Select and Cancel both carry labels', () => {
     const dialog = {
-      option_source: 'derived',
+      option_source: 'dynamic',
       fields: [{
         type: 'actions',
         buttons: [
@@ -1907,53 +1907,53 @@ describe('dialogToBlocks — choice option_source', () => {
     .flatMap(b => b.elements)
     .map(e => e.text.text);
 
-  it('renders six authored options as six buttons, plus Cancel', () => {
-    const blocks = dialogToBlocks(choiceDialog('authored', 6), 900, 'choice');
+  it('renders six static options as six buttons, plus Cancel', () => {
+    const blocks = dialogToBlocks(choiceDialog('static', 6), 900, 'choice');
     assert.equal(selects(blocks).length, 0);
     assert.deepEqual(buttonLabels(blocks), [
       'Option 0', 'Option 1', 'Option 2', 'Option 3', 'Option 4', 'Option 5', 'Cancel',
     ]);
   });
 
-  it('collapses twelve derived options to a dropdown, leaving Cancel a button', () => {
-    const blocks = dialogToBlocks(choiceDialog('derived', 12), 901, 'choice');
+  it('collapses twelve dynamic options to a dropdown, leaving Cancel a button', () => {
+    const blocks = dialogToBlocks(choiceDialog('dynamic', 12), 901, 'choice');
     const [select] = selects(blocks);
     assert.ok(select, 'expected a static_select');
     assert.equal(select.element.options.length, 12);
     assert.deepEqual(buttonLabels(blocks), ['Select', 'Cancel']);
   });
 
-  it('leaves five derived options as buttons — the bound is unchanged for derived sets', () => {
-    const blocks = dialogToBlocks(choiceDialog('derived', 5), 902, 'choice');
+  it('leaves five dynamic options as buttons — the bound is unchanged for dynamic sets', () => {
+    const blocks = dialogToBlocks(choiceDialog('dynamic', 5), 902, 'choice');
     assert.equal(selects(blocks).length, 0);
     assert.equal(buttonLabels(blocks).length, 6);
   });
 
-  it('collapses an authored set past what one actions block can hold', () => {
-    const blocks = dialogToBlocks(choiceDialog('authored', 26), 903, 'choice');
+  it('collapses a static set past what one actions block can hold', () => {
+    const blocks = dialogToBlocks(choiceDialog('static', 26), 903, 'choice');
     assert.equal(selects(blocks).length, 1);
     assert.deepEqual(buttonLabels(blocks), ['Select', 'Cancel']);
   });
 
-  it('reads a dialog declaring nothing as authored', () => {
+  it('reads a dialog declaring nothing as static', () => {
     const blocks = dialogToBlocks(choiceDialog(undefined, 6), 904, 'choice');
     assert.equal(selects(blocks).length, 0);
     assert.equal(buttonLabels(blocks).length, 7);
   });
 
-  it('keeps the description list when authored options stay buttons, drops it when they collapse', () => {
-    const authored = dialogToBlocks(choiceDialog('authored', 6, true), 905, 'choice');
-    assert.ok(authored.some(b => b.text?.includes('Meaning 0')), 'descriptions belong above the buttons');
+  it('keeps the description list when static options stay buttons, drops it when they collapse', () => {
+    const staticSet = dialogToBlocks(choiceDialog('static', 6, true), 905, 'choice');
+    assert.ok(staticSet.some(b => b.text?.includes('Meaning 0')), 'descriptions belong above the buttons');
 
-    const derived = dialogToBlocks(choiceDialog('derived', 6, true), 905, 'choice');
-    assert.ok(!derived.some(b => b.text?.includes?.('Meaning 0')), 'descriptions travel on the options instead');
-    assert.equal(selects(derived)[0].element.options[0].description.text, 'Meaning 0');
+    const dynamicSet = dialogToBlocks(choiceDialog('dynamic', 6, true), 905, 'choice');
+    assert.ok(!dynamicSet.some(b => b.text?.includes?.('Meaning 0')), 'descriptions travel on the options instead');
+    assert.equal(selects(dynamicSet)[0].element.options[0].description.text, 'Meaning 0');
   });
 
   it('ignores option_source on a gate type that is not choice', () => {
     const blocks = dialogToBlocks({
       title: '',
-      option_source: 'derived',
+      option_source: 'dynamic',
       fields: [
         { type: 'typography', value: 'Confirm?' },
         { type: 'actions', buttons: Array.from({ length: 8 }, (_, i) => ({ action: `a${i}`, label: `Do ${i}` })) },

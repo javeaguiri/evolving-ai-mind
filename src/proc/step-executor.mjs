@@ -306,28 +306,32 @@ export function resolveGateOptions(step, localState) {
 }
 
 /**
- * Where a gate's option set came from — a fact about the set, never an instruction about
- * the widget that draws it.
+ * Whether a gate's choice set is static or dynamic — a fact about the set, never an
+ * instruction about the widget that draws it.
  *
  * The renderer could not previously have this: buildDialog expands `iterator` and strips it
  * (see resolveGateOptions) before the payload is built, leaving callback.mjs to tell a six
- * point rating scale from a twelve-month picker by counting, which it cannot do. An
- * `authored` set was written at design time — its length is a property of the design, and
- * every value being visible at once is the interaction. A `derived` set is built from
- * runtime data and may hold three entries or three hundred.
+ * point rating scale from a twelve-month trailing window by counting, which it cannot do. A
+ * `static` set was written out at design time, so its length is a property of the design. A
+ * `dynamic` set is computed at runtime, may hold three entries or three hundred, and may
+ * grow over time.
  *
  * A step may declare `option_source` and that wins. Absent one it is read off the step,
- * where the fact is already stated: options pulled wholesale from local_state, or an option
- * carrying `iterator`, are derived by definition of where their entries come from.
+ * because the mechanism IS the property: options pulled wholesale from local_state, or an
+ * option carrying `iterator`, are the only ways a set gets built at runtime.
+ *
+ * Control buttons do not enter into it — the set is what the user chooses BETWEEN, and a
+ * dynamic option list alongside a static Cancel is a dynamic set. The renderer keeps
+ * control buttons out of whatever it collapses.
  *
  * What to DRAW from this belongs to the experience layer, along with its own limits.
  */
 export function resolveOptionSource(step) {
-  if (step?.option_source === 'authored' || step?.option_source === 'derived') {
+  if (step?.option_source === 'static' || step?.option_source === 'dynamic') {
     return step.option_source;
   }
-  if (typeof step?.options === 'string') return 'derived';
-  return (step?.options ?? []).some(option => option?.iterator) ? 'derived' : 'authored';
+  if (typeof step?.options === 'string') return 'dynamic';
+  return (step?.options ?? []).some(option => option?.iterator) ? 'dynamic' : 'static';
 }
 
 /**

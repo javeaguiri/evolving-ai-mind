@@ -185,23 +185,35 @@ whether conventions alone are enough.
 `human_gate` contract has no field in which a workflow can characterise an option set beyond its
 size, so the renderer counted. Full diagnosis: `arch-minds-eye.md` §12.8.
 
-- **C1** ✅ **DONE** — `option_source` (`authored | derived`) on the `human_gate` contract.
+- **C1** ✅ **DONE** — `option_source` (`static | dynamic`) on the `human_gate` contract.
   One property, not the two §12.3 named: `ordered` is not carried, because nothing in the
   rendering rule reads it — buttons and dropdowns both preserve order, and a contract field
   with no consumer is speculative surface.
-  **The default is inferred, not declared** (the user's call). `resolveOptionSource`
-  (`step-executor.mjs`) reads the fact off the step where it is already stated: `options`
-  given as a `{{template}}` reference, or an option carrying `iterator`, are derived by
-  definition of where their entries come from. §12.8 called that signal an accident; it is
-  not — it is the definition. An explicit declaration overrides it.
+  **The vocabulary is the user's, and it is better than §12.3's `authored`/`derived`** —
+  standard, and what an LLM reaches for unprompted, which is the point of a field Novia has
+  to set without reading its description first.
+  **The value is read off the step, not declared** (the user's call, and their framing is
+  what settled it). §12.3 called the `iterator` signal an accident and C1 was scoped as a
+  proxy for intent; under static/dynamic it is neither. There is no way to build a dynamic
+  set except through runtime mechanics — a `{{template}}` reference or an `iterator` — so
+  `resolveOptionSource` (`step-executor.mjs`) reads the property itself, not a stand-in for
+  it. An explicit value overrides, for the one shape the mechanism misreads: a fixed scale
+  assembled in a `js_transform` rather than typed out.
+  Step-level, not per-option: the array is genuinely mixed — the period gate holds one
+  `iterator` option *and* a static Cancel — so the property describes the choice set, and
+  the renderer already excludes control buttons from what it collapses.
   `buildDialog` resolves it onto every dialog it emits, since `iterator` is expanded and
   stripped before the payload is built — which is precisely why the renderer could not
   have this and was left counting.
 - **C2** ✅ **DONE** — `callback.mjs` reads `dialog.option_source` and picks the bound:
-  derived collapses past `CHOICE_DROPDOWN_THRESHOLD` (5, unchanged); authored stays inline
+  dynamic collapses past `CHOICE_DROPDOWN_THRESHOLD` (5, unchanged); static stays inline
   until `ACTIONS_ELEMENT_LIMIT` (25, Slack's cap on one actions block). Both bounds stay in
-  the Experience tier and a workflow can raise neither — a declared property cannot ask for
+  the Experience tier and a workflow can raise neither — a stated property cannot ask for
   a message Slack rejects. Not a threshold bump.
+  The usability rationale is the user's and is recorded at the constants: a static set is
+  answered fastest with every value visible because the workflow is run repeatedly; a
+  dynamic set needs thought either way, and one control is what survives the set growing —
+  which is why the dynamic bound stays low rather than creeping up to meet the static one.
   `dialogToBlocks` is now **exported and tested directly**: the test file carried a 214-line
   "faithful copy" of it that had already drifted, and four further copied helpers
   (`buildListSelect`, `buildSelectOptionText`, `truncateOption`, `buildObjectArrayTable`)
