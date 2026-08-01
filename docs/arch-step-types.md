@@ -315,6 +315,16 @@ LLM emits unprompted; run 695 was rejected for using it against a schema that ha
 invented `initial` instead. The dialog still carries it to Slack as `initial`, which is
 Slack's own name for the same thing.
 
+**`placeholder` is not a substitute for it, and the difference is not cosmetic.** A
+placeholder is hint text: it displays, and it submits nothing. A field carrying only a
+placeholder therefore resolves **empty** — and an empty field that is not `optional`
+makes `resumeGate` re-render the gate asking the user to complete it, rather than
+advancing (`run-workflow.mjs` form-resume check). On a data-driven form of twenty-odd
+fields the result is a gate that appears to show current values and then does nothing
+when submitted, because every untouched field came back blank. An edit form sets
+`default` on **every** field. There is no step-level equivalent — a pre-filled value
+belongs on the field, never on the gate.
+
 **Data-driven field lists.** `fields` may be a `{{state_key}}` reference to an array a
 preceding `js_transform` built, exactly as `options` and `reveals` may be. That is how a
 form carries **one field per data row** — an amount box and a type dropdown for *each*
