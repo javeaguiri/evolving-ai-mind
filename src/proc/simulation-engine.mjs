@@ -155,6 +155,53 @@ export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
     }
   };
 
+  // The envelope every step carries regardless of type. `step` and `type` appear in no
+  // input_contract — they are what the contract is selected BY — so composing assertions
+  // from the contracts alone leaves the most load-bearing field in the format unchecked.
+  // run-workflow compares frame.current_step against `step`; without it nothing routes.
+  //
+  // Missing it is not a quiet defect downstream. A 19-step array using `step_label`
+  // (session 1121) passed shape, then produced seven L1 dead_routing_target issues each
+  // reading `Step "undefined" routes to "6" but no step with key "6" exists` — because
+  // every key collapsed to the same "undefined" and so every target looked dead. One
+  // repeated field-name mistake, reported seven times as something else.
+  //
+  // Four structural rules, not a per-type list: the maintenance-free property holds.
+  const seenKeys = new Set();
+  steps.forEach((s, i) => {
+    const rawKey = s?.step;
+    const where  = `index ${i}`;
+
+    if (rawKey === undefined || rawKey === null || rawKey === '') {
+      issues.push({
+        check:         'missing_step_key',
+        step:          where,
+        failure_class: 'missing_step_key',
+        detail:        `The step at ${where} has no "step" key. Every step carries "step" — the string the engine routes to, and the only way another step can name it.`,
+      });
+      return;
+    }
+    if (typeof rawKey !== 'string') {
+      issues.push({
+        check:         'non_string_step_key',
+        step:          String(rawKey),
+        failure_class: 'non_string_step_key',
+        detail:        `The step at ${where} has "step": ${JSON.stringify(rawKey)}. Step keys are strings and are compared by exact equality — an unquoted 3 is not the same as "3".`,
+      });
+      return;
+    }
+    if (seenKeys.has(rawKey)) {
+      issues.push({
+        check:         'duplicate_step_key',
+        step:          rawKey,
+        failure_class: 'duplicate_step_key',
+        detail:        `Step key "${rawKey}" appears more than once. Keys are how routing names a step, so a duplicate makes every route to it ambiguous.`,
+      });
+      return;
+    }
+    seenKeys.add(rawKey);
+  });
+
   for (const s of steps) {
     const stepKey = String(s?.step);
     checkOne(s, stepKey);
