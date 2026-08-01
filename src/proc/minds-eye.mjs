@@ -664,6 +664,33 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
+      // Refused before the gate, not at it — the loop continues so the next turn can
+      // correct, instead of ending the round on a decision nobody gets to make.
+      const refusal = await preGateRefusal(action, params, traceId);
+      if (refusal) {
+        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         refusalEntry,
+        });
+
+        workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+        seq += 1;
+
+        // No progress line: this is a failed attempt about to be corrected, which is the
+        // case notifyTurnProgress deliberately stays quiet about.
+        console.info('proc/minds-eye: gated write refused before gate', {
+          action,
+          sessionId: session.id,
+          issueCount: refusal.issues?.length ?? 0,
+          traceId,
+        });
+        continue;
+      }
+
       if (actionCount >= prefs.max_actions_per_session) {
         await postTurnLimitGate(session.id, callback, traceId, true);
         earlyExit = true;
@@ -872,6 +899,38 @@ async function simulateForRegistration(steps, traceId) {
       ...(result.static_analysis?.issues ?? []),
       ...(result.routing_matrix?.issues  ?? []),
     ],
+  };
+}
+
+/**
+ * A refusal that is already decided does not need a human to confirm it.
+ *
+ * `register_workflow` re-runs the same simulation at execution and refuses anything that
+ * fails, so a failing array can only ever produce one outcome. Posting the gate anyway
+ * asked the user to approve something guaranteed to fail — and, because a gate ends the
+ * round, it stopped Novia on a defect she could have corrected on the very next turn
+ * (session 1121: 23 steps, every one missing its `step` key, sent for approval).
+ *
+ * Returning the issues as a tool result instead keeps the loop running and hands her the
+ * same list the executor would have. The gate stays what it is for: deciding whether a
+ * *valid* workflow should exist.
+ *
+ * Returns null when there is nothing decided yet — including for shape errors the executor
+ * reports better than a simulation would, and for every other gated write, whose outcome
+ * genuinely is the human's to determine.
+ */
+async function preGateRefusal(action, params, traceId) {
+  if (action !== 'register_workflow') return null;
+  const steps = params?.steps;
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+
+  const sim = await simulateForRegistration(steps, traceId);
+  if (sim.passed) return null;
+
+  return {
+    error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
+    validation: sim.error_summary,
+    issues:     sim.issues,
   };
 }
 
@@ -1442,6 +1501,37 @@ async function assembleContext() {
 // Build the user-facing LLM input: context blocks + conversation transcript
 // ---------------------------------------------------------------------------
 
+/**
+ * Which history entry holds the step array currently being worked on.
+ *
+ * Tool entries are recorded with their `params`, so every array Novia has submitted is
+ * already persisted — but the transcript renders only `result`, so she has been reading
+ * verdicts about arrays she cannot see, naming step keys absent from her context. With no
+ * copy of her own work in front of her she rebuilds all of it from reasoning each turn,
+ * which is why session 1121 drifted 19 → 21 → 23 steps and why `step_label` returned two
+ * turns after she had corrected it.
+ *
+ * One array is rendered, never all of them: the latest is the draft, and the earlier ones
+ * are the same workflow in a worse state. `sequence_number` already orders them, so the
+ * newest submission IS the current version — no version column, no separate draft store.
+ *
+ * `__pending__` and `__cancelled__` are skipped. A pending entry carries a copy of the
+ * array too, but it is awaiting a human decision rather than a correction, and treating it
+ * as the draft would mark the last correctable array superseded.
+ */
+export function latestDraftIndex(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.role !== 'tool') continue;
+    try {
+      const parsed = JSON.parse(entry.content);
+      if (parsed?.tool === '__pending__' || parsed?.tool === '__cancelled__') continue;
+      if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) return i;
+    } catch { /* not a readable tool entry */ }
+  }
+  return -1;
+}
+
 export function buildUserMessage(layer1Context, layer2Context, history, prefs, notice) {
   const parts = [];
 
@@ -1449,7 +1539,9 @@ export function buildUserMessage(layer1Context, layer2Context, history, prefs, n
   if (layer2Context) parts.push(layer2Context);
 
   if (history.length > 0) {
-    const transcript = history.map(e => {
+    const draftIndex = latestDraftIndex(history);
+
+    const transcript = history.map((e, i) => {
       if (e.role === 'user')      return `User: ${e.content}`;
       if (e.role === 'assistant') {
         try {
@@ -1462,7 +1554,20 @@ export function buildUserMessage(layer1Context, layer2Context, history, prefs, n
           const parsed = JSON.parse(e.content);
           if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
           if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
-          return `Tool (${parsed.tool}): ${JSON.stringify(parsed.result).slice(0, 15000)}`;
+
+          const result = JSON.stringify(parsed.result).slice(0, 15000);
+
+          // A submitted step array is shown once, on the newest submission, because that
+          // is the draft; the same array in an older state is not worth its tokens and is
+          // reduced to the verdict it earned. Not truncated when it is shown — half a step
+          // array is not a thing anyone can correct.
+          if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) {
+            return i === draftIndex
+              ? `Tool (${parsed.tool}) — CURRENT DRAFT, ${parsed.params.steps.length} steps. This is the array you last submitted; correct THIS array rather than composing a new one from scratch.\nSubmitted steps: ${JSON.stringify(parsed.params.steps)}\nResult: ${result}`
+              : `Tool (${parsed.tool}): submitted ${parsed.params.steps.length} steps, since superseded. Result: ${result}`;
+          }
+
+          return `Tool (${parsed.tool}): ${result}`;
         } catch { return `Tool: ${e.content.slice(0, 15000)}`; }
       }
       return '';
