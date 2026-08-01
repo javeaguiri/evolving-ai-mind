@@ -379,6 +379,36 @@ async function handleGateResume(body, callback, traceId, req) {
 // that always starts fresh). Checked both before starting a round (cheapest —
 // refuses before spending an LLM call) and after a round ends without a
 // response (so a session can't slip past it one continue-gate at a time).
+/**
+ * What a failed `callLlm` gets: another try, a correction, or the end of the round.
+ *
+ * `reask` — the response was severed at the output ceiling, not malformed. Feeding the raw
+ * output back for correction is exactly wrong here: that output IS what exhausted the
+ * budget, so re-sending it guarantees a second truncation. The same question is asked
+ * again instead, with the cut-off stated, and the pacing instruction does the rest.
+ *
+ * Once only. A second truncation in a row means the notice did not land, and looping on it
+ * would spend the whole round generating responses nobody ever sees.
+ *
+ * `correct` — the content was complete but the JSON escaping was not, which the raw output
+ * is exactly what is needed to fix.
+ */
+export function classifyLlmFailure(llmError, lastTurnTruncated) {
+  if (llmError?.isTruncated)  return lastTurnTruncated ? 'fail' : 'reask';
+  if (llmError?.isParseError && llmError.rawOutput) return 'correct';
+  return 'fail';
+}
+
+// Sent in place of the cut-off response, not alongside it — the severed text is never
+// echoed back, since its length is the problem. States what happened, what survived, and
+// that the work can be split; how to split it is the pacing instruction's business.
+const TRUNCATION_NOTICE =
+  'Your previous response reached the output limit before it was finished, so none of it ' +
+  'was recorded and this is the same question again. Nothing else was lost — the ' +
+  'conversation above is intact, and only that one unfinished response is gone. Keep this ' +
+  'response short enough to complete. If what you were producing does not fit, produce the ' +
+  'part that does, say what remains, and take the rest on the next turn.';
+
 async function notifyLifetimeCeiling(session, callback, traceId, count) {
   console.warn('proc/minds-eye: session at/over lifetime turn ceiling', { sessionId: session.id, count, traceId });
   if (callback) {
@@ -403,15 +433,33 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let seq             = currentSeq;
   let responded       = false;
   let earlyExit       = false;
+  let truncationNotice = null;            // carried into the next message when a turn was cut off
+  let lastTurnTruncated = false;
 
   while (turnsThisRound < prefs.turn_limit) {
-    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
+    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs, truncationNotice);
+    truncationNotice  = null;
 
     let decision;
     try {
       decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
+      lastTurnTruncated = false;
     } catch (llmError) {
-      if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
+      const failureAction = classifyLlmFailure(llmError, lastTurnTruncated);
+
+      if (failureAction === 'reask') {
+        console.warn('proc/minds-eye: response truncated at output ceiling — re-asking', {
+          traceId,
+          maxOutputTokens: prefs.max_output_tokens,
+        });
+        truncationNotice  = TRUNCATION_NOTICE;
+        lastTurnTruncated = true;
+        turnCount      += 1;
+        turnsThisRound += 1;
+        continue;
+      }
+
+      if (failureAction === 'correct') {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
         // The correction call is a real extra LLM call — counts as its own turn.
         try {
@@ -1329,7 +1377,7 @@ async function assembleContext() {
 // Build the user-facing LLM input: context blocks + conversation transcript
 // ---------------------------------------------------------------------------
 
-function buildUserMessage(layer1Context, layer2Context, history, prefs) {
+export function buildUserMessage(layer1Context, layer2Context, history, prefs, notice) {
   const parts = [];
 
   parts.push(layer1Context);
@@ -1368,6 +1416,9 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     'Based on the context and conversation above, decide your next action. ' +
     'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
   );
+
+  // Last, so it is the nearest instruction to the response it constrains.
+  if (notice) parts.push(notice);
 
   return parts.join('\n\n---\n\n');
 }
