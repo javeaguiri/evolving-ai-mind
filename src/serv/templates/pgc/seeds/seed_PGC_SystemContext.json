@@ -1170,10 +1170,11 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 4,
+    "version": 5,
     "content": {
       "name": "Novia",
       "model": "anthropic/claude-sonnet-4-6",
+      "max_output_tokens": 10240,
       "turn_limit": 12,
       "max_actions_per_session": 8,
       "max_lifetime_turns": 100,
