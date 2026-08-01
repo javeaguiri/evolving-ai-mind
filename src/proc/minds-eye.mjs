@@ -49,6 +49,10 @@ const DEFAULT_PREFERENCES = {
   name:                   'Agent',
   model:                  'anthropic/claude-sonnet-4-6',
   max_output_tokens:      8192,
+  // Wall clock for one round, sized under ProcFunction's Lambda timeout with room left for
+  // the session writes and the continue gate that follow the last turn. It is a fallback:
+  // the live value lives in minds_eye_preferences, where it can be tuned without a deploy.
+  round_budget_ms:        195_000,
   turn_limit:             8,
   max_actions_per_session:5,
   max_lifetime_turns:     100,
@@ -380,6 +384,31 @@ async function handleGateResume(body, callback, traceId, req) {
 // refuses before spending an LLM call) and after a round ends without a
 // response (so a session can't slip past it one continue-gate at a time).
 /**
+ * Whether there is room for another turn inside this round's wall-clock budget.
+ *
+ * The loop runs its turns inside ONE Lambda invocation, so `turn_limit` is not the budget
+ * that binds — wall clock is. Session 1121 spent 7s, 85s and 46s on three turns and the
+ * fourth was still running when the invocation hit its ceiling. A Lambda timeout is not an
+ * exception: nothing catches it, no notification is posted, the turn in flight writes
+ * nothing, and the SQS message was deleted on receipt so there is no retry. The round
+ * simply vanishes, which from Slack is indistinguishable from hanging.
+ *
+ * The estimate is the longest turn already seen this round, because that is the only
+ * evidence this round offers about what the next one costs. Early turns are cheap and the
+ * expensive ones cluster late, as the transcript grows — so the estimate rises exactly when
+ * caution starts to matter. It cannot be a guarantee: a turn may always exceed every turn
+ * before it. A guarantee would need the invocation's real remaining time, and PROC endpoint
+ * modules must not learn they are running on Lambda (architecture.md §3.5) — hence a
+ * configured budget rather than getRemainingTimeInMillis.
+ *
+ * With no turn observed yet the estimate is 0, so the first turn of a round always runs.
+ */
+export function roundBudgetExhausted(elapsedMs, longestTurnMs, budgetMs) {
+  if (!budgetMs) return false;
+  return elapsedMs + longestTurnMs > budgetMs;
+}
+
+/**
  * What a failed `callLlm` gets: another try, a correction, or the end of the round.
  *
  * `reask` — the response was severed at the output ceiling, not malformed. Feeding the raw
@@ -435,8 +464,28 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let earlyExit       = false;
   let truncationNotice = null;            // carried into the next message when a turn was cut off
   let lastTurnTruncated = false;
+  const roundStart   = Date.now();
+  let longestTurnMs  = 0;
+  let budgetExhausted = false;
 
   while (turnsThisRound < prefs.turn_limit) {
+    // Stop before starting a turn there is no room to finish. Ending here is a clean exit
+    // down the same path the turn limit uses — turnCount persisted, continue gate posted —
+    // rather than the invocation dying mid-call with nothing written.
+    if (roundBudgetExhausted(Date.now() - roundStart, longestTurnMs, prefs.round_budget_ms)) {
+      console.info('proc/minds-eye: round budget reached — ending round', {
+        sessionId:     session.id,
+        turnsThisRound,
+        elapsedMs:     Date.now() - roundStart,
+        longestTurnMs,
+        budgetMs:      prefs.round_budget_ms,
+        traceId,
+      });
+      budgetExhausted = true;
+      break;
+    }
+
+    const turnStart   = Date.now();
     const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs, truncationNotice);
     truncationNotice  = null;
 
@@ -454,6 +503,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         });
         truncationNotice  = TRUNCATION_NOTICE;
         lastTurnTruncated = true;
+        longestTurnMs   = Math.max(longestTurnMs, Date.now() - turnStart);
         turnCount      += 1;
         turnsThisRound += 1;
         continue;
@@ -487,6 +537,10 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         break;
       }
     }
+
+    // Measured across the whole turn, correction call included — the budget check cares
+    // what a turn costs in wall clock, not how many API calls it took to get there.
+    longestTurnMs = Math.max(longestTurnMs, Date.now() - turnStart);
 
     // Every turn costs exactly 1, regardless of which tool ran or whether it
     // errored — a tool call and a direct respond are the same cost; only the
@@ -652,10 +706,21 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
+    // A round that ends WITHOUT responding never persisted its turns: minds_eye_turn_count
+    // is written on respond and at the action gate, and neither happens here. So every
+    // turn-limit and budget exit was invisible to max_lifetime_turns — a session could
+    // burn turns the lifetime ceiling never counted, one continue at a time, which is the
+    // exact leak that ceiling exists to stop. Safe to write: the in-loop ceiling check
+    // breaks with earlyExit before turnCount could exceed the DB constraint.
+    await updateRows('PGC_Session',
+      [{ column: 'id', op: 'eq', value: session.id }],
+      { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+    );
+
     if (turnCount >= prefs.max_lifetime_turns) {
       await notifyLifetimeCeiling(session, callback, traceId, turnCount);
     } else {
-      await postTurnLimitGate(session.id, callback, traceId);
+      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted);
     }
   }
 }
@@ -1557,7 +1622,7 @@ async function executeReadTool(action, params, traceId) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false) {
+async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false) {
   if (!callback) return;
   await enqueueCallback(callback, {
     type:             'HUMAN_GATE',
@@ -1565,5 +1630,9 @@ async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount 
     sessionId,
     traceId,
     resetActionCount,
+    // Which limit was hit. The gate is identical either way — only what the user is told
+    // differs, and a round that stopped on time reads very differently from one that ran
+    // out of turns: it means nothing is wrong and continuing costs nothing but a click.
+    budgetExhausted,
   });
 }

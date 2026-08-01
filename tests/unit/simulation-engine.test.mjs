@@ -520,6 +520,49 @@ describe('L0 — shape, composed from PGC_StepType', () => {
     assert.match(result.error_summary, /not supplied/);
   });
 
+  // The envelope L0 could not see: `step` and `type` are what a contract is selected BY, so
+  // composing assertions from the contracts alone left the field run-workflow routes on
+  // unchecked. Session 1121 simulated 19 steps keyed `step_label`; shape passed, and L1 then
+  // reported seven dead_routing_target issues reading `Step "undefined"` — one repeated
+  // field-name mistake, told back seven times as something else.
+
+  it('catches a step array whose steps carry no step key at all', () => {
+    const steps = [
+      { step_label: '1', type: 'js_transform', expression: '1 + 1', output_key: 'x', on_success: 'next' },
+      { step_label: '2', type: 'end' },
+    ];
+    const shape = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS });
+    assert.equal(shape.passed, false);
+    const issues = shape.issues.filter(i => i.check === 'missing_step_key');
+    assert.equal(issues.length, 2, 'one per step, not one per broken route');
+    assert.match(issues[0].detail, /has no "step" key/);
+    assert.match(issues[0].detail, /index 0/);
+  });
+
+  it('catches an unquoted numeric step key', () => {
+    const steps = [{ step: 1, type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'non_string_step_key');
+    assert.ok(issue);
+    assert.match(issue.detail, /compared by exact equality/);
+  });
+
+  it('catches a duplicate step key — every route to it would be ambiguous', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '1', output_key: 'a', on_success: '1' },
+      { step: '1', type: 'js_transform', expression: '2', output_key: 'b', on_success: 'next' },
+      { step: '2', type: 'end' },
+    ];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'duplicate_step_key');
+    assert.ok(issue);
+    assert.equal(issue.step, '1');
+  });
+
+  it('passes a well-formed envelope — the check adds no false positive', () => {
+    assert.equal(runLevel0ShapeCheck(gate(), { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
   it('catches a step type that is not in the registry', () => {
     const steps = [{ step: '1', type: 'serv_qeury', input: { tableName: 'PGD_X' }, output_key: 'r', on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
     const shape = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS });

@@ -18,7 +18,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLlmFailure, buildUserMessage } from '../../src/proc/minds-eye.mjs';
+import { classifyLlmFailure, buildUserMessage, roundBudgetExhausted } from '../../src/proc/minds-eye.mjs';
 
 const truncated = () => {
   const e = new Error('LLM returned invalid JSON: Unexpected token \'G\'');
@@ -91,5 +91,49 @@ describe('buildUserMessage — the truncation notice', () => {
     const before = buildUserMessage('LAYER1', 'LAYER2', history, prefs, null);
     const after  = buildUserMessage('LAYER1', 'LAYER2', history, prefs, 'NOTICE');
     assert.ok(after.startsWith(before), 'the re-ask is the same message plus the notice');
+  });
+});
+
+// ── The round's wall-clock budget ───────────────────────────────────────────
+//
+// The loop runs its turns inside ONE Lambda invocation, so turn_limit is not the budget
+// that binds. Session 1121 spent 7s, 85s and 46s on three turns and the fourth was still
+// running when the invocation hit its ceiling: Duration 240000ms, Status timeout. Nothing
+// catches a Lambda timeout, so no notification was posted, the turn in flight wrote
+// nothing, and the SQS message had already been deleted on receipt — the round vanished,
+// which from Slack is indistinguishable from hanging.
+
+describe('roundBudgetExhausted', () => {
+  const BUDGET = 195_000;
+
+  it('always allows the first turn — nothing has been observed yet', () => {
+    assert.equal(roundBudgetExhausted(0, 0, BUDGET), false);
+  });
+
+  it('allows a turn there is room for', () => {
+    // 40s elapsed, longest turn so far 85s → 125s, inside the budget.
+    assert.equal(roundBudgetExhausted(40_000, 85_000, BUDGET), false);
+  });
+
+  it('stops the round when the next turn would not fit', () => {
+    // Session 1121's actual shape: 138s spent over three turns, longest 85s. 223s > 195s,
+    // so the fourth turn — the one that died with the Lambda — never starts.
+    assert.equal(roundBudgetExhausted(138_000, 85_000, BUDGET), true);
+  });
+
+  it('treats the boundary as room to run', () => {
+    assert.equal(roundBudgetExhausted(110_000, 85_000, BUDGET), false);
+    assert.equal(roundBudgetExhausted(110_001, 85_000, BUDGET), true);
+  });
+
+  it('tightens as the estimate grows — late turns are the expensive ones', () => {
+    // Same elapsed time, different evidence about what a turn now costs.
+    assert.equal(roundBudgetExhausted(120_000,  7_000, BUDGET), false);
+    assert.equal(roundBudgetExhausted(120_000, 85_000, BUDGET), true);
+  });
+
+  it('never stops a round when no budget is configured', () => {
+    assert.equal(roundBudgetExhausted(600_000, 200_000, undefined), false);
+    assert.equal(roundBudgetExhausted(600_000, 200_000, 0), false);
   });
 });

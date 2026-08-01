@@ -709,10 +709,12 @@ async function postHumanGate(message) {
   // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
   // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false } = message;
+    const { sessionId, resetActionCount = false, budgetExhausted = false } = message;
     const gateText = resetActionCount
       ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
-      : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+      : budgetExhausted
+        ? "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session."
+        : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
