@@ -71,13 +71,14 @@ describe('where the progress line is emitted', () => {
   it('does not report before the final reply — respond already posts its own message', () => {
     const respondBlock = procSrc.match(/if \(action === 'respond'\) \{[\s\S]*?break;/)?.[0] ?? '';
     assert.ok(respondBlock.length > 0);
-    assert.doesNotMatch(respondBlock, /notifyTurnProgress/);
+    // A CALL, not a mention — the block is allowed to explain why it does not report.
+    assert.doesNotMatch(respondBlock, /notifyTurnProgress\(/);
   });
 
   it('does not report before a gated write — the gate is the message', () => {
     const gatedBlock = procSrc.match(/\} else if \(GATED_WRITE_TOOLS\.has\(action\)\) \{[\s\S]*?break;/)?.[0] ?? '';
     assert.ok(gatedBlock.length > 0);
-    assert.doesNotMatch(gatedBlock, /notifyTurnProgress/);
+    assert.doesNotMatch(gatedBlock, /notifyTurnProgress\(/);
   });
 
   it('costs no extra model call — the line is built from the decision already returned', () => {
