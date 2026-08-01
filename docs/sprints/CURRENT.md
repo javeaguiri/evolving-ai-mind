@@ -185,16 +185,33 @@ whether conventions alone are enough.
 `human_gate` contract has no field in which a workflow can characterise an option set beyond its
 size, so the renderer counted. Full diagnosis: `arch-minds-eye.md` §12.8.
 
-- **C1** — Add option-set properties to the `human_gate` contract. The discriminator is whether
-  the set is **authored** at design time or **derived** from data at runtime — already present in
-  the step JSON by accident, since the gates that should collapse carry an `iterator` and the one
-  that should not does not.
-- **C2** — `callback.mjs` renders from the declared properties instead of
-  `CHOICE_DROPDOWN_THRESHOLD`. Mechanics stay in the Experience tier; only their input changes.
-  **Not a threshold bump** — raising 5 to 6 is a rule generalised from one specimen and fails at
-  the next one.
-- **C3** — Repair `flashcard_quiz_session` step 12 and verify `edit_budget` step 3 is unaffected
-  (AC7). Both verified live from Slack by the user.
+- **C1** ✅ **DONE** — `option_source` (`authored | derived`) on the `human_gate` contract.
+  One property, not the two §12.3 named: `ordered` is not carried, because nothing in the
+  rendering rule reads it — buttons and dropdowns both preserve order, and a contract field
+  with no consumer is speculative surface.
+  **The default is inferred, not declared** (the user's call). `resolveOptionSource`
+  (`step-executor.mjs`) reads the fact off the step where it is already stated: `options`
+  given as a `{{template}}` reference, or an option carrying `iterator`, are derived by
+  definition of where their entries come from. §12.8 called that signal an accident; it is
+  not — it is the definition. An explicit declaration overrides it.
+  `buildDialog` resolves it onto every dialog it emits, since `iterator` is expanded and
+  stripped before the payload is built — which is precisely why the renderer could not
+  have this and was left counting.
+- **C2** ✅ **DONE** — `callback.mjs` reads `dialog.option_source` and picks the bound:
+  derived collapses past `CHOICE_DROPDOWN_THRESHOLD` (5, unchanged); authored stays inline
+  until `ACTIONS_ELEMENT_LIMIT` (25, Slack's cap on one actions block). Both bounds stay in
+  the Experience tier and a workflow can raise neither — a declared property cannot ask for
+  a message Slack rejects. Not a threshold bump.
+  `dialogToBlocks` is now **exported and tested directly**: the test file carried a 214-line
+  "faithful copy" of it that had already drifted, and four further copied helpers
+  (`buildListSelect`, `buildSelectOptionText`, `truncateOption`, `buildObjectArrayTable`)
+  died with it. All ten pre-existing `dialogToBlocks` describes now run against the real
+  function. 14 new tests (725 → 739).
+  **AC7 needs no workflow edit.** `flashcard_quiz_session` step 12 has no `iterator` → its
+  six authored options are buttons again; `edit_budget` step 3 carries one → still a
+  dropdown. C3 is therefore live verification, not repair.
+- **C3** — Verify `flashcard_quiz_session` step 12 and `edit_budget` step 3 (AC7). No repair
+  needed — the inferred default covers both. Verified live from Slack by the user.
 - **C4** — While in `callback.mjs`: the literal `**` in a gate message (run 735) is the same file
   and still needs a repro to pin the block path. Opportunistic, not an AC.
 

@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions, resolveOptionSource } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
@@ -1933,5 +1933,86 @@ describe('cancel option routing — on_select wins over the action name', () => 
 
   it('a cancel option with no on_select still cancels', () => {
     assert.equal(routesAway([{ label: 'Cancel', action: 'cancel' }]), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveOptionSource — where a gate's option set came from
+// ---------------------------------------------------------------------------
+//
+// The property the renderer needs and could not have: buildDialog expands `iterator`
+// and strips it, so callback.mjs saw only a count and could not tell a fixed rating
+// scale from a twelve-month picker. This states the fact; the widget stays the
+// experience layer's call.
+
+describe('resolveOptionSource', () => {
+  it('reads an inline option list as authored', () => {
+    assert.equal(resolveOptionSource({
+      gate_type: 'choice',
+      options: [
+        { value: '0', label: 'A', on_select: 'next' },
+        { value: '1', label: 'B', on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    }), 'authored');
+  });
+
+  it('reads an option carrying iterator as derived', () => {
+    assert.equal(resolveOptionSource({
+      gate_type: 'choice',
+      options: [
+        { value: '{{value}}', label: '{{label}}', iterator: 'period_options', on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    }), 'derived');
+  });
+
+  it('reads a templated option list as derived — the entries come from local_state either way', () => {
+    assert.equal(resolveOptionSource({ gate_type: 'choice', options: '{{card_options}}' }), 'derived');
+  });
+
+  it('an explicit declaration overrides the inference in both directions', () => {
+    assert.equal(resolveOptionSource({
+      option_source: 'authored',
+      options: [{ value: '{{v}}', label: '{{l}}', iterator: 'rows' }],
+    }), 'authored');
+    assert.equal(resolveOptionSource({
+      option_source: 'derived',
+      options: [{ value: '0', label: 'A' }],
+    }), 'derived');
+  });
+
+  it('ignores an unrecognised declaration and falls back to the inference', () => {
+    assert.equal(resolveOptionSource({
+      option_source: 'dropdown',
+      options: [{ value: '{{v}}', label: '{{l}}', iterator: 'rows' }],
+    }), 'derived');
+  });
+
+  it('reads a gate with no options at all as authored', () => {
+    assert.equal(resolveOptionSource({ gate_type: 'form' }), 'authored');
+  });
+
+  it('buildDialog carries the resolved source on the dialog it returns', () => {
+    const authored = buildDialog({
+      gate_type: 'choice',
+      message_template: 'How well did you recall it?',
+      options: [
+        { value: '0', label: 'A', description: 'Total blackout', on_select: 'next' },
+        { value: '5', label: 'F', description: 'Perfect recall',  on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    }, {});
+    assert.equal(authored.option_source, 'authored');
+
+    const derived = buildDialog({
+      gate_type: 'choice',
+      message_template: 'Which period?',
+      options: [
+        { value: '{{period}}', label: '{{period}}', iterator: 'period_options', on_select: 'next' },
+        { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+      ],
+    }, { period_options: [{ period: '2026-06' }, { period: '2026-07' }] });
+    assert.equal(derived.option_source, 'derived');
   });
 });

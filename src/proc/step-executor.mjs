@@ -306,6 +306,31 @@ export function resolveGateOptions(step, localState) {
 }
 
 /**
+ * Where a gate's option set came from — a fact about the set, never an instruction about
+ * the widget that draws it.
+ *
+ * The renderer could not previously have this: buildDialog expands `iterator` and strips it
+ * (see resolveGateOptions) before the payload is built, leaving callback.mjs to tell a six
+ * point rating scale from a twelve-month picker by counting, which it cannot do. An
+ * `authored` set was written at design time — its length is a property of the design, and
+ * every value being visible at once is the interaction. A `derived` set is built from
+ * runtime data and may hold three entries or three hundred.
+ *
+ * A step may declare `option_source` and that wins. Absent one it is read off the step,
+ * where the fact is already stated: options pulled wholesale from local_state, or an option
+ * carrying `iterator`, are derived by definition of where their entries come from.
+ *
+ * What to DRAW from this belongs to the experience layer, along with its own limits.
+ */
+export function resolveOptionSource(step) {
+  if (step?.option_source === 'authored' || step?.option_source === 'derived') {
+    return step.option_source;
+  }
+  if (typeof step?.options === 'string') return 'derived';
+  return (step?.options ?? []).some(option => option?.iterator) ? 'derived' : 'authored';
+}
+
+/**
  * Resolve a form gate's `fields` — authored inline as an array, or given as a {{template}}
  * reference to an array a preceding js_transform built (one field per data row, e.g. an amount
  * box per budget category). Always returns an array. Shared by buildDialog (render) and by
@@ -651,6 +676,7 @@ export function buildDialog(step, localState) {
 
   return {
     title:  step.description ?? '',
+    option_source: resolveOptionSource(step),
     fields,
   };
 }

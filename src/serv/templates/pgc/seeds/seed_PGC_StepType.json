@@ -186,6 +186,12 @@
       },
       {
         "type": "string",
+        "field": "option_source",
+        "required": false,
+        "description": "authored | derived — where the option set came from, NOT how it should be drawn. `authored` means the options were written at design time: the count is a property of the design and every value being visible at once is itself the interaction (a fixed rating scale). `derived` means the set is built from runtime data and may hold three entries or three hundred. The engine infers this when the field is absent — options given as a {{template}} reference, or an option carrying `iterator`, are derived; anything else is authored — so declare it only to override that reading. The experience layer decides which widget carries the set, and owns its own limits; a workflow never names a widget."
+      },
+      {
+        "type": "string",
         "field": "on_cancel",
         "required": true,
         "description": "Routing when user clicks a cancel option \u2014 REQUIRED on every human_gate. Must point to a valid step_label or \"cancel\". Both the cancel option (action/value: \"cancel\" in options or special_buttons) AND this on_cancel routing field are mandatory \u2014 satisfying one without the other fails L1 validation."

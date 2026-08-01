@@ -13,7 +13,7 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn } from '../../src/ui/slackbot/callback.mjs';
+import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks } from '../../src/ui/slackbot/callback.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
 // **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
@@ -475,300 +475,11 @@ function buildListTable(items, parentHeading) {
   return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
-// ── Faithful copy of the static_select builders from callback.mjs ───────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildListSelect
+// Expected values asserted against below — Slack's own static_select limits, as stated
+// in src/ui/slackbot/callback.mjs. Not a copy of any behaviour: the builders they bound
+// are exercised through the real exported dialogToBlocks.
 const SELECT_OPTION_LIMIT = 100;
 const OPTION_TEXT_LIMIT   = 75;
-const CHOICE_DROPDOWN_THRESHOLD = 5;
-
-function truncateOption(text) {
-  const s = String(text ?? '');
-  return s.length <= OPTION_TEXT_LIMIT ? s : `${s.slice(0, OPTION_TEXT_LIMIT - 1)}…`;
-}
-
-function buildSelectOptionText(item, excludeColumn) {
-  const entry = Object.entries(item.fields ?? {}).find(([col, value]) =>
-    col !== excludeColumn && value !== null && value !== undefined && String(value).trim() !== ''
-  );
-  const summary = entry ? String(entry[1]).trim() : '';
-  return truncateOption(summary ? `${item.id} — ${summary}` : String(item.id));
-}
-
-function buildListSelect(items, workflowRunId) {
-  const selectable = items.filter(item => item.secondaryAction);
-  if (selectable.length === 0 || selectable.length > SELECT_OPTION_LIMIT) return null;
-
-  const groups = new Map();
-  for (const item of selectable) {
-    const table = item.responseData?.table;
-    if (!groups.has(table)) groups.set(table, []);
-    groups.get(table).push(item);
-  }
-  const entries = [...groups.entries()];
-
-  const toOptions = groupItems => {
-    const excludeColumn = groupItems[0]?.responseData?.fkColumn ?? undefined;
-    return groupItems.map(item => ({
-      text:  { type: 'plain_text', text: buildSelectOptionText(item, excludeColumn) },
-      value: JSON.stringify({
-        id: item.id,
-        ...(item.responseData?.table ? { table: item.responseData.table } : {}),
-      }),
-    }));
-  };
-
-  const element = {
-    type:        'static_select',
-    action_id:   'list_select_value',
-    placeholder: { type: 'plain_text', text: 'Choose a record' },
-  };
-  if (entries.length > 1) {
-    element.option_groups = entries.map(([table, groupItems]) => ({
-      label:   { type: 'plain_text', text: truncateOption(formatTableName(table)) },
-      options: toOptions(groupItems),
-    }));
-  } else {
-    element.options = toOptions(entries[0][1]);
-  }
-
-  return {
-    type:     'input',
-    block_id: `list_select_input_${workflowRunId}`,
-    element,
-    label:    { type: 'plain_text', text: 'Select a record' },
-  };
-}
-
-// ── Faithful copy of buildObjectArrayTable from callback.mjs ────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildObjectArrayTable
-function buildObjectArrayTable(items) {
-  const columns = [];
-  const seen = new Set();
-  for (const item of items) {
-    for (const key of Object.keys(item)) {
-      if (!seen.has(key)) { seen.add(key); columns.push(key); }
-    }
-  }
-  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
-  const header = `| ${headerLabels.join(' | ')} |`;
-  const sep    = `|${columns.map(() => '---').join('|')}|`;
-  const rows   = items.map(item => `| ${columns.map(col => escapeCell(item[col])).join(' | ')} |`);
-  return [header, sep, ...rows].join('\n');
-}
-
-// ── Faithful copy of dialogToBlocks from callback.mjs ───────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:dialogToBlocks
-function dialogToBlocks(dialog, workflowRunId, gateType) {
-  const blocks = [];
-
-  const choiceButtons  = gateType === 'choice'
-    ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
-    : [];
-  const choiceAsDropdown =
-    choiceButtons.length > CHOICE_DROPDOWN_THRESHOLD && choiceButtons.length <= SELECT_OPTION_LIMIT;
-
-  for (const field of (dialog?.fields ?? [])) {
-    switch (field.type) {
-
-      case 'typography':
-        blocks.push({
-          type: 'markdown',
-          text: `\ud83e\udde0 ${field.value}`,
-        });
-        break;
-
-      case 'description_list': {
-        if (choiceAsDropdown) break;
-        const lines = (field.items ?? []).map(item =>
-          `**${item.label}** \u2014 ${item.description || item.label}`
-        );
-        if (lines.length > 0) {
-          blocks.push({
-            type: 'markdown',
-            text: lines.join('\n'),
-          });
-        }
-        break;
-      }
-
-      case 'list': {
-        if (field.label) {
-          blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: `*${field.label}*` },
-          });
-        }
-        const items = field.items ?? [];
-        if (items.length > 0) {
-          blocks.push(...markdownToBlocks(buildListTable(items, field.parentHeading)));
-        }
-        const selectable = items.find(item => item.secondaryAction);
-        if (selectable) {
-          const validStyle = selectable.secondaryAction.style === 'danger' || selectable.secondaryAction.style === 'primary';
-          blocks.push(buildListSelect(items, workflowRunId) ?? {
-            type:     'input',
-            block_id: `list_select_input_${workflowRunId}`,
-            element:  {
-              type:        'plain_text_input',
-              action_id:   'list_select_value',
-              placeholder: { type: 'plain_text', text: `e.g. ${selectable.id}` },
-            },
-            label: { type: 'plain_text', text: 'Enter the ID to select' },
-          });
-          blocks.push({
-            type:     'actions',
-            elements: [{
-              type: 'button',
-              ...(validStyle ? { style: selectable.secondaryAction.style } : {}),
-              text:      { type: 'plain_text', text: selectable.secondaryAction.label },
-              action_id: `list_select_${selectable.secondaryAction.action}`,
-              value:     JSON.stringify({ workflowRunId, action: selectable.secondaryAction.action }),
-            }],
-          });
-        }
-        break;
-      }
-
-      case 'textbox':
-        break;
-
-      case 'reveal': {
-        blocks.push(buildRevealBlock(field));
-        break;
-      }
-
-      case 'review_object': {
-        const BLOCK_CHAR_LIMIT = 2800;
-        for (const item of (field.items ?? [])) {
-          let valueText;
-          if (Array.isArray(item.value)) {
-            if (item.value.length === 0) {
-              continue;
-            } else if (typeof item.value[0] === 'object') {
-              const allEmpty = item.value.every(v => Object.keys(v).length === 0);
-              if (allEmpty) {
-                valueText = `${item.value.length} entries _(metadata auto-assigned by DB)_`;
-              } else {
-                const first = JSON.stringify(item.value[0]);
-                const allSame = item.value.every(v => JSON.stringify(v) === first);
-                if (allSame && item.value.length > 3) {
-                  valueText = `${item.value.length}\u00d7 ${first}`;
-                } else if (item.value.every(v => v.syntax || v.verb || v.command)) {
-                  valueText = '\n' + item.value
-                    .map(v => `    \u2022 ${v.syntax ?? v.verb ?? v.command}`)
-                    .join('\n');
-                } else {
-                  blocks.push({ type: 'markdown', text: `*${item.key}:*` });
-                  blocks.push(...markdownToBlocks(buildObjectArrayTable(item.value)));
-                  continue;
-                }
-              }
-            } else {
-              valueText = item.value.join(', ');
-            }
-          } else if (item.value !== null && typeof item.value === 'object') {
-            valueText = JSON.stringify(item.value, null, 2);
-          } else {
-            valueText = String(item.value ?? '');
-          }
-          let line = `*${item.key}:* ${valueText}`;
-          if (line.length > BLOCK_CHAR_LIMIT) {
-            line = line.slice(0, BLOCK_CHAR_LIMIT - 3) + '...';
-          }
-          blocks.push({
-            type: 'section',
-            text: { type: 'mrkdwn', text: line },
-          });
-        }
-        break;
-      }
-
-      case 'radio': {
-        const options = (field.options ?? []).map(o => ({
-          text:  { type: 'plain_text', text: o.label },
-          value: o.value,
-        }));
-        blocks.push({
-          type: 'section',
-          text: { type: 'mrkdwn', text: field.label ?? 'Select one:' },
-          accessory: {
-            type:      'radio_buttons',
-            action_id: field.name ?? 'radio',
-            options,
-          },
-        });
-        break;
-      }
-
-      case 'actions': {
-        const allButtons = field.buttons ?? [];
-
-        if (choiceAsDropdown) {
-          const choices = allButtons.filter(b => b.action !== 'cancel');
-          blocks.push({
-            type:     'input',
-            block_id: `choice_select_${workflowRunId}`,
-            element:  {
-              type:        'static_select',
-              action_id:   'choice_value',
-              placeholder: { type: 'plain_text', text: 'Choose one' },
-              options: choices.map(btn => ({
-                text:  { type: 'plain_text', text: truncateOption(btn.label) },
-                value: String(btn.action),
-                ...(btn.description
-                  ? { description: { type: 'plain_text', text: truncateOption(btn.description) } }
-                  : {}),
-              })),
-            },
-            label: { type: 'plain_text', text: 'Select' },
-          });
-          blocks.push({
-            type:     'actions',
-            elements: [
-              {
-                type:      'button',
-                style:     'primary',
-                text:      { type: 'plain_text', text: 'Select' },
-                action_id: 'workflow_choice_submit',
-                value:     JSON.stringify({ workflowRunId, action: 'confirm', label: 'Select' }),
-              },
-              ...allButtons.filter(b => b.action === 'cancel').map((btn, i) => ({
-                type:      'button',
-                text:      { type: 'plain_text', text: btn.label },
-                action_id: `workflow_action_${btn.action || i}_${i}`,
-                value:     JSON.stringify({ workflowRunId, action: btn.action, label: btn.label }),
-              })),
-            ],
-          });
-          break;
-        }
-
-        const elements = allButtons.map((btn, i) => ({
-          type:      'button',
-          style:     btn.style === 'primary' ? 'primary' : btn.style === 'danger' ? 'danger' : undefined,
-          text:      { type: 'plain_text', text: btn.label },
-          action_id: `workflow_action_${btn.action || i}_${i}`,
-          value:     JSON.stringify({
-            workflowRunId,
-            action: btn.action,
-            label:  btn.label,
-            ...(btn.modal ? { modal: btn.modal } : {}),
-          }),
-        }));
-        if (elements.length > 0) {
-          blocks.push({ type: 'actions', elements });
-        }
-        break;
-      }
-
-      default:
-        // In tests we capture the unknown type rather than calling console.warn
-        break;
-    }
-  }
-
-  return blocks;
-}
 
 // ── Faithful copy of the pure block-assembly slice of postHumanGate's
 // text_input branch from callback.mjs (excludes the routeCallback Slack call).
@@ -1884,8 +1595,11 @@ describe('groupBlocksForSlack', () => {
 // choice gate — buttons below the threshold, dropdown above it
 // ---------------------------------------------------------------------------
 
-describe('dialogToBlocks — choice gate rendering scales with option count', () => {
+describe('dialogToBlocks — a derived choice set collapses on option count', () => {
+  // The live 12-month picker: its options are expanded from a local_state array, so
+  // buildDialog marks the set derived and this layer collapses it past a handful.
   const choiceDialog = n => ({
+    option_source: 'derived',
     fields: [
       { type: 'typography', value: "Which month's budget would you like to edit?" },
       {
@@ -1947,6 +1661,7 @@ describe('dialogToBlocks — choice dropdown suppresses the duplicate descriptio
   // markdown table already shows. Rendered as a description_list beneath it, it read as
   // a plain-text second copy of the table.
   const monthDialog = n => ({
+    option_source: 'derived',
     fields: [
       { type: 'typography', value: '| Month | Net |\n|---|---|\n| 07/2026 | 100 |' },
       {
@@ -2047,6 +1762,7 @@ describe('every button payload carries its label', () => {
   // that omits it degrades to showing the raw action name.
   it('choice-dropdown Select and Cancel both carry labels', () => {
     const dialog = {
+      option_source: 'derived',
       fields: [{
         type: 'actions',
         buttons: [
@@ -2146,5 +1862,104 @@ describe('isPermanentRenderFailure — retry vs report', () => {
   it('does not throw on a malformed error object', () => {
     assert.equal(isPermanentRenderFailure(undefined), false);
     assert.equal(isPermanentRenderFailure({}), false);
+  });
+});
+
+// ── dialogToBlocks — choice option rendering, the REAL exported function ────
+//
+// A choice gate's options used to collapse into a dropdown on a count alone, which
+// cannot separate a six-point rating scale from a twelve-month picker: grading a card
+// went from one click to three interactions in the workflow whose value is the speed of
+// repetition. The gate now declares where its option set came from and this layer reads
+// that, keeping both bounds — and the widget decision — here.
+
+describe('dialogToBlocks — choice option_source', () => {
+  // Shaped as buildDialog emits a choice gate: a description travels on the button as
+  // well as in the description_list, so it can move onto a dropdown option when the set
+  // collapses.
+  const choiceDialog = (optionSource, count, withDescriptions = false) => ({
+    title: '',
+    ...(optionSource ? { option_source: optionSource } : {}),
+    fields: [
+      { type: 'typography', value: 'Pick one' },
+      ...(withDescriptions ? [{
+        type:  'description_list',
+        items: Array.from({ length: count }, (_, i) => ({ value: String(i), label: `Option ${i}`, description: `Meaning ${i}` })),
+      }] : []),
+      {
+        type: 'actions',
+        buttons: [
+          ...Array.from({ length: count }, (_, i) => ({
+            action: String(i),
+            label:  `Option ${i}`,
+            style:  'default',
+            ...(withDescriptions ? { description: `Meaning ${i}` } : {}),
+          })),
+          { action: 'cancel', label: 'Cancel', style: 'default' },
+        ],
+      },
+    ],
+  });
+
+  const selects = blocks => blocks.filter(b => b.element?.type === 'static_select');
+  const buttonLabels = blocks => blocks
+    .filter(b => b.type === 'actions')
+    .flatMap(b => b.elements)
+    .map(e => e.text.text);
+
+  it('renders six authored options as six buttons, plus Cancel', () => {
+    const blocks = dialogToBlocks(choiceDialog('authored', 6), 900, 'choice');
+    assert.equal(selects(blocks).length, 0);
+    assert.deepEqual(buttonLabels(blocks), [
+      'Option 0', 'Option 1', 'Option 2', 'Option 3', 'Option 4', 'Option 5', 'Cancel',
+    ]);
+  });
+
+  it('collapses twelve derived options to a dropdown, leaving Cancel a button', () => {
+    const blocks = dialogToBlocks(choiceDialog('derived', 12), 901, 'choice');
+    const [select] = selects(blocks);
+    assert.ok(select, 'expected a static_select');
+    assert.equal(select.element.options.length, 12);
+    assert.deepEqual(buttonLabels(blocks), ['Select', 'Cancel']);
+  });
+
+  it('leaves five derived options as buttons — the bound is unchanged for derived sets', () => {
+    const blocks = dialogToBlocks(choiceDialog('derived', 5), 902, 'choice');
+    assert.equal(selects(blocks).length, 0);
+    assert.equal(buttonLabels(blocks).length, 6);
+  });
+
+  it('collapses an authored set past what one actions block can hold', () => {
+    const blocks = dialogToBlocks(choiceDialog('authored', 26), 903, 'choice');
+    assert.equal(selects(blocks).length, 1);
+    assert.deepEqual(buttonLabels(blocks), ['Select', 'Cancel']);
+  });
+
+  it('reads a dialog declaring nothing as authored', () => {
+    const blocks = dialogToBlocks(choiceDialog(undefined, 6), 904, 'choice');
+    assert.equal(selects(blocks).length, 0);
+    assert.equal(buttonLabels(blocks).length, 7);
+  });
+
+  it('keeps the description list when authored options stay buttons, drops it when they collapse', () => {
+    const authored = dialogToBlocks(choiceDialog('authored', 6, true), 905, 'choice');
+    assert.ok(authored.some(b => b.text?.includes('Meaning 0')), 'descriptions belong above the buttons');
+
+    const derived = dialogToBlocks(choiceDialog('derived', 6, true), 905, 'choice');
+    assert.ok(!derived.some(b => b.text?.includes?.('Meaning 0')), 'descriptions travel on the options instead');
+    assert.equal(selects(derived)[0].element.options[0].description.text, 'Meaning 0');
+  });
+
+  it('ignores option_source on a gate type that is not choice', () => {
+    const blocks = dialogToBlocks({
+      title: '',
+      option_source: 'derived',
+      fields: [
+        { type: 'typography', value: 'Confirm?' },
+        { type: 'actions', buttons: Array.from({ length: 8 }, (_, i) => ({ action: `a${i}`, label: `Do ${i}` })) },
+      ],
+    }, 906, 'confirm');
+    assert.equal(selects(blocks).length, 0);
+    assert.equal(buttonLabels(blocks).length, 8);
   });
 });
