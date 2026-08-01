@@ -894,10 +894,16 @@ async function simulateForRegistration(steps, traceId) {
   return {
     passed:        result.passed,
     error_summary: result.error_summary,
+    // Every level that can fail the verdict contributes its issues. The smoke test was
+    // missing, so a run whose ONLY failure was L2b reported `issues: []` — the narrative
+    // in error_summary carried the defect while the structured field said there wasn't
+    // one. Seen live: session 1121 at 10:12:13, routing matrix green, smoke test red,
+    // issueCount 0.
     issues: [
       ...(result.shape_analysis?.issues  ?? []),
       ...(result.static_analysis?.issues ?? []),
       ...(result.routing_matrix?.issues  ?? []),
+      ...(result.smoke_test?.issues      ?? []),
     ],
   };
 }
