@@ -544,5 +544,30 @@ environment is the risk the branch-to-prod process exists to avoid — and AC9 i
 and answered ($2.73 against the $1.42 baseline), so the fix changes the *future* number, not the
 sprint's finding.
 
+**One-off domain task, and the system finding it produced.** Repaired the flashcards domain by
+direct SERV write (`PGD_*` is evolving-artifact data with no seed file): moved
+`C1/C2 Unidad 1 (el/la)` under the established parent deck, corrected a card back to
+`el madero / la madera`, deleted the empty duplicate parent, and fixed the `Grammer` → `Grammar`
+spelling — `title_embedding` recomputed automatically, since `table.mjs:547` re-embeds when an
+`embed_source` field changes.
+
+The deck's `card_count` read 0 against 34 cards, and chasing that produced a **new High Priority
+backlog item**. The user's hypothesis was that `create_domain` failed to instruct `add_entity` to
+set the field; the opposite is true. `PGC_Memory` 142 — the only one of ~12 flashcards schema
+snapshots matching the live tables — states the increment/decrement rule in full and delegates it
+to *"application logic after card insert/delete"*. **That layer does not exist.** `add_entity`
+inserts one row into one table; nothing reads a domain's initial-value conventions at insert
+time. Fault domain is **Contract at the `create_domain` boundary**, not Instruction — and it
+generalises to `learned_count`, `due_count`, `last_review_date`, and every denormalized column
+`create_domain` will ever generate. Three candidate fixes recorded, sequencing *do not
+denormalize* first: at household scale the column can be a `COUNT(*)` or a view, and that asks
+whether it should exist before building machinery to maintain it. The other decks look correct
+only because Novia hand-repaired them on 2026-07-07, before this deck existed.
+
+`learned_count` / `due_count` deliberately left wrong: memory 142's rule (`interval > 0` means
+learned) would mark all 34 imported cards learned, when the import set that interval rather than
+any review. Needs the user's call, not a guess.
+
 **Next:** AC8 / Track D (hand Novia `edit_budget` with the symptom only) and AC6 are the two
-unstarted ACs. The transcript fix is Sprint 10's, with the diagnosis already written down.
+unstarted ACs. Sprint 10 carries two items diagnosed but not built: the transcript prefix-cache
+fix and the `create_domain` derived-column gap.
