@@ -49,7 +49,7 @@ would commit to a shape before there is any evidence she needs one.
 | **AC4** | `register_workflow` exists as a gated Novia tool (`GATED_WRITE_TOOLS`), writing `PGC_Workflow` + `PGC_IntentMap`. | ✅ **MET** (B2) — not yet exercised on a real build; that is AC5. |
 | **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. | ◐ **BUILD HALF MET** — `edit_budget` (id 357, 25 steps) designed in conversation across sessions 1121/1122, simulated to a clean L0+L1+L2 pass, and registered via `register_workflow`. No `create_workflow` at any point. **The runtime half did not come free**: the generated workflow needed repairs before a run completed, and those were made outside the Novia path. Counting this as met would be counting the build and ignoring the AC's second clause. |
 | **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. | ⬜ **NOT MET — and the budget that binds was the wrong one.** Turns 12, actions 8, output 10240 are all raised, but the round runs inside one 240s Lambda and each turn costs 7–100s, so it dies at turn 3–4 and `turn_limit: 12` is unreachable. The timeout is silent: no notification, no session write, no retry. Compression cannot be exercised until a round can reach the gate. See backlog. |
-| **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. | ◐ **FIRST GATE CONFIRMED LIVE** (2026-08-04) — `flashcard_quiz_session` step 12 renders its six grades as buttons. The `edit_budget` step 3 dropdown check remains: it is the regression guard that distinguishes reading `option_source` from a global threshold bump, and the quiz gate alone cannot tell those apart. No workflow edit needed. |
+| **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. | ✅ **MET** — both gates confirmed live 2026-08-04 from the same deployed renderer: six static grades inline as buttons, the `iterator`-backed period set still collapsed to a dropdown. The two together are what a threshold bump cannot produce, so this verifies the contract read rather than the number. No workflow edit needed. |
 | **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. | ⬜ Not started. |
 | **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. | ✅ **MEASURED, and it does not favour the Novia path yet.** **$2.73** to build and register (session 1121, 26 calls) — roughly **2× the $1.42 baseline** — plus **$3.40** for the repair session (1122) that followed. ~$0.39 of the build was lost to harness defects since fixed, so a clean rebuild would be cheaper; the dominant structural cost is re-emitting the step array every turn, which is a known fix, not a mystery. See Session 6. |
 
@@ -222,12 +222,13 @@ size, so the renderer counted. Full diagnosis: `arch-minds-eye.md` §12.8.
   **AC7 needs no workflow edit.** `flashcard_quiz_session` step 12 has no `iterator` → its
   six authored options are buttons again; `edit_budget` step 3 carries one → still a
   dropdown. C3 is therefore live verification, not repair.
-- **C3** ◐ — Verify `flashcard_quiz_session` step 12 and `edit_budget` step 3 (AC7). No repair
-  needed — the inferred default covers both. Verified live from Slack by the user.
-  **Quiz gate ✅ 2026-08-04** — six static grades render as buttons, so `option_source: static`
-  resolves and the renderer takes the `ACTIONS_ELEMENT_LIMIT` bound. **`edit_budget` step 3
-  outstanding** — it carries an `iterator`, so it must still collapse to a dropdown; that check
-  is what proves the property is read rather than the threshold raised for everything.
+- **C3** ✅ **DONE** — Both gates verified live from Slack by the user, 2026-08-04 (AC7).
+  `flashcard_quiz_session` step 12: six static grades inline as buttons, so `option_source`
+  resolves `static` and the renderer takes the `ACTIONS_ELEMENT_LIMIT` bound. `edit_budget`
+  step 3: still a dropdown, its `iterator` inferring `dynamic` at the unchanged
+  `CHOICE_DROPDOWN_THRESHOLD`. **The pair is the evidence** — one gate alone cannot separate
+  a contract read from a raised threshold; divergent bounds under one deployment can only come
+  from the property. No repair was needed, as C2 predicted: the inferred default covered both.
 - **C4** — While in `callback.mjs`: the literal `**` in a gate message (run 735) is the same file
   and still needs a repro to pin the block path. Opportunistic, not an AC.
 
