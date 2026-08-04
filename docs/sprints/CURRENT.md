@@ -516,3 +516,33 @@ v30, `workflow_convention_bridge` v2, `PGC_StepType` `human_gate` updated.
 
 **Next:** C3 (the live two-gate check, user-run) is the only Track C item outstanding. Track D
 is untouched. The transcript fix should come before either.
+
+### Session 7 — 2026-08-04 — AC7 closed; transcript cost diagnosed and deferred
+
+**AC7 ✅ MET.** Both gates verified live from Slack: `flashcard_quiz_session` step 12 renders its
+six static grades as inline buttons, `edit_budget` step 3 still collapses its `iterator`-backed
+period set to a dropdown. The pair is the evidence — one gate alone cannot separate a read of
+`option_source` from a globally raised threshold; divergent bounds under one deployment can only
+come from the property. No repair was needed, as C2 predicted. Track C is complete apart from C4
+(the literal `**`, opportunistic, still needs a repro).
+
+**The transcript cost item was diagnosed, and the diagnosis inverts the previous reading.** It is
+a cache-invalidation defect in our own code, not a gateway limitation. `cache_read` pinned at
+4041 had been read as *only the system prompt is cacheable*; but tokens land in `cache_creation`
+only if a breakpoint covers them, so the climbing `cache_creation` proves the gateway **is**
+caching the transcript — writing a fresh entry every turn and reading none of it. Caching is a
+prefix match, and two things in `minds-eye.mjs` break the prefix every turn: `buildUserMessage`
+puts the volatile context blocks **ahead of** the append-only transcript, and `assembleContext`
+orders `PGC_Memory` by `priority DESC LIMIT 5` with no tiebreaker — **35 of 100 rows are tied at
+priority 8** (verified live), so which five return, and in what order, can differ between
+identical queries. Full diagnosis, the three-part fix, and the expected ~12× cut on the creation
+component are recorded in `docs/backlog.md`.
+
+**Deferred to Sprint 10 by the user.** The change touches input assembly for every Novia session
+and needs a live Slack round to validate, which the user runs. Landing it untested with no test
+environment is the risk the branch-to-prod process exists to avoid — and AC9 is already measured
+and answered ($2.73 against the $1.42 baseline), so the fix changes the *future* number, not the
+sprint's finding.
+
+**Next:** AC8 / Track D (hand Novia `edit_budget` with the symptom only) and AC6 are the two
+unstarted ACs. The transcript fix is Sprint 10's, with the diagnosis already written down.
