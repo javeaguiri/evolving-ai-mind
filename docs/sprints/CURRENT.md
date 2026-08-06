@@ -2,7 +2,8 @@
 
 **Status: IN PROGRESS. Scoped and branched 2026-07-29 — `sprint/09-novia-builds-workflows`.**
 Tracks A (A1–A4 ✅), B (code items ✅) and C (C1–C3 ✅) are done. Six of nine ACs met.
-**Track D is deferred to Sprint 10 (2026-08-06)** — see AC8. A5 added to scope in its place.
+**Track D (D1–D3) and A5 are deferred to Sprint 10 (2026-08-06)** — both need a live Slack round
+to validate; see AC8. **D4 is the only substantive item left in Sprint 9**, and it needs no round.
 
 > Read before implementing: `docs/sprints/sprint-08.md` §RETRO, and `docs/arch-minds-eye.md`
 > §12 (the dissolution proposal) — specifically §12.7 for what is settled and what is open.
@@ -128,9 +129,22 @@ whether conventions alone are enough.
   **This is Track A's premise, not a new one** — a convention Novia cannot derive, stated once
   as data rather than transcribed or guessed. It is a discoverability gap, not a capability
   one: the same session shows `run_sql` working well once the names are right.
-  **Pulled into Sprint 9 ahead of the deferred Track D**, because it is data with no deploy
-  risk and it removes ~44% of the cost of exactly the session shape AC8 will be.
-  **Placement is the open call.** The B3 precedent puts operating protocol in
+  **Deferred to Sprint 10 (2026-08-06), with Track D.** It was pulled into Sprint 9 on the
+  grounds that data carries no deploy risk; the user's correction is that this applies the AC8
+  reasoning inconsistently. **A5 cannot be validated without a live Slack round either** — the
+  observation that closes it is Novia calling `list_physical_tables` and quoting identifiers,
+  which only a real session shows. Landing it in Sprint 9 would put an unexercised change in
+  prod and leave its value unrealised until the Sprint 10 round regardless. Deferring gives one
+  deploy, one round, one measurement.
+  **No replay-corpus cost either way** — the standard objection to prompt edits does not apply
+  here: Novia's turns are not fingerprinted (`minds-eye.mjs` calls `callLlm` directly, B5), so
+  `minds_eye_system_prompt` carries no recorded fingerprints to churn.
+  **Sequencing note for Sprint 10.** Landing A5 with the prefix-cache fix means the AC8 round
+  validates three things at once. That is acceptable *if taken deliberately*, because the
+  signals are read from different places and do not confound: the cache effect from
+  `cache_read` / `cache_creation` in the usage logs, A5 from whether any `run_sql` call fails on
+  an identifier, AC8 from whether she reaches step 5.
+  **Placement is still the open call.** The B3 precedent puts operating protocol in
   `minds_eye_system_prompt` rather than the bridge, which is scoped to step arrays — but A1
   established that prompt stays concise, and this is two lines. Proposal: system prompt.
 
@@ -276,6 +290,19 @@ live round, and is blocked by nothing. Available for Sprint 9 at any point.
 - **D4** — **Validation add:** L1 should flag `{{key.N}}` numeric indexing on a value that is not
   a known array. D1 passed L1 silently. Carried from the Sprint 8 backlog item; the only part of
   the dropped drift item that survives.
+  **Reach verified in code 2026-08-06 — this is not `create_workflow` work, and Novia's path is
+  its primary consumer.** `register_workflow` runs the same engine: `minds-eye.mjs:915` calls
+  `runSimulation` at default level (L0+L1+L2) and folds `static_analysis.issues` — L1 — into the
+  single refusal set that both the gate and the write read. A new L1 assertion therefore hardens
+  Novia's registration boundary with no other wiring. **The specimen makes the point:** D1 is in
+  `edit_budget`, which Novia built and registered, and L1 passed it silently — so this is a
+  repair to the gate that was meant to catch her own output.
+  The machinery already exists — L1 walks template refs via `extractTemplateRefs`
+  (`simulation-engine.mjs:668`, `:1108`), so this is an added assertion inside an existing walk.
+  Mechanism confirmed: `resolvePath` (`template-resolver.mjs:57-64`) special-cases a numeric key
+  only when `cur` is an array; on a string it falls through to `cur[key]`.
+  With `create_workflow` retired by the direction, the surviving consumers are
+  `register_workflow`, `upsert-workflow.mjs`'s pre-write guard, and `troubleshoot-workflow.mjs`.
 
 ---
 
@@ -283,7 +310,7 @@ live round, and is blocked by nothing. Available for Sprint 9 at any point.
 
 | Track | ACs |
 |---|---|
-| A | AC1, AC2 (A5 carries no AC — scope added 2026-08-06) |
+| A | AC1, AC2 (A5 carries no AC — deferred to Sprint 10) |
 | B | AC3, AC4, AC5, AC6, AC9 |
 | C | AC7 |
 | D | AC8 — deferred to Sprint 10 with D1–D3; D4 remains available |
@@ -599,7 +626,7 @@ any review. Needs the user's call, not a guess.
 unstarted ACs. Sprint 10 carries two items diagnosed but not built: the transcript prefix-cache
 fix and the `create_domain` derived-column gap.
 
-### Session 8 — 2026-08-06 — Track D deferred; A5 added in its place
+### Session 8 — 2026-08-06 — Track D and A5 deferred to Sprint 10; D4 reach verified
 
 **AC8 moves to Sprint 10. The reason is measurement validity, not time.** Session 1122 was
 already an AC8-shaped session — a repair round, not a build — and it cost $3.40 without
@@ -618,19 +645,32 @@ was itself deferred *because* it needs a live Slack round to validate, and AC8 i
 round. Run in that order, one session yields both: `cache_read` climbing past its pinned 4041
 while `cache_creation` flattens is visible in the same usage logs that answer AC8.
 
-**A5 added to Sprint 9 scope** — the `run_sql` physical-table-name gap. It was not the item under
-discussion but it is the other half of why 1122 went badly: seven of ~12 `run_sql` calls failed on
-identifiers, roughly $1.50 of the $3.40. Two statements close it (use `list_physical_tables`
-first; double-quote CamelCase identifiers), both `PGC_SystemContext`/prompt content, no deploy
-risk. Filed under Track A because it is that track's premise — a convention Novia cannot derive,
-stated once as data. Placement between `minds_eye_system_prompt` and the bridge is the open call;
-the B3 precedent says operating protocol goes in the prompt.
+**A5 raised, then deferred to Sprint 10 in the same session** — the `run_sql` physical-table-name
+gap, the other half of why 1122 went badly: seven of ~12 `run_sql` calls failed on identifiers,
+roughly $1.50 of the $3.40. It was pulled into Sprint 9 on the grounds that data carries no deploy
+risk. **The user's correction is that this applied the AC8 reasoning inconsistently** — A5 cannot
+be validated without a live Slack round either, since the observation that closes it is Novia
+calling `list_physical_tables` and quoting identifiers. Landing it in Sprint 9 would put an
+unexercised change in prod and leave its value unrealised until the Sprint 10 round anyway.
+Deferring gives one deploy, one round, one measurement. It stays filed under Track A because it is
+that track's premise — a convention Novia cannot derive, stated once as data.
 
-**D4 explicitly not deferred.** It is a pure `simulation-engine.mjs` addition with unit tests,
-needs no live round, and is blocked by nothing.
+**D4 not deferred, and its reach was verified in code rather than assumed.** The question asked was
+whether it serves `create_workflow` only or Novia's new capability; the answer is the latter, more
+than the former. `register_workflow` runs the same engine — `minds-eye.mjs:915` calls
+`runSimulation` at default level and folds L1's `static_analysis.issues` into the one refusal set
+the gate and the write share — so a new L1 assertion hardens Novia's registration boundary with no
+other wiring. D1 is in `edit_budget`, which Novia built and registered and which L1 passed
+silently, making D4 a repair to the gate meant to catch her own output. With `create_workflow`
+retired by the direction, its surviving consumers are `register_workflow`,
+`upsert-workflow.mjs`'s pre-write guard, and `troubleshoot-workflow.mjs`.
 
 **Sprint 9 will close at six of nine ACs** — AC5 half met, AC6 not met, AC8 deferred. That is an
 honest close: the sprint's finding is already banked, and AC8 extends it rather than changing it.
 
-**Next:** A5 (data, no live round needed), and D4 if wanted. Both are unblocked and can land in
-Sprint 9 without a Slack session.
+**Sprint 10 now carries four items**, three of which validate in a single Slack round: the
+transcript prefix-cache fix, A5, and AC8 / Track D — plus the `create_domain` derived-column gap,
+which is independent.
+
+**Next:** D4 is the only substantive Sprint 9 item left, and it needs no Slack session. C4 (the
+literal `**`) remains opportunistic and still needs a repro.
