@@ -1,0 +1,222 @@
+// Copyright (c) 2026 Javea Guiri. All rights reserved.
+// Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+// See LICENSE file in the project root for full license terms.
+// tests/unit/minds-eye-truncation.test.mjs
+//
+// A response severed at the output ceiling used to end the session (session 1121,
+// 2026-08-01): Novia wrote 8192 tokens of prose and was cut mid-sentence, the parse
+// failed, and the round exited with "Agent reasoning failed" in Slack. The turn's work
+// was never written to PGC_SessionEntry, so nothing of it survived.
+//
+// Truncation is not a malformed response and must not be treated as one. The correction
+// path echoes the raw output back to be re-emitted as valid JSON — which is the right
+// remedy for bad escaping and precisely the wrong one here, since that output is what
+// exhausted the budget. The same question is asked again instead, with the cut-off
+// stated.
+//
+// Run: node --test tests/unit/minds-eye-truncation.test.mjs
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { classifyLlmFailure, buildUserMessage, roundBudgetExhausted, latestDraftIndex } from '../../src/proc/minds-eye.mjs';
+
+const truncated = () => {
+  const e = new Error('LLM returned invalid JSON: Unexpected token \'G\'');
+  e.isParseError = true;
+  e.rawOutput    = 'Good catch — serv_upsert is exactly the right tool here.';
+  e.isTruncated  = true;
+  return e;
+};
+
+const badEscaping = () => {
+  const e = new Error('LLM returned invalid JSON: Bad control character');
+  e.isParseError = true;
+  e.rawOutput    = '{ "action": "respond", "message": "line one\nline two" }';
+  return e;
+};
+
+describe('classifyLlmFailure', () => {
+
+  it('re-asks a truncated response instead of correcting it', () => {
+    assert.equal(classifyLlmFailure(truncated(), false), 'reask');
+  });
+
+  it('gives up when a re-ask truncates too — the notice did not land', () => {
+    assert.equal(classifyLlmFailure(truncated(), true), 'fail');
+  });
+
+  it('still corrects a complete response with broken escaping', () => {
+    assert.equal(classifyLlmFailure(badEscaping(), false), 'correct');
+  });
+
+  it('corrects broken escaping even directly after a truncated turn', () => {
+    // lastTurnTruncated only bars a second re-ask. A different failure on the retry is
+    // its own case and gets its own remedy.
+    assert.equal(classifyLlmFailure(badEscaping(), true), 'correct');
+  });
+
+  it('fails a transport error — nothing to correct and nothing to re-ask', () => {
+    assert.equal(classifyLlmFailure(new Error('LLM call timed out after 170s'), false), 'fail');
+  });
+
+  it('fails a parse error carrying no raw output', () => {
+    const e = new Error('LLM returned empty response');
+    e.isParseError = true;
+    assert.equal(classifyLlmFailure(e, false), 'fail');
+  });
+
+  it('does not throw on a missing error object', () => {
+    assert.equal(classifyLlmFailure(undefined, false), 'fail');
+  });
+});
+
+describe('buildUserMessage — the truncation notice', () => {
+  const prefs = { name: 'Agent', tone: 'concise', advisory_level: 'proactive' };
+  const history = [{ role: 'user', content: 'build me a workflow' }];
+
+  it('omits the notice when a turn was not truncated', () => {
+    const withNone = buildUserMessage('LAYER1', null, history, prefs, null);
+    assert.ok(!withNone.includes('output limit'));
+  });
+
+  it('appends the notice last, nearest the response it constrains', () => {
+    const notice  = 'NOTICE-SENTINEL';
+    const message = buildUserMessage('LAYER1', null, history, prefs, notice);
+    assert.ok(message.endsWith(notice), 'the notice must be the final section');
+    assert.ok(message.includes('LAYER1'), 'context is still carried');
+    assert.ok(message.includes('build me a workflow'), 'the conversation is still carried');
+  });
+
+  it('carries the conversation intact — a re-ask loses only the severed response', () => {
+    const before = buildUserMessage('LAYER1', 'LAYER2', history, prefs, null);
+    const after  = buildUserMessage('LAYER1', 'LAYER2', history, prefs, 'NOTICE');
+    assert.ok(after.startsWith(before), 'the re-ask is the same message plus the notice');
+  });
+});
+
+// ── The round's wall-clock budget ───────────────────────────────────────────
+//
+// The loop runs its turns inside ONE Lambda invocation, so turn_limit is not the budget
+// that binds. Session 1121 spent 7s, 85s and 46s on three turns and the fourth was still
+// running when the invocation hit its ceiling: Duration 240000ms, Status timeout. Nothing
+// catches a Lambda timeout, so no notification was posted, the turn in flight wrote
+// nothing, and the SQS message had already been deleted on receipt — the round vanished,
+// which from Slack is indistinguishable from hanging.
+
+describe('roundBudgetExhausted', () => {
+  const BUDGET = 195_000;
+
+  it('always allows the first turn — nothing has been observed yet', () => {
+    assert.equal(roundBudgetExhausted(0, 0, BUDGET), false);
+  });
+
+  it('allows a turn there is room for', () => {
+    // 40s elapsed, longest turn so far 85s → 125s, inside the budget.
+    assert.equal(roundBudgetExhausted(40_000, 85_000, BUDGET), false);
+  });
+
+  it('stops the round when the next turn would not fit', () => {
+    // Session 1121's actual shape: 138s spent over three turns, longest 85s. 223s > 195s,
+    // so the fourth turn — the one that died with the Lambda — never starts.
+    assert.equal(roundBudgetExhausted(138_000, 85_000, BUDGET), true);
+  });
+
+  it('treats the boundary as room to run', () => {
+    assert.equal(roundBudgetExhausted(110_000, 85_000, BUDGET), false);
+    assert.equal(roundBudgetExhausted(110_001, 85_000, BUDGET), true);
+  });
+
+  it('tightens as the estimate grows — late turns are the expensive ones', () => {
+    // Same elapsed time, different evidence about what a turn now costs.
+    assert.equal(roundBudgetExhausted(120_000,  7_000, BUDGET), false);
+    assert.equal(roundBudgetExhausted(120_000, 85_000, BUDGET), true);
+  });
+
+  it('never stops a round when no budget is configured', () => {
+    assert.equal(roundBudgetExhausted(600_000, 200_000, undefined), false);
+    assert.equal(roundBudgetExhausted(600_000, 200_000, 0), false);
+  });
+});
+
+// ── The current draft ───────────────────────────────────────────────────────
+//
+// Tool entries are persisted WITH their params, so every array Novia submitted is already
+// in PGC_SessionEntry — but the transcript rendered only `result`, so she read verdicts
+// naming step keys her context did not contain. Rebuilding the whole array from reasoning
+// each turn is why session 1121 drifted 19 -> 21 -> 23 steps and why `step_label` came
+// back two turns after she had corrected it.
+
+const simEntry = (stepCount, verdict, keyField = 'step') => JSON.stringify({
+  tool:   'simulate_workflow',
+  params: { steps: Array.from({ length: stepCount }, (_, i) => ({ [keyField]: String(i + 1), type: 'end' })) },
+  result: { passed: verdict, total_issues: verdict ? 0 : 3 },
+});
+
+describe('latestDraftIndex', () => {
+
+  it('finds the newest submitted array', () => {
+    const history = [
+      { role: 'user', content: 'build it' },
+      { role: 'tool', content: simEntry(19, false) },
+      { role: 'tool', content: simEntry(21, false) },
+    ];
+    assert.equal(latestDraftIndex(history), 2);
+  });
+
+  it('returns -1 when nothing has been submitted yet', () => {
+    assert.equal(latestDraftIndex([
+      { role: 'user', content: 'build it' },
+      { role: 'tool', content: JSON.stringify({ tool: 'query_table', params: { tableName: 'PGC_StepType' }, result: { count: 19 } }) },
+    ]), -1);
+  });
+
+  it('skips a pending approval — it awaits a decision, not a correction', () => {
+    const history = [
+      { role: 'tool', content: simEntry(21, false) },
+      { role: 'tool', content: JSON.stringify({ tool: '__pending__', action: 'register_workflow', params: { steps: [{ step: '1' }] } }) },
+    ];
+    assert.equal(latestDraftIndex(history), 0, 'the last correctable array, not the pending copy');
+  });
+
+  it('ignores tool entries with no steps and unreadable content alike', () => {
+    const history = [
+      { role: 'tool', content: simEntry(19, false) },
+      { role: 'tool', content: 'not json at all' },
+      { role: 'tool', content: JSON.stringify({ tool: 'read_workflow', params: { workflowName: 'x' }, result: {} }) },
+    ];
+    assert.equal(latestDraftIndex(history), 0);
+  });
+});
+
+describe('buildUserMessage — the current draft', () => {
+  const prefs = { name: 'Agent', tone: 'concise', advisory_level: 'proactive' };
+
+  it('renders the newest array in full and reduces the older one to its verdict', () => {
+    const message = buildUserMessage('L1', null, [
+      { role: 'tool', content: simEntry(19, false, 'step_label') },
+      { role: 'tool', content: simEntry(21, false) },
+    ], prefs);
+
+    assert.match(message, /CURRENT DRAFT, 21 steps/);
+    assert.match(message, /submitted 19 steps, since superseded/);
+    // The superseded array's contents are gone; only the newest is spelled out.
+    assert.ok(!message.includes('step_label'), 'a superseded array costs nothing but its verdict');
+    assert.match(message, /"step":"21"/, 'the draft is rendered whole, so it can be corrected');
+  });
+
+  it('keeps every verdict — a superseded array still earned its result', () => {
+    const message = buildUserMessage('L1', null, [
+      { role: 'tool', content: simEntry(19, false) },
+      { role: 'tool', content: simEntry(21, true) },
+    ], prefs);
+    assert.equal((message.match(/"passed"/g) ?? []).length, 2);
+  });
+
+  it('leaves tool calls that carry no step array exactly as before', () => {
+    const message = buildUserMessage('L1', null, [
+      { role: 'tool', content: JSON.stringify({ tool: 'query_table', params: { tableName: 'PGC_StepType' }, result: { count: 19 } }) },
+    ], prefs);
+    assert.match(message, /Tool \(query_table\): \{"count":19\}/);
+    assert.ok(!message.includes('CURRENT DRAFT'));
+  });
+});

@@ -254,6 +254,33 @@ L1 counts `action_key` as a **write** in the state-flow trace, so a downstream
 `{{edit_action}}` resolves. Without that it would be rejected as never written — which is
 exactly how run 719 failed before this existed.
 
+###### `option_source` — a static or a dynamic choice set
+
+`static | dynamic`. A statement about the set, not about the widget that draws it.
+
+A **static** set was written out at design time. Its length cannot grow behind the
+renderer's back, and the case that matters is a workflow run over and over: grading a card
+is one click while every value is visible and three interactions once they sit behind a
+dropdown. A **dynamic** set is computed at runtime — a trailing twelve-month window, the
+rows of a query. Choosing from one takes thought either way, so the extra click costs
+little, and a single control is what survives the set growing.
+
+It describes the **choice set** — what the user picks between. A Cancel or other control
+button alongside a dynamic option list does not make the set static; the renderer keeps
+control buttons out of whatever it collapses, so Cancel stays a button in both shapes.
+
+`buildDialog` resolves this onto every dialog it emits, so the experience layer always has
+it. Absent an explicit value it is read off the step, because the mechanism *is* the
+property: `options` given as a `{{template}}` reference, or an option carrying `iterator`,
+are the only ways a set gets built at runtime. Declare it only to override that reading —
+for a fixed scale assembled in a `js_transform` rather than typed out, say.
+
+The renderer applies its own mechanics and its own limits to the answer — *dynamic and
+numerous collapses; static stays inline until Slack's cap on one actions block forces it* —
+and a workflow can raise neither bound. This is the `form` rule below applied one level up:
+a field's `type` names what is collected, a choice set's `option_source` names what kind of
+set it is, and neither names a widget.
+
 ###### `form` gate_type
 
 Collects any number of typed values in **one** gate and writes them to `output_key`
@@ -287,6 +314,16 @@ it (`"YYYY-MM-DD"` for `date`; the option's `value` for `select`/`radio`). It is
 LLM emits unprompted; run 695 was rejected for using it against a schema that had
 invented `initial` instead. The dialog still carries it to Slack as `initial`, which is
 Slack's own name for the same thing.
+
+**`placeholder` is not a substitute for it, and the difference is not cosmetic.** A
+placeholder is hint text: it displays, and it submits nothing. A field carrying only a
+placeholder therefore resolves **empty** — and an empty field that is not `optional`
+makes `resumeGate` re-render the gate asking the user to complete it, rather than
+advancing (`run-workflow.mjs` form-resume check). On a data-driven form of twenty-odd
+fields the result is a gate that appears to show current values and then does nothing
+when submitted, because every untouched field came back blank. An edit form sets
+`default` on **every** field. There is no step-level equivalent — a pre-filled value
+belongs on the field, never on the gate.
 
 **Data-driven field lists.** `fields` may be a `{{state_key}}` reference to an array a
 preceding `js_transform` built, exactly as `options` and `reveals` may be. That is how a

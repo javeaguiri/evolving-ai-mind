@@ -30,6 +30,8 @@ import { ok, err }                                         from '../shared/lambd
 import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
 import { callLlm }                                         from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
+import { runSimulation }                                  from './simulation-engine.mjs';
+import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -47,6 +49,10 @@ const DEFAULT_PREFERENCES = {
   name:                   'Agent',
   model:                  'anthropic/claude-sonnet-4-6',
   max_output_tokens:      8192,
+  // Wall clock for one round, sized under ProcFunction's Lambda timeout with room left for
+  // the session writes and the continue gate that follow the last turn. It is a fallback:
+  // the live value lives in minds_eye_preferences, where it can be tuned without a deploy.
+  round_budget_ms:        195_000,
   turn_limit:             8,
   max_actions_per_session:5,
   max_lifetime_turns:     100,
@@ -70,6 +76,7 @@ const INLINE_WRITE_TOOLS = new Set([
 
 // Gated write tools — post a HUMAN_GATE before executing.
 const GATED_WRITE_TOOLS = new Set([
+  'register_workflow',
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
   'create_view', 'drop_view',
 ]);
@@ -376,6 +383,81 @@ async function handleGateResume(body, callback, traceId, req) {
 // that always starts fresh). Checked both before starting a round (cheapest —
 // refuses before spending an LLM call) and after a round ends without a
 // response (so a session can't slip past it one continue-gate at a time).
+/**
+ * The notification for a round that ended on a failed reasoning turn.
+ *
+ * A failure exit skips the loop-exit block, so no continue gate is posted and the thread
+ * ends on an error with no way back in — twice the user has had to hunt an older message to
+ * resume. `format: 'markdown'` plus a `sessionId` is all the renderer needs to attach the
+ * follow-up button it already builds (`callback.mjs:437`), so the session stays reachable
+ * without a second gate type or a new mechanism. The session itself was never damaged: every
+ * completed turn is already written to PGC_SessionEntry.
+ */
+function buildFailureNotification(sessionId, traceId, llmError) {
+  return {
+    type:      'HUMAN_NOTIFICATION',
+    format:    'markdown',
+    sessionId,
+    traceId,
+    message:   `Agent reasoning failed: ${llmError.message}\n\nEverything up to this point is saved — use **Ask follow-up** to pick the session back up.`,
+  };
+}
+
+/**
+ * Whether there is room for another turn inside this round's wall-clock budget.
+ *
+ * The loop runs its turns inside ONE Lambda invocation, so `turn_limit` is not the budget
+ * that binds — wall clock is. Session 1121 spent 7s, 85s and 46s on three turns and the
+ * fourth was still running when the invocation hit its ceiling. A Lambda timeout is not an
+ * exception: nothing catches it, no notification is posted, the turn in flight writes
+ * nothing, and the SQS message was deleted on receipt so there is no retry. The round
+ * simply vanishes, which from Slack is indistinguishable from hanging.
+ *
+ * The estimate is the longest turn already seen this round, because that is the only
+ * evidence this round offers about what the next one costs. Early turns are cheap and the
+ * expensive ones cluster late, as the transcript grows — so the estimate rises exactly when
+ * caution starts to matter. It cannot be a guarantee: a turn may always exceed every turn
+ * before it. A guarantee would need the invocation's real remaining time, and PROC endpoint
+ * modules must not learn they are running on Lambda (architecture.md §3.5) — hence a
+ * configured budget rather than getRemainingTimeInMillis.
+ *
+ * With no turn observed yet the estimate is 0, so the first turn of a round always runs.
+ */
+export function roundBudgetExhausted(elapsedMs, longestTurnMs, budgetMs) {
+  if (!budgetMs) return false;
+  return elapsedMs + longestTurnMs > budgetMs;
+}
+
+/**
+ * What a failed `callLlm` gets: another try, a correction, or the end of the round.
+ *
+ * `reask` — the response was severed at the output ceiling, not malformed. Feeding the raw
+ * output back for correction is exactly wrong here: that output IS what exhausted the
+ * budget, so re-sending it guarantees a second truncation. The same question is asked
+ * again instead, with the cut-off stated, and the pacing instruction does the rest.
+ *
+ * Once only. A second truncation in a row means the notice did not land, and looping on it
+ * would spend the whole round generating responses nobody ever sees.
+ *
+ * `correct` — the content was complete but the JSON escaping was not, which the raw output
+ * is exactly what is needed to fix.
+ */
+export function classifyLlmFailure(llmError, lastTurnTruncated) {
+  if (llmError?.isTruncated)  return lastTurnTruncated ? 'fail' : 'reask';
+  if (llmError?.isParseError && llmError.rawOutput) return 'correct';
+  return 'fail';
+}
+
+// Sent in place of the cut-off response, not alongside it — the severed text is never
+// echoed back, since its length is the problem. States what happened, what survived, and
+// that the work can be split; how to split it is the pacing instruction's business.
+const TRUNCATION_NOTICE =
+  'Your previous response reached the output limit before it was finished, so none of it ' +
+  'was recorded and this is the same question again. Nothing else was lost — the ' +
+  'conversation above is intact, and only that one unfinished response is gone. Keep this ' +
+  'response short enough to complete. If what you were producing does not fit, produce the ' +
+  'part that does, say what remains, and take the rest on the next turn.';
+
 async function notifyLifetimeCeiling(session, callback, traceId, count) {
   console.warn('proc/minds-eye: session at/over lifetime turn ceiling', { sessionId: session.id, count, traceId });
   if (callback) {
@@ -400,15 +482,54 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   let seq             = currentSeq;
   let responded       = false;
   let earlyExit       = false;
+  let truncationNotice = null;            // carried into the next message when a turn was cut off
+  let lastTurnTruncated = false;
+  const roundStart   = Date.now();
+  let longestTurnMs  = 0;
+  let budgetExhausted = false;
 
   while (turnsThisRound < prefs.turn_limit) {
-    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs);
+    // Stop before starting a turn there is no room to finish. Ending here is a clean exit
+    // down the same path the turn limit uses — turnCount persisted, continue gate posted —
+    // rather than the invocation dying mid-call with nothing written.
+    if (roundBudgetExhausted(Date.now() - roundStart, longestTurnMs, prefs.round_budget_ms)) {
+      console.info('proc/minds-eye: round budget reached — ending round', {
+        sessionId:     session.id,
+        turnsThisRound,
+        elapsedMs:     Date.now() - roundStart,
+        longestTurnMs,
+        budgetMs:      prefs.round_budget_ms,
+        traceId,
+      });
+      budgetExhausted = true;
+      break;
+    }
+
+    const turnStart   = Date.now();
+    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs, truncationNotice);
+    truncationNotice  = null;
 
     let decision;
     try {
       decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
+      lastTurnTruncated = false;
     } catch (llmError) {
-      if (llmError.isParseError && llmError.rawOutput && !llmError.isTruncated) {
+      const failureAction = classifyLlmFailure(llmError, lastTurnTruncated);
+
+      if (failureAction === 'reask') {
+        console.warn('proc/minds-eye: response truncated at output ceiling — re-asking', {
+          traceId,
+          maxOutputTokens: prefs.max_output_tokens,
+        });
+        truncationNotice  = TRUNCATION_NOTICE;
+        lastTurnTruncated = true;
+        longestTurnMs   = Math.max(longestTurnMs, Date.now() - turnStart);
+        turnCount      += 1;
+        turnsThisRound += 1;
+        continue;
+      }
+
+      if (failureAction === 'correct') {
         // Generation fault: LLM produced valid content but invalid JSON escaping.
         // The correction call is a real extra LLM call — counts as its own turn.
         try {
@@ -418,24 +539,36 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           turnsThisRound += 1;
           console.info('proc/minds-eye: JSON parse corrected', { traceId });
         } catch (corrErr) {
+          // The correction's OWN failure was previously terminal — no classification, no
+          // retry — so a transport blip while repairing a recoverable parse error ended the
+          // session (`fetch failed`, session 1122 11:06:53, after two corrections in the
+          // same round had succeeded). Classify it the same way as any other failed call:
+          // a truncated correction gets re-asked, and anything else still ends the round.
+          if (classifyLlmFailure(corrErr, lastTurnTruncated) === 'reask') {
+            console.warn('proc/minds-eye: correction truncated — re-asking', { traceId });
+            truncationNotice  = TRUNCATION_NOTICE;
+            lastTurnTruncated = true;
+            longestTurnMs     = Math.max(longestTurnMs, Date.now() - turnStart);
+            turnCount      += 1;
+            turnsThisRound += 1;
+            continue;
+          }
           console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
-          if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: `Agent reasoning failed: ${llmError.message}` });
+          if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
           earlyExit = true;
           break;
         }
       } else {
         console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
-        if (callback) {
-          await enqueueCallback(callback, {
-            type:    'HUMAN_NOTIFICATION',
-            traceId,
-            message: `Agent reasoning failed: ${llmError.message}`,
-          });
-        }
+        if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
         earlyExit = true;
         break;
       }
     }
+
+    // Measured across the whole turn, correction call included — the budget check cares
+    // what a turn costs in wall clock, not how many API calls it took to get there.
+    longestTurnMs = Math.max(longestTurnMs, Date.now() - turnStart);
 
     // Every turn costs exactly 1, regardless of which tool ran or whether it
     // errored — a tool call and a direct respond are the same cost; only the
@@ -506,6 +639,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
       console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
     } else if (HOUSEKEEPING_TOOLS.has(action)) {
@@ -525,6 +659,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
       console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
 
     } else if (INLINE_WRITE_TOOLS.has(action)) {
@@ -553,9 +688,37 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
       console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
 
     } else if (GATED_WRITE_TOOLS.has(action)) {
+      // Refused before the gate, not at it — the loop continues so the next turn can
+      // correct, instead of ending the round on a decision nobody gets to make.
+      const refusal = await preGateRefusal(action, params, traceId);
+      if (refusal) {
+        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         refusalEntry,
+        });
+
+        workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+        seq += 1;
+
+        // No progress line: this is a failed attempt about to be corrected, which is the
+        // case notifyTurnProgress deliberately stays quiet about.
+        console.info('proc/minds-eye: gated write refused before gate', {
+          action,
+          sessionId: session.id,
+          issueCount: refusal.issues?.length ?? 0,
+          traceId,
+        });
+        continue;
+      }
+
       if (actionCount >= prefs.max_actions_per_session) {
         await postTurnLimitGate(session.id, callback, traceId, true);
         earlyExit = true;
@@ -580,6 +743,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
+      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
       console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
 
     } else {
@@ -597,12 +761,69 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
+    // A round that ends WITHOUT responding never persisted its turns: minds_eye_turn_count
+    // is written on respond and at the action gate, and neither happens here. So every
+    // turn-limit and budget exit was invisible to max_lifetime_turns — a session could
+    // burn turns the lifetime ceiling never counted, one continue at a time, which is the
+    // exact leak that ceiling exists to stop. Safe to write: the in-loop ceiling check
+    // breaks with earlyExit before turnCount could exceed the DB constraint.
+    await updateRows('PGC_Session',
+      [{ column: 'id', op: 'eq', value: session.id }],
+      { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+    );
+
     if (turnCount >= prefs.max_lifetime_turns) {
       await notifyLifetimeCeiling(session, callback, traceId, turnCount);
     } else {
-      await postTurnLimitGate(session.id, callback, traceId);
+      await postTurnLimitGate(session.id, callback, traceId, false, budgetExhausted);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-turn progress line
+//
+// A build runs for many turns during which the only visible tool output is a
+// gate or the final reply — from Slack it reads as silence. Every decision
+// already carries `reasoning`, which until now went only to CloudWatch, so
+// surfacing it costs no extra tokens: one notification per turn, no second
+// model call.
+//
+// Only successful turns are reported. A tool call that came back with an error
+// is an attempt the agent is about to correct, and narrating both the malformed
+// request and the corrected one describes flailing rather than progress. The
+// error still reaches the model through the tool result, which is what has to
+// act on it.
+//
+// `respond` and gated writes post nothing here — each already produces the
+// message the user is meant to read, and a progress line in front of it is noise.
+// ---------------------------------------------------------------------------
+
+export function turnSucceeded(result) {
+  if (!result || typeof result !== 'object') return true;   // no result object = nothing failed
+  if (result.error) return false;
+  if (result.success === false) return false;
+  return true;
+}
+
+async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, result }) {
+  if (!callback) return;
+  if (!turnSucceeded(result)) {
+    console.info('proc/minds-eye: turn not reported — tool returned an error', { action, turn, traceId });
+    return;
+  }
+
+  const detail = String(reasoning ?? '').trim();
+  const line   = detail
+    ? `_Turn ${turn} · \`${action}\`_ — ${detail}`
+    : `_Turn ${turn} · \`${action}\`_`;
+
+  await enqueueCallback(callback, {
+    type:    'HUMAN_NOTIFICATION',
+    format:  'markdown',
+    traceId,
+    message: line,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +835,7 @@ function gateButtonConfig(action, params = {}) {
   if (action === 'drop_table')           return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'drop_view')            return { confirmLabel: 'Drop',   confirmStyle: 'danger' };
   if (action === 'create_view')          return { confirmLabel: 'Create', confirmStyle: null };
+  if (action === 'register_workflow')    return { confirmLabel: 'Register', confirmStyle: null };
   if (action === 'propose_workflow_fix') return { confirmLabel: 'Apply',  confirmStyle: null };
   if (action === 'propose_schema_fix') {
     const isDrop = params.operation === 'dropColumn';
@@ -654,12 +876,134 @@ async function postActionGate({ session, action, params, callback, traceId, curr
 }
 
 // ---------------------------------------------------------------------------
+// PGC_IntentMap rows for a newly registered workflow — one row per phrase
+// (the Sprint 7 shape), plus the workflow's own name, since the phrase a user is
+// most likely to type is the thing the workflow is called. `source` records which
+// of the two a row came from. Pure — exported for test.
+// ---------------------------------------------------------------------------
+
+export function buildIntentMapRows(name, intentPhrases = [], workflowId = null) {
+  const seen    = new Set([name]);
+  const phrases = [{ pattern: name, source: 'name' }];
+
+  for (const raw of Array.isArray(intentPhrases) ? intentPhrases : []) {
+    if (typeof raw !== 'string') continue;
+    const pattern = raw.trim();
+    if (!pattern || seen.has(pattern)) continue;
+    seen.add(pattern);
+    phrases.push({ pattern, source: 'auto' });
+  }
+
+  return phrases.map(({ pattern, source }) => ({
+    pattern,
+    intent_category: name,
+    action_type:     'workflow',
+    workflow_id:     workflowId,
+    source,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Validation shared by the register_workflow gate and its write
+//
+// The gate tells the user whether the array validates; the write refuses if it
+// does not. Both need the same verdict, and deriving it twice is how a gate ends
+// up promising something the write then declines to do.
+// ---------------------------------------------------------------------------
+
+async function simulateForRegistration(steps, traceId) {
+  const result = runSimulation({
+    steps,
+    mockOutputs:       null,
+    simulationPaths:   null,
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    traceId,
+  });
+  return {
+    passed:        result.passed,
+    error_summary: result.error_summary,
+    // Every level that can fail the verdict contributes its issues. The smoke test was
+    // missing, so a run whose ONLY failure was L2b reported `issues: []` — the narrative
+    // in error_summary carried the defect while the structured field said there wasn't
+    // one. Seen live: session 1121 at 10:12:13, routing matrix green, smoke test red,
+    // issueCount 0.
+    issues: [
+      ...(result.shape_analysis?.issues  ?? []),
+      ...(result.static_analysis?.issues ?? []),
+      ...(result.routing_matrix?.issues  ?? []),
+      ...(result.smoke_test?.issues      ?? []),
+    ],
+  };
+}
+
+/**
+ * A refusal that is already decided does not need a human to confirm it.
+ *
+ * `register_workflow` re-runs the same simulation at execution and refuses anything that
+ * fails, so a failing array can only ever produce one outcome. Posting the gate anyway
+ * asked the user to approve something guaranteed to fail — and, because a gate ends the
+ * round, it stopped Novia on a defect she could have corrected on the very next turn
+ * (session 1121: 23 steps, every one missing its `step` key, sent for approval).
+ *
+ * Returning the issues as a tool result instead keeps the loop running and hands her the
+ * same list the executor would have. The gate stays what it is for: deciding whether a
+ * *valid* workflow should exist.
+ *
+ * Returns null when there is nothing decided yet — including for shape errors the executor
+ * reports better than a simulation would, and for every other gated write, whose outcome
+ * genuinely is the human's to determine.
+ */
+async function preGateRefusal(action, params, traceId) {
+  if (action !== 'register_workflow') return null;
+  const steps = params?.steps;
+  if (!Array.isArray(steps) || steps.length === 0) return null;
+
+  const sim = await simulateForRegistration(steps, traceId);
+  if (sim.passed) return null;
+
+  return {
+    error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
+    validation: sim.error_summary,
+    issues:     sim.issues,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Build human-readable gate text for gated write tools
 // ---------------------------------------------------------------------------
 
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
+
+      case 'register_workflow': {
+        const { name, domain = null, description = '', steps = [], intentPhrases = [], intentKeywords = null } = params;
+
+        // The gate is where a human decides whether this workflow should exist. What
+        // makes that decision possible is not the step JSON — it is whether the array
+        // validates and what the workflow will answer to. Both go in the message.
+        const sim = await simulateForRegistration(steps, traceId);
+
+        const lines = [
+          `**Register workflow: \`${name}\`**`,
+          domain ? `Domain: \`${domain}\`` : 'Domain: _(none — standalone workflow)_',
+          `${steps.length} steps`,
+          '',
+          description ? `${description}\n` : '',
+          sim.passed
+            ? `Validation: **passed** (L0 shape, L1 static, L2 routing + data flow)`
+            : `Validation: **FAILED** — registration will be refused:\n${sim.error_summary}`,
+          '',
+          intentPhrases.length
+            ? `Invoked by: ${intentPhrases.map(p => `\`${p}\``).join(', ')}`
+            : '_No invocation phrases supplied — the workflow will only be reachable by its exact name._',
+          intentKeywords?.length
+            ? `Routing keywords: ${intentKeywords.map(k => `\`${k}\``).join(', ')}`
+            : '_No intent_keywords — Pass 2 keyword routing will not match this workflow._',
+        ].filter(l => l !== '');
+
+        return lines.join('\n');
+      }
 
       case 'propose_workflow_fix': {
         const { workflowName, steps: proposedSteps = [] } = params;
@@ -853,6 +1197,67 @@ async function executeWriteTool(action, params, traceId) {
         return { success: resp.success, scope };
       }
 
+      case 'register_workflow': {
+        const { name, domain = null, description = '', steps, intentPhrases = [], intentKeywords = null } = params;
+        if (!name || !Array.isArray(steps) || steps.length === 0) {
+          return { error: 'name and a non-empty steps array are required' };
+        }
+
+        // Registration creates a workflow; changing one is propose_workflow_fix. Keeping
+        // them separate means neither tool can silently do the other's job — a name
+        // collision here is a mistake to report, not an update to perform.
+        const existing = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: name }], null, 1);
+        if (existing.rows?.length > 0) {
+          return {
+            error: `A workflow named "${name}" already exists (id ${existing.rows[0].id}, v${existing.rows[0].version}). ` +
+                   'Use propose_workflow_fix to change it, or register under a different name.',
+          };
+        }
+
+        // The pre-write guard. dev_scripts/upsert-workflow.mjs refuses to ship a seed
+        // that fails validation; a workflow arriving from a conversation gets the same
+        // gate. An approved-but-broken registration is worse than a refused one: it is
+        // discovered by a user running it.
+        const sim = await simulateForRegistration(steps, traceId);
+        if (!sim.passed) {
+          return {
+            error: 'Workflow failed validation — not registered.',
+            validation: sim.error_summary,
+            issues: sim.issues,
+          };
+        }
+
+        const wfResp = await insertRow('PGC_Workflow', {
+          name,
+          domain,
+          description,
+          steps,
+          version: 1,
+          state_strategy: 'sequential_with_confirmation',
+          intent_keywords: intentKeywords,
+        });
+        if (!wfResp.success) return { error: `PGC_Workflow insert failed: ${wfResp.error}` };
+
+        const workflowId = wfResp.row?.id ?? wfResp.rows?.[0]?.id ?? null;
+
+        const intentRows = buildIntentMapRows(name, intentPhrases, workflowId);
+        const imResp     = await insertRows('PGC_IntentMap', intentRows);
+
+        return {
+          success:            wfResp.success,
+          workflow_id:        workflowId,
+          name,
+          domain,
+          version:            1,
+          step_count:         steps.length,
+          intent_rows_written: imResp.success ? intentRows.length : 0,
+          // A failed intent map write leaves a registered workflow that routing cannot
+          // reach by phrase. Reported rather than swallowed, so the next turn can fix it.
+          intent_map_error:   imResp.success ? null : imResp.error,
+          validation:         'passed',
+        };
+      }
+
       case 'propose_workflow_fix': {
         const { workflowName, steps } = params;
         if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
@@ -992,13 +1397,15 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
 // Derive memory scope from session tool call history (pure — no I/O)
 // ---------------------------------------------------------------------------
 
-function deriveScope(workingHistory) {
+export function deriveScope(workingHistory) {
   const scope = {};
   for (const entry of workingHistory) {
     if (entry.role !== 'tool') continue;
     let parsed;
     try { parsed = JSON.parse(entry.content); } catch { continue; }
     const { tool, params = {}, result = {} } = parsed;
+    if (tool === 'register_workflow'    && params.name)                   scope.workflow = params.name;
+    if (tool === 'register_workflow'    && params.domain)                 scope.domain   = params.domain;
     if (tool === 'propose_workflow_fix' && params.workflowName)           scope.workflow = params.workflowName;
     if (tool === 'read_workflow'         && params.workflowName && !scope.workflow) scope.workflow = params.workflowName;
     if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
@@ -1036,6 +1443,15 @@ async function writeFactualMemory(action, params, result, sessionId, traceId) {
         ? ` (step count changed: ${result.stepCountBefore} → ${result.stepCountAfter})`
         : '';
       content = `Session ${sessionId}: fixed ${workflowName} v${(result.newVersion ?? 1) - 1}→v${result.newVersion ?? '?'}. ${diffSummary}${countNote}. Outcome: ${result.success ? 'success' : 'failed'}.`;
+
+    } else if (action === 'register_workflow') {
+      const { name, domain = null } = params;
+      scope   = domain ? { workflow: name, domain } : { workflow: name };
+      content = `Session ${sessionId}: registered workflow ${name}` +
+                `${domain ? ` in domain ${domain}` : ' (standalone)'} — ` +
+                `${result.step_count ?? '?'} steps, ${result.intent_rows_written ?? 0} intent phrase(s). ` +
+                `Outcome: ${result.success ? 'success' : 'failed'}` +
+                `${result.intent_map_error ? `; intent map write failed: ${result.intent_map_error}` : ''}.`;
 
     } else if (action === 'propose_schema_fix') {
       const { operation, tableName } = params;
@@ -1119,14 +1535,47 @@ async function assembleContext() {
 // Build the user-facing LLM input: context blocks + conversation transcript
 // ---------------------------------------------------------------------------
 
-function buildUserMessage(layer1Context, layer2Context, history, prefs) {
+/**
+ * Which history entry holds the step array currently being worked on.
+ *
+ * Tool entries are recorded with their `params`, so every array Novia has submitted is
+ * already persisted — but the transcript renders only `result`, so she has been reading
+ * verdicts about arrays she cannot see, naming step keys absent from her context. With no
+ * copy of her own work in front of her she rebuilds all of it from reasoning each turn,
+ * which is why session 1121 drifted 19 → 21 → 23 steps and why `step_label` returned two
+ * turns after she had corrected it.
+ *
+ * One array is rendered, never all of them: the latest is the draft, and the earlier ones
+ * are the same workflow in a worse state. `sequence_number` already orders them, so the
+ * newest submission IS the current version — no version column, no separate draft store.
+ *
+ * `__pending__` and `__cancelled__` are skipped. A pending entry carries a copy of the
+ * array too, but it is awaiting a human decision rather than a correction, and treating it
+ * as the draft would mark the last correctable array superseded.
+ */
+export function latestDraftIndex(history) {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.role !== 'tool') continue;
+    try {
+      const parsed = JSON.parse(entry.content);
+      if (parsed?.tool === '__pending__' || parsed?.tool === '__cancelled__') continue;
+      if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) return i;
+    } catch { /* not a readable tool entry */ }
+  }
+  return -1;
+}
+
+export function buildUserMessage(layer1Context, layer2Context, history, prefs, notice) {
   const parts = [];
 
   parts.push(layer1Context);
   if (layer2Context) parts.push(layer2Context);
 
   if (history.length > 0) {
-    const transcript = history.map(e => {
+    const draftIndex = latestDraftIndex(history);
+
+    const transcript = history.map((e, i) => {
       if (e.role === 'user')      return `User: ${e.content}`;
       if (e.role === 'assistant') {
         try {
@@ -1139,7 +1588,20 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
           const parsed = JSON.parse(e.content);
           if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
           if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
-          return `Tool (${parsed.tool}): ${JSON.stringify(parsed.result).slice(0, 15000)}`;
+
+          const result = JSON.stringify(parsed.result).slice(0, 15000);
+
+          // A submitted step array is shown once, on the newest submission, because that
+          // is the draft; the same array in an older state is not worth its tokens and is
+          // reduced to the verdict it earned. Not truncated when it is shown — half a step
+          // array is not a thing anyone can correct.
+          if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) {
+            return i === draftIndex
+              ? `Tool (${parsed.tool}) — CURRENT DRAFT, ${parsed.params.steps.length} steps. This is the array you last submitted; correct THIS array rather than composing a new one from scratch.\nSubmitted steps: ${JSON.stringify(parsed.params.steps)}\nResult: ${result}`
+              : `Tool (${parsed.tool}): submitted ${parsed.params.steps.length} steps, since superseded. Result: ${result}`;
+          }
+
+          return `Tool (${parsed.tool}): ${result}`;
         } catch { return `Tool: ${e.content.slice(0, 15000)}`; }
       }
       return '';
@@ -1158,6 +1620,9 @@ function buildUserMessage(layer1Context, layer2Context, history, prefs) {
     'Based on the context and conversation above, decide your next action. ' +
     'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
   );
+
+  // Last, so it is the nearest instruction to the response it constrains.
+  if (notice) parts.push(notice);
 
   return parts.join('\n\n---\n\n');
 }
@@ -1232,10 +1697,10 @@ async function executeReadTool(action, params, traceId) {
       }
 
       case 'simulate_workflow': {
-        const { steps } = params;
+        const { steps, level } = params;
         if (!steps) return { error: 'steps is required' };
         const { servPost } = await import('../shared/serv-client.mjs');
-        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps });
+        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps, ...(level !== undefined ? { level } : {}) });
         return resp;
       }
 
@@ -1296,7 +1761,7 @@ async function executeReadTool(action, params, traceId) {
 // Post a turn-limit notification
 // ---------------------------------------------------------------------------
 
-async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false) {
+async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount = false, budgetExhausted = false) {
   if (!callback) return;
   await enqueueCallback(callback, {
     type:             'HUMAN_GATE',
@@ -1304,5 +1769,9 @@ async function postTurnLimitGate(sessionId, callback, traceId, resetActionCount 
     sessionId,
     traceId,
     resetActionCount,
+    // Which limit was hit. The gate is identical either way — only what the user is told
+    // differs, and a round that stopped on time reads very differently from one that ran
+    // out of turns: it means nothing is wrong and continuing costs nothing but a click.
+    budgetExhausted,
   });
 }

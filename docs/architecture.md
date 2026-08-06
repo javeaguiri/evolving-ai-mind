@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.7
-Status: Active development — Sprint 8 closed; Sprint 9 upcoming
-Last updated: 2026-07-25 (Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts)
+Version: 3.8
+Status: Active development — Sprint 9 closed; Sprint 10 upcoming
+Last updated: 2026-08-06 (Sprint 9 close — Novia builds workflows: step-type-registry.mjs added; L0 shape check as a `level` selector on runSimulation, replacing the `skeleton` flag; register_workflow gated write tool; option_source on the human_gate contract with static/dynamic render bounds in callback.mjs; L1 numeric-index check and a template walk that descends the whole step input)
+Previously: 3.7 — 2026-07-25 — Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts
 Previously: 3.6 — 2026-06-29 — Sprint 6 close (Sprint 7 close did not bump this header); Track P; Expenses/Recipe domains; reveal/reveals; SHUTDOWN SQS; RecursiveLoop: Allow; listPhysicalTables + dropConstraint
 Previously: 3.5 — 2026-06-18 — Sprint 5 close; Novia Phase 1; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live
 
@@ -48,9 +49,10 @@ For authoritative detail follow the section references in each row.
 | `src/proc/replay-corpus.mjs` | PROC | Replay corpus read — looks up a recorded response by `fingerprint_hash` (source-run-first, then global) and classifies drift (hit/soft/hard/miss); `decideReplayAction` maps break policy × lookup status → call/serve/break. SERV reads only. Imported by `llm-harness` (the serve/break decision) and `replay.mjs` (break report). See `docs/arch-replay.md` §3-§8 | Changes affect which recordings a replay serves and when it breaks |
 | `src/proc/replay.mjs` | PROC | Replay harness endpoints — `POST /proc/replay` (start/record, a fourth run-entry point), `GET /proc/replay/{runId}` (status + break report), `POST /proc/replay/{runId}/resume` (write resolution → `resume_llm`). Also the `REPLAY` (start/list) and `REPLAY_RESUME` (payload-free break resolution, A11) SQS handlers. HTTP-dispatched by proxy segments. See `docs/arch-replay.md` §9 | Changes affect how replays are started and resumed |
 | `src/ui/slackbot/replay.mjs` | EXP | `/replay` Slack command → `REPLAY` SQS enqueue (list, replay, or record). Posts the thread the break notifications reply under | Changes affect the Slack entry to the replay harness |
-| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
+| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. `register_workflow` (gated) writes `PGC_Workflow` + `PGC_IntentMap`, refusing any step array that fails simulation. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
-| `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
+| `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. L0 shape (composed from `PGC_StepType.input_contract`, never hand-authored) / L1 static / L2 routing + data-flow, selected by `level`. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
+| `src/proc/step-type-registry.mjs` | PROC | `loadStepTypeContracts` — the single read of `PGC_StepType` on behalf of validation, for L0's four consumers. Deliberately not shared with `llm-harness.mjs`'s own read of the same table, which is column-scoped and ordered because the assembled request is fingerprinted for the replay corpus | Changes affect what L0 enforces everywhere at once; returns null (never `[]`) on a failed read so L0 reports not-run rather than rejecting every step type |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
 | `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
@@ -348,7 +350,8 @@ src/
     step-executor.mjs  Step type dispatch (one case per type, no workflow-specific logic)
     classify-intent.mjs  Intent pipeline entry
     classify-intent-tiers.mjs  Pure classification functions — unit-testable, no I/O
-    simulation-engine.mjs  Pure L1/L2 simulator — no I/O, imported by step-executor + dev_scripts
+    simulation-engine.mjs  Pure L0/L1/L2 simulator — no I/O, imported by step-executor + dev_scripts
+    step-type-registry.mjs loadStepTypeContracts — the one PGC_StepType read that feeds L0
     llm-harness.mjs    LLM call assembly + memory injection
     fingerprint.mjs    Pure request fingerprint for the replay harness (arch-replay.md §3)
     replay-corpus.mjs  Replay corpus lookup + drift classification (arch-replay.md §3-§8)
