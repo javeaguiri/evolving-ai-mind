@@ -1,7 +1,8 @@
 # Sprint 9 — Novia Builds Workflows
 
 **Status: IN PROGRESS. Scoped and branched 2026-07-29 — `sprint/09-novia-builds-workflows`.**
-Track A complete (A1–A4 ✅) as of 2026-07-30. Track B is the next work.
+Tracks A (A1–A4 ✅), B (code items ✅) and C (C1–C3 ✅) are done. Six of nine ACs met.
+**Track D is deferred to Sprint 10 (2026-08-06)** — see AC8. A5 added to scope in its place.
 
 > Read before implementing: `docs/sprints/sprint-08.md` §RETRO, and `docs/arch-minds-eye.md`
 > §12 (the dissolution proposal) — specifically §12.7 for what is settled and what is open.
@@ -50,7 +51,7 @@ would commit to a shape before there is any evidence she needs one.
 | **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. | ◐ **BUILD HALF MET** — `edit_budget` (id 357, 25 steps) designed in conversation across sessions 1121/1122, simulated to a clean L0+L1+L2 pass, and registered via `register_workflow`. No `create_workflow` at any point. **The runtime half did not come free**: the generated workflow needed repairs before a run completed, and those were made outside the Novia path. Counting this as met would be counting the build and ignoring the AC's second clause. |
 | **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. | ⬜ **NOT MET — and the budget that binds was the wrong one.** Turns 12, actions 8, output 10240 are all raised, but the round runs inside one 240s Lambda and each turn costs 7–100s, so it dies at turn 3–4 and `turn_limit: 12` is unreachable. The timeout is silent: no notification, no session write, no retry. Compression cannot be exercised until a round can reach the gate. See backlog. |
 | **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. | ✅ **MET** — both gates confirmed live 2026-08-04 from the same deployed renderer: six static grades inline as buttons, the `iterator`-backed period set still collapsed to a dropdown. The two together are what a threshold bump cannot produce, so this verifies the contract read rather than the number. No workflow edit needed. |
-| **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. | ⬜ Not started. |
+| **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. | ⬜ **DEFERRED TO SPRINT 10.** Not descoped for time — running it now cannot answer it. Session 1122 was an AC8-shaped session: it cost $3.40, did not complete the repair, and two of its failures were transcript-driven rather than reasoning-driven. A round that dies from a 54k-token transcript or the 240s Lambda ceiling measures the harness, not Novia's Generation-domain scope — and a *failed* AC8 under those conditions would read as a capability finding when it is a harness finding. Runs after the prefix-cache fix, as that fix's live validation. See Session 8. |
 | **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. | ✅ **MEASURED, and it does not favour the Novia path yet.** **$2.73** to build and register (session 1121, 26 calls) — roughly **2× the $1.42 baseline** — plus **$3.40** for the repair session (1122) that followed. ~$0.39 of the build was lost to harness defects since fixed, so a clean rebuild would be cheaper; the dominant structural cost is re-emitting the step array every turn, which is a known fix, not a mystery. See Session 6. |
 
 ---
@@ -118,6 +119,20 @@ whether conventions alone are enough.
   therefore an archetype candidate), `stale` (wrong against the code). 8 / 11 / 6 rows.
   Five of the eleven oversteps are loop and save-and-continue topology across four rows — one
   procedure stated five times in four places. Reopen if a real build needs a cut rule.
+- **A5** — **Added to scope 2026-08-06.** `run_sql` gives Novia no route to physical table
+  names. Seven of ~12 `run_sql` calls in session 1122 failed on identifiers, and roughly
+  **$1.50 of that session's $3.40** went on discovering them. Two statements close it: use
+  `list_physical_tables` before writing raw SQL, and double-quote the CamelCase identifiers
+  (unquoted, Postgres folds `PGC_WorkflowRunStep` to lowercase → relation does not exist),
+  which is the single most common failure in that set.
+  **This is Track A's premise, not a new one** — a convention Novia cannot derive, stated once
+  as data rather than transcribed or guessed. It is a discoverability gap, not a capability
+  one: the same session shows `run_sql` working well once the names are right.
+  **Pulled into Sprint 9 ahead of the deferred Track D**, because it is data with no deploy
+  risk and it removes ~44% of the cost of exactly the session shape AC8 will be.
+  **Placement is the open call.** The B3 precedent puts operating protocol in
+  `minds_eye_system_prompt` rather than the bridge, which is scoped to step arrays — but A1
+  established that prompt stays concise, and this is two lines. Proposal: system prompt.
 
 ### Track B — Novia builds a workflow
 
@@ -237,6 +252,17 @@ size, so the renderer counted. Full diagnosis: `arch-minds-eye.md` §12.8.
 Three live defects with known-correct answers, which makes them the cleanest possible test of
 Novia's Generation-domain scope. Found while writing §12.11 / §12.12.
 
+**D1–D3 deferred to Sprint 10 (2026-08-06).** These are live Slack rounds driven through Novia,
+and the two harness defects that wreck such a round are both known and both unfixed: the
+transcript prefix-cache invalidation (Sprint 10) and the 240s round budget (AC6). Diagnosis is
+the worst-case shape for the first — read-heavy and multi-turn, so the transcript grows fastest
+exactly where the cost curve is steepest. Deferring is what keeps the result *readable*: run
+after the fix and the round doubles as that fix's live validation, since `cache_read` climbing
+past 4041 while `cache_creation` flattens is visible in the same usage logs that answer AC8.
+
+**D4 is not deferred** — it is a pure `simulation-engine.mjs` addition with unit tests, needs no
+live round, and is blocked by nothing. Available for Sprint 9 at any point.
+
 - **D1** — `edit_budget` step 5 returns zero rows on every run. `selected_period` is the string
   `"2026-07"` and the step filters on `{{selected_period.0}}` / `.1`; `resolvePath`
   (`template-resolver.mjs:63`) applies a numeric key to a non-array by falling through to
@@ -257,10 +283,10 @@ Novia's Generation-domain scope. Found while writing §12.11 / §12.12.
 
 | Track | ACs |
 |---|---|
-| A | AC1, AC2 |
+| A | AC1, AC2 (A5 carries no AC — scope added 2026-08-06) |
 | B | AC3, AC4, AC5, AC6, AC9 |
 | C | AC7 |
-| D | AC8 |
+| D | AC8 — deferred to Sprint 10 with D1–D3; D4 remains available |
 
 ---
 
@@ -274,7 +300,8 @@ All workflow runs are triggered **by the user from Slack** — never by curl.
    surviving shapes. Watch for: does she query the registries, or invent? Does she ask a question
    whose answer changes the design, or ask nothing?
 3. **Repair** — hand Novia `edit_budget` and the symptom ("the form always shows zeros"), not the
-   diagnosis. Does she reach step 5?
+   diagnosis. Does she reach step 5? **Deferred to Sprint 10** — run it after the prefix-cache
+   fix, so the round validates that fix as well as answering AC8.
 4. **Budget exhaustion** — a build that hits the turn limit, to exercise compression (AC6).
 
 ---
@@ -571,3 +598,39 @@ any review. Needs the user's call, not a guess.
 **Next:** AC8 / Track D (hand Novia `edit_budget` with the symptom only) and AC6 are the two
 unstarted ACs. Sprint 10 carries two items diagnosed but not built: the transcript prefix-cache
 fix and the `create_domain` derived-column gap.
+
+### Session 8 — 2026-08-06 — Track D deferred; A5 added in its place
+
+**AC8 moves to Sprint 10. The reason is measurement validity, not time.** Session 1122 was
+already an AC8-shaped session — a repair round, not a build — and it cost $3.40 without
+completing the repair, with two of its failures transcript-driven rather than reasoning-driven.
+AC8 asks exactly one question: can Novia reach step 5 unaided, inside the Generation fault
+domain? A round that dies from a 54k-token transcript or the 240s Lambda ceiling does not answer
+it; it re-answers a question already answered in Session 6. The asymmetric risk is a *failed*
+AC8 under those conditions, which would be recorded as a capability finding when it is a harness
+finding — and capability findings are what the §12.7 dissolution decision is gated on.
+
+Diagnosis is also the worst-case shape for the defect being deferred: read-heavy and multi-turn,
+so the transcript grows fastest exactly where the cost curve is steepest.
+
+**The deferral buys a second result rather than only postponing the first.** The prefix-cache fix
+was itself deferred *because* it needs a live Slack round to validate, and AC8 is a live Slack
+round. Run in that order, one session yields both: `cache_read` climbing past its pinned 4041
+while `cache_creation` flattens is visible in the same usage logs that answer AC8.
+
+**A5 added to Sprint 9 scope** — the `run_sql` physical-table-name gap. It was not the item under
+discussion but it is the other half of why 1122 went badly: seven of ~12 `run_sql` calls failed on
+identifiers, roughly $1.50 of the $3.40. Two statements close it (use `list_physical_tables`
+first; double-quote CamelCase identifiers), both `PGC_SystemContext`/prompt content, no deploy
+risk. Filed under Track A because it is that track's premise — a convention Novia cannot derive,
+stated once as data. Placement between `minds_eye_system_prompt` and the bridge is the open call;
+the B3 precedent says operating protocol goes in the prompt.
+
+**D4 explicitly not deferred.** It is a pure `simulation-engine.mjs` addition with unit tests,
+needs no live round, and is blocked by nothing.
+
+**Sprint 9 will close at six of nine ACs** — AC5 half met, AC6 not met, AC8 deferred. That is an
+honest close: the sprint's finding is already banked, and AC8 extends it rather than changing it.
+
+**Next:** A5 (data, no live round needed), and D4 if wanted. Both are unblocked and can land in
+Sprint 9 without a Slack session.
