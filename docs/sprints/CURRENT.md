@@ -298,6 +298,62 @@ All workflow runs and all Novia sessions are triggered **by the user from Slack*
 
 ---
 
+## 2C starting kit — everything needed to begin, verified 2026-08-06
+
+Branch `sprint/10-viability-checkpoints` is cut from main and pushed. Start here; nothing below
+needs re-deriving.
+
+### The three changes, at their current line numbers
+
+| # | Site | Current state | Change |
+|---|---|---|---|
+| **(i)** | `minds-eye.mjs:1518` — `assembleContext` | `getRows('PGC_Memory', [], { column: 'priority', direction: 'desc' }, 5)` — no tiebreaker | Add a deterministic secondary key (`id`). **See the blocker below — this is not a one-liner.** |
+| **(ii)** | `minds-eye.mjs:1569` — `buildUserMessage` | `parts.push(layer1Context)` `:1572`, layer2 `:1573`, transcript `:1610`, standing instruction `:1619`, notice `:1625`; joined `\n\n---\n\n` at `:1627` | Transcript **first** (it is the append-only part), then the context blocks, then the instruction, then the notice. Turn N's input becomes turn N−1's plus an append. |
+| **(iii)** | `minds-eye.mjs:1598-1602` — draft supersession | Rewrites an earlier entry's rendering when a newer array is submitted | Stop rewriting in place. **Lowest priority** — it invalidates only from that entry onward, on submit turns, where (i) and (ii) invalidate everything on every turn. |
+
+### Blocker found while verifying — (i) needs a SERV change first
+
+**SERV supports no secondary sort key at all.** `normalizeOrderBy` (`table.mjs:846`) returns a
+single `{ column, direction }`, and `table.mjs:138` validates exactly one column name.
+
+The string form is a **silent trap**: `"priority DESC, id ASC"` splits on whitespace to
+`column: "priority"`, `direction: "desc,"` — which fails the `=== 'desc'` test at `:852` and
+falls back to **ascending**. It would not error; it would quietly invert the sort and return the
+five *lowest*-priority memories.
+
+So (i) is two changes, not one: extend `normalizeOrderBy` and the `orderBy` validation to accept
+a composite sort, then use it. **Fault domain: Execution** — a multi-column `ORDER BY` is
+standard SQL, which is the extend-not-prompt case exactly. Check `getRows`
+(`serv-client.mjs:85`) and `serv_query` (`step-executor.mjs:807`) for pass-through, and whether
+`orderBy` appears in any fingerprint component before changing its shape.
+
+### The load-bearing fact, re-verified live today
+
+`PGC_Memory` holds **100 rows**: `{ priority 2: 10, priority 3: 36, priority 5: 19, priority 8: 35 }`.
+**35 rows tie at priority 8**, and `LIMIT 5` draws five of those 35 with no tiebreaker — Postgres
+guarantees no stable order for ties, so which five return, and in what order, can differ between
+identical queries. That block sits near byte zero of `input`, so a reshuffle invalidates the whole
+transcript behind it.
+
+### Riding the same deploy
+
+**A5** — `run_sql` table-name guidance into `minds_eye_system_prompt`
+(`src/serv/templates/pgc/seeds/seed_PGC_Prompt.json`, then `upsert-prompt.mjs`). Two statements:
+use `list_physical_tables` before writing raw SQL, and double-quote CamelCase identifiers
+(unquoted, Postgres folds `PGC_WorkflowRunStep` to lowercase → relation does not exist).
+
+### How it gets validated
+
+Deploy (`sam build && sam deploy --no-confirm-changeset`, then the seed upsert), then **one live
+Novia round from Slack — the user runs it.** Read the usage logs: `cache_read` should climb past
+its pinned 4041 while `cache_creation` flattens. That single round closes **AC1 and AC2**, and
+sets up **AC4**. Expected ~12× cut on the creation component; AC1's threshold is ≥ 5×.
+
+No test environment, so this validates against prod — the accepted consequence of the Out of
+Scope decision above.
+
+---
+
 ## Session Notes
 
 ### Session 1 — 2026-08-06 — Scope
