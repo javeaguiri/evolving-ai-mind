@@ -160,10 +160,28 @@ Catches structural errors in the step array itself:
 | No `output_key` is set on a `review_object` or `confirm` gate | Gate type does not write output |
 | Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
 | `output_key` (step-level or option-level) is a string, not another type | Malformed output_key |
+| No `{{key.0}}` positional index on a key whose every writer produces a single value | Numeric index on non-array |
 
 Required-field presence was checked here, from a hand-written map of five step types.
 It is a shape assertion, so it moved to Level 0 where it is composed from the registry
 and covers all nineteen.
+
+**The template walk descends the whole `input`, at any depth.** A token is as live inside
+`input.filters[0].value` as at `input.tableName`; taking only the top-level string values
+left every nested one unchecked by both template rules above.
+
+**Numeric indexing is checked in one direction only.** `resolvePath` special-cases a numeric
+key when the current value is an array and otherwise falls through to `cur[key]`, so
+`{{period.0}}` against the string `"2026-07"` silently yields `"2"`. Level 1 tracks which
+keys have *only* non-array writers — a `human_gate`'s `output_key` (every gate write path
+produces one picked value, one typed string, or a form's field map), its `action_key`, and
+an option-level `output_key` — and flags a positional index on those. Array-ness is never
+proven: a `js_transform` returns any shape, and an `llm_call`'s schema lives in `PGC_Prompt`
+rather than on the step, so both stay unknown and unflagged. A key written by more than one
+step is unknown unless every writer is a non-array producer. Since any Level 1 issue fails
+the whole simulation — and so refuses a `register_workflow` write — a false positive here
+costs more than a miss. Only the segment directly after the base key is checked; deeper ones
+sit on values this pass knows nothing about.
 
 Level 1 failures are returned immediately — no Level 2 checks run.
 
