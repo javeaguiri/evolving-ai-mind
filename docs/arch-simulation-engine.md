@@ -18,7 +18,7 @@ It is consumer-agnostic — four independent call sites use it, none of which ow
 |---|---|
 | `create_workflow` / `fix_workflow` | The `simulate` step type (`step-executor.mjs`'s `executeSimulate`) — a workflow step that dry-runs another workflow's generated step array as part of the authoring flow. See `docs/arch-step-processor.md` §6.5.6 and `docs/arch-create-workflow.md`. |
 | Novia (`minds-eye.mjs`) | The `simulate_workflow` tool calls the standalone HTTP endpoint (below) directly — no `WorkflowRun` involved. See `docs/arch-minds-eye.md`. |
-| `dev_scripts/upsert-workflow.mjs` | Runs Level 1 static analysis on every seed workflow before writing it to `PGC_Workflow`, as a pre-write guard against shipping a structurally broken seed. |
+| `dev_scripts/upsert-workflow.mjs` | Runs Level 0 + Level 1 on every seed workflow before writing it to `PGC_Workflow`, as a pre-write guard against shipping a structurally broken seed. Aborts if `PGC_StepType` cannot be read, rather than dropping to Level 1 silently. |
 | `troubleshoot-workflow.mjs` | Runs simulation against a registered workflow's current step array to diagnose reported failures. |
 
 ## Why simulation is not optional for `create_workflow`
@@ -100,11 +100,51 @@ for the `generate_workflow_paths` prompt enforces this minimum coverage.
 
 ## What the simulator validates
 
-`runSimulation` combines four independent checks. **`result.passed` is determined
-by Level 1 + Level 2a + Level 2b only.** Level 2c (legacy path execution) still runs
+`runSimulation` combines five independent checks. **`result.passed` is determined
+by Level 0 + Level 1 + Level 2a + Level 2b.** Level 2c (legacy path execution) still runs
 when `simulation_paths` is supplied and its results are returned for diagnostic
 display, but does not gate `passed` — see the note on each level below. Checks run
 in order; a level only runs if the previous one passed.
+
+The `level` parameter (0, 1 or 2 — default 2) stops the run at a chosen depth. It
+replaced the `skeleton: true` flag, which switched four content checks off inside
+Level 1 so a routing sketch could be validated: the question that flag was reaching
+for is what Level 0 asks directly. `input.skeleton: true` on a `simulate` step is
+still accepted and means `level: 0`.
+
+**Level 0 — Shape (`runLevel0ShapeCheck`) — is each element a step of the type it claims?**
+
+Level 1 asks whether a step array is a coherent program. Level 0 asks the question
+below that: does each element carry the fields its step type requires. It is
+answerable on a sketch, which is why it is the level a content-free routing topology
+is validated at.
+
+| Check | Failure class |
+|---|---|
+| `type` names a live row in `PGC_StepType` | `unknown_step_type` |
+| Every field the type's `input_contract` marks `required` is present and non-empty | `missing_required_field` |
+
+Every assertion is **composed from `PGC_StepType.input_contract` and none is written
+in the engine**. The contract's `field` names already encode placement —
+`input.tableName` sits under the step's `input` object, `gate_type` at the step root —
+so a required field is a dot path resolved against the step. Adding a step type, or
+making one of its fields required, changes what Level 0 enforces with no code change.
+It replaced a hand-written map covering five of the nineteen step types.
+
+Two structural rules qualify it, both stated once rather than as per-type exceptions:
+
+- An iterator's `item_step` is held to the same contract, reported against its
+  parent's key (`"6.item_step"`).
+- `output_key` is not required *in* an `item_step`: the iterator collects each item's
+  return value and writes that array to its own `output_key` on the parent frame, so
+  an item's own `output_key` is never read.
+
+The contracts are **passed in, never fetched** — the engine is pure.
+`src/proc/step-type-registry.mjs` is the single reader on behalf of validation, used
+by all four consumers. When contracts are absent Level 0 returns `ran: false` rather
+than passing, and a `level: 0` request that supplied none is an error: a validator
+that silently no-ops when its input is missing reads as a pass, which is the failure
+mode that produced the Sprint 7 schema-registry defect.
 
 **Level 1 — Static analysis (`runLevel1StaticAnalysis`) — no execution, no mocks needed**
 
@@ -119,8 +159,29 @@ Catches structural errors in the step array itself:
 | Every `input.prompt` in an `llm_call` names an `intent_category` in `PGC_Prompt` | Unknown prompt reference |
 | No `output_key` is set on a `review_object` or `confirm` gate | Gate type does not write output |
 | Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
-| Required `input.*` fields present for each `serv_*` type (e.g. `serv_upsert` needs `tableName`, `matchColumns`, `rows`) | Serv step missing required input |
 | `output_key` (step-level or option-level) is a string, not another type | Malformed output_key |
+| No `{{key.0}}` positional index on a key whose every writer produces a single value | Numeric index on non-array |
+
+Required-field presence was checked here, from a hand-written map of five step types.
+It is a shape assertion, so it moved to Level 0 where it is composed from the registry
+and covers all nineteen.
+
+**The template walk descends the whole `input`, at any depth.** A token is as live inside
+`input.filters[0].value` as at `input.tableName`; taking only the top-level string values
+left every nested one unchecked by both template rules above.
+
+**Numeric indexing is checked in one direction only.** `resolvePath` special-cases a numeric
+key when the current value is an array and otherwise falls through to `cur[key]`, so
+`{{period.0}}` against the string `"2026-07"` silently yields `"2"`. Level 1 tracks which
+keys have *only* non-array writers — a `human_gate`'s `output_key` (every gate write path
+produces one picked value, one typed string, or a form's field map), its `action_key`, and
+an option-level `output_key` — and flags a positional index on those. Array-ness is never
+proven: a `js_transform` returns any shape, and an `llm_call`'s schema lives in `PGC_Prompt`
+rather than on the step, so both stay unknown and unflagged. A key written by more than one
+step is unknown unless every writer is a non-array producer. Since any Level 1 issue fails
+the whole simulation — and so refuses a `register_workflow` write — a false positive here
+costs more than a miss. Only the segment directly after the base key is checked; deeper ones
+sit on values this pass knows nothing about.
 
 Level 1 failures are returned immediately — no Level 2 checks run.
 
@@ -237,13 +298,18 @@ PREPARATION-STEP RULE), never in translation — that is the only stage permitte
 
 ## Simulation result structure
 
+`static_analysis` is `null` when Level 0 failed and Level 1 never ran — a consumer
+reading only that field must treat `null` as a failure, not as an absence of issues.
+
 ```json
 {
   "passed": true,
+  "level": 2,
   "total_issues": 0,
   "paths_run": 3,
   "paths_passed": 3,
   "paths_failed": 0,
+  "shape_analysis": { "ran": true, "passed": true, "issues": [] },
   "static_analysis": { "passed": true, "issues": [] },
   "routing_matrix": { "passed": true, "reachable_count": 12, "unreachable_count": 0, "issues": [] },
   "smoke_test": { "passed": true, "steps_tested": 4, "issues": [] },

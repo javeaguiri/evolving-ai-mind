@@ -1,233 +1,75 @@
-# Sprint 9 — Novia Builds Workflows
+# Sprint 10 — NOT YET SCOPED
 
-**Status: SCOPED 2026-07-29. Branch not yet cut.**
+**Status: awaiting scope.** Sprint 9 closed 2026-08-06. Retro phase ✅ (see
+`docs/sprints/sprint-09.md` §RETRO). **Scope, branch and acceptance criteria still to be agreed
+with the user** — the candidates below are the carry-forward position, not a plan.
 
-> Read before implementing: `docs/sprints/sprint-08.md` §RETRO, and `docs/arch-minds-eye.md`
-> §12 (the dissolution proposal) — specifically §12.7 for what is settled and what is open.
-
----
-
-## Sprint Goal
-
-**Move workflow creation into Novia, bridging this system's conventions to the code-writing
-capability she already has.**
-
-Sprint 8 proved the `create_workflow` development loop is free. The 2026-07-26 evaluation
-concluded the pipeline is not converging regardless — 98 runs, 4 surviving workflows,
-`generate_workflow_steps` at v49 with the defect class moved from structural to semantic. The
-direction set in §12 is to dissolve it. This sprint is the capability evaluation that decision
-is gated on.
-
-### The framing rule — read this before writing anything for Novia
-
-Novia can already write code. What she cannot know is **this system's conventions**: that a
-workflow is a step array with particular routing fields, that `local_state` carries values
-between steps, that a human gate is a UI widget contract with caps and a rendering tier that
-must not be told domain vocabulary.
-
-Everything written for her bridges those conventions to a skill she has. It states **what the
-engine accepts** and **what each tier owns**. It does not state how to design.
-
-**The overstepping test, applied to every line written this sprint:** is this statement of the
-form *"the engine accepts X"* or *"this tier owns Y"*? If instead it is a fill-in-the-blank
-structure, an ordering she must follow, or a syntax she must emit — we have overstepped, and
-that line comes out. Templates and archetypes are explicitly parked (see Out of Scope): they
-would commit to a shape before there is any evidence she needs one.
-
-**Provisional branch:** `sprint/09-novia-builds-workflows`
+> Read before scoping: `docs/sprints/sprint-09.md` §RETRO, `docs/backlog.md`, and
+> `docs/arch-minds-eye.md` §12.7 — OQ1 is now answered and OQ6 closed; OQ5 is partly answered.
 
 ---
 
-## Acceptance Criteria
+## Where Sprint 9 left the system
 
-| # | Criterion |
-|---|---|
-| **AC1** | A convention bridge exists as `PGC_SystemContext`, injected into `minds_eye_system_prompt`, and passes the overstepping test line by line. |
-| **AC2** | The bridge sources registry facts **by query, not transcription** — step types from `PGC_StepType`, gate mechanics from the `human_gate` contract, prompt names from `PGC_Prompt`. No hand-maintained list of anything that already exists as a row. |
-| **AC3** | **L0** runs inside `simulation-engine.mjs` as a level below L1, with its schema composed from `PGC_StepType.input_contract` and never hand-authored. Runs on both a sketch and a filled array, replacing the `skeleton: true` flag threaded through `runSimulation`. |
-| **AC4** | `register_workflow` exists as a gated Novia tool (`GATED_WRITE_TOOLS`), writing `PGC_Workflow` + `PGC_IntentMap`. |
-| **AC5** | **Novia builds one new workflow end-to-end from a Slack request** — designed in conversation, simulated, registered, and then *run successfully*. No `create_workflow` involvement at any point. |
-| **AC6** | Turn and action budgets support a full build. Session compression at the turn-limit gate (§6.1) is exercised deliberately rather than incidentally. |
-| **AC7** | **Quiz dialog fixed at the contract, not the threshold.** `human_gate` carries option-set properties; `callback.mjs` renders from them. `flashcard_quiz_session` step 12 renders six buttons again **and** `edit_budget` step 3 still renders a dropdown. |
-| **AC8** | Novia diagnoses and repairs `edit_budget` step 5 unaided — Generation fault domain, no code change. Fallback: hand-repair and record why she could not. |
-| **AC9** | **Cost per delivered working workflow measured** for the Novia path, against the `create_workflow` baseline of ≈$1.42 per paid build (run 729). This is the §12.7 OQ1 evidence the dissolution decision is gated on. |
+Novia can design, simulate and register a workflow from a Slack conversation with no
+`create_workflow` involvement. What she cannot yet do unaided is **repair** one — and the two
+things standing in the way of finding out are both diagnosed and unbuilt.
 
----
+Three ACs did not close, and they are not independent:
 
-## Out of Scope
+| Carried | Why it did not close | Unblocked by |
+|---|---|---|
+| **AC5** second half — `edit_budget` runs end-to-end through the Novia path | the runtime needed repairs made outside that path | AC8 |
+| **AC6** — session compression at the turn-limit gate | a round dies at the 240s Lambda ceiling before reaching the gate | the transcript fix |
+| **AC8** — Novia repairs `edit_budget` step 5 unaided | deferred for measurement validity, not time | the transcript fix |
 
-| Item | Why |
-|---|---|
-| **Bounded translation drift** | Dropped. It relaxes a constraint that exists only because the routing skeleton locks, and §12.11 showed the drift it was permitting is a dialog strategy expanding an interaction point — dissolved structurally, not by relaxing a rule. Remove from backlog High Priority at close. |
-| **Archetype / dialog-strategy seed content** | Parked behind the framing rule. Writing procedures and strategies as data commits to a shape before Novia has shown what she needs. Revisit in Sprint 10 with evidence from real builds. |
-| **The §12.11 / §12.12 notation** | `{{slot:name}}`, `include`/`bind`, `for_each`/`{{each}}` are an invented mini-language — the exact pattern `CLAUDE.md` warns against. Parked with the registry. The *findings* in those sections stand; the notation does not. |
-| **`PGC_DialogStrategy` table; bootstrapping `PGC_Archetype`** | Follows the registry. Both stay committed and unbootstrapped. |
-| **`create_workflow` prompt repairs** | The four design prompts are retired by the direction. Repairing them is work on documents with no future, and prompt edits churn every replay fingerprint recorded against them. **Do not run `create_workflow` this sprint** (`design_workflow_dialogs` v19 is spliced — §12.8). |
-| **Release-readiness** | Test environment, README bootstrap, log hygiene. Preempted twice now; carries to Sprint 10. |
-| **`/chat` dead code removal** | Deletion still undecided; independent of this sprint. |
+**The transcript prefix-cache fix is the unlock for all three**, which is why it is the lead
+candidate rather than merely the cheapest.
 
 ---
 
-## Tracks
+## Candidate scope — to be confirmed, not assumed
 
-### Track A — The convention bridge
+### Lead candidate — the transcript prefix-cache fix
 
-The prep work. Nothing in Track B can be judged until this exists, because the whole question is
-whether conventions alone are enough.
+A cache-invalidation defect in our own code, not a gateway limitation. Two things in
+`minds-eye.mjs` break the prefix every turn: `buildUserMessage` orders `input` as volatile
+context → transcript when the transcript is the append-only part, and `assembleContext` runs
+`ORDER BY priority DESC LIMIT 5` on `PGC_Memory` with no tiebreaker while 35 of 100 rows tie at
+priority 8. Three-part fix, all system code, none dependent on Perplexity. Expected ~12× cut on
+the creation component. **Needs a live Slack round to validate — the user runs it.**
 
-- **A1** — Write the bridge as `PGC_SystemContext`, injected into `minds_eye_system_prompt`.
-  Always resident, so it stays small. Covers: what a workflow is (step array, routing fields,
-  terminal steps), how `local_state` carries values, `{{token}}` resolution, and where the
-  Procedure/Experience boundary falls.
-- **A2** ✅ **DONE** — Gate mechanics come from the `human_gate` `input_contract` in
-  `PGC_StepType`, queried. Four rules that existed only in the duplicates are now in the contract:
-  the 40-field ceiling (an engine render limit, previously only in prompt prose); the
-  `action` vs `on_select` distinction and `on_select`'s valid tokens; that a `reveal` does not
-  route and must not be paired with a matching option; and that bare and `step:`-prefixed keys
-  are both accepted. The `iterator` `item_step` already carried its choice-only rule — no edit
-  needed.
-- **A3** ✅ **DONE (audit)** — Step type knowledge is queried from `PGC_StepType`, never
-  transcribed. `step_usage_patterns` (16.6 KB) and `step_type_contracts` (22 KB) do not migrate
-  into the bridge. Audit result recorded in `arch-minds-eye.md` §12.8.
-- **A2/A3 sequencing — the duplicates are not deleted yet, deliberately.** Deleting a
-  `PGC_SystemContext` row whose `{{token}}` still appears in a prompt hands the LLM the literal
-  token text (the standing backlog defect), and removing the token means editing the four design
-  prompts — out of scope this sprint, and prompt edits churn every replay fingerprint recorded
-  against them. `step_type_contracts`, `human_gate_dialog_rules` and the `human_gate` block in
-  `workflow_constraints` are `inject_for` the create_workflow family only, so they are inert for
-  Novia. **They die with the prompts.** Confirm removal at the point those prompts are retired.
-- **A4** — Apply the overstepping test to every line, and record what was cut. The cut list is
-  evidence for whether archetypes are needed at all.
+### Sequenced behind it, validating in the same round
 
-### Track B — Novia builds a workflow
+- **A5** — `run_sql` physical table names (`list_physical_tables` first; double-quote CamelCase
+  identifiers). Context/prompt content, no code.
+- **AC8 / Track D** — hand Novia `edit_budget` with the symptom only. D1 (`{{selected_period.N}}`
+  on a string) is now caught by L1, so the specimen may need reconstructing; D2 and D3 stand.
+- **AC6** — round budget and session compression, once turns are cheap enough to reach the gate.
 
-- **B1** — **L0** in `simulation-engine.mjs` (AC3). Schema composed from
-  `PGC_StepType.input_contract`. Replaces the `skeleton: true` flag; absorbs L1's
-  `serv_step_missing_required_input`, which is a shape assertion in the wrong level.
-  Fault domain: Validation.
-- **B2** — `register_workflow` gated write tool (AC4).
-- **B3** — Turn and action budgets. `turn_limit` and `max_actions_per_session` are
-  `PGC_SystemContext` preferences and adjustable without a deploy, but their current defaults are
-  far below what a build requires. Session compression at the turn-limit gate becomes
-  load-bearing (AC6).
-- **B4** — Drive one build end-to-end from Slack (AC5). **User runs this**, per convention.
-- **B5** — Instrument the cost measurement (AC9). Novia's own turns are not fingerprinted
-  (`minds-eye.mjs` calls `callLlm` directly, bypassing `llm-harness.mjs`), so her reasoning is
-  not replayable — the measurement is of live spend, and that is the honest number to compare.
+**One round can validate the fix, A5 and AC8 together** — the signals read from different places
+and do not confound: the cache effect from `cache_read`/`cache_creation` in the usage logs, A5
+from whether any `run_sql` call fails on an identifier, AC8 from whether she reaches the defect.
 
-### Track C — The quiz dialog
+### Independent of the above
 
-**Fault domain: Contract.** `callback.mjs` behaves reasonably on what it is given; the
-`human_gate` contract has no field in which a workflow can characterise an option set beyond its
-size, so the renderer counted. Full diagnosis: `arch-minds-eye.md` §12.8.
-
-- **C1** — Add option-set properties to the `human_gate` contract. The discriminator is whether
-  the set is **authored** at design time or **derived** from data at runtime — already present in
-  the step JSON by accident, since the gates that should collapse carry an `iterator` and the one
-  that should not does not.
-- **C2** — `callback.mjs` renders from the declared properties instead of
-  `CHOICE_DROPDOWN_THRESHOLD`. Mechanics stay in the Experience tier; only their input changes.
-  **Not a threshold bump** — raising 5 to 6 is a rule generalised from one specimen and fails at
-  the next one.
-- **C3** — Repair `flashcard_quiz_session` step 12 and verify `edit_budget` step 3 is unaffected
-  (AC7). Both verified live from Slack by the user.
-- **C4** — While in `callback.mjs`: the literal `**` in a gate message (run 735) is the same file
-  and still needs a repro to pin the block path. Opportunistic, not an AC.
-
-### Track D — Capability evaluation on known-broken specimens
-
-Three live defects with known-correct answers, which makes them the cleanest possible test of
-Novia's Generation-domain scope. Found while writing §12.11 / §12.12.
-
-- **D1** — `edit_budget` step 5 returns zero rows on every run. `selected_period` is the string
-  `"2026-07"` and the step filters on `{{selected_period.0}}` / `.1`; `resolvePath`
-  (`template-resolver.mjs:63`) applies a numeric key to a non-array by falling through to
-  `cur[key]`, so it queries year `2`, month `0`. The form is therefore always built from an empty
-  `existing_budgets`. **This is AC8.**
-- **D2** — `import_budget_spreadsheet` step 9 passes an array of bare category names to a
-  `serv_insert` whose column needs row objects.
-- **D3** — The current date is frozen at generation time in three places
-  (`edit_budget` step 2 `'2026-07'`; `import_budget_spreadsheet` step 1 `new Date('2026-07-02')`
-  and step 2's literal date string). Three instances makes it a generation habit, not a one-off.
-- **D4** — **Validation add:** L1 should flag `{{key.N}}` numeric indexing on a value that is not
-  a known array. D1 passed L1 silently. Carried from the Sprint 8 backlog item; the only part of
-  the dropped drift item that survives.
+- **`create_domain` derived-field maintenance** — `card_count`, `learned_count`, `due_count` and
+  every denormalized column it will ever generate. Contract fault at the `create_domain`
+  boundary. Sequence *do not denormalize* first.
+- **Release-readiness** — test environment, README bootstrap, log hygiene. **Preempted in
+  Sprints 7, 8 and 9.** If it is deferred a fourth time, that should be a decision rather than an
+  outcome.
+- **C4** — the literal `**` in a gate message (run 735); still needs a repro to pin the block path.
 
 ---
 
-## Track → AC Map
+## Open decisions for scoping
 
-| Track | ACs |
-|---|---|
-| A | AC1, AC2 |
-| B | AC3, AC4, AC5, AC6, AC9 |
-| C | AC7 |
-| D | AC8 |
-
----
-
-## Test Scenarios
-
-All workflow runs are triggered **by the user from Slack** — never by curl.
-
-1. **Quiz regression** — run `flashcard_quiz_session` to the rating gate. Six buttons, one click
-   to grade. Then `edit_budget` to the period gate: still a dropdown.
-2. **Greenfield build** — a Slack request to Novia for a workflow that matches none of the four
-   surviving shapes. Watch for: does she query the registries, or invent? Does she ask a question
-   whose answer changes the design, or ask nothing?
-3. **Repair** — hand Novia `edit_budget` and the symptom ("the form always shows zeros"), not the
-   diagnosis. Does she reach step 5?
-4. **Budget exhaustion** — a build that hits the turn limit, to exercise compression (AC6).
-
----
-
-## Sprint Close Checklist
-
-- [ ] `node --test tests/unit/*.test.mjs` passes
-- [ ] L0/L1/L2 pass on the workflow Novia built
-- [ ] `CLAUDE.md` "Current State" updated
-- [ ] `docs/architecture.md` updated — §1.5 for any new tool or validation level
-- [ ] `docs/arch-simulation-engine.md` updated for L0
-- [ ] `docs/arch-minds-eye.md` §12.7 updated with the OQ1 answer (AC9)
-- [ ] `docs/arch-data.md` — no schema change expected; confirm
-- [ ] `docs/backlog.md` — bounded drift removed, D4 retained, new items added
-- [ ] `docs/sprints/CURRENT.md` → `docs/sprints/sprint-09.md` with outcome notes
-
----
-
-## Session Notes
-
-### Session 1 — 2026-07-29 — Scope
-
-Sprint scoped from a session that started as a quiz-dialog bug report and became a design
-review. Sequence: the quiz rating gate turned out to be `CHOICE_DROPDOWN_THRESHOLD` catching six
-authored options; that exposed `gate_type` as an enum conflating what is shown, what is asked and
-which widget draws it; that settled §12.7 OQ2 (two tables) and produced the §12.10 distillation
-of the four surviving workflows.
-
-Writing `scoped_row_editor` and `ingest_and_insert` out in full (§12.11, §12.12) then produced
-the notation this sprint parks. The user's call, and the right one: `{{slot:name}}`,
-`include`/`bind` and `for_each` are an invented mini-language, and inventing a syntax an LLM must
-emit is the violation pattern `CLAUDE.md` names explicitly. The findings in those sections stand
-— that a strategy expands an interaction point, that nesting is inlining, that the shared
-fragment is not about foreign keys — but they are evidence, not a design to build against yet.
-
-Three scoping decisions taken: registry out of scope (bridge only), minimal L0 in
-`simulation-engine`, and the broken specimens used as Novia's capability evaluation rather than
-hand-repaired.
-
-### Session 2 — 2026-07-29 — A2/A3 prep
-
-`step_type_contracts` turned out to be a hand-maintained *copy* of the `PGC_StepType` rows —
-identical field names, transcribed rather than referenced — carrying 17 of 19 step types and a
-`human_gate` entry missing three fields the live row declares, one of them required. The
-argument for querying the registry did not need making; it was already measurable. Full audit in
-`arch-minds-eye.md` §12.8.
-
-The `human_gate` and `condition` contracts were updated and upserted (`upsert-step-type.mjs`:
-17 ok, 2 updated). 687 unit tests pass. The routing-format contradiction between
-`workflow_constraints` (`step:N`) and the `condition` contract (bare keys) was resolved by
-describing what the engine does — `step-executor.mjs:1637` and `run-workflow.mjs:1711` strip the
-prefix, so both forms are identical after normalisation. Picking a canonical form would have
-invented a constraint the engine does not have, which is the bridge's failure mode rather than
-its job. Closes the backlog item "Condition step routing format".
+1. **Does the `create_workflow` dissolution decision get taken this sprint?** §12.7 OQ1 is
+   answered but unfavourable, and explicitly says the decision should not be taken on that number
+   as it stands. Re-measuring needs the transcript fix first.
+2. **Release-readiness — in or out?** Three deferrals is the argument for scoping it deliberately
+   this time, including the part where a test environment would have made the Sprint 9 deferrals
+   unnecessary.
+3. **Archetypes** — parked in Sprint 9 behind the framing rule, to be revisited "with evidence
+   from real builds". One build now exists. Whether it constitutes evidence is a scoping call.

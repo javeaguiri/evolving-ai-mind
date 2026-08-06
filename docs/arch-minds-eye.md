@@ -189,9 +189,29 @@ count against `max_actions_per_session`.
 | Set | Tools | Gate |
 |---|---|---|
 | Inline write | `update_data`, `insert_data`, `upsert_data` | None — executes immediately |
-| Gated write | `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
+| Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
+
+**`register_workflow`** (Sprint 9, AC4) — `{ name, domain?, description, steps, intentPhrases?,
+intentKeywords? }`. Creates a workflow: one `PGC_Workflow` row at version 1, and one
+`PGC_IntentMap` row per invocation phrase plus one for the workflow's own name (`source`
+distinguishes `name` from `auto`). It is the write end of the path the convention bridge opens —
+Novia designs a step array in conversation, simulates it, and registers it, with no
+`create_workflow` involvement.
+
+Two boundaries hold it in place:
+
+- **It refuses to write a step array that does not validate.** The same L0+L1+L2 verdict is
+  computed once and used twice — shown in the gate so the human is approving a known-good
+  array, and re-checked at execution. The issues come back on refusal so the next turn can
+  correct and re-propose. `dev_scripts/upsert-workflow.mjs` refuses to ship a seed that fails
+  validation; a workflow arriving from a conversation gets the same gate.
+- **It creates, it never updates.** A name that already exists is an error naming
+  `propose_workflow_fix`, so neither tool can silently do the other's job.
+
+A failed `PGC_IntentMap` write is reported rather than swallowed: the workflow exists but no
+phrase reaches it, and that is a state the next turn has to know about.
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
@@ -345,7 +365,7 @@ assemble context (Layer 1 + 2; Layer 3 if improvement task)
 if action == "respond":
   post to Slack → end turn (await thread reply)
 if action is read tool:
-  execute → append result to session → loop (reason again)
+  execute → append result to session → report the turn → loop (reason again)
 if action is action tool:
   post HUMAN_GATE (confirm/cancel) → enqueue MINDS_EYE_RESUME
     on approve: execute → append result → loop (reason again)
@@ -356,6 +376,21 @@ if turn_count >= turn_limit:
     Pause    → compress session → post "Session paused. Resume with /novia continue." → end
     Cancel   → close session → end
 ```
+
+**Per-turn progress reporting.** Between the opening request and the final reply the only
+things a user sees are gates. Over a build that is a long silence, so every **successful**
+turn posts a one-line `HUMAN_NOTIFICATION`: the turn number, the tool, and the `reasoning`
+the decision already carried. No second model call — the field exists on every decision and
+until now reached only CloudWatch.
+
+Reported: read tools, housekeeping, inline writes, triggers. Not reported: `respond` and
+gated writes, each of which already produces the message the user is meant to read.
+
+A turn whose tool returned an error is **skipped** — `turnSucceeded()` treats an `error`
+field or `success: false` as a failure. A malformed request the agent is about to correct
+describes flailing rather than progress; the error still reaches the model through the tool
+result, which is what has to act on it. An empty-but-valid result is reported: no rows found
+is an answer.
 
 **Session compression (triggered at turn_limit gate on Continue or Pause):**
 The full `PGC_SessionEntry` history is replayed to the LLM on every turn. As sessions grow long this expands the context window and increases inference cost. At the turn-limit gate, before continuing or pausing, Novia runs a compression step:
@@ -381,8 +416,15 @@ All preferences are read from `PGC_SystemContext.minds_eye_preferences` at sessi
 
 | Preference key | Default | Behaviour at limit |
 |---|---|---|
-| `turn_limit` | `8` | Human gate — Continue / Pause / Cancel |
-| `max_actions_per_session` | `5` | Post summary and end session |
+| `turn_limit` | `12` | Human gate — Continue / Pause / Cancel |
+| `max_actions_per_session` | `8` | Post summary and end session |
+
+`turn_limit` is a **per-invocation** budget, not a per-session one: the Continue button
+starts a fresh round with the transcript intact. Raising it does not remove the boundary,
+it moves it — which is why the system prompt carries a pacing instruction telling Novia to
+choose her own stopping points (something the user can accept or reject, with the state
+that must survive written down first) rather than letting the round end wherever it lands.
+The budget is the backstop; the pacing instruction is what makes the stop legible.
 
 **Tone preferences** — injected into `minds_eye_system_prompt` at session start to shape all responses
 
@@ -514,10 +556,31 @@ Sprint 5 build order:
 
 ## 12. Proposal — workflow generation as a Novia toolkit
 
-> **Status: PROPOSAL — under evaluation. Not scoped, not decided, no implementation.**
-> Measurements in this section were taken 2026-07-26 against the live database and the
-> `seed_PGC_Prompt` / `seed_PGC_SystemContext` seed files. They are point-in-time findings,
-> not configuration.
+> **Status (2026-07-29).** Direction set — `create_workflow` is dissolved into Novia, gated on
+> evaluating her capability first (§12.7). **Sprint 9 is scoped and branched against this
+> section**: `docs/sprints/CURRENT.md`, branch `sprint/09-novia-builds-workflows`.
+>
+> Measurements throughout are point-in-time findings against the live database and seed files,
+> not configuration. Each carries the date it was taken.
+>
+> **The governing constraint, and the reason most of this section is not being built:** Novia can
+> already write code. What she lacks is *this system's conventions*. So what gets written for her
+> states **what the engine accepts** and **what each tier owns** — never a fill-in-the-blank
+> structure, a required ordering, or a syntax she must emit. Sprint 9 writes a convention bridge
+> on that basis and lets archetypes follow from what real builds turn out to need.
+>
+> | Subsection | Status |
+> |---|---|
+> | 12.1–12.2 the measured problem | Evidence, 2026-07-26 |
+> | 12.3 the two registries | **Settled** — procedures and dialog strategies are two tables |
+> | 12.4 phases become guidelines | Direction; not built |
+> | 12.5–12.6 removals, dependencies | Direction |
+> | 12.7 open questions | Three remain; OQ2 closed 2026-07-29 |
+> | 12.8 defects | Register. **Do not run `create_workflow` while these stand** |
+> | 12.9 table schemas | Templates committed, **not bootstrapped**; no consumer reads them |
+> | 12.10 distillation | **Settled** — four procedures + one fragment, three interaction points |
+> | 12.11–12.12 worked specimens | Findings stand; **notation parked** — see the banner in §12.11 |
+> | 12.13 the cut list | Register, Sprint 9 A4. The `overstep` rows are the Sprint 10 archetype evidence |
 
 The proposal is to dissolve `create_workflow` — today a 73-step `PGC_Workflow` row at v85 —
 into a set of tools Novia orchestrates, with workflow design patterns held as searchable
@@ -861,9 +924,24 @@ one table cannot express the composition.
 
 Remaining open:
 
-1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
-   baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
-   gated on.
+1. ✅ **ANSWERED — Sprint 9, AC9 — and the answer does not yet favour the Novia path.**
+   **$2.73** to build and register `edit_budget` (session 1121, 26 calls) against the
+   `create_workflow` baseline of **≈$1.42** per paid build (run 729) — roughly **2×** — plus
+   **$3.40** for the repair session (1122) that followed without completing the repair.
+   Three qualifications, all material to how this number should be read:
+   **(a)** ~$0.39 of the build went on harness defects since fixed (six of them, §Sprint 9
+   Session 6), so a clean rebuild is cheaper than the measured figure.
+   **(b)** The dominant cost is structural and diagnosed, not mysterious: Novia's transcript is
+   re-sent whole every turn and re-cached at *creation* price because our own input assembly
+   breaks the cache prefix. The fix is three changes in `minds-eye.mjs`, and the expected effect
+   is roughly a **12× cut** on that component. It is deferred to Sprint 10 only because it needs
+   a live round to validate.
+   **(c)** The baseline is not like-for-like in the Novia path's favour: $1.42 buys a
+   `create_workflow` build that also needed repair, and the 2026-07-26 evaluation put that
+   pipeline at 4 surviving workflows from 98 runs — so cost per *delivered working* workflow, the
+   quantity OQ1 actually names, is not $1.42 for the baseline either.
+   **The dissolution decision should not be taken on this number as it stands.** Re-measure after
+   the prefix-cache fix, on a build that does not pay for defects since closed.
 2. Whether `reconcile_missing_rows` earns its place as a shared fragment. Its two instances
    share a topology but differ in gap computation, target count and whether the inserted ids are
    needed, so its `gap` slot is an expression rather than a table or column binding (§12.12).
@@ -876,12 +954,19 @@ Remaining open:
    a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
    matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
    whose side of the tool/guidance line is undecided.
-5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
-   requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
-   than incidental.
-6. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
-   `/proc/simulate-workflow` endpoint. A distinct tool makes "validate, then simulate" a legible
-   two-step for a reasoning agent and yields sharper errors; a selector avoids a new endpoint.
+5. ◐ **Partly answered — Sprint 9 raised all three budgets and none was the one that binds.**
+   `turn_limit` 8 → 12, `max_actions_per_session` 5 → 8, `max_output_tokens` 8192 → 10240 (which
+   was absent from `minds_eye_preferences` entirely and falling through to a default). But the
+   round runs its turns inside **one 240s Lambda invocation**, so a round dies at turn 3–4 and
+   `turn_limit: 12` is unreachable. `roundBudgetExhausted` now stops before a turn there is no
+   room to finish. **Session compression at the turn-limit gate remains unexercised**, because a
+   round still cannot reach that gate — it carries to Sprint 10 behind the transcript fix, which
+   is what makes turns cheap enough for a round to get there.
+6. ✅ **CLOSED — Sprint 9, B1. A `level` selector, not a new tool.** L0 is `level: 0` on
+   `runSimulation` and on the existing `/proc/simulate-workflow` endpoint, so "validate, then
+   simulate" is `simulate_workflow { steps, level: 0 }` with no new surface for Novia to learn.
+   The `skeleton: true` flag it replaces is gone from the engine and accepted only as a retired
+   spelling in `step-executor`.
 
 ### 12.8 Defects surfaced by the prompt sweep
 
@@ -1484,3 +1569,80 @@ has both terminals (steps 15 and 16) — it just numbers them.
   generation habit rather than a one-off.
 - **Step 3 branches on a bare length.** `{{parsed_data.validation_errors.length}}` routes on
   truthiness rather than a comparison. It behaves correctly, but only because `0` is falsy.
+
+### 12.13 The cut list (Sprint 9 A4)
+
+A register of every rule in the `create_workflow` instruction layer that was considered for the
+convention bridge and not carried, with the reason it failed the overstepping test and a
+disposition. The bridge itself is the record of what *was* carried, so carried lines are not
+listed here.
+
+Source material: the four design prompts and the `PGC_SystemContext` rows injected into them —
+`step_type_contracts`, `step_usage_patterns`, `runtime_bindings`, `template_syntax`,
+`workflow_constraints`, `workflow_routing_rules`, `serv_db_step_shapes`, `flat_loop_example`,
+`human_gate_dialog_rules`.
+
+The overstepping test is a per-line judgement, so without a register "we cut it" is
+unfalsifiable. §12.3 claims six archetypes are recoverable from prompt prose; this is that claim
+measured. A cut rule Novia turned out to need, and that no registry row supplied, is a candidate
+`PGC_Archetype` / `PGC_DialogStrategy` row. A cut rule nothing ever asked for is prose that dies
+with its prompt. **If the `overstep` rows are never missed, archetypes are not needed** — that is
+the evidence AC1 produces and Sprint 10 reads.
+
+| Disposition | Meaning |
+|---|---|
+| `registry` | Already a queryable row. The bridge points at the table instead of restating it. Not evidence of anything — this is AC2 working. |
+| `overstep` | A design instruction: an ordering, a shape to fill, or a "when X, do Y". Not a statement of what the engine accepts. **The archetype candidates.** |
+| `stale` | Measurably wrong against the code today. Recorded so it is not re-copied; dies with its prompt. |
+
+#### `registry` — already a row, the bridge points instead
+
+| Source | Rule | Where it already lives |
+|---|---|---|
+| `step_type_contracts` (whole row, 22 KB) | Per-type field lists transcribed from PGC_StepType | `PGC_StepType` — 19 rows. The copy carries 17, and its `human_gate` entry omits `fields`, `action_key` and the required `on_cancel` (§12.8) |
+| `step_usage_patterns` | "REQUIRED fields" block for each of js_transform, condition, human_gate ×4 gate types, iterator, llm_call | `PGC_StepType.input_contract` per row |
+| `human_gate_dialog_rules` (whole row) | action vs on_select; valid on_select tokens; cancel-option requirement; reveal does not route | The `human_gate` contract — moved there by A2 |
+| `workflow_constraints` § human_gate | gate_type enum; form `fields`; `special_buttons`; which gate types write output_key | The `human_gate` contract |
+| `workflow_constraints` § iterator | `execution_mode: "sequential"`; suspending vs non-suspending; choice-only item_step | The `iterator` contract |
+| `workflow_constraints` § notify, § end | notify has no on_else; end has no routing fields and is last | The `notify` and `end` contracts |
+| `serv_db_step_shapes` | Filter object shape; the ten valid ops; filters required on update/delete | The `serv_*` contracts |
+| `workflow_routing_rules` 1, 3 | on_else on serv_* steps; filter shape restated a third time | `serv_*` contracts — and rule 1 is also `stale`, below |
+
+#### `overstep` — design instruction, not engine acceptance
+
+| Source | Rule | Why it is not a bridge line |
+|---|---|---|
+| `flat_loop_example` (whole row) | Guard at step 9, body 10–13, post-loop 14; last body step routes both fields back to the guard; cancel routes to a terminal | A worked skeleton with slots — the fill-in-the-blank shape the framing rule excludes. The engine fact under it, that a backward edge needs a gate on the path, is carried. |
+| `workflow_routing_rules` 6a | A loop's exit option must name the first step after the loop body, never "next" | A correctness rule about one topology. The engine fact under it — "next" is positional — is carried; the rest is loop design. |
+| `workflow_routing_rules` 6b | A save-and-continue back-edge lands on the re-query step, not the format step | The strongest archetype candidate here: it is `scoped_row_editor`'s defining hazard and a real finding (the saved value appears to revert). Belongs to a procedure, not to the engine. |
+| `workflow_routing_rules` 5 | A condition's false branch must not reach a gate that branch should not encounter | Design rule; the simulator already checks the reachability form of it. |
+| `workflow_routing_rules` 7 | How to interpret "Path X has no decision entry for human_gate step N" | Guidance on reading a simulator error. Belongs with the simulator's error text. |
+| `step_usage_patterns` § iterator + human_gate | The preference-gate pattern: js_transform builds options → condition guards → iterator presents one choice gate per item | A dialog strategy (§12.3), written as a four-step fill-in. |
+| `step_usage_patterns` § choice with option `iterator` | "Do NOT add a preceding js_transform to build the options array" | The engine fact — an option's `iterator` expands it per element — is on the human_gate contract. "Do not add a step" is a design instruction. |
+| `step_usage_patterns` § form | "Never collect a date or an enumerable value as free text and then parse it with an llm_call" | A design judgement about cost and determinism. Correct, and not a statement of what the engine accepts. Already duplicated onto the human_gate contract by an earlier sprint — resolve when those prompts retire. |
+| `workflow_constraints` § suspending iterator vs flat loop | Choose by whether iterations share state | A selection rule between two topologies — archetype territory. |
+| `template_syntax` § message_template | Transform Handlebars into indexed dot-notation | An instruction to a translation stage that does not exist in Novia's path. The engine fact — only double braces are recognised, everything else passes through literally — is carried. |
+| `runtime_bindings` § input.* | What `input` contains for create_workflow runs and for `*_entity` runs | Specimen-specific, not an engine fact. Read the workflow row. |
+
+#### `stale` — wrong against the code today
+
+| Source | Claim | Actual behaviour |
+|---|---|---|
+| `template_syntax` | "If the path does not exist in local_state, the template resolves to an empty string silently" | `resolveTemplate` returns the match unchanged (`template-resolver.mjs:95`) — the literal `{{key}}` is delivered to the model or the user. This is the root of the standing "prompts hand the LLM their own token text" defect. The bridge states the true behaviour. |
+| `runtime_bindings` | A dot-notation output_key requires the parent object to already exist | `setPath` creates intermediate objects (`run-workflow.mjs:1732`). |
+| `step_usage_patterns` | "only top-level keys are reliable write targets; for nested writes, return the full updated object" | Same as above, stated as a workaround for a limitation that is not there. |
+| `workflow_constraints` § condition | "on_success and on_else use step:N format" | Contradicted by `step_usage_patterns` § condition ("Do NOT use step:N here") and by the engine, which normalises both (`run-workflow.mjs:1711`). Resolved in A2 by describing normalisation; both statements are cut. |
+| `workflow_routing_rules` 1, `workflow_constraints` § step array | "Every step that calls an external service MUST set on_else: cancel" | Not a branch the engine takes. serv_* and llm_call steps signal failure by throwing, and a throw fails the run (`run-workflow.mjs:323`); an iterator item failure does the same (`run-workflow.mjs:1351`). Only `condition` and `simulate` read `on_else`. The convention is harmless, but its stated purpose is false and a design relying on it has no recovery path. |
+| `workflow_constraints` § Guard 3 | "the loop exhausts Lambda execution time (~60 seconds)" | A volatile number inside an instruction; the mechanism is what matters, and the stuck-step guard fires first at three hits. |
+
+#### Count
+
+| Disposition | Rows |
+|---|---|
+| `registry` | 8 |
+| `overstep` | 11 |
+| `stale` | 6 |
+
+The eleven `overstep` rows are the Sprint 10 evidence base. Five concern loop and
+save-and-continue topology across four different rows — one procedure (`scoped_row_editor`)
+stated five times in four places, which is §12.10's finding measured from the cut side.

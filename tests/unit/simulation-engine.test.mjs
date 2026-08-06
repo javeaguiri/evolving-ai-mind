@@ -16,7 +16,15 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runSimulation } from '../../src/proc/simulation-engine.mjs';
+import { readFileSync } from 'node:fs';
+import { runSimulation, runLevel0ShapeCheck } from '../../src/proc/simulation-engine.mjs';
+
+// L0 composes its assertions from PGC_StepType. The seed file is the same content
+// the live rows hold, so the tests exercise the real contracts rather than a
+// fixture that can quietly disagree with the registry.
+const CONTRACTS = JSON.parse(
+  readFileSync(new URL('../../src/serv/templates/pgc/seeds/seed_PGC_StepType.json', import.meta.url), 'utf8'),
+);
 
 describe('L2b data-flow trace — serv_query.filters shape (run 623 reproduction)', () => {
   it('flags a nested array-of-filter-groups fed into serv_query.filters', () => {
@@ -472,12 +480,158 @@ describe('L1 — gate size', () => {
     assert.equal(sizeIssue(formGate('{{edit_fields}}')), undefined);
   });
 
-  it('does not fire in skeleton mode, where fields are not yet designed', () => {
-    const result = runSimulation({ steps: formGate(nFields(63)), skeleton: true, traceId: 't' });
-    assert.equal(
-      result.static_analysis.issues.find(i => i.check === 'gate_too_many_fields'),
-      undefined,
-    );
+  it('is not reached at level 0, where fields are not yet designed', () => {
+    // Replaces the retired `skeleton: true` flag. A sketch is validated at L0,
+    // which asks only whether each element is a step of the type it claims to be;
+    // the gate ceiling is an L1 question and L1 does not run.
+    const result = runSimulation({
+      steps: formGate(nFields(63)),
+      level: 0,
+      stepTypeContracts: CONTRACTS,
+      traceId: 't',
+    });
+    assert.equal(result.passed, true);
+    assert.equal(result.static_analysis, null);
+  });
+
+  it('still fires on the same steps at the default level', () => {
+    const result = runSimulation({ steps: formGate(nFields(63)), stepTypeContracts: CONTRACTS, traceId: 't' });
+    assert.ok(result.static_analysis.issues.find(i => i.check === 'gate_too_many_fields'));
+  });
+});
+
+describe('L0 — shape, composed from PGC_StepType', () => {
+  const gate = extra => [
+    { step: '1', type: 'human_gate', gate_type: 'confirm', message_template: 'ok?', on_cancel: 'cancel',
+      options: [{ label: 'Cancel', action: 'cancel', on_select: 'cancel' }], on_success: 'next', ...extra },
+    { step: '2', type: 'end' },
+  ];
+
+  it('reports not-run, and does not claim a pass, when contracts are absent', () => {
+    const shape = runLevel0ShapeCheck(gate(), {});
+    assert.equal(shape.ran, false);
+    assert.equal(shape.passed, false);
+    assert.match(shape.reason, /not supplied/);
+  });
+
+  it('fails a level 0 request that supplied no contracts, rather than passing silently', () => {
+    const result = runSimulation({ steps: gate(), level: 0, traceId: 't' });
+    assert.equal(result.passed, false);
+    assert.match(result.error_summary, /not supplied/);
+  });
+
+  // The envelope L0 could not see: `step` and `type` are what a contract is selected BY, so
+  // composing assertions from the contracts alone left the field run-workflow routes on
+  // unchecked. Session 1121 simulated 19 steps keyed `step_label`; shape passed, and L1 then
+  // reported seven dead_routing_target issues reading `Step "undefined"` — one repeated
+  // field-name mistake, told back seven times as something else.
+
+  it('catches a step array whose steps carry no step key at all', () => {
+    const steps = [
+      { step_label: '1', type: 'js_transform', expression: '1 + 1', output_key: 'x', on_success: 'next' },
+      { step_label: '2', type: 'end' },
+    ];
+    const shape = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS });
+    assert.equal(shape.passed, false);
+    const issues = shape.issues.filter(i => i.check === 'missing_step_key');
+    assert.equal(issues.length, 2, 'one per step, not one per broken route');
+    assert.match(issues[0].detail, /has no "step" key/);
+    assert.match(issues[0].detail, /index 0/);
+  });
+
+  it('catches an unquoted numeric step key', () => {
+    const steps = [{ step: 1, type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'non_string_step_key');
+    assert.ok(issue);
+    assert.match(issue.detail, /compared by exact equality/);
+  });
+
+  it('catches a duplicate step key — every route to it would be ambiguous', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '1', output_key: 'a', on_success: '1' },
+      { step: '1', type: 'js_transform', expression: '2', output_key: 'b', on_success: 'next' },
+      { step: '2', type: 'end' },
+    ];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'duplicate_step_key');
+    assert.ok(issue);
+    assert.equal(issue.step, '1');
+  });
+
+  it('passes a well-formed envelope — the check adds no false positive', () => {
+    assert.equal(runLevel0ShapeCheck(gate(), { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
+  it('catches a step type that is not in the registry', () => {
+    const steps = [{ step: '1', type: 'serv_qeury', input: { tableName: 'PGD_X' }, output_key: 'r', on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    const shape = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS });
+    const issue = shape.issues.find(i => i.check === 'unknown_step_type');
+    assert.ok(issue);
+    // The detail enumerates every live type, which beats guessing at one.
+    assert.match(issue.detail, /serv_query/);
+  });
+
+  it('catches a required field missing from the step root', () => {
+    const steps = [{ step: '1', type: 'condition', expression: '{{flag}}', on_success: '2' }, { step: '2', type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'missing_required_field');
+    assert.ok(issue);
+    assert.match(issue.detail, /on_else/);
+  });
+
+  it('catches a required field missing from the step input object', () => {
+    const steps = [{ step: '1', type: 'serv_update', input: { tableName: 'PGD_X', updates: { a: 1 } }, on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.check === 'missing_required_field');
+    assert.ok(issue);
+    assert.match(issue.detail, /input\.filters/);
+  });
+
+  it('accepts a {{template}} reference as a present value', () => {
+    const steps = [{ step: '1', type: 'serv_delete', input: { tableName: '{{t}}', filters: '{{f}}' }, on_success: 'next', on_else: 'cancel' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
+  it('holds an iterator item_step to the same contract', () => {
+    const steps = [
+      { step: '1', type: 'iterator', items_key: 'rows', execution_mode: 'sequential', on_complete: 'next',
+        item_step: { type: 'serv_insert', input: { tableName: 'PGD_X' } } },
+      { step: '2', type: 'end' },
+    ];
+    const issue = runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS })
+      .issues.find(i => i.step === '1.item_step');
+    assert.ok(issue);
+    assert.match(issue.detail, /input\.row/);
+  });
+
+  it('does not require output_key on an item_step — the iterator collects the results', () => {
+    const steps = [
+      { step: '1', type: 'iterator', items_key: 'rows', execution_mode: 'sequential', on_complete: 'next', output_key: 'out',
+        item_step: { type: 'serv_query', input: { tableName: 'PGD_X' } } },
+      { step: '2', type: 'end' },
+    ];
+    assert.equal(runLevel0ShapeCheck(steps, { stepTypeContracts: CONTRACTS }).passed, true);
+  });
+
+  it('short-circuits before L1, so a shape failure never reports as a clean static pass', () => {
+    const steps = [{ step: '1', type: 'condition', expression: '{{flag}}', on_success: '2' }, { step: '2', type: 'end' }];
+    const result = runSimulation({ steps, stepTypeContracts: CONTRACTS, traceId: 't' });
+    assert.equal(result.passed, false);
+    assert.equal(result.static_analysis, null);
+    assert.equal(result.shape_analysis.passed, false);
+    assert.match(result.error_summary, /\[shape\]/);
+  });
+
+  it('enforces write_memory fields where the engine actually reads them', () => {
+    // buildMemoryRow (step-executor.mjs) destructures step.input, so the contract
+    // names input.memory_type / input.scope / input.content_key. A row declaring
+    // them at the step root is the shape the engine ignores.
+    const rootLevel = [{ step: '1', type: 'write_memory', memory_type: 'semantic', scope: {}, content_key: 'c', on_success: 'next' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(rootLevel, { stepTypeContracts: CONTRACTS }).passed, false);
+
+    const underInput = [{ step: '1', type: 'write_memory', input: { memory_type: 'semantic', scope: { domain: 'd' }, content_key: 'c' }, on_success: 'next' }, { step: '2', type: 'end' }];
+    assert.equal(runLevel0ShapeCheck(underInput, { stepTypeContracts: CONTRACTS }).passed, true);
   });
 });
 
@@ -531,5 +685,135 @@ describe('L1 state flow — action_key records the gate outcome', () => {
 
     const result = runSimulation({ steps, traceId: 't' });
     assert.equal(result.passed, true, JSON.stringify(result.error_summary));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D4 — numeric indexing on a value that cannot be an array (run 735, edit_budget)
+//
+// resolvePath special-cases a numeric key only when the current value is an
+// array; on anything else it falls through to cur[key]. {{selected_period.0}}
+// against the string "2026-07" therefore yields "2" instead of failing, and
+// step 5 queried year "2" / month "0" on every run. L1 passed it silently.
+// ---------------------------------------------------------------------------
+
+describe('L1 numeric indexing on a non-array (run 735 reproduction)', () => {
+  const periodGate = {
+    step: '1', type: 'human_gate', gate_type: 'choice',
+    message_template: 'Which period?',
+    output_key: 'selected_period',
+    options: [
+      { label: 'July 2026', value: '2026-07', on_select: 'next' },
+      { label: 'Cancel',    action: 'cancel', on_select: 'cancel' },
+    ],
+    on_cancel: 'cancel', on_success: 'next',
+  };
+
+  const numericIssues = result =>
+    (result.static_analysis?.issues ?? []).filter(i => i.failure_class === 'numeric_index_on_non_array');
+
+  it('flags a gate-written value indexed by position', () => {
+    const steps = [
+      periodGate,
+      {
+        step: '2', type: 'serv_query',
+        input: {
+          tableName: 'PGD_Budgets',
+          filters: [
+            { column: 'year',  op: 'eq', value: '{{selected_period.0}}' },
+            { column: 'month', op: 'eq', value: '{{selected_period.1}}' },
+          ],
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'existing_budgets',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const issues = numericIssues(runSimulation({ steps, traceId: 't' }));
+    assert.equal(issues.length, 2, 'both .0 and .1 must be reported');
+    assert.match(issues[0].detail, /writes "selected_period" as a single value, not an array/);
+    assert.equal(issues[0].step, '2', 'the issue belongs to the reading step, not the gate');
+  });
+
+  it('flags it on an iterator-backed option set — the shape run 735 actually had', () => {
+    // edit_budget step 3 built its period options from an iterator over month_options,
+    // which is what made the set dynamic (AC7). The gate's own output_key is still the
+    // one value the user picked, so option provenance must not change the verdict.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `['2026-07']`, on_success: 'next', output_key: 'month_options' },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        message_template: 'Which period?',
+        output_key: 'selected_period',
+        options: [
+          { iterator: 'month_options', label: '{{item}}', value: '{{item}}', on_select: 'next' },
+          { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_cancel: 'cancel', on_success: 'next',
+      },
+      {
+        step: '3', type: 'serv_query',
+        input: { tableName: 'PGD_Budgets', filters: [{ column: 'year', op: 'eq', value: '{{selected_period.0}}' }] },
+        on_success: 'next', on_else: 'cancel', output_key: 'existing_budgets',
+      },
+      { step: '4', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('flags the bracket form too — {{key[0]}} is the same defect', () => {
+    const steps = [
+      periodGate,
+      { step: '2', type: 'notify', message_template: 'Year {{selected_period[0]}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('flags a value written by action_key', () => {
+    const steps = [
+      { ...periodGate, action_key: 'chosen_action' },
+      { step: '2', type: 'notify', message_template: '{{chosen_action.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('does not flag indexing into a serv_query result — that IS an array', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Budgets' }, on_success: 'next', on_else: 'cancel', output_key: 'rows' },
+      { step: '2', type: 'notify', message_template: 'First: {{rows.0.name}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('does not flag a js_transform output — its shape is not knowable statically', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `['a', 'b']`, on_success: 'next', output_key: 'parts' },
+      { step: '2', type: 'notify', message_template: '{{parts.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('does not flag a deeper numeric segment — the value at that depth is unknown', () => {
+    const steps = [
+      { ...periodGate, gate_type: 'form', fields: [{ name: 'amount', type: 'text', label: 'Amount' }], output_key: 'form_values' },
+      { step: '2', type: 'notify', message_template: '{{form_values.entries.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('downgrades to unknown when a later step rewrites the key with an unknown shape', () => {
+    const steps = [
+      periodGate,
+      { step: '2', type: 'js_transform', expression: `['2026', '07']`, on_success: 'next', output_key: 'selected_period' },
+      { step: '3', type: 'notify', message_template: '{{selected_period.0}}', on_success: 'next' },
+      { step: '4', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), [],
+      'a key any writer of which may produce an array must not be flagged');
   });
 });

@@ -709,10 +709,12 @@ async function postHumanGate(message) {
   // minds_eye_continue_gate \u2014 Novia turn-limit gate. Three options: Continue resumes the loop,
   // Follow-up opens a modal for the user to ask a question, Cancel ends the session.
   if (gateType === 'minds_eye_continue_gate') {
-    const { sessionId, resetActionCount = false } = message;
+    const { sessionId, resetActionCount = false, budgetExhausted = false } = message;
     const gateText = resetActionCount
       ? "I've reached my action limit. Continue to keep going (resets the limit), ask a Follow-up question, or Cancel to end the session."
-      : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
+      : budgetExhausted
+        ? "I've used up this round's time — nothing has gone wrong, and everything so far is saved. Continue to pick up where I left off, ask a Follow-up question, or Cancel to end the session."
+        : "I've reached my turn limit. Continue to keep reasoning, ask a Follow-up question, or Cancel to end the session.";
     const sessionContextBlock = { type: 'context', elements: [{ type: 'mrkdwn', text: `sessionId: ${sessionId} | traceId: ${traceId}` }] };
     const gateBlocks = [
       ...markdownToBlocks(gateText),
@@ -1195,7 +1197,25 @@ const OPTION_TEXT_LIMIT   = 75;
 
 // Above this many real choices, a choice gate's lettered buttons become a dropdown.
 // Below it, buttons are the friendlier control — one click, no submit.
+//
+// Which count applies depends on whether the choice set is static or dynamic, which the
+// gate states as `option_source` and this tier reads (it never reads what to draw).
+//
+// A DYNAMIC set is computed at runtime — the twelve-month trailing window this threshold
+// was introduced for. Choosing from one takes thought either way, so the extra click a
+// dropdown costs is not what makes it slow, and the dropdown is the control that survives
+// the set growing: a window that widens to twenty-four months degrades a wall of buttons
+// and leaves a dropdown untouched. Collapse it early.
+//
+// A STATIC set was written out at design time, and the case that matters is a workflow run
+// over and over: grading a card is one click while every value is visible and three
+// interactions once they are behind a dropdown. Its length cannot grow behind our backs,
+// so it stays inline until Slack's own cap on one actions block forces the issue.
+//
+// Both bounds are this layer's and the workflow can raise neither — a stated property
+// cannot ask for a message Slack rejects.
 const CHOICE_DROPDOWN_THRESHOLD = 5;
+const ACTIONS_ELEMENT_LIMIT     = 25;
 
 function truncateOption(text) {
   const s = String(text ?? '');
@@ -1296,7 +1316,7 @@ function buildObjectArrayTable(items) {
   return [header, sep, ...rows].join('\n');
 }
 
-function dialogToBlocks(dialog, workflowRunId, gateType) {
+export function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
   // Decided once, up front, because two cases below depend on it: a choice gate with
@@ -1307,8 +1327,13 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
   const choiceButtons  = gateType === 'choice'
     ? ((dialog?.fields ?? []).find(f => f.type === 'actions')?.buttons ?? []).filter(b => b.action !== 'cancel')
     : [];
+  // A gate built by buildDialog always carries option_source. A payload without one is
+  // read as static, the reading that leaves a hand-written option list drawn as written.
+  const collapseAbove = dialog?.option_source === 'dynamic'
+    ? CHOICE_DROPDOWN_THRESHOLD
+    : ACTIONS_ELEMENT_LIMIT;
   const choiceAsDropdown =
-    choiceButtons.length > CHOICE_DROPDOWN_THRESHOLD && choiceButtons.length <= SELECT_OPTION_LIMIT;
+    choiceButtons.length > collapseAbove && choiceButtons.length <= SELECT_OPTION_LIMIT;
 
   for (const field of (dialog?.fields ?? [])) {
     switch (field.type) {
@@ -1507,7 +1532,8 @@ function dialogToBlocks(dialog, workflowRunId, gateType) {
         // A choice gate is "pick one value, and the click routes". Up to a handful of
         // options, lettered buttons read well. Past that they wrap into an unusable wall —
         // a 12-month picker rendered 13 buttons. Slack's static_select is the same
-        // interaction drawn better, so past the threshold the options become a dropdown
+        // interaction drawn better, so past the bound that applies to this gate's declared
+        // option_source (see the constants above) the options become a dropdown
         // with a Select button. The gate's BEHAVIOUR is untouched (on_select still routes);
         // only how the options are drawn changes, which is this layer's call. Existing
         // choice gates with a few options are unaffected.

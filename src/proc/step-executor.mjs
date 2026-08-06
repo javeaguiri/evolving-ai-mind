@@ -49,6 +49,7 @@ import {
   evalItemCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
+import { loadStepTypeContracts } from './step-type-registry.mjs';
 import { pickLabelColumn }              from '../shared/schema-utils.mjs';
 
 // ---------------------------------------------------------------------------
@@ -302,6 +303,35 @@ export function resolveGateOptions(step, localState) {
     const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
     return items.map(item => resolveOption(option, { ...localState, ...item }));
   });
+}
+
+/**
+ * Whether a gate's choice set is static or dynamic — a fact about the set, never an
+ * instruction about the widget that draws it.
+ *
+ * The renderer could not previously have this: buildDialog expands `iterator` and strips it
+ * (see resolveGateOptions) before the payload is built, leaving callback.mjs to tell a six
+ * point rating scale from a twelve-month trailing window by counting, which it cannot do. A
+ * `static` set was written out at design time, so its length is a property of the design. A
+ * `dynamic` set is computed at runtime, may hold three entries or three hundred, and may
+ * grow over time.
+ *
+ * A step may declare `option_source` and that wins. Absent one it is read off the step,
+ * because the mechanism IS the property: options pulled wholesale from local_state, or an
+ * option carrying `iterator`, are the only ways a set gets built at runtime.
+ *
+ * Control buttons do not enter into it — the set is what the user chooses BETWEEN, and a
+ * dynamic option list alongside a static Cancel is a dynamic set. The renderer keeps
+ * control buttons out of whatever it collapses.
+ *
+ * What to DRAW from this belongs to the experience layer, along with its own limits.
+ */
+export function resolveOptionSource(step) {
+  if (step?.option_source === 'static' || step?.option_source === 'dynamic') {
+    return step.option_source;
+  }
+  if (typeof step?.options === 'string') return 'dynamic';
+  return (step?.options ?? []).some(option => option?.iterator) ? 'dynamic' : 'static';
 }
 
 /**
@@ -650,6 +680,7 @@ export function buildDialog(step, localState) {
 
   return {
     title:  step.description ?? '',
+    option_source: resolveOptionSource(step),
     fields,
   };
 }
@@ -1548,7 +1579,12 @@ async function executeSimulate({ step, localState, run, traceId }) {
   const stepsKey       = step.input?.steps_key;
   const mockOutputsKey = step.input?.mock_outputs_key;   // optional
   const pathsKey       = step.input?.paths_key;          // optional
-  const skeleton       = step.input?.skeleton === true;  // optional — skips serv required-field checks
+  // `level` selects how far validation runs: 0 shape only, 1 adds static analysis,
+  // 2 adds the routing matrix and data-flow trace. `skeleton: true` is the retired
+  // spelling of level 0 — it used to mean "run L1 with the content checks switched
+  // off", which is the question L0 now answers directly. Accepted here so workflow
+  // rows written against the old flag keep validating their sketches.
+  const level = step.input?.level ?? (step.input?.skeleton === true ? 0 : 2);
   // optional — path to the routing skeleton this step array was translated from. When
   // present, L1 checks that translation emitted exactly one step per design item and
   // invented none of its own (see checkSkeletonDrift).
@@ -1572,7 +1608,8 @@ async function executeSimulate({ step, localState, run, traceId }) {
     mockOutputs,
     simulationPaths: simPaths,
     runInput: run?.input ?? {},
-    skeleton,
+    stepTypeContracts: await loadStepTypeContracts(traceId),
+    level,
     lockedSkeleton,
     traceId,
   });
