@@ -466,6 +466,18 @@ export function runLevel1StaticAnalysis(steps) {
   const writtenByStep = {};   // { [key]: first_step_key_that_wrote_it }
   const allReadsEver  = new Set(); // union of all reads across all steps
 
+  // Value-shape tracking, for the numeric-index check below. Only two verdicts are
+  // worth carrying: a key whose every writer produces a non-array, and everything else.
+  //
+  // Array-ness is deliberately not proven. A js_transform returns any shape it likes, and
+  // an llm_call's schema lives in PGC_Prompt rather than on the step, so "unknown" is the
+  // honest verdict for both. Since ANY Level 1 issue fails the whole simulation — and so
+  // refuses a register_workflow write — a false positive here costs far more than a miss.
+  const keyKind = {};   // { [key]: 'non_array' | 'unknown' }
+  const noteKeyKind = (key, kind) => {
+    keyKind[key] = (keyKind[key] === undefined || keyKind[key] === kind) ? kind : 'unknown';
+  };
+
   // Build the set of output_key values written by each step at each point
   // in the canonical (top-to-bottom) execution order. This is a conservative
   // approximation — it does not model branching. It catches the common case
@@ -629,10 +641,14 @@ export function runLevel1StaticAnalysis(steps) {
     const templatesToCheck = [];
     if (s.message_template) templatesToCheck.push(s.message_template);
     if (s.context_key)      templatesToCheck.push(`{{${s.context_key}}}`);
+    // Descend the whole input, not just its top level. A token is just as live inside
+    // input.filters[0].value or input.rows[2].amount as it is at input.tableName, and
+    // taking only Object.values meant every nested one went unchecked — by both this
+    // walk's unresolved-key check and the numeric-index check below. That is why run
+    // 735's {{selected_period.0}}, which sits in a filter value, reached production
+    // through a clean L1.
     if (typeof s.input === 'object' && s.input !== null) {
-      Object.values(s.input).forEach(v => {
-        if (typeof v === 'string') templatesToCheck.push(v);
-      });
+      collectTemplateStrings(s.input, templatesToCheck);
     }
     if (s.input_key)  templatesToCheck.push(`{{${s.input_key}}}`);
     if (s.items_key)  templatesToCheck.push(`{{${s.items_key}}}`);
@@ -714,6 +730,29 @@ export function runLevel1StaticAnalysis(steps) {
             });
           }
         }
+        // Numeric indexing on a value that cannot be an array.
+        //
+        // resolvePath (template-resolver.mjs) special-cases a numeric key only when the
+        // current value is an array; on anything else it falls through to cur[key]. So
+        // {{period.0}} against the string "2026-07" yields "2" rather than failing —
+        // silent, and wrong. Run 735's edit_budget step 5 filtered on year "2" / month
+        // "0" and returned zero rows on every run, which L1 passed without comment.
+        //
+        // Only the segment immediately after the base key is checked. A deeper numeric
+        // segment sits on a value this pass knows nothing about.
+        const segments = ref.replace(/\[(\d+)\]/g, '.$1').split('.');
+        if (segments.length > 1 && /^\d+$/.test(segments[1]) && keyKind[segments[0]] === 'non_array') {
+          const key = `numeric_index::${segments[0]}.${segments[1]}`;
+          if (!seenTemplateIssues.has(key)) {
+            seenTemplateIssues.add(key);
+            issues.push({
+              check:         'numeric_index_on_non_array',
+              step:          stepKey,
+              failure_class: 'numeric_index_on_non_array',
+              detail:        `Step "${stepKey}" references "{{${ref}}}", indexing "${segments[0]}" by position — but step "${writtenByStep[segments[0]]}" writes "${segments[0]}" as a single value, not an array. Positional indexing resolves against arrays only: on a string it returns one character, and on an object it looks for a field literally named "${segments[1]}". Split the value in a js_transform step and reference the resulting keys.`,
+            });
+          }
+        }
       }
     }
 
@@ -779,14 +818,24 @@ export function runLevel1StaticAnalysis(steps) {
       const baseAction = s.action_key.split('.')[0];
       outputKeysSoFar.add(baseAction);
       stepWrites.add(baseAction);
+      // resumeGate writes matchedOption.value ?? action — a single option identity.
+      noteKeyKind(baseAction, 'non_array');
       if (!writtenByStep[baseAction]) writtenByStep[baseAction] = stepKey;
     }
 
     if (s.output_key && typeof s.output_key === 'string') {
+      // Every human_gate write path in run-workflow's resumeGate produces one value:
+      // choice writes the picked value, text_input/followup_prompt the typed string,
+      // dynamic confirm the userResponse, item_action the row's value, and a form gate
+      // the collected field map. None of them is an array. Every other step type is
+      // unknown here — including serv_query and iterator, which do write arrays, but
+      // knowing that adds nothing to a check that only fires on 'non_array'.
+      const outKind = s.type === 'human_gate' ? 'non_array' : 'unknown';
       for (const rawKey of s.output_key.split(',')) {
         const baseOut = rawKey.trim().split('.')[0];
         outputKeysSoFar.add(baseOut);
         stepWrites.add(baseOut);
+        noteKeyKind(baseOut, outKind);
         if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
       }
     } else if (s.output_key !== undefined && s.output_key !== null && s.output_key !== '') {
@@ -803,6 +852,8 @@ export function runLevel1StaticAnalysis(steps) {
         const baseOut = opt.output_key.split('.')[0];
         outputKeysSoFar.add(baseOut);
         stepWrites.add(baseOut);
+        // An option-level output_key carries the modal's inputValue — a typed string.
+        noteKeyKind(baseOut, 'non_array');
         if (!writtenByStep[baseOut]) writtenByStep[baseOut] = stepKey;
       } else if (opt.output_key !== undefined && opt.output_key !== null && opt.output_key !== '') {
         issues.push({
@@ -1624,6 +1675,27 @@ function isHardSmokeFailure(issue) {
 // ---------------------------------------------------------------------------
 // Simulate helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Collect every string held anywhere inside a step input, at any depth, into `out`.
+ *
+ * Step inputs are plain JSON built by upsert or by an LLM, so there are no cycles to
+ * guard against and no prototype chain to walk.
+ */
+export function collectTemplateStrings(value, out) {
+  if (typeof value === 'string') {
+    out.push(value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const v of value) collectTemplateStrings(v, out);
+    return out;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const v of Object.values(value)) collectTemplateStrings(v, out);
+  }
+  return out;
+}
 
 /**
  * Extract all {{ref}} template variable names from a string.

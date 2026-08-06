@@ -287,9 +287,28 @@ live round, and is blocked by nothing. Available for Sprint 9 at any point.
 - **D3** — The current date is frozen at generation time in three places
   (`edit_budget` step 2 `'2026-07'`; `import_budget_spreadsheet` step 1 `new Date('2026-07-02')`
   and step 2's literal date string). Three instances makes it a generation habit, not a one-off.
-- **D4** — **Validation add:** L1 should flag `{{key.N}}` numeric indexing on a value that is not
-  a known array. D1 passed L1 silently. Carried from the Sprint 8 backlog item; the only part of
-  the dropped drift item that survives.
+- **D4** ✅ **DONE** — **Validation add:** L1 flags `{{key.N}}` numeric indexing on a value that is
+  not a known array. D1 passed L1 silently. Carried from the Sprint 8 backlog item; the only part
+  of the dropped drift item that survives.
+  **Checked in one direction only.** L1 tracks keys whose *every* writer produces a non-array — a
+  `human_gate`'s `output_key`, its `action_key`, an option-level `output_key` — and flags a
+  positional index on those. Array-ness is never proven: a `js_transform` returns any shape and an
+  `llm_call`'s schema lives in `PGC_Prompt`, not on the step, so both stay unknown and unflagged.
+  Any L1 issue fails the whole simulation and so refuses a `register_workflow` write, which makes
+  a false positive cost more than a miss.
+  **A second defect found by building it, and it is the larger one.** The first test failed
+  because L1's template walk took `Object.values(s.input)` — top-level strings only — so a token
+  inside `input.filters[0].value` was invisible to the walk entirely. **That, not the missing
+  numeric rule, is why D1 reached production through a clean L1**: the unresolved-key check could
+  not see the token either. The walk now descends the whole input at any depth
+  (`collectTemplateStrings`).
+  **Regression-checked against every seed:** all 11 seed workflows produce zero L1 issues, and a
+  before/after diff of the pass/fail verdict for all 11 is identical — the widened walk surfaces
+  no new failures. 766 → 774 unit tests.
+  **Not validated against the live specimen, because there is nothing left to catch:**
+  `edit_budget` is at v6 and restructured — the gate writes `form_month` and step 6 derives
+  `selected_month`, with no numeric-index token anywhere in the array. The tests reproduce the
+  documented run-735 shape instead, including the `iterator`-backed option set.
   **Reach verified in code 2026-08-06 — this is not `create_workflow` work, and Novia's path is
   its primary consumer.** `register_workflow` runs the same engine: `minds-eye.mjs:915` calls
   `runSimulation` at default level (L0+L1+L2) and folds `static_analysis.issues` — L1 — into the

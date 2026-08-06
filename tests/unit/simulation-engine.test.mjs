@@ -687,3 +687,133 @@ describe('L1 state flow — action_key records the gate outcome', () => {
     assert.equal(result.passed, true, JSON.stringify(result.error_summary));
   });
 });
+
+// ---------------------------------------------------------------------------
+// D4 — numeric indexing on a value that cannot be an array (run 735, edit_budget)
+//
+// resolvePath special-cases a numeric key only when the current value is an
+// array; on anything else it falls through to cur[key]. {{selected_period.0}}
+// against the string "2026-07" therefore yields "2" instead of failing, and
+// step 5 queried year "2" / month "0" on every run. L1 passed it silently.
+// ---------------------------------------------------------------------------
+
+describe('L1 numeric indexing on a non-array (run 735 reproduction)', () => {
+  const periodGate = {
+    step: '1', type: 'human_gate', gate_type: 'choice',
+    message_template: 'Which period?',
+    output_key: 'selected_period',
+    options: [
+      { label: 'July 2026', value: '2026-07', on_select: 'next' },
+      { label: 'Cancel',    action: 'cancel', on_select: 'cancel' },
+    ],
+    on_cancel: 'cancel', on_success: 'next',
+  };
+
+  const numericIssues = result =>
+    (result.static_analysis?.issues ?? []).filter(i => i.failure_class === 'numeric_index_on_non_array');
+
+  it('flags a gate-written value indexed by position', () => {
+    const steps = [
+      periodGate,
+      {
+        step: '2', type: 'serv_query',
+        input: {
+          tableName: 'PGD_Budgets',
+          filters: [
+            { column: 'year',  op: 'eq', value: '{{selected_period.0}}' },
+            { column: 'month', op: 'eq', value: '{{selected_period.1}}' },
+          ],
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'existing_budgets',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const issues = numericIssues(runSimulation({ steps, traceId: 't' }));
+    assert.equal(issues.length, 2, 'both .0 and .1 must be reported');
+    assert.match(issues[0].detail, /writes "selected_period" as a single value, not an array/);
+    assert.equal(issues[0].step, '2', 'the issue belongs to the reading step, not the gate');
+  });
+
+  it('flags it on an iterator-backed option set — the shape run 735 actually had', () => {
+    // edit_budget step 3 built its period options from an iterator over month_options,
+    // which is what made the set dynamic (AC7). The gate's own output_key is still the
+    // one value the user picked, so option provenance must not change the verdict.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `['2026-07']`, on_success: 'next', output_key: 'month_options' },
+      {
+        step: '2', type: 'human_gate', gate_type: 'choice',
+        message_template: 'Which period?',
+        output_key: 'selected_period',
+        options: [
+          { iterator: 'month_options', label: '{{item}}', value: '{{item}}', on_select: 'next' },
+          { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+        ],
+        on_cancel: 'cancel', on_success: 'next',
+      },
+      {
+        step: '3', type: 'serv_query',
+        input: { tableName: 'PGD_Budgets', filters: [{ column: 'year', op: 'eq', value: '{{selected_period.0}}' }] },
+        on_success: 'next', on_else: 'cancel', output_key: 'existing_budgets',
+      },
+      { step: '4', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('flags the bracket form too — {{key[0]}} is the same defect', () => {
+    const steps = [
+      periodGate,
+      { step: '2', type: 'notify', message_template: 'Year {{selected_period[0]}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('flags a value written by action_key', () => {
+    const steps = [
+      { ...periodGate, action_key: 'chosen_action' },
+      { step: '2', type: 'notify', message_template: '{{chosen_action.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.equal(numericIssues(runSimulation({ steps, traceId: 't' })).length, 1);
+  });
+
+  it('does not flag indexing into a serv_query result — that IS an array', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Budgets' }, on_success: 'next', on_else: 'cancel', output_key: 'rows' },
+      { step: '2', type: 'notify', message_template: 'First: {{rows.0.name}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('does not flag a js_transform output — its shape is not knowable statically', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `['a', 'b']`, on_success: 'next', output_key: 'parts' },
+      { step: '2', type: 'notify', message_template: '{{parts.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('does not flag a deeper numeric segment — the value at that depth is unknown', () => {
+    const steps = [
+      { ...periodGate, gate_type: 'form', fields: [{ name: 'amount', type: 'text', label: 'Amount' }], output_key: 'form_values' },
+      { step: '2', type: 'notify', message_template: '{{form_values.entries.0}}', on_success: 'next' },
+      { step: '3', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), []);
+  });
+
+  it('downgrades to unknown when a later step rewrites the key with an unknown shape', () => {
+    const steps = [
+      periodGate,
+      { step: '2', type: 'js_transform', expression: `['2026', '07']`, on_success: 'next', output_key: 'selected_period' },
+      { step: '3', type: 'notify', message_template: '{{selected_period.0}}', on_success: 'next' },
+      { step: '4', type: 'end' },
+    ];
+    assert.deepEqual(numericIssues(runSimulation({ steps, traceId: 't' })), [],
+      'a key any writer of which may produce an array must not be flagged');
+  });
+});
