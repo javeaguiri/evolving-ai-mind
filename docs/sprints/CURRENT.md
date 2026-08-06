@@ -305,6 +305,14 @@ live round, and is blocked by nothing. Available for Sprint 9 at any point.
   **Regression-checked against every seed:** all 11 seed workflows produce zero L1 issues, and a
   before/after diff of the pass/fail verdict for all 11 is identical — the widened walk surfaces
   no new failures. 766 → 774 unit tests.
+  **Deployed and confirmed live 2026-08-06** through `POST /proc/simulate-workflow`. Both halves
+  verified against the deployed engine, which is what makes it evidence rather than inspection:
+  the run-735 shape returns `passed: false` with two `numeric_index_on_non_array` issues, and an
+  array-valued pair (`{{rows.0.id}}` from a `serv_query`, `{{parts.0}}` from a `js_transform`)
+  returns `passed: true` with zero issues. The second is the one that matters — a false positive
+  there would refuse a valid `register_workflow` write. Seeds unchanged by D4;
+  `upsert-step-type.mjs` (19 ok) and `upsert-system-context.mjs` (37 ok) re-run to confirm the DB
+  matches the branch.
   **Not validated against the live specimen, because there is nothing left to catch:**
   `edit_budget` is at v6 and restructured — the gate writes `form_month` and step 6 derives
   `selected_month`, with no numeric-index token anywhere in the array. The tests reproduce the
