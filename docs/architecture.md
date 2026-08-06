@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.7
-Status: Active development — Sprint 8 closed; Sprint 9 upcoming
-Last updated: 2026-07-25 (Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts)
+Version: 3.8
+Status: Active development — Sprint 9 closed; Sprint 10 upcoming
+Last updated: 2026-08-06 (Sprint 9 close — Novia builds workflows: step-type-registry.mjs added; L0 shape check as a `level` selector on runSimulation, replacing the `skeleton` flag; register_workflow gated write tool; option_source on the human_gate contract with static/dynamic render bounds in callback.mjs; L1 numeric-index check and a template walk that descends the whole step input)
+Previously: 3.7 — 2026-07-25 — Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts
 Previously: 3.6 — 2026-06-29 — Sprint 6 close (Sprint 7 close did not bump this header); Track P; Expenses/Recipe domains; reveal/reveals; SHUTDOWN SQS; RecursiveLoop: Allow; listPhysicalTables + dropConstraint
 Previously: 3.5 — 2026-06-18 — Sprint 5 close; Novia Phase 1; MINDS_EYE/MINDS_EYE_RESUME SQS types; minds-eye.mjs added; PGC_Session/PGC_SessionEntry live
 

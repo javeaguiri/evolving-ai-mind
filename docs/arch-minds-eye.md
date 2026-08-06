@@ -924,9 +924,24 @@ one table cannot express the composition.
 
 Remaining open:
 
-1. Cost per *delivered working workflow* for a Novia-driven build, measured against the current
-   baseline. Unmeasured today for either approach, and the evidence the dissolution decision is
-   gated on.
+1. ✅ **ANSWERED — Sprint 9, AC9 — and the answer does not yet favour the Novia path.**
+   **$2.73** to build and register `edit_budget` (session 1121, 26 calls) against the
+   `create_workflow` baseline of **≈$1.42** per paid build (run 729) — roughly **2×** — plus
+   **$3.40** for the repair session (1122) that followed without completing the repair.
+   Three qualifications, all material to how this number should be read:
+   **(a)** ~$0.39 of the build went on harness defects since fixed (six of them, §Sprint 9
+   Session 6), so a clean rebuild is cheaper than the measured figure.
+   **(b)** The dominant cost is structural and diagnosed, not mysterious: Novia's transcript is
+   re-sent whole every turn and re-cached at *creation* price because our own input assembly
+   breaks the cache prefix. The fix is three changes in `minds-eye.mjs`, and the expected effect
+   is roughly a **12× cut** on that component. It is deferred to Sprint 10 only because it needs
+   a live round to validate.
+   **(c)** The baseline is not like-for-like in the Novia path's favour: $1.42 buys a
+   `create_workflow` build that also needed repair, and the 2026-07-26 evaluation put that
+   pipeline at 4 surviving workflows from 98 runs — so cost per *delivered working* workflow, the
+   quantity OQ1 actually names, is not $1.42 for the baseline either.
+   **The dissolution decision should not be taken on this number as it stands.** Re-measure after
+   the prefix-cache fix, on a build that does not pay for defects since closed.
 2. Whether `reconcile_missing_rows` earns its place as a shared fragment. Its two instances
    share a topology but differ in gap computation, target count and whether the inserted ids are
    needed, so its `gap` slot is an expression rather than a table or column binding (§12.12).
@@ -939,12 +954,19 @@ Remaining open:
    a focused single-shot call and keeps a large JSON artifact out of the transcript — but on a
    matched archetype it may be a deterministic fill needing no LLM call at all. The only phase
    whose side of the tool/guidance line is undecided.
-5. Turn and action budgets. `turn_limit` and `max_actions_per_session` are far below what a build
-   requires, so session compression at the turn-limit gate (§6.1) becomes load-bearing rather
-   than incidental.
-6. Whether L0 is a distinct `validate_workflow_shape` tool or a `level` selector on the existing
-   `/proc/simulate-workflow` endpoint. A distinct tool makes "validate, then simulate" a legible
-   two-step for a reasoning agent and yields sharper errors; a selector avoids a new endpoint.
+5. ◐ **Partly answered — Sprint 9 raised all three budgets and none was the one that binds.**
+   `turn_limit` 8 → 12, `max_actions_per_session` 5 → 8, `max_output_tokens` 8192 → 10240 (which
+   was absent from `minds_eye_preferences` entirely and falling through to a default). But the
+   round runs its turns inside **one 240s Lambda invocation**, so a round dies at turn 3–4 and
+   `turn_limit: 12` is unreachable. `roundBudgetExhausted` now stops before a turn there is no
+   room to finish. **Session compression at the turn-limit gate remains unexercised**, because a
+   round still cannot reach that gate — it carries to Sprint 10 behind the transcript fix, which
+   is what makes turns cheap enough for a round to get there.
+6. ✅ **CLOSED — Sprint 9, B1. A `level` selector, not a new tool.** L0 is `level: 0` on
+   `runSimulation` and on the existing `/proc/simulate-workflow` endpoint, so "validate, then
+   simulate" is `simulate_workflow { steps, level: 0 }` with no new surface for Novia to learn.
+   The `skeleton: true` flag it replaces is gone from the engine and accepted only as a retired
+   spelling in `step-executor`.
 
 ### 12.8 Defects surfaced by the prompt sweep
 
