@@ -9,12 +9,20 @@
 //   2. Load or create PGC_Session (session_type = 'minds_eye')
 //   3. Assemble Layer 1 context (PGC_Workflow summaries)
 //   4. Assemble Layer 2 context (relevant PGC_Memory entries)
-//   5. Reason loop: callLlm → { action, params, reasoning } | { action: "respond", message }
+//   5. Reason loop: callLlmWithTools → a native function_call, dispatched by name
 //      - Read tool          → execute → append result → continue loop
 //      - Inline write tool  → execute directly → append result → continue loop (no gate)
 //      - Gated write tool   → store __pending__ entry → post HUMAN_GATE → end turn
 //      - "respond"          → post to Slack → end turn
 //      - turn_count >= turn_limit → post turn-limit notification → end
+//
+// The round's request is built once and then only ever appended to: the constant parts
+// (system prompt, both context layers, the standing instruction) go in `instructions`, and
+// each turn pushes the gateway's own returned items plus the tool's output onto `input`.
+// That shape is what earns incremental prompt-cache credit — measured at read/prev 1.00 per
+// turn, against a flat read of the instructions block when the transcript was rendered into
+// one string instead. Appending a user turn mid-round forfeits that credit for the turn, so
+// only the truncation notice does it, and only when a call never completed.
 //
 // Write tool gate policy:
 //   update_data, insert_data — inline, no confirmation gate
@@ -28,22 +36,21 @@
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
 import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
-import { callLlm }                                         from '../shared/llm-client.mjs';
+import { callLlmWithTools }                                from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 import { runSimulation }                                  from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 
-const ACTION_SCHEMA = {
-  type: 'object',
-  required: ['action', 'reasoning'],
-  properties: {
-    action:   { type: 'string' },
-    params:   { type: 'object' },
-    reasoning:{ type: 'string' },
-    message:  { type: 'string' },
-    advisory: { type: 'string' },
-  },
-};
+// Closes the round's instructions. Constant, so it rides in the cached prefix rather than
+// being re-sent with every turn.
+//
+// It replaces ACTION_SCHEMA, which described a {action, params, reasoning} envelope that was
+// never actually enforced: it was passed to callLlm, but response_format is gated to sonar
+// models and Novia runs anthropic/claude-sonnet-4-6, so the schema was dropped at the seam
+// every single time. Tool schemas are enforced by the gateway, so the contract is now real.
+const STANDING_INSTRUCTION =
+  'Decide your next action and call exactly one tool. Call respond when you are holding ' +
+  'something the user could accept or reject, or when the task is done.';
 
 const DEFAULT_PREFERENCES = {
   name:                   'Agent',
@@ -549,6 +556,33 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     return;
   }
 
+  const toolDefs = await loadToolDefinitions(traceId);
+  if (!toolDefs) {
+    // Ending the round with a real message beats running tool-less: a Novia with no tools
+    // can only talk, and the user would have no way to tell that from a bad answer.
+    if (callback) {
+      await enqueueCallback(callback, {
+        type:      'HUMAN_NOTIFICATION',
+        traceId,
+        message:   `Could not load the tool catalog, so this round was not started. Check the minds_eye_tool_schemas system context row.\n\n_Session ${session.id}_`,
+        sessionId: session.id,
+      });
+    }
+    return;
+  }
+
+  // Everything constant for the round goes in `instructions`, which is cached and read back
+  // at a tenth of write price on every later turn. What must NOT go here is anything that
+  // changes per turn: `instructions` sits ahead of the whole transcript, so a change to it
+  // invalidates the round's entire prefix.
+  const roundInstructions = [systemPrompt, layer1Context, layer2Context, STANDING_INSTRUCTION]
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+
+  // Rebuilt once, from what is persisted. From here the array only ever grows, and it grows
+  // by appending the gateway's own returned items — that is what earns the prefix credit.
+  let input = toInputItems(workingHistory);
+
   let turnCount      = currentTurnCount;  // cumulative lifetime tally — never reset, persisted
   let turnsThisRound  = 0;                // per-invocation budget — always starts fresh
   let actionCount     = currentActionCount;
@@ -560,6 +594,17 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   const roundStart   = Date.now();
   let longestTurnMs  = 0;
   let budgetExhausted = false;
+
+  // The turn's open call, so each dispatch branch can close it with the tool's result.
+  let activeCall = null;
+  const recordToolOutput = (result) => {
+    if (!activeCall) return;
+    input.push({
+      type:    'function_call_output',
+      call_id: activeCall.call_id,
+      output:  capOutput(JSON.stringify(result ?? null)),
+    });
+  };
 
   while (turnsThisRound < prefs.turn_limit) {
     // Stop before starting a turn there is no room to finish. Ending here is a clean exit
@@ -578,18 +623,25 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       break;
     }
 
-    const turnStart   = Date.now();
-    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs, truncationNotice);
-    truncationNotice  = null;
+    const turnStart = Date.now();
 
-    let decision;
+    // A notice is the one thing that has to arrive as a user turn: it follows a call that
+    // never completed, so there is no call_id to attach it to. That costs this turn's prefix
+    // credit and only this turn's — an accepted trade, since re-asks are rare.
+    if (truncationNotice) {
+      input.push({ role: 'user', content: truncationNotice });
+      truncationNotice = null;
+    }
+
+    let turn;
     try {
-      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
+      turn = await callLlmWithTools(prefs.model, roundInstructions, input, toolDefs, traceId, prefs.max_output_tokens);
       lastTurnTruncated = false;
     } catch (llmError) {
-      const failureAction = classifyLlmFailure(llmError, lastTurnTruncated);
-
-      if (failureAction === 'reask') {
+      // The old 'correct' branch is gone with the JSON contract it served: callLlmWithTools
+      // parses nothing, so it cannot raise a parse error. Malformed arguments now come back
+      // as a successful call and are answered below, on the chain, for free.
+      if (classifyLlmFailure(llmError, lastTurnTruncated) === 'reask') {
         console.warn('proc/minds-eye: response truncated at output ceiling — re-asking', {
           traceId,
           maxOutputTokens: prefs.max_output_tokens,
@@ -602,41 +654,50 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         continue;
       }
 
-      if (failureAction === 'correct') {
-        // Generation fault: LLM produced valid content but invalid JSON escaping.
-        // The correction call is a real extra LLM call — counts as its own turn.
-        try {
-          const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
-          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
-          turnCount += 1;
-          turnsThisRound += 1;
-          console.info('proc/minds-eye: JSON parse corrected', { traceId });
-        } catch (corrErr) {
-          // The correction's OWN failure was previously terminal — no classification, no
-          // retry — so a transport blip while repairing a recoverable parse error ended the
-          // session (`fetch failed`, session 1122 11:06:53, after two corrections in the
-          // same round had succeeded). Classify it the same way as any other failed call:
-          // a truncated correction gets re-asked, and anything else still ends the round.
-          if (classifyLlmFailure(corrErr, lastTurnTruncated) === 'reask') {
-            console.warn('proc/minds-eye: correction truncated — re-asking', { traceId });
-            truncationNotice  = TRUNCATION_NOTICE;
-            lastTurnTruncated = true;
-            longestTurnMs     = Math.max(longestTurnMs, Date.now() - turnStart);
-            turnCount      += 1;
-            turnsThisRound += 1;
-            continue;
-          }
-          console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
-          if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
-          earlyExit = true;
-          break;
-        }
-      } else {
-        console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
-        if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
-        earlyExit = true;
-        break;
+      console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
+      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
+      earlyExit = true;
+      break;
+    }
+
+    // The model's own items go on the chain before anything it asked for is executed —
+    // they are what the next turn reads back from cache.
+    input.push(...turn.output.map(item => ({ ...item })));
+
+    activeCall = turn.output.find(o => o.type === 'function_call') ?? null;
+
+    let decision;
+    if (activeCall) {
+      let args;
+      try {
+        args = JSON.parse(activeCall.arguments);
+      } catch {
+        // Answer the malformed call as its own tool result. This keeps the chain intact and
+        // costs nothing, where a correction prompt used to cost a whole extra LLM call.
+        console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
+          action: activeCall.name, traceId,
+        });
+        recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
+        activeCall = null;
+        turnCount      += 1;
+        turnsThisRound += 1;
+        longestTurnMs   = Math.max(longestTurnMs, Date.now() - turnStart);
+        continue;
       }
+      const { reasoning, message, advisory, ...params } = args;
+      decision = { action: activeCall.name, params, reasoning, message, advisory };
+
+    } else if (turn.text) {
+      // Answered in prose without calling respond. Treat it as the reply it plainly is,
+      // rather than failing the round on a technicality the user would never see.
+      console.info('proc/minds-eye: text reply with no tool call — treating as respond', { traceId });
+      decision = { action: 'respond', params: {}, message: turn.text };
+
+    } else {
+      console.error('proc/minds-eye: turn produced neither a tool call nor text', { traceId });
+      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, new Error('empty turn')));
+      earlyExit = true;
+      break;
     }
 
     // Measured across the whole turn, correction call included — the budget check cares
@@ -709,6 +770,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         content:         toolEntry,
       });
 
+      recordToolOutput(toolResult);
       workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
       seq += 1;
 
@@ -729,6 +791,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         content:         hkEntry,
       });
 
+      recordToolOutput(hkResult);
       workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
       seq += 1;
 
@@ -758,6 +821,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         { minds_eye_action_count: actionCount }
       );
 
+      recordToolOutput(writeResult);
       workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
       seq += 1;
 
@@ -778,6 +842,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
           content:         refusalEntry,
         });
 
+        recordToolOutput(refusal);
         workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
         seq += 1;
 
@@ -813,6 +878,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         content:         triggerEntry,
       });
 
+      recordToolOutput(triggerResult);
       workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
       seq += 1;
 
@@ -1727,102 +1793,6 @@ export function toInputItems(workingHistory = []) {
   if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
 
   return items;
-}
-
-// ---------------------------------------------------------------------------
-// Build the user-facing LLM input: context blocks + conversation transcript
-// ---------------------------------------------------------------------------
-
-/**
- * Which history entry holds the step array currently being worked on.
- *
- * Tool entries are recorded with their `params`, so every array Novia has submitted is
- * already persisted — but the transcript renders only `result`, so she has been reading
- * verdicts about arrays she cannot see, naming step keys absent from her context. With no
- * copy of her own work in front of her she rebuilds all of it from reasoning each turn,
- * which is why session 1121 drifted 19 → 21 → 23 steps and why `step_label` returned two
- * turns after she had corrected it.
- *
- * One array is rendered, never all of them: the latest is the draft, and the earlier ones
- * are the same workflow in a worse state. `sequence_number` already orders them, so the
- * newest submission IS the current version — no version column, no separate draft store.
- *
- * `__pending__` and `__cancelled__` are skipped. A pending entry carries a copy of the
- * array too, but it is awaiting a human decision rather than a correction, and treating it
- * as the draft would mark the last correctable array superseded.
- */
-export function latestDraftIndex(history) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const entry = history[i];
-    if (entry?.role !== 'tool') continue;
-    try {
-      const parsed = JSON.parse(entry.content);
-      if (parsed?.tool === '__pending__' || parsed?.tool === '__cancelled__') continue;
-      if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) return i;
-    } catch { /* not a readable tool entry */ }
-  }
-  return -1;
-}
-
-export function buildUserMessage(layer1Context, layer2Context, history, prefs, notice) {
-  const parts = [];
-
-  parts.push(layer1Context);
-  if (layer2Context) parts.push(layer2Context);
-
-  if (history.length > 0) {
-    const draftIndex = latestDraftIndex(history);
-
-    const transcript = history.map((e, i) => {
-      if (e.role === 'user')      return `User: ${e.content}`;
-      if (e.role === 'assistant') {
-        try {
-          const parsed = JSON.parse(e.content);
-          return parsed.message ? `Assistant: ${parsed.message}` : `Assistant: ${e.content}`;
-        } catch { return `Assistant: ${e.content}`; }
-      }
-      if (e.role === 'tool') {
-        try {
-          const parsed = JSON.parse(e.content);
-          if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
-          if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
-
-          const result = JSON.stringify(parsed.result).slice(0, 15000);
-
-          // A submitted step array is shown once, on the newest submission, because that
-          // is the draft; the same array in an older state is not worth its tokens and is
-          // reduced to the verdict it earned. Not truncated when it is shown — half a step
-          // array is not a thing anyone can correct.
-          if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) {
-            return i === draftIndex
-              ? `Tool (${parsed.tool}) — CURRENT DRAFT, ${parsed.params.steps.length} steps. This is the array you last submitted; correct THIS array rather than composing a new one from scratch.\nSubmitted steps: ${JSON.stringify(parsed.params.steps)}\nResult: ${result}`
-              : `Tool (${parsed.tool}): submitted ${parsed.params.steps.length} steps, since superseded. Result: ${result}`;
-          }
-
-          return `Tool (${parsed.tool}): ${result}`;
-        } catch { return `Tool: ${e.content.slice(0, 15000)}`; }
-      }
-      return '';
-    }).filter(Boolean).join('\n\n');
-
-    parts.push(`CONVERSATION:\n${transcript}`);
-  }
-
-  // Tool names, params, and gating are documented once in minds_eye_system_prompt
-  // (the instructions/system message) — not re-enumerated here. A second,
-  // hand-maintained copy in this per-turn message previously drifted stale
-  // (missing run_sql, upsert_data, create_view, drop_view) while still telling
-  // the model to use ONLY the tools listed here; removed rather than patched,
-  // since two copies of the same catalog will drift again.
-  parts.push(
-    'Based on the context and conversation above, decide your next action. ' +
-    'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
-  );
-
-  // Last, so it is the nearest instruction to the response it constrains.
-  if (notice) parts.push(notice);
-
-  return parts.join('\n\n---\n\n');
 }
 
 // ---------------------------------------------------------------------------

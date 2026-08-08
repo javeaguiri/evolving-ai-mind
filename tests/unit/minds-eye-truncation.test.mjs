@@ -18,7 +18,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyLlmFailure, buildUserMessage, roundBudgetExhausted, latestDraftIndex } from '../../src/proc/minds-eye.mjs';
+import { classifyLlmFailure, roundBudgetExhausted } from '../../src/proc/minds-eye.mjs';
 
 const truncated = () => {
   const e = new Error('LLM returned invalid JSON: Unexpected token \'G\'');
@@ -67,30 +67,6 @@ describe('classifyLlmFailure', () => {
 
   it('does not throw on a missing error object', () => {
     assert.equal(classifyLlmFailure(undefined, false), 'fail');
-  });
-});
-
-describe('buildUserMessage — the truncation notice', () => {
-  const prefs = { name: 'Agent', tone: 'concise', advisory_level: 'proactive' };
-  const history = [{ role: 'user', content: 'build me a workflow' }];
-
-  it('omits the notice when a turn was not truncated', () => {
-    const withNone = buildUserMessage('LAYER1', null, history, prefs, null);
-    assert.ok(!withNone.includes('output limit'));
-  });
-
-  it('appends the notice last, nearest the response it constrains', () => {
-    const notice  = 'NOTICE-SENTINEL';
-    const message = buildUserMessage('LAYER1', null, history, prefs, notice);
-    assert.ok(message.endsWith(notice), 'the notice must be the final section');
-    assert.ok(message.includes('LAYER1'), 'context is still carried');
-    assert.ok(message.includes('build me a workflow'), 'the conversation is still carried');
-  });
-
-  it('carries the conversation intact — a re-ask loses only the severed response', () => {
-    const before = buildUserMessage('LAYER1', 'LAYER2', history, prefs, null);
-    const after  = buildUserMessage('LAYER1', 'LAYER2', history, prefs, 'NOTICE');
-    assert.ok(after.startsWith(before), 'the re-ask is the same message plus the notice');
   });
 });
 
@@ -150,73 +126,4 @@ const simEntry = (stepCount, verdict, keyField = 'step') => JSON.stringify({
   tool:   'simulate_workflow',
   params: { steps: Array.from({ length: stepCount }, (_, i) => ({ [keyField]: String(i + 1), type: 'end' })) },
   result: { passed: verdict, total_issues: verdict ? 0 : 3 },
-});
-
-describe('latestDraftIndex', () => {
-
-  it('finds the newest submitted array', () => {
-    const history = [
-      { role: 'user', content: 'build it' },
-      { role: 'tool', content: simEntry(19, false) },
-      { role: 'tool', content: simEntry(21, false) },
-    ];
-    assert.equal(latestDraftIndex(history), 2);
-  });
-
-  it('returns -1 when nothing has been submitted yet', () => {
-    assert.equal(latestDraftIndex([
-      { role: 'user', content: 'build it' },
-      { role: 'tool', content: JSON.stringify({ tool: 'query_table', params: { tableName: 'PGC_StepType' }, result: { count: 19 } }) },
-    ]), -1);
-  });
-
-  it('skips a pending approval — it awaits a decision, not a correction', () => {
-    const history = [
-      { role: 'tool', content: simEntry(21, false) },
-      { role: 'tool', content: JSON.stringify({ tool: '__pending__', action: 'register_workflow', params: { steps: [{ step: '1' }] } }) },
-    ];
-    assert.equal(latestDraftIndex(history), 0, 'the last correctable array, not the pending copy');
-  });
-
-  it('ignores tool entries with no steps and unreadable content alike', () => {
-    const history = [
-      { role: 'tool', content: simEntry(19, false) },
-      { role: 'tool', content: 'not json at all' },
-      { role: 'tool', content: JSON.stringify({ tool: 'read_workflow', params: { workflowName: 'x' }, result: {} }) },
-    ];
-    assert.equal(latestDraftIndex(history), 0);
-  });
-});
-
-describe('buildUserMessage — the current draft', () => {
-  const prefs = { name: 'Agent', tone: 'concise', advisory_level: 'proactive' };
-
-  it('renders the newest array in full and reduces the older one to its verdict', () => {
-    const message = buildUserMessage('L1', null, [
-      { role: 'tool', content: simEntry(19, false, 'step_label') },
-      { role: 'tool', content: simEntry(21, false) },
-    ], prefs);
-
-    assert.match(message, /CURRENT DRAFT, 21 steps/);
-    assert.match(message, /submitted 19 steps, since superseded/);
-    // The superseded array's contents are gone; only the newest is spelled out.
-    assert.ok(!message.includes('step_label'), 'a superseded array costs nothing but its verdict');
-    assert.match(message, /"step":"21"/, 'the draft is rendered whole, so it can be corrected');
-  });
-
-  it('keeps every verdict — a superseded array still earned its result', () => {
-    const message = buildUserMessage('L1', null, [
-      { role: 'tool', content: simEntry(19, false) },
-      { role: 'tool', content: simEntry(21, true) },
-    ], prefs);
-    assert.equal((message.match(/"passed"/g) ?? []).length, 2);
-  });
-
-  it('leaves tool calls that carry no step array exactly as before', () => {
-    const message = buildUserMessage('L1', null, [
-      { role: 'tool', content: JSON.stringify({ tool: 'query_table', params: { tableName: 'PGC_StepType' }, result: { count: 19 } }) },
-    ], prefs);
-    assert.match(message, /Tool \(query_table\): \{"count":19\}/);
-    assert.ok(!message.includes('CURRENT DRAFT'));
-  });
 });
