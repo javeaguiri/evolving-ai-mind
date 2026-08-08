@@ -1605,6 +1605,131 @@ async function assembleContext() {
 }
 
 // ---------------------------------------------------------------------------
+// Rebuild the round's LLM input from persisted session entries
+// ---------------------------------------------------------------------------
+
+// Matches the render cap this replaces: a single tool result cannot dominate the
+// rebuilt transcript. Applied to outputs only — never to a call's arguments, which
+// carry Novia's own submitted work. Sprint 9's largest defect was her losing sight of
+// step arrays she had submitted, and truncating them here would reintroduce it.
+const MAX_TOOL_OUTPUT_CHARS = 15000;
+
+const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
+
+function capOutput(text) {
+  return text.length > MAX_TOOL_OUTPUT_CHARS
+    ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated]`
+    : text;
+}
+
+/**
+ * Convert persisted PGC_SessionEntry rows into the canonical item array the gateway takes.
+ *
+ * Runs once per round, at the start. Within a round the loop appends the gateway's own
+ * output items instead, because those carry server-assigned call_ids and are what earn
+ * incremental cache credit. Rebuilding from our own shape here costs nothing: a round
+ * always opens with a user message, and a user message forfeits prefix credit for its turn
+ * regardless — so byte-fidelity with a previous round's items would buy exactly nothing.
+ *
+ * Keeping PGC_SessionEntry in its existing shape is what lets /explain, chat.mjs and
+ * deriveScope go on reading it unchanged.
+ *
+ * Entry shapes in, items out:
+ *   role 'user'                              -> { role: 'user', content }
+ *   role 'assistant' {action:'respond',...}  -> { role: 'assistant', content: message }
+ *   role 'tool' {tool, params, result}       -> function_call + function_call_output
+ *   role 'tool' {tool:'__pending__', ...}    -> function_call, output supplied by what follows
+ *   role 'tool' {tool:'__cancelled__', ...}  -> the pending call's output
+ *
+ * A gated action spans two entries — the __pending__ that posted the gate and whatever
+ * resolved it — and must come back as ONE call with one output, or the model sees the same
+ * destructive action requested twice.
+ *
+ * call_ids are synthesised from sequence_number. They only have to be unique and consistent
+ * inside this array; nothing downstream matches them against the gateway's originals.
+ *
+ * @param {Array} workingHistory  PGC_SessionEntry rows in sequence order
+ * @returns {Array} canonical items for callLlmWithTools
+ */
+export function toInputItems(workingHistory = []) {
+  const items   = [];
+  let   pending = null;   // { callId, name } — a function_call still waiting for its output
+
+  const closePending = (output) => {
+    items.push({ type: 'function_call_output', call_id: pending.callId, output });
+    pending = null;
+  };
+
+  workingHistory.forEach((entry, i) => {
+    const callId = `call_${entry?.sequence_number ?? i}`;
+
+    if (entry?.role === 'user') {
+      // Reachable: the user ignores a gate and sends a new message instead of answering it.
+      // The call still has to be closed — an unpaired call followed by a user turn is not
+      // a shape the gateway accepts.
+      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+      items.push({ role: 'user', content: String(entry.content ?? '') });
+      return;
+    }
+
+    let parsed = null;
+    try { parsed = JSON.parse(entry?.content); } catch { /* not a JSON entry */ }
+
+    if (entry?.role === 'assistant') {
+      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+      // reasoning and advisory are deliberately dropped: reasoning is per-turn scratch, and
+      // the advisory was already delivered to the user when the round ended.
+      items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
+      return;
+    }
+
+    if (!parsed?.tool) return;   // an unreadable tool entry contributes nothing
+
+    if (parsed.tool === '__pending__') {
+      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+      items.push({
+        type:      'function_call',
+        call_id:   callId,
+        name:      parsed.action,
+        arguments: JSON.stringify(parsed.params ?? {}),
+      });
+      pending = { callId, name: parsed.action };
+      return;
+    }
+
+    if (parsed.tool === '__cancelled__') {
+      if (pending) closePending(JSON.stringify({ cancelled: true }));
+      return;   // a cancellation with no open call has nothing to attach to
+    }
+
+    // The entry a gate resolves into carries the same action as the pending call, so it
+    // becomes that call's output rather than a second call.
+    if (pending && pending.name === parsed.tool) {
+      closePending(capOutput(JSON.stringify(parsed.result ?? null)));
+      return;
+    }
+
+    if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+
+    items.push({
+      type:      'function_call',
+      call_id:   callId,
+      name:      parsed.tool,
+      arguments: JSON.stringify(parsed.params ?? {}),
+    });
+    items.push({
+      type:    'function_call_output',
+      call_id: callId,
+      output:  capOutput(JSON.stringify(parsed.result ?? null)),
+    });
+  });
+
+  if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+
+  return items;
+}
+
+// ---------------------------------------------------------------------------
 // Build the user-facing LLM input: context blocks + conversation transcript
 // ---------------------------------------------------------------------------
 

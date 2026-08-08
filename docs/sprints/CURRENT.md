@@ -162,7 +162,7 @@ first is done:
 | | Work | State |
 |---|---|---|
 | 2a | 23 tool schemas in `PGC_SystemContext.minds_eye_tool_schemas`; `selectToolDefinitions` + `loadToolDefinitions` with a two-way drift check against the dispatch sets | ✅ DONE |
-| 2b | `toInputItems(workingHistory)` — rebuild canonical items at round start, pairing `__pending__` with its resolution | |
+| 2b | `toInputItems(workingHistory)` — rebuild canonical items at round start, pairing `__pending__` with its resolution | ✅ DONE |
 | 2c | The loop swap: `callLlmWithTools`, dispatch on `function_call.name`, append real `output` items | |
 | 2d | `instructions` absorbs both context blocks and the standing instruction; `buildUserMessage`, `latestDraftIndex` and draft supersession are deleted | |
 | 2e | Gate resume pairs a persisted `__pending__` with its resolution on rebuild | |
