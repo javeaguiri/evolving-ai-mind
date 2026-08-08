@@ -28,39 +28,23 @@ const LLM_TIMEOUT_MS = 170_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 /**
- * Call Perplexity Agent API and return parsed JSON.
- * Strips markdown fences defensively before JSON.parse.
+ * POST a request body to the gateway and return the parsed response envelope.
  *
- * @param {string} model         LLM model name from PGC_Prompt.model
- * @param {string} instructions  System prompt — {{userInput}} already substituted by caller
- * @param {string} userMessage   User-facing input message
- * @param {object} outputSchema  PGC_Prompt.output_schema — enforced at model level if provided
- * @param {string} traceId       For logging
- * @returns {Promise<object>}    Parsed JSON response
+ * Every caller in this file needs the same four things — the key check, the abort
+ * ceiling, the timeout-vs-transport error distinction, and the non-2xx error text —
+ * and had its own byte-identical copy of them. One copy means a change to the abort
+ * ceiling or the error shape cannot apply to some callers and not others.
+ *
+ * Response post-processing is deliberately NOT here: callers differ on what the
+ * envelope means (parsed JSON, raw text, or the raw item array), and that difference
+ * is the whole reason they are separate functions.
+ *
+ * @param {object} body  The request body, already assembled
+ * @returns {Promise<object>} The parsed response envelope
  */
-export async function callLlm(model, instructions, userMessage, outputSchema, traceId, maxOutputTokens) {
+async function postToGateway(body) {
   const llmKey = process.env.LLM_API_KEY;
   if (!llmKey) throw new Error('LLM_API_KEY env var not set');
-
-  const body = {
-    model,
-    input:        userMessage,
-    instructions,
-    max_output_tokens: parseInt(maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 10),
-  };
-
-  // response_format enforces the schema at the model level — reduces field-name
-  // hallucination without relying solely on the Ajv correction loop for structure.
-  // markdown-fence stripping is kept as a defensive fallback.
-  // IMPORTANT: response_format is only supported by sonar models via the Perplexity
-  // agent endpoint. Non-sonar models (e.g. anthropic/claude-*, openai/gpt-*) routed
-  // through the gateway return HTTP 400 when response_format is present. For those
-  // models schema enforcement relies entirely on the Ajv correction loop in review-output.mjs.
-  const isSonar = typeof model === 'string' && model.includes('sonar');
-  const responseFormat = (isSonar && outputSchema)
-    ? { type: 'json_schema', json_schema: { name: 'output', schema: outputSchema, strict: false } }
-    : undefined;
-  if (responseFormat) body.response_format = responseFormat;
 
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
@@ -90,7 +74,107 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
     throw new Error(`Agent API error ${response.status}: ${text}`);
   }
 
-  const data = await response.json();
+  return response.json();
+}
+
+/**
+ * Call the gateway with native tool definitions, returning the raw output items.
+ *
+ * Separate from callLlm rather than a flag on it, because the contracts differ:
+ * callLlm promises parsed JSON, and a tool-calling turn may return no message block
+ * at all — only a `function_call` — so there is nothing for JSON.parse to read. A
+ * function whose return type depends on what the model chose to do is worse than two
+ * functions with one contract each.
+ *
+ * `input` accepts a string OR an array of canonical items, and the array form is the
+ * point of this function. Echoing the previous turn's `output` items back — carrying
+ * the server-assigned `call_id` — gives each item its own cache boundary, so turn N
+ * reads turn N-1's whole prefix at cache-read rates instead of rewriting it. A
+ * hand-rendered transcript string is one opaque block and gets no such credit:
+ * measured on the live gateway, the same append scored read 4,698 as a string against
+ * read 16,539 as items. Nothing about that is inferable from the request shape, which
+ * is why it is written down here.
+ *
+ * @param {string}       model            Gateway model id
+ * @param {string}       instructions     System prompt
+ * @param {string|Array} input            A prompt string, or canonical items to carry forward
+ * @param {Array}        [tools]          Tool definitions: { type: 'function', name, description, parameters }
+ * @param {string}       traceId          For logging
+ * @param {number}       [maxOutputTokens]
+ * @returns {Promise<{output: Array, usage: object, text: string}>}
+ *   `output` is echoed straight back as the next turn's `input`; `usage` carries the
+ *   cache counters; `text` is every message block's text joined, empty on a pure tool call.
+ */
+export async function callLlmWithTools(model, instructions, input, tools, traceId, maxOutputTokens) {
+  const body = {
+    model,
+    input,
+    instructions,
+    max_output_tokens: parseInt(maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 10),
+    ...(tools?.length ? { tools } : {}),
+  };
+
+  const data   = await postToGateway(body);
+  const output = data.output ?? [];
+  const usage  = data.usage ?? {};
+
+  const text = output
+    .filter(o => o.type === 'message')
+    .map(o => o.content?.map(c => c.text ?? '').join('') ?? '')
+    .join('')
+    .trim();
+
+  // cache_read vs cache_creation is the signal the whole item-array design turns on,
+  // so it is logged explicitly rather than left inside the usage blob.
+  const details = usage.input_tokens_details ?? {};
+  console.info('llm-client: callLlmWithTools response', {
+    model,
+    itemTypes:     output.map(o => o.type),
+    inputTokens:   usage.input_tokens,
+    cacheCreation: details.cache_creation_input_tokens,
+    cacheRead:     details.cache_read_input_tokens,
+    cost:          usage.cost?.total_cost,
+    traceId,
+  });
+
+  if (output.length === 0) throw new Error('LLM returned no output items');
+
+  return { output, usage, text };
+}
+
+/**
+ * Call Perplexity Agent API and return parsed JSON.
+ * Strips markdown fences defensively before JSON.parse.
+ *
+ * @param {string} model         LLM model name from PGC_Prompt.model
+ * @param {string} instructions  System prompt — {{userInput}} already substituted by caller
+ * @param {string} userMessage   User-facing input message
+ * @param {object} outputSchema  PGC_Prompt.output_schema — enforced at model level if provided
+ * @param {string} traceId       For logging
+ * @returns {Promise<object>}    Parsed JSON response
+ */
+export async function callLlm(model, instructions, userMessage, outputSchema, traceId, maxOutputTokens) {
+  const body = {
+    model,
+    input:        userMessage,
+    instructions,
+    max_output_tokens: parseInt(maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS, 10),
+  };
+
+  // response_format enforces the schema at the model level — reduces field-name
+  // hallucination without relying solely on the Ajv correction loop for structure.
+  // markdown-fence stripping is kept as a defensive fallback.
+  // IMPORTANT: response_format is only supported by sonar models via the Perplexity
+  // agent endpoint. Non-sonar models (e.g. anthropic/claude-*, openai/gpt-*) routed
+  // through the gateway return HTTP 400 when response_format is present. For those
+  // models schema enforcement relies entirely on the Ajv correction loop in review-output.mjs.
+  const isSonar = typeof model === 'string' && model.includes('sonar');
+  const responseFormat = (isSonar && outputSchema)
+    ? { type: 'json_schema', json_schema: { name: 'output', schema: outputSchema, strict: false } }
+    : undefined;
+  if (responseFormat) body.response_format = responseFormat;
+
+  const data = await postToGateway(body);
 
   // Capture token usage before any parsing — needed for truncation detection below.
   const outputTokens = data.usage?.output_tokens ?? 0;
@@ -153,9 +237,6 @@ export async function callLlm(model, instructions, userMessage, outputSchema, tr
  * @returns {Promise<string>} Raw LLM text response
  */
 export async function callLlmWithMessages(model, messages, traceId) {
-  const llmKey = process.env.LLM_API_KEY;
-  if (!llmKey) throw new Error('LLM_API_KEY env var not set');
-
   // Concatenate every system-role message rather than taking only the first —
   // callers (e.g. explain.mjs) may layer their own meta-instructions on top of
   // stored context (e.g. the original llm_call's full prompt_text) that is
@@ -191,35 +272,7 @@ export async function callLlmWithMessages(model, messages, traceId) {
     ...(isSonar && history.length > 0   ? { messages: history }     : {}),
   };
 
-  const controller = new AbortController();
-  const timeoutId  = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-
-  let response;
-  try {
-    response = await fetch(process.env.LLM_AGENT_URL, {
-      method:  'POST',
-      headers: {
-        'Authorization': `Bearer ${llmKey}`,
-        'Content-Type':  'application/json',
-      },
-      body:   JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (fetchErr) {
-    if (fetchErr.name === 'AbortError') {
-      throw new Error(`LLM call timed out after ${LLM_TIMEOUT_MS / 1000}s`);
-    }
-    throw fetchErr;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Agent API error ${response.status}: ${text}`);
-  }
-
-  const data = await response.json();
+  const data = await postToGateway(body);
 
   console.info('llm-client: callLlmWithMessages response', {
     model,
