@@ -154,10 +154,10 @@ them. The test it states is what this change passes — the doc does not name th
 |---|---|---|
 | **(i)** | `llm-client.mjs` | Accept a `tools` parameter and an item-array `input`. Purely additive — `callLlm`'s parsed-JSON contract is untouched, so every existing caller is unaffected. |
 | **(ii)** | `minds-eye.mjs` | Emit the tool catalog natively; carry `response.output` items forward and return results as `function_call_output`. **The substantial part** — the loop, `PGC_SessionEntry` persistence, and the `__pending__`/`__cancelled__` gate entries are all built on our own entry shape. |
-| **(iii)** | `minds_eye_system_prompt` | Retire the prose tool catalog and the anti-native-tool-use rule. Large prompt shrink; `ACTION_SCHEMA` stops being dead weight because tool schemas are enforced server-side. |
+| **(iii)** | `minds_eye_system_prompt` | ✅ **DONE** — prose catalogs, the `{action, params}` envelope and the anti-native-tool-use rule retired. 14,920 → 10,236 chars (~1,171 tokens); v30 → v31. Every SOP, protocol and sequencing instruction kept: those say what to do and in what order, which no schema expresses. |
 
-**Progress.** (i) done — `5f82c8b` … `37ca58d`. Step (ii) is broken into five parts, of which the
-first is done:
+**Progress.** All three steps are code-complete and pushed; none of it has run yet. Step (ii) was
+broken into five parts:
 
 | | Work | State |
 |---|---|---|
