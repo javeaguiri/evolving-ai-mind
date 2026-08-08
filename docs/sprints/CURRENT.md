@@ -605,6 +605,37 @@ review, and measured nothing — the exact failure mode of the fix this sprint s
 
 Probe spend to date across all six probes: **$1.31**.
 
+### Session 6 — 2026-08-08 — 2C deployed, not yet exercised
+
+All three steps are live in prod. `sam build && sam deploy --no-confirm-changeset` succeeded;
+`upsert-system-context.mjs` inserted `minds_eye_tool_schemas` (**id 46, 23 tools**) and updated
+`minds_eye_system_prompt` **v30 → v31**; `upsert-step-type.mjs` carried `serv_query`'s composite
+`orderBy` contract. Verified against the live rows: the prompt is 10,236 chars and none of
+`native tool-use formats`, `── READ TOOLS`, `── OUTPUT` or `"action":` survives in it.
+
+**Nothing has run.** Unit tests cover `toInputItems`, `selectToolDefinitions` and
+`callLlmWithTools`; the assembled loop has never executed. The next `/novia` round is the
+integration test and closes AC1 and AC2 together.
+
+**What to read.** `llm-client: callLlmWithTools response` logs `itemTypes`, `inputTokens`,
+`cacheCreation`, `cacheRead` and `cost` for every turn:
+
+```
+aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --region us-east-2
+```
+
+| Signal | Pass | What failure looks like |
+|---|---|---|
+| **AC1 mechanism** | `cacheRead` exceeds the instructions+tools block (~7,900) on every turn after the first, and grows with the transcript | `cacheRead` pinned flat — the shape regressed to what three weeks of logs already show |
+| **AC1 cost** | `cacheCreation` stays near the per-turn increment rather than tracking `inputTokens` | creation climbing with the transcript |
+| **AC2** | no `run_sql` call fails on an identifier | a relation-does-not-exist error |
+| Loop health | `itemTypes` is `["function_call"]` most turns | `[]`, or repeated `respond` on turn 1 |
+
+**Rollback**, if the round misbehaves: `git checkout main && sam build && sam deploy
+--no-confirm-changeset`, then re-run both upsert scripts from main — the seed rows are the other
+half of the deploy and reverting code alone would leave v31 and row 46 in place.
+
+
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
 **The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
