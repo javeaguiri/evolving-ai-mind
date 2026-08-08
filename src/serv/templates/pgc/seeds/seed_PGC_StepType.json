@@ -341,10 +341,10 @@
         "description": "Array of { column, op, value } filter objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains"
       },
       {
-        "type": "object",
+        "type": "object | string | array",
         "field": "input.orderBy",
         "required": false,
-        "description": "{ column, direction } \u2014 direction is \"asc\" or \"desc\""
+        "description": "One sort term, or a list of them for a composite sort. A term is { column, direction } with direction \"asc\" or \"desc\" (default \"asc\"), or the SQL string form \"column DESC\". A list is either an array of terms or one comma-separated SQL string. Sort on a unique column last whenever the leading term can tie and the row cap can cut the tie. Without that trailing term, which rows come back from within a tied group is not stable between identical queries."
       },
       {
         "type": "integer",

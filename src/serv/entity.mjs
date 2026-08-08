@@ -25,6 +25,7 @@
 
 import { ok, err }   from '../shared/lambda-utils.mjs';
 import { getClient } from './init-brain.mjs';
+import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
 
 // System columns never written by callers
 const SYSTEM_COLS = new Set(['id', 'created_at', 'updated_at']);
@@ -234,8 +235,10 @@ async function listEntities(req) {
       }
     }
 
-    if (orderBy && !validColumns.has(orderBy.column)) {
-      return err(400, `orderBy column "${orderBy.column}" not found in schema`, req.correlationId);
+    const orderTerms = normalizeOrderBy(orderBy);
+    const badTerm    = orderTerms.find(t => !validColumns.has(t.column));
+    if (badTerm) {
+      return err(400, `orderBy column "${badTerm.column}" not found in schema`, req.correlationId);
     }
 
     const safeLimit   = Math.min(Math.max(1, parseInt(limit, 10) || 100), 1000);
@@ -267,9 +270,7 @@ async function listEntities(req) {
       ? `${hasGroupBy ? 'HAVING' : 'WHERE'} ${conditions.join(' AND ')}`
       : '';
 
-    const orderClause = orderBy
-      ? `ORDER BY r."${orderBy.column}" ${orderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
-      : '';
+    const orderClause = buildOrderClause(orderTerms, 'r.');
 
     const pgdClient = getClient(process.env.PGD_DATABASE_URL);
     await pgdClient.connect();

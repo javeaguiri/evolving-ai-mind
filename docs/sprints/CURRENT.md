@@ -48,12 +48,16 @@ category, not its own** — receipt processing is day-to-day use, and it recurs 
 the whole reason the lazy-match design (below) is a cost decision rather than an implementation
 detail.
 
-**Threshold:** PASS if measured fixed cost ≤ $30/month. FAIL above $40/month. Between the two,
-report the breakdown and treat it as a decision rather than a verdict.
+**Threshold:** PASS if fixed cost ≤ $30/month. FAIL above $40/month.
 
-**Deliverable:** a per-service breakdown from AWS Cost Explorer for a full billing month. If RDS
-dominates — which is the expectation — that fact is what makes "we have not explored cheaper
-PostgreSQL suppliers" an actionable item for contributors later rather than a vague note.
+**Settled 2026-08-08 on standing evidence — PASS. No Cost Explorer run.** AWS charges have held
+at ~$21/month for many months with no development-driven variance, which is what this checkpoint
+asked and answers it inside the threshold. A per-service breakdown would confirm a number that
+has already been stable across several billing cycles.
+
+**The cost risk is Perplexity API spend, not AWS**, and it is measured by Checkpoints 2 and 3 —
+where it belongs, since it is the variable that development activity and per-receipt use actually
+move. Checkpoint 1 is closed; the go/no-go turns on the other two.
 
 ---
 
@@ -221,7 +225,7 @@ together are the alias-learning claim; one number alone is not.
 | **AC7** | Lazy matching resolves a real receipt's items against inventory, threshold calibrated, confirmations persisted as aliases | 3b | Named in 3b |
 | **AC8** | One routing workflow, built by Novia, handles both receipt kinds end-to-end from Slack | 3c | Binary — both kinds |
 | **AC9** | Per-receipt cost measured on first and third use of the same merchant | 3b | Third < first |
-| **AC10** | AWS fixed cost measured per-service for a full billing month | 1 | ≤ $30/month |
+| **AC10** | ~~AWS fixed cost measured per-service for a full billing month~~ — **settled PASS 2026-08-08 on standing evidence: ~$21/month, stable for months. No measurement task.** | 1 | ≤ $30/month ✅ |
 | **AC11** | **Written go/no-go recommendation** against every threshold above, with each marked PASS / MARGINAL / FAIL | — | Exists, and is unambiguous |
 
 ---
@@ -251,7 +255,7 @@ The dependency chain is strict and should not be run out of order:
 3b  serv_query vectorSearch  ──┐                                   │
 3a  inventory domain         ──┴──►  AC7 (lazy match)  ──►  AC8 (3c routing workflow)
                                                                    │
-                                              AC10 (AWS cost)  ────┴──►  AC11 go/no-go
+                                                                   └──►  AC11 go/no-go
 ```
 
 **Nothing in Checkpoint 2 is measurable before 2c lands** — that is the whole reason AC8 was
@@ -259,8 +263,7 @@ deferred out of Sprint 9. **AC8 (the routing workflow) is built by Novia**, so i
 Checkpoint 2 as well as behind its own prerequisites; it is the second capability data point, not
 a parallel track.
 
-AC10 is independent and can run at any time — it needs a full billing month of data, so start it
-first even though it reports last.
+AC10 is closed — see Checkpoint 1. It contributes a PASS to AC11 and no work.
 
 ---
 
@@ -387,3 +390,39 @@ Two findings from verifying live state rather than reading the docs:
    away, not new machinery. This is what makes the vector-first design affordable enough to
    prefer over UC-P4's per-receipt `llm_call`, which would have charged for every receipt forever
    and contradicted the system's founding principle.
+
+### Session 2 — 2026-08-08 — SERV composite orderBy investigation
+
+**Checkpoint 1 closed on standing evidence.** The user's call: AWS has held at ~$21/month for
+months, the variance that matters is Perplexity spend, and that is already measured by
+Checkpoints 2 and 3. A Cost Explorer run would have confirmed a stable number at the cost of a
+task. AC10 marked PASS, sequencing updated.
+
+**The 2C blocker verified against prod, not inferred.** `orderBy: "priority DESC, id ASC"` on
+`PGC_Memory` returned five **priority 2** rows — the lowest — with ids in no order at all. The
+composite string form does not error and does not sort: it silently inverts direction and drops
+the second key. Any generated workflow writing standard SQL `ORDER BY` today gets quietly wrong
+data back.
+
+**The tie problem is 2.6× wider than measured two days ago.** `PGC_Memory` has grown 100 → **270
+rows**; `{2: 15, 3: 97, 5: 67, 8: 91}`. **91 rows tie at priority 8**, drawn 5 at a time with no
+tiebreaker.
+
+Three things the starting kit did not have:
+
+1. **L0 and the replay fingerprint are both unaffected**, so the shape change is safe. L0's
+   contract loop skips non-required fields and checks presence only (`simulation-engine.mjs:134`)
+   — `input_contract.type` is descriptive, never enforced. `fingerprint.mjs` hashes `resolvedInput`
+   for `llm_call` steps only, and `orderBy` is a `serv_*` input that never appears there.
+2. **There are two orderBy render sites, not one.** `entity.mjs:270` (`listEntities`) builds its
+   own `ORDER BY` and never calls `normalizeOrderBy` — it reads `orderBy.column` directly at
+   `:237`, so a string form fails with `orderBy column "undefined" not found`. Same defect class,
+   different symptom, live step type (`serv_entity_list`). The fix is shared, not local to
+   `table.mjs`.
+3. **Only one of `assembleContext`'s two queries is actually nondeterministic.** `PGC_Workflow` is
+   15 rows with unique names under `LIMIT 50`. The `id` tiebreaker goes on both regardless — so it
+   rests on a rule rather than on a uniqueness nothing enforces.
+
+**Adjacent finding, not this fix:** `memory-client.mjs:162` retrieves with `LIMIT 500` per scope
+and re-sorts in JS on a 3-key comparator, so the `memory` fingerprint component is stable at 270
+rows — and stops being stable when a scope passes 500. Backlog.

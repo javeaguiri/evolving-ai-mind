@@ -81,6 +81,8 @@ export async function bestEffort(label, ctx, fn) {
  * (or combined with) exact filters. SERV embeds queryText and ranks results.
  *
  * @param {object} [vectorSearch]  { column, queryText, threshold?, limit? }
+ * @param {string|object|Array} [orderBy]  One sort term or several — "priority DESC",
+ *   { column, direction }, or an array of either for a composite sort
  */
 export async function getRows(tableName, filters = [], orderBy, limit, vectorSearch, columns) {
   return servPost('/api/v1/serv/table/getRows', {
@@ -145,7 +147,8 @@ export async function upsertRows(tableName, matchColumns, rows) {
  *
  * @param {string}   entityName   PascalCase entity name e.g. 'Recipe'
  * @param {Array}    filters      Optional filter array — same shape as getRows filters
- * @param {object}   orderBy      Optional { column, direction }
+ * @param {string|object|Array} orderBy  Optional — one sort term or several; same
+ *   forms as getRows
  * @param {number}   limit        Optional row cap (default 100, max 1000)
  */
 export async function listEntities(entityName, filters = [], orderBy, limit) {

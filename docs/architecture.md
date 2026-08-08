@@ -60,6 +60,7 @@ For authoritative detail follow the section references in each row.
 | `src/shared/schema-utils.mjs` | Shared | Pure interpretation of a `PGC_Schema.columns` array — `pickLabelColumn` (which column stands in for a row as its readable value; returns null when none does) | Used by `classify-intent.mjs` (display label for `/m list <table>`) and `step-executor.mjs` (natural key for reference-table FK resolution) — the two differ only in preference order |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
 | `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
+| `src/serv/query-utils.mjs` | SERV | Pure interpretation of the SERV read wire format — `normalizeOrderBy` (object, SQL string, or array of either → a list of `{ column, direction }` terms) and `buildOrderClause`. Shared by `table.mjs` `getRows` and `entity.mjs` `listEntities` so the two cannot disagree about what a caller may send | Changes affect how every SERV read is sorted; callers must still validate each term's column against the registered schema before rendering |
 | `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; auto-infers `embed_source` for `X_embedding` vector columns. **The registry must never assert what the database does not**: `dropColumn` uses RESTRICT (never CASCADE — CASCADE silently *deletes dependent views*) and `pruneColumnRefs` clears every constraint and FK referencing the dropped column; `modifyConstraint` **upserts** into `PGC_Schema.constraints` (a CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so the design prompts never see the enum). `target` is read from `PGC_Schema`, never from the caller. See Section 5.1 | Changes affect table creation and schema registration |
 
 ### Data — PGC Table Groups
@@ -365,6 +366,7 @@ src/
     schema.mjs         DDL + PGC_Schema/TableMap registration
     table.mjs          Row-level DML gated by PGC_TableMap
     entity.mjs         Assembled entity reads/writes via PGC_EntitySchema
+    query-utils.mjs    normalizeOrderBy + buildOrderClause — pure, shared by table.mjs and entity.mjs
     templates/pgc/     PGC_*.json table definitions — static ES module imports (NOT fs.readFile)
     templates/pgc/seeds/  seed_PGC_*.json — consumed by dev_scripts/upsert-*.mjs
   shared/             Pure utilities — no business logic, no tier-specific imports

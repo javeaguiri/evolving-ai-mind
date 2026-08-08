@@ -29,6 +29,7 @@ import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
+import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -133,10 +134,12 @@ async function getRows(req) {
     if (filterError) return err(400, filterError, req.correlationId);
 
     // --- Normalize and validate orderBy ---
-    // Accept both object { column, direction } and string "col ASC" / "col DESC".
-    const normalizedOrderBy = normalizeOrderBy(orderBy);
-    if (normalizedOrderBy && !validColumns.has(normalizedOrderBy.column)) {
-      return err(400, `orderBy column "${normalizedOrderBy.column}" not found in schema`, req.correlationId);
+    // Object, string, or array — one term or several. Every column is validated,
+    // because each one is interpolated into the ORDER BY clause.
+    const orderTerms = normalizeOrderBy(orderBy);
+    const badTerm    = orderTerms.find(t => !validColumns.has(t.column));
+    if (badTerm) {
+      return err(400, `orderBy column "${badTerm.column}" not found in schema`, req.correlationId);
     }
 
     // --- Validate vectorSearch if present ---
@@ -199,9 +202,7 @@ async function getRows(req) {
       // --- Standard parameterised SELECT ---
       const { whereClause, values } = buildWhereClause(filters);
 
-      const orderClause = normalizedOrderBy
-        ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
-        : '';
+      const orderClause = buildOrderClause(orderTerms);
 
       let selectList = '*';
       if (columns?.length) {
@@ -838,20 +839,6 @@ async function upsertRows(req) {
 // ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Normalise orderBy to { column, direction } regardless of input form.
- * Accepts object { column, direction } or string "col_name ASC" / "col_name".
- */
-function normalizeOrderBy(orderBy) {
-  if (!orderBy) return null;
-  if (typeof orderBy === 'object') return orderBy;
-  const parts = String(orderBy).trim().split(/\s+/);
-  return {
-    column:    parts[0],
-    direction: (parts[1] ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
-  };
-}
 
 /**
  * Validate filter array — operators and column names.
