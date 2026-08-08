@@ -1063,7 +1063,20 @@ All `filters` arrays are ANDed. Omit `filters` to return all rows.
 | `jsonb_contains` | JSONB `@>` containment — row's column contains value | `{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }` |
 | `jsonb_contained_by` | JSONB `<@` containment — row's column is contained by value (inverse of `jsonb_contains`) | `{ "column": "scope", "op": "jsonb_contained_by", "value": { "domain": "flashcards", "workflow": "add_entity" } }` |
 
-Optional fields on any `getRows` call: `"orderBy": "column ASC|DESC"`, `"limit": N`, `"columns": ["col1", "col2"]` (projects the SELECT list instead of `*` — see the `PGC_WorkflowRun`/`PGC_WorkflowRunStep` caution above for when this is required, not just an optimization).
+Optional fields on any `getRows` call: `"orderBy"`, `"limit": N`, `"columns": ["col1", "col2"]` (projects the SELECT list instead of `*` — see the `PGC_WorkflowRun`/`PGC_WorkflowRunStep` caution above for when this is required, not just an optimization).
+
+**`orderBy` — one sort term or several.** `listEntities` accepts the same forms.
+
+| Form | Example |
+|---|---|
+| SQL string | `"orderBy": "priority DESC"` |
+| Object | `"orderBy": { "column": "priority", "direction": "desc" }` |
+| Composite, SQL string | `"orderBy": "priority DESC, id ASC"` |
+| Composite, array | `"orderBy": [{ "column": "priority", "direction": "desc" }, { "column": "id", "direction": "asc" }]` |
+
+Every column is validated against the table's registered schema, whichever form is used. `direction` defaults to `asc`.
+
+**Add a trailing term on a unique column whenever the leading column can tie and `limit` is set.** Postgres guarantees no order within a tied group, so the `limit` cuts it at an arbitrary point and identical queries can return different rows. `PGC_Memory` ordered by `priority` is the live case — a large share of its rows carry the same priority, so a small `limit` draws an arbitrary subset of them.
 
 #### Common PGC admin queries
 
