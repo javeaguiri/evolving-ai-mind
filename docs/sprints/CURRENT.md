@@ -163,11 +163,39 @@ supersession (the old fix (iii)) goes away with the re-rendering. And `ACTION_SC
 currently **never sent** for Novia at all: `llm-client.mjs:59` gates `response_format` behind
 `model.includes('sonar')`, so her output structure is enforced by prompt prose and nothing else.
 
-**Known unknown, and it gates the rewrite.** The probe tested **one** append. Anthropic's native
-API allows at most four cache breakpoints per request, so a 20-turn round may get incremental
-credit only for the most recent few items rather than the whole transcript. **Probe a multi-turn
-sequence before starting step (ii)** — it is cheap, and it is the difference between a large win
-and a bounded one.
+**Resolved by a multi-turn probe: credit holds for the whole round, and there is a hard design
+rule attached.** Eight turns in Novia's actual shape — one user turn, then a chain of tool
+round-trips — gave `read` equal to the previous turn's entire `in` on **every** turn, with
+`create` flat at the per-turn increment and per-turn cost flat while the transcript more than
+doubled:
+
+```
+turn      in   create     read  prev in  read/prev        $
+1     15,607   15,605        0        0          -  0.05973
+2     18,541    2,935   15,605   15,607       1.00  0.01658
+8     36,139    2,933   33,205   33,206       1.00  0.02185
+```
+
+Creation over the round: 172,279 tokens today against 36,138 — **4.8× at eight turns**, and
+because today's cost grows quadratically while this grows linearly, a 20-turn round projects to
+**~12×**.
+
+**The rule: never append a user message mid-round.** The same probe run with a fresh user turn
+injected each iteration — everything else identical — pinned `read` at the `instructions` block
+and grew `create` linearly, which is today's failure profile exactly. One trailing user item
+forfeits the whole prefix credit for that turn. The mechanism is not visible from outside; the
+effect is measured twice with everything else held constant.
+
+That rule is what shapes step (ii). Everything `minds-eye.mjs` currently appends to the per-turn
+user message has to move or go:
+
+| Today, in the per-turn user message | Under native tools |
+|---|---|
+| Standing instruction ("decide your next action") | Constant → into `instructions` |
+| `layer1Context` / `layer2Context` | Constant within a round → into `instructions` |
+| `truncationNotice` | Per-turn and volatile → needs another home, or an accepted one-turn cost |
+
+So `buildUserMessage` does not get reordered. It mostly stops existing.
 
 **No replay-corpus impact.** Verified: `minds-eye.mjs:31` imports `callLlm` directly from
 `llm-client.mjs` and never touches `llm-harness.mjs`, which is where `computeFingerprint` runs
@@ -524,6 +552,28 @@ Also found while checking blast radius: `ACTION_SCHEMA` is passed at `minds-eye.
 `llm-client.mjs:59` gates `response_format` behind `model.includes('sonar')` — so it has **never
 been sent** for Novia. Her output structure is enforced by prompt prose alone. Native tool schemas
 fix that as a side effect.
+
+### Session 5 — 2026-08-08 — Step 1 landed; multi-turn credit confirmed and bounded by one rule
+
+**Step 1 is in (`37ca58d`).** `callLlmWithTools` in `llm-client.mjs`, additive — `callLlm`'s
+parsed-JSON contract untouched, so no existing caller changes behaviour. `postToGateway` extracted
+because the key check, abort ceiling, timeout-vs-transport split and non-2xx handling were
+byte-identical in both existing callers and a third copy was the wrong answer; the timeout message
+text is deliberately unchanged because `classifyLlmFailure` matches on it. 805 unit tests.
+
+**Two probes, and the first one's design was wrong.** The multi-turn probe injected a fresh user
+message every iteration to force tool calls, and `read` stayed pinned at the `instructions` block
+across all eight turns — which reads as "the single-append win does not generalise". But that
+shape is multi-turn chat, not an agentic loop: Novia receives a user message at the start of a
+round and on a gate resume, never between tool round-trips. Re-run in her actual shape, credit held
+at 1.00 on every turn.
+
+The wrong probe turned out to be the more valuable one, because the contrast isolated the rule now
+recorded in 2c above: **a trailing user message forfeits the round's prefix credit.** Had step (ii)
+been written without knowing that, it would have shipped a loop that looked correct, passed
+review, and measured nothing — the exact failure mode of the fix this sprint started with.
+
+Probe spend to date across all six probes: **$1.31**.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
