@@ -1349,5 +1349,601 @@
     "inject_for": [],
     "version": 2,
     "content": "WORKFLOW CONVENTIONS — what the engine accepts, and what each tier owns\n\nYou can already write code. What follows is not how to design a workflow — it is what this system's execution engine accepts, and which tier owns which decision. Everything not stated here is a row you can query. Query it rather than assume it.\n\n── A WORKFLOW ───────────────────────────────────────────────────────────────────\nA workflow is a row in PGC_Workflow. Its steps column is a JSON array. Each element is a step object carrying a step key, a type, and routing fields. The step key is the field `step` and the type is the field `type` — those two names exactly, on every step; nothing else is read as either.\n\nStep keys are strings, compared by exact equality — \"3\" and \"3a\" are different steps, and an unquoted 3 is not the same as \"3\". No two steps share a key.\n\ntype must be a live row in PGC_StepType. That table declares, per type, the required and optional fields (input_contract), what the step writes (output_contract), and which routing tokens it accepts (on_success_options, on_failure_options). It is the authority on step shape; nothing here restates it.\n  query_table { tableName: \"PGC_StepType\", filters: [{ column: \"status\", op: \"eq\", value: \"live\" }] }\n\nExactly one end step, and it is the last element of the array. Reaching it completes the run. cancel is a terminal outcome, not a step — nothing declares it.\n\nRegistered workflows are readable specimens: read_workflow { workflowName }.\n\n── ROUTING — WHAT THE ENGINE DOES WITH A TOKEN ──────────────────────────────────\nA routing token is resolved in this order:\n  \"end\"                        the run ends\n  \"cancel\"                     the run is cancelled (option on_select and gate on_cancel only)\n  \"step:<key>\"                 <key> — the prefix is stripped\n  a token equal to a step key  that step\n  \"next\"                       the next element in array order\n  anything else                also the next element in array order\n\nTwo consequences follow. Array order is load-bearing: \"next\" means positionally next, not next in the design. And an invented token does not fail — \"continue\", \"retry\" and \"proceed\" all resolve to the positionally-next step, silently.\n\nA bare key and \"step:<key>\" are the same token after normalisation. Both are accepted in every routing field.\n\nEvery reachable step needs some path to end or cancel; the simulator reports those that do not.\n\n── FAILURE IS NOT A ROUTING PATH ────────────────────────────────────────────────\non_else is consulted by condition (required — the step throws without it), by simulate, and by an iterator's own completion routing. Every other step type signals failure by throwing, and a throw fails the run: the status becomes failed and the user gets a WORKFLOW_ERROR. The on_else: \"cancel\" carried by serv_* and llm_call steps is therefore not a branch the engine takes on failure.\n\nA path the workflow can actually take on a bad outcome has to be reachable from a value in local_state — a condition on a result — because the thrown-failure path is not routed.\n\n── local_state ──────────────────────────────────────────────────────────────────\nEach stack frame carries a local_state object. A step's output_key writes its result there, in the frame that executed it.\n\n  output_key: \"a,b,c\"     destructures an object result into three top-level keys at once\n  output_key: \"a.b\"       writes a nested path; intermediate objects are created as needed\n  result undefined        writes nothing\n  result null             writes null — a key that exists and is empty\n\ninput is the run's input object. It is readable everywhere as {{input.field}} and is never written by a step.\n\nInside an iterator's item_step, item is bound to the current element and every key of the parent frame stays readable. The iterator's own output_key is written to the parent frame after all items finish, as an array of item results in execution order.\n\nA human gate writes on resume. Which gate types write, and what value they write, is declared on the human_gate row in PGC_StepType.\n\nA js_transform expression receives two bindings: items (its input_key resolved) and local_state (the whole object as of that moment). The sandbox is synchronous — no I/O, no await, no imports — and is killed at 500ms.\n\n── {{token}} RESOLUTION ─────────────────────────────────────────────────────────\nDouble braces are the only syntax the resolver recognises. Angle brackets and Handlebars blocks are not template syntax: they reach the user, or the model, as the literal characters typed.\n\nAccepted forms:\n  {{key}}               a top-level key\n  {{key.path}}          a dot path into an object\n  {{key[0].field}}      bracket index — identical to {{key.0.field}}\n  {{key[*].field}}      wildcard — that field from every element, as an array\n  {{key.length}}        length of an array (0 when it is not one)\n  {{key[idx].field}}    idx is a top-level key holding a number\n\nA field whose entire value is a single token resolves to the raw value: an object or array is passed through intact, not stringified. A token inside a longer string is stringified into it.\n\nAn unresolved token is left in place verbatim. It does not become an empty string. A key that does not exist arrives at the model, or at the user, as the literal text {{key}}.\n\nA numeric segment applied to something that is not an array reads a property of that name. Indexing into a string does not split it — the read simply misses, and misses silently.\n\nResolution is single-pass. A resolved value that itself contains a token is not resolved again.\n\n── THE EXECUTION MODEL AND ITS GUARDS ───────────────────────────────────────────\nOne step per SQS message; the stack is persisted between steps, so nothing is held in memory across them. A suspended gate costs nothing while it waits.\n\nThree idempotency hits on the same step key fail the run — a loop with no suspension point in it reaches that, or exhausts the Lambda first.\n\nA backward routing edge is safe only when a human_gate lies on the path between the target step and the step that jumps back to it. Without one the loop runs synchronously until one of those two limits ends it.\n\nserv_update and serv_delete without filters are rejected by SERV.\n\nsimulate_workflow runs the static checks over a step array before anything is registered.\n\n── WHAT EACH TIER OWNS ──────────────────────────────────────────────────────────\nThe procedure tier — workflows and their steps — owns what decision the user is being asked to make, what data they need in order to make it, and what the content says. Content is formatted procedure-side, in standard markdown.\n\nThe experience tier — one renderer per channel, Slack today — owns mechanics: which block type wraps a piece of content, how options are laid out, how a modal is assembled. It holds no domain vocabulary and must never need any. If a rendering decision would require knowing what a field means or what a value implies, that decision belongs in the step, not the renderer.\n\nSo a gate declares what it is asking for and the properties of what it is showing; it never names a widget. A form field's type says what is being collected — date, select, textarea — and the renderer chooses what draws it. The same step output has to render on a different experience layer without editing the workflow.\n\n── WHERE THE REST LIVES ─────────────────────────────────────────────────────────\n  PGC_StepType         step fields, gate types, routing options       query_table\n  PGC_Prompt           registered prompts, their tokens, schemas      read_prompt\n  PGC_Schema           tables and columns                             list_tables\n  PGC_EntitySchema     entity definitions                             query_table\n  PGC_Workflow         working specimens                              read_workflow\n  PGC_SystemContext    SOPs and preferences, by key                   query_table"
+  },
+  {
+    "key": "minds_eye_tool_schemas",
+    "section": "rules",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 1,
+    "content": {
+      "tools": [
+        {
+          "name": "query_table",
+          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "orderBy": {
+                "type": "string",
+                "description": "One sort term or several: \"col DESC\", or \"col DESC, id ASC\" for a composite sort."
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "query_entity",
+          "description": "Read an assembled entity via PGC_EntitySchema. entityName is PascalCase (e.g. Recipe), not a table name. Filters use columns from the entity root table.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "entityName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "entityName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_memory",
+          "description": "Retrieve PGC_Memory rows. Use a jsonb_contains filter on scope to find prior sessions on a domain or workflow.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_workflow",
+          "description": "Read a workflow name, version, domain, description and its full steps JSON. Never call twice for the same workflow in one session; the result is already in your history.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_prompt",
+          "description": "Read a prompt text, output schema, max_output_tokens and error log for one intent category.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "intentCategory": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "intentCategory",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "simulate_workflow",
+          "description": "Validate a workflow step array without writing it. Returns the issues to correct.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "steps": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "search_domain_help",
+          "description": "Semantic search over PGC_DomainHelp to resolve which domain a request is about. Start here when the domain is not already known.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "query",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_tables",
+          "description": "List registered tables by domain or prefix. Returns table names AND column names, so call this before any query that names a column.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_physical_tables",
+          "description": "List physical tables in the PGD database, each flagged registered or not. Use to find orphaned tables after a failed create_domain, and to get exact identifiers before writing raw SQL.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "prefix": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "run_sql",
+          "description": "Execute a read-only SELECT or WITH statement directly. Use for aggregate and GROUP BY checks that query_table cannot express. Call list_physical_tables first to get exact identifiers, and double-quote CamelCase identifiers: unquoted, Postgres folds PGC_WorkflowRunStep to lowercase and the relation does not exist. No semicolons. Write keywords are rejected.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "selectSql": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "pgd (default) or pgc"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "selectSql",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "update_data",
+          "description": "Update matching rows. Executes immediately with no confirmation gate.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "updates": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "filters",
+              "updates",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "insert_data",
+          "description": "Insert one new row. Executes immediately with no confirmation gate. Not idempotent: a retry duplicates the row.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "row": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "row",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "upsert_data",
+          "description": "Insert each row if new, update it if it already exists, matched by matchColumns. Idempotent, so prefer this over insert_data whenever the same batch might be sent twice.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "matchColumns": {
+                "type": "array"
+              },
+              "rows": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "matchColumns",
+              "rows",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "register_workflow",
+          "description": "Register a workflow that does not exist yet. Writes PGC_Workflow plus one PGC_IntentMap row per intent phrase. Refuses to write a step array that fails validation and returns the issues instead. To change a workflow that already exists, use propose_workflow_fix. Read the workflow convention bridge before building the step array.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array"
+              },
+              "intentPhrases": {
+                "type": "array"
+              },
+              "intentKeywords": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "propose_workflow_fix",
+          "description": "Propose corrected steps for a workflow that already exists. Send the full original steps from read_workflow with only the diagnosed changes applied; never draft a replacement from scratch.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "propose_schema_fix",
+          "description": "Propose a schema change to a PGD_* table. Operations: addColumn, modifyColumn, dropColumn, modifyConstraint, dropConstraint. Adding or changing a foreign key is not supported. Anything beyond a single column add or retype is an ordered sequence, so read the schema-change procedure first.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "operation": {
+                "type": "string"
+              },
+              "tableName": {
+                "type": "string"
+              },
+              "column": {
+                "type": "object"
+              },
+              "columnName": {
+                "type": "string"
+              },
+              "newType": {
+                "type": "string"
+              },
+              "nullable": {
+                "type": "boolean"
+              },
+              "using": {
+                "type": "string"
+              },
+              "constraintName": {
+                "type": "string"
+              },
+              "expression": {
+                "type": "string"
+              },
+              "columns": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "operation",
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "delete_data",
+          "description": "Delete matching rows. Requires human confirmation before it runs.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "filters",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "drop_table",
+          "description": "Physically drop a PGD_* table. Destructive, and requires human confirmation. Use after list_physical_tables to clean up orphaned tables.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "create_view",
+          "description": "Create a read-only view and register it in PGC_Schema and PGC_TableMap. Requires human confirmation, and posts the SQL for approval first. Validate the selectSql with run_sql before proposing it.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "selectSql": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "selectSql",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "drop_view",
+          "description": "Drop a registered view. Destructive, and requires human confirmation.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "run_workflow",
+          "description": "Dispatch a registered workflow to the step-executor engine, which then owns the interaction and posts its own results. Pass any context you already know in input so the workflow can skip selection steps. Do not use it for interactive wizards, which will stall waiting for input you cannot give. For a plain data lookup use query_entity instead.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "write_memory",
+          "description": "Record diagnostic reasoning to PGC_Memory: what you found, why the defect existed, and what is still open. Executes immediately, with no gate and no action limit. Scope is derived by the harness, so do not pass it. Call this before responding in any session where you changed something or found something notable.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "memory_type": {
+                "type": "string",
+                "description": "episodic, semantic, or procedural"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "content",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "respond",
+          "description": "Reply to the user and end the round. Use it when you are holding something they can accept or reject: a design to agree before you build on it, a diagnosis before you act on it, a validated step array before it is registered. Say what you have and what you intend next.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "advisory": {
+                "type": "string",
+                "description": "Optional. Only when something worth flagging is visible from data already read."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "message",
+              "reasoning"
+            ]
+          }
+        }
+      ]
+    }
   }
 ]

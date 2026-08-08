@@ -705,7 +705,7 @@ from PGC at runtime.
 | `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
 | `PGC_SystemContext` | System-wide config — thresholds, defaults, feature flags | Step Processor, Preprocessor | `init-brain.mjs` / admin |
 | `PGC_StepType` | Step type registry — canonical list of valid step types | Right-brain (Backlog) | `init-brain.mjs` |
-| `PGC_Capability` | Capability registry — available tools the brain can invoke | Right-brain (Backlog) | `init-brain.mjs` |
+| `PGC_Capability` | Service registry — external capabilities the brain can reach (e.g. a stock-price service), not the agent's own tool catalog. Empty today. **Adding a capability is intended to be a developer action, not something Novia or an add-capability workflow can do** — the fence on how far evolving-mind capability extends itself. That restriction is not yet enforced and the final decision is open | Backlog | `init-brain.mjs` |
 | `PGC_WorkflowStats` | Aggregate view — run counts, failure rates per workflow | Right-brain, monitoring | DB view (auto-maintained) |
 
 #### How these tables are used together in a workflow run

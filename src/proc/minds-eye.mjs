@@ -91,6 +91,79 @@ const HOUSEKEEPING_TOOLS = new Set([
   'write_memory',
 ]);
 
+// Every name the loop can actually dispatch. The Sets above stay the authority on that —
+// a schema is only sent to the gateway if there is code behind it, because a tool the model
+// can call and the loop cannot run is worse than a tool it never sees.
+export const DISPATCHABLE_TOOLS = new Set([
+  ...READ_TOOLS, ...INLINE_WRITE_TOOLS, ...GATED_WRITE_TOOLS,
+  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, 'respond',
+]);
+
+/**
+ * Reconcile the stored tool schemas against what the loop can dispatch.
+ *
+ * The schemas live in PGC_SystemContext (minds_eye_tool_schemas) so a description can be
+ * retuned without a deploy — triggering quality is mostly description quality. The cost of
+ * that is drift: a row can describe a tool the code does not have, or miss one it does.
+ * Both directions are reported rather than silently tolerated.
+ *
+ * `type: 'function'` is added here rather than stored 23 times in the row.
+ *
+ * @param {object|null} content       The row's content — expects { tools: [{name, description, parameters}] }
+ * @param {Set<string>} dispatchable  Names the loop can execute
+ * @returns {{tools: Array, undispatchable: string[], undescribed: string[]}}
+ */
+export function selectToolDefinitions(content, dispatchable = DISPATCHABLE_TOOLS) {
+  const declared = Array.isArray(content?.tools) ? content.tools : [];
+
+  const named          = declared.filter(t => typeof t?.name === 'string' && t.name);
+  const undispatchable = named.filter(t => !dispatchable.has(t.name)).map(t => t.name);
+
+  const tools = named
+    .filter(t => dispatchable.has(t.name))
+    .map(({ name, description, parameters }) => ({ type: 'function', name, description, parameters }));
+
+  const describedNames = new Set(tools.map(t => t.name));
+  const undescribed    = [...dispatchable].filter(n => !describedNames.has(n));
+
+  return { tools, undispatchable, undescribed };
+}
+
+/**
+ * Load the tool catalog for a round.
+ *
+ * Returns null — never [] — when the row cannot be read. An empty array is a valid state
+ * meaning "no tools", and sending it would leave Novia mute with no error to explain why;
+ * null lets the caller end the round with a real message instead.
+ *
+ * @returns {Promise<Array|null>} Tool definitions ready for callLlmWithTools, or null
+ */
+async function loadToolDefinitions(traceId) {
+  const resp = await getRows('PGC_SystemContext', [
+    { column: 'key', op: 'eq', value: 'minds_eye_tool_schemas' },
+  ]);
+
+  if (!resp.success || !resp.rows?.length) {
+    console.error('proc/minds-eye: minds_eye_tool_schemas row not readable', { traceId });
+    return null;
+  }
+
+  const { tools, undispatchable, undescribed } = selectToolDefinitions(resp.rows[0].content);
+
+  if (undispatchable.length > 0) {
+    console.warn('proc/minds-eye: tool schemas describe undispatchable tools — dropped', { undispatchable, traceId });
+  }
+  if (undescribed.length > 0) {
+    console.warn('proc/minds-eye: dispatchable tools have no schema — invisible to the model', { undescribed, traceId });
+  }
+  if (tools.length === 0) {
+    console.error('proc/minds-eye: tool schema row yielded no usable tools', { traceId });
+    return null;
+  }
+
+  return tools;
+}
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;

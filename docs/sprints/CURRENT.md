@@ -156,6 +156,36 @@ them. The test it states is what this change passes — the doc does not name th
 | **(ii)** | `minds-eye.mjs` | Emit the tool catalog natively; carry `response.output` items forward and return results as `function_call_output`. **The substantial part** — the loop, `PGC_SessionEntry` persistence, and the `__pending__`/`__cancelled__` gate entries are all built on our own entry shape. |
 | **(iii)** | `minds_eye_system_prompt` | Retire the prose tool catalog and the anti-native-tool-use rule. Large prompt shrink; `ACTION_SCHEMA` stops being dead weight because tool schemas are enforced server-side. |
 
+**Progress.** (i) done — `5f82c8b` … `37ca58d`. Step (ii) is broken into five parts, of which the
+first is done:
+
+| | Work | State |
+|---|---|---|
+| 2a | 23 tool schemas in `PGC_SystemContext.minds_eye_tool_schemas`; `selectToolDefinitions` + `loadToolDefinitions` with a two-way drift check against the dispatch sets | ✅ DONE |
+| 2b | `toInputItems(workingHistory)` — rebuild canonical items at round start, pairing `__pending__` with its resolution | |
+| 2c | The loop swap: `callLlmWithTools`, dispatch on `function_call.name`, append real `output` items | |
+| 2d | `instructions` absorbs both context blocks and the standing instruction; `buildUserMessage`, `latestDraftIndex` and draft supersession are deleted | |
+| 2e | Gate resume pairs a persisted `__pending__` with its resolution on rebuild | |
+
+**Schemas live in `PGC_SystemContext`, not `PGC_Capability`.** `PGC_Capability` is the registry for
+external *service* capabilities — a stock-price service, say — and adding one is intended to stay a
+developer action rather than something Novia or a future add-capability workflow performs. That
+fence is not yet enforced and the decision is open; either way it is not the agent's own tool
+catalog. The rule that a step type's contract lives in `PGC_StepType` does not transfer here:
+a new agentic behaviour is not a new step type.
+
+**The 23-tool catalog is verified live, not assumed.** The gateway accepts it for
+`anthropic/claude-sonnet-4-6`; the tools block costs ~3,162 tokens and **is cached** (a follow-up
+call read 7,565 = instructions + tools and cost $0.0046 against $0.0335 cold); routing is sound
+with 23 choices rather than one; and `read/prev` still hits 1.00 on append with the full catalog
+loaded. Step (iii) removes the prose catalog from `instructions`, so the net size change is close
+to neutral while schema enforcement is gained.
+
+A5's guidance now rides in `run_sql`'s own description — *call `list_physical_tables` first,
+double-quote CamelCase identifiers* — and the probe showed the model obeying it by reaching for a
+listing tool before raw SQL. A tool description doing the work a prompt rule used to do is the
+same principle as the rest of this rescope.
+
 **Three defects die structurally rather than being fixed.** Sprint 9's largest finding — Novia
 could not see her own work because `buildUserMessage` dropped a tool entry's `params` — becomes
 impossible, because the params *are* `function_call.arguments`, echoed verbatim. Draft
