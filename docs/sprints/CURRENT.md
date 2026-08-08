@@ -110,28 +110,76 @@ and `edit_budget` v6 is repaired.
 | **MARGINAL** | ≤ $2.00, or reached with one hint | Works, but the advantage over regeneration is not decisive. |
 | **FAIL** | > $2.00, or requires human diagnosis | The claimed advantage does not exist. |
 
-#### 2c — The prerequisite: the transcript prefix-cache fix
+#### 2c — The prerequisite: native tool calling
 
-Neither measurement above is meaningful until this lands. A cache-invalidation defect in our own
-code, not a gateway limitation. Two causes in `minds-eye.mjs`: `buildUserMessage` orders `input`
-as volatile context → transcript, when the transcript is the append-only part whose prefix is
-stable; and `assembleContext` runs `ORDER BY priority DESC LIMIT 5` on `PGC_Memory` with no
-tiebreaker while **35 of 100 rows tie at priority 8**, so byte zero of `input` can move between
-identical queries.
+**Rescoped 2026-08-08 after the original diagnosis was disproved twice.** Neither measurement
+above is meaningful until this lands.
 
-Three-part fix: (i) deterministic secondary sort key on both `assembleContext` queries;
-(ii) reorder `buildUserMessage` so turn N's input is turn N−1's plus an append; (iii) stop
-rewriting history in place in the draft-supersession branch. Expected ~12× cut on the creation
-component. Full diagnosis in `docs/backlog.md`.
+**What it is not.** It is not the `PGC_Memory` tiebreaker: `assembleContext` runs once per round
+(`minds-eye.mjs:148`) and its result is held constant across every turn, so a reshuffle cannot
+explain a miss between turns four seconds apart — and the miss happens anyway. It is not a
+gateway capability gap either: the gateway caches `input` fully on a byte-identical repeat.
+
+**What it is.** We send the transcript as **one hand-rendered string**. A string has no internal
+boundaries, so there is nothing to match a prefix against — the whole block misses on any change,
+and an agentic loop changes it every turn by definition. Measured on the live gateway, same
+model, same append operation:
+
+| `input` shape | Appended turn |
+|---|---|
+| String (what we send today) | create 13,477 · **read 4,698** — the `instructions` block only |
+| Hand-built `{role, content}` array | create 11,502 · **read 4,695** — the `instructions` block only |
+| **Echoed `response.output` items** | create 10,132 · **read 16,539** — the *entire* turn-1 prefix |
+
+In the third case `read` equals the previous turn's `create` exactly: instructions plus the whole
+prior user turn came back at 0.1× while only genuinely new tokens were written at 1.25×. Turn 2's
+input was 60% larger than turn 1's and cost 26% less. Canonical items carrying server-assigned
+`call_id`s get per-item cache boundaries; a string does not.
+
+**Fault domain: Execution — and it is the extend-not-prompt violation pattern, textually.**
+`CLAUDE.md` names three clauses; this matches all three. The established standard is native
+function calling, which the gateway supports for `anthropic/claude-sonnet-4-6` — Novia's exact
+model. The proprietary shape invented instead is `{action, params, reasoning}` (`ACTION_SCHEMA`,
+`minds-eye.mjs:36`). And the prompt rule forcing it is in `minds_eye_system_prompt` verbatim:
+*"DO NOT revert to native tool-use formats, native API behavior, or any pattern not described
+here."* That is not an accidental omission — it is a written instruction forbidding the standard.
+
+Note the principle's stated boundaries are `step-executor.mjs`, `template-resolver.mjs`,
+`table.mjs`, `review-output.mjs` and `serv-client.mjs`; this seam predates Novia and is not among
+them. The test it states is what this change passes — the doc does not name the change.
+
+**Three steps, smallest first:**
+
+| # | Site | Change |
+|---|---|---|
+| **(i)** | `llm-client.mjs` | Accept a `tools` parameter and an item-array `input`. Purely additive — `callLlm`'s parsed-JSON contract is untouched, so every existing caller is unaffected. |
+| **(ii)** | `minds-eye.mjs` | Emit the tool catalog natively; carry `response.output` items forward and return results as `function_call_output`. **The substantial part** — the loop, `PGC_SessionEntry` persistence, and the `__pending__`/`__cancelled__` gate entries are all built on our own entry shape. |
+| **(iii)** | `minds_eye_system_prompt` | Retire the prose tool catalog and the anti-native-tool-use rule. Large prompt shrink; `ACTION_SCHEMA` stops being dead weight because tool schemas are enforced server-side. |
+
+**Three defects die structurally rather than being fixed.** Sprint 9's largest finding — Novia
+could not see her own work because `buildUserMessage` dropped a tool entry's `params` — becomes
+impossible, because the params *are* `function_call.arguments`, echoed verbatim. Draft
+supersession (the old fix (iii)) goes away with the re-rendering. And `ACTION_SCHEMA` is
+currently **never sent** for Novia at all: `llm-client.mjs:59` gates `response_format` behind
+`model.includes('sonar')`, so her output structure is enforced by prompt prose and nothing else.
+
+**Known unknown, and it gates the rewrite.** The probe tested **one** append. Anthropic's native
+API allows at most four cache breakpoints per request, so a 20-turn round may get incremental
+credit only for the most recent few items rather than the whole transcript. **Probe a multi-turn
+sequence before starting step (ii)** — it is cheap, and it is the difference between a large win
+and a bounded one.
+
+**No replay-corpus impact.** Verified: `minds-eye.mjs:31` imports `callLlm` directly from
+`llm-client.mjs` and never touches `llm-harness.mjs`, which is where `computeFingerprint` runs
+(`llm-harness.mjs:299`). Novia's calls are not fingerprinted and not in the corpus.
 
 **A5 lands in the same deploy** — `run_sql` gives Novia no route to physical table names, which
 cost ~$1.50 of session 1122's $3.40. Two statements close it: use `list_physical_tables` before
 raw SQL, and double-quote CamelCase identifiers. Context content, no code.
 
-**One live round validates the fix, A5, and 2b together.** The signals read from different
-places and do not confound: the cache effect from `cache_read`/`cache_creation` in the usage
-logs, A5 from whether any `run_sql` call fails on an identifier, 2b from whether she reaches the
-defect.
+**One live round validates 2c, A5, and 2b together.** The signals read from different places and
+do not confound: the cache effect from `cache_read`/`cache_creation` in the usage logs, A5 from
+whether any `run_sql` call fails on an identifier, 2b from whether she reaches the defect.
 
 ---
 
@@ -216,7 +264,7 @@ together are the alias-learning claim; one number alone is not.
 
 | # | Criterion | Checkpoint | Threshold |
 |---|---|---|---|
-| **AC1** | Transcript prefix-cache fix lands; a live Novia round shows `cache_read` climbing past its pinned 4041 while `cache_creation` flattens | 2c | Creation component down ≥ 5× |
+| **AC1** | Novia's loop uses native function calling; in a live round `cache_read` exceeds the `instructions` block on **every** turn after the first and grows with the transcript, while `cache_creation` holds near the per-turn increment | 2c | Mechanism: binary. Cost: creation component down ≥ 4× |
 | **AC2** | A5 — `run_sql` table-name guidance; no `run_sql` call in the validating round fails on an identifier | 2c | 0 identifier failures |
 | **AC3** | Novia rebuilds `edit_budget` clean-room, without sight of workflow 357, to a **running** workflow | 2a | ≤ $1.50 all-in |
 | **AC4** | Novia diagnoses and repairs D2 or D3 given the symptom only | 2b | ≤ $1.00, unaided |
@@ -248,7 +296,7 @@ together are the alias-learning claim; one number alone is not.
 The dependency chain is strict and should not be run out of order:
 
 ```
-2c  transcript fix + A5          ──┐
+2c  native tools + A5           ──┐
                                    ├──►  AC3 (2a build cost)     ──┐
                                    └──►  AC4 (2b repair cost)    ──┤
                                                                    │
@@ -301,7 +349,16 @@ All workflow runs and all Novia sessions are triggered **by the user from Slack*
 
 ---
 
-## 2C starting kit — everything needed to begin, verified 2026-08-06
+## 2C starting kit — SUPERSEDED 2026-08-08
+
+> **Kept as the record, not as instructions.** Its premise — that the prefix-cache miss is caused
+> by `buildUserMessage` ordering and the `PGC_Memory` tie — was disproved by the logs and four
+> gateway probes (see Sessions 3 and 4). Fixes (ii) and (iii) below would have measured zero. The
+> SERV composite `orderBy` blocker it found was real and is fixed (`5f82c8b`); the tiebreaker it
+> enables is still worth applying on its own merits, but it is not the cache fix. **Work the
+> rescoped 2c above instead.**
+
+### Original text, verified 2026-08-06
 
 Branch `sprint/10-viability-checkpoints` is cut from main and pushed. Start here; nothing below
 needs re-deriving.
@@ -426,6 +483,47 @@ Three things the starting kit did not have:
 **Adjacent finding, not this fix:** `memory-client.mjs:162` retrieves with `LIMIT 500` per scope
 and re-sorts in JS on a 3-key comparator, so the `memory` fingerprint component is stable at 270
 rows — and stops being stable when a scope passes 500. Backlog.
+
+### Session 4 — 2026-08-08 — The fix exists, on this gateway. 2c rescoped to native tool calling.
+
+Session 3 concluded 2c was not buildable. **That conclusion was wrong**, and the correction came
+from a Perplexity multi-turn code sample the user supplied. Two more probes, $0.12.
+
+**The distinguishing variable is the shape of `input`, not the gateway.** Session 3 tested a
+string and a hand-built `{role, content}` array; both got credit for the `instructions` block
+only. Echoing `response.output` items verbatim — carrying server-assigned `call_id`s — behaves
+completely differently:
+
+```
+A. turn 1  (string input)          in 16,541   create 16,539   read      0   $0.06311
+B. turn 2  (appended item array)   in 26,672   create 10,132   read 16,539   $0.04679
+C. repeat of B (byte-identical)    in 26,672   create      0   read 26,671   $0.01162
+```
+
+`read` on B equals `create` on A **exactly**. Turn 2's input was 60% larger than turn 1's and
+cost 26% less. Canonical items get per-item cache boundaries; a string is one opaque block. Session
+3's "per block, all-or-nothing" reading was right about the string path and wrong to generalise.
+
+**Native tool calling also works** for `anthropic/claude-sonnet-4-6` and coexists with
+`instructions`: the probe got back `output: ["function_call"]` with `call_id=toolu_01AqHNY...`
+and `arguments={"order_id": "ORD-98712"}`, then answered correctly from a `function_call_output`.
+
+**So no provider switch is needed.** The Anthropic-direct option explored earlier in the session
+is not required — no second provider, no embedding migration (the stored `pplx-embed-v1-4b`
+vectors stay put), no split billing, no new key.
+
+**Estimated at ~4–5× on the creation component**, re-derived from 08-01's 1.44M cache-write
+tokens: ~$0.43 read plus ~$0.75 increments against $5.40. The increment figure is the soft one,
+which is why AC1's cost threshold is set at ≥4× and its mechanism half is binary.
+
+**One unknown gates the rewrite:** the probe tested a single append, and Anthropic's native API
+allows at most four cache breakpoints per request. A 20-turn round may earn credit only for the
+last few items. A multi-turn probe comes before step (ii).
+
+Also found while checking blast radius: `ACTION_SCHEMA` is passed at `minds-eye.mjs:514` but
+`llm-client.mjs:59` gates `response_format` behind `model.includes('sonar')` — so it has **never
+been sent** for Novia. Her output structure is enforced by prompt prose alone. Native tool schemas
+fix that as a side effect.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
