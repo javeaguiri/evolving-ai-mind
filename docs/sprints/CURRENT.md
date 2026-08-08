@@ -426,3 +426,70 @@ Three things the starting kit did not have:
 **Adjacent finding, not this fix:** `memory-client.mjs:162` retrieves with `LIMIT 500` per scope
 and re-sorts in JS on a 3-key comparator, so the `memory` fingerprint component is stable at 270
 rows — and stops being stable when a scope passes 500. Backlog.
+
+### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
+
+**The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
+defect in our own code. It is a gateway capability gap, and no change to `minds-eye.mjs` moves it.
+`minds-eye.mjs` was not modified. Four probes against the live gateway, $0.34 all in.
+
+**Evidence 1 — the logs already refuted the diagnosis.** 100 usage records over three weeks:
+`cache_read_input_tokens` is either 0 (first turn) or **exactly 4041** — the `instructions`
+block — on every call, every session, every model. Not one byte of `input` has ever been served
+from cache. Meanwhile `cache_creation` = `input_tokens` − 4041 on every turn.
+
+The within-round sequence is what kills the memory-shuffle explanation. 08-02, nine consecutive
+turns seconds apart, `cache_read` flat at 4041 while `input` grew 5,293 → 22,768:
+
+```
+07:11:20  in  5,293   create  1,250   read 4041
+07:11:24  in  5,828   create  1,785   read 4041
+07:11:44  in 11,919   create  7,876   read 4041
+07:11:56  in 22,768   create 18,725   read 4041
+```
+
+`assembleContext()` runs **once per round** (`minds-eye.mjs:148`) and its result is held constant
+across every turn inside `runReasoningLoop`. So within that round both context blocks were
+identical strings and the transcript grew by pure append — and the prefix still missed. The
+`PGC_Memory` shuffle can only move byte zero *between* rounds. It cannot cause a miss four
+seconds apart. Fixes (i), (ii) and (iii) would have measured zero.
+
+**Evidence 2 — three request shapes, one answer.** Cache matching is **per block,
+all-or-nothing**; there is no prefix matching inside a block.
+
+| Shape | Result |
+|---|---|
+| `input` string, byte-identical repeat | full hit, ~12× cheaper — `input` **is** cacheable |
+| `input` string, append-only | read 4,695 (instructions only), re-created 13,477 |
+| `messages` history array | HTTP 400 `unknown field "messages"` |
+| `input` as role array, append-only | accepted, semantically honoured, read 4,695 — caches identically to a string |
+
+**Evidence 3 — the 1.25× write premium is mandatory.** Nine opt-out candidates: six rejected as
+unknown fields, three (`store: false`, two cache-control headers) accepted and silently ignored.
+The multiplier held at 1.25× on every call. The gateway auto-caches and exposes no control.
+
+Billing multipliers, matched to three decimals against probe cost: uncached **1.0×**, cache write
+**1.25×**, cache read **0.1×**.
+
+**What this means.** Every Novia turn pays 1.25× on the entire transcript and can never pay less.
+Round cost is **quadratic in turns** — roughly `1.25 × rate × t × N²/2` — which is why 08-01 was
+59 calls for $6.71 at a mean of 24k tokens per call, and why session 1122's repair burned $3.40
+without finishing. This is the shape of the loop, not a misconfiguration.
+
+**The fix is inverted from what was scoped.** Not reordering *within* `input` — moving
+round-stable content **out of `input` and into `instructions`**, where it is read at 0.1× instead
+of written at 1.25×. `layer1Context` and `layer2Context` qualify. Real, nearly free, and small
+(~800 tokens/turn). The transcript cannot move, because it changes every turn.
+
+**The only lever on the dominant cost is sending less transcript.** Compaction, and the per-tool-
+result cap at `minds-eye.mjs:1592` — 15,000 chars *each*, uncompacted, forever. That makes
+carry-forward **item 4, session compression, the front of the queue** rather than the back: it was
+sequenced behind the cache fix, and the cache fix does not exist.
+
+**Consequences for the ACs — needs a rescope decision.** AC1 is unachievable as written; its
+mechanism does not exist. AC3 and AC4 name 2c as their prerequisite and their thresholds were set
+against Sprint 9 costs carrying this penalty. AC2 (A5) is unaffected — it is prompt content and
+still worth deploying.
+
+The SERV composite `orderBy` work stands on its own: it fixed a live silent-wrong-data bug and
+still makes `PGC_Memory` retrieval deterministic, which matters to the replay corpus regardless.
