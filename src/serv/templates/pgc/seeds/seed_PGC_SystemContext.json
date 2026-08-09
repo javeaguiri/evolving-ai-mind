@@ -1360,7 +1360,7 @@
       "tools": [
         {
           "name": "query_table",
-          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them.",
+          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them. Pass vectorSearch to match by meaning instead of by text: each row comes back with a similarity score, which is how a threshold gets calibrated against real data rather than guessed.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1377,6 +1377,10 @@
               },
               "limit": {
                 "type": "integer"
+              },
+              "vectorSearch": {
+                "type": "object",
+                "description": "Rank rows by pgvector cosine similarity instead of comparing text. Shape: { column, queryText, threshold?, limit? }. column must be a vector column on the table; list_tables shows which, and one exists for any column named <name>_embedding. queryText is the text to match. threshold is the minimum similarity a row must reach, 0 to 1, default 0.75. Every returned row carries a similarity score, so probing the same queryText at a low threshold is how a real threshold gets chosen: run it against known matches and known non-matches and read where the scores separate. A threshold calibrated for one kind of text does not transfer to another. Combines with filters rather than replacing them, and results come back most-similar first."
               },
               "reasoning": {
                 "type": "string",

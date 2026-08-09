@@ -1845,9 +1845,9 @@ async function executeReadTool(action, params, traceId) {
     switch (action) {
 
       case 'query_table': {
-        const { tableName, filters = [], orderBy, limit } = params;
+        const { tableName, filters = [], orderBy, limit, vectorSearch } = params;
         if (!tableName) return { error: 'tableName is required' };
-        const resp = await getRows(tableName, filters, orderBy, limit ?? 20);
+        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch);
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 

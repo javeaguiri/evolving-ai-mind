@@ -84,3 +84,54 @@ describe('serv_query contract — vectorSearch is declared, and L0 is unaffected
     assert.match(field.description, /[Cc]ombines with filters/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Novia's own query_table tool — the same pass-through, one layer up
+//
+// serv_query lets her BUILD a workflow that matches semantically. query_table lets
+// her CHECK what a threshold actually does before committing one to a workflow.
+// Both call getRows positionally, so both drop vectorSearch the same silent way if
+// the argument is omitted.
+// ---------------------------------------------------------------------------
+
+const mindsEyeSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
+const contextRows = JSON.parse(readFileSync('src/serv/templates/pgc/seeds/seed_PGC_SystemContext.json', 'utf8'));
+
+const toolSchemas = contextRows.find(r => (r.key ?? r.context_key) === 'minds_eye_tool_schemas');
+const queryTable  = toolSchemas.content.tools.find(t => t.name === 'query_table');
+
+describe('query_table — vectorSearch reaches SERV', () => {
+  it('destructures vectorSearch and passes it as the 5th getRows argument', () => {
+    assert.match(
+      mindsEyeSrc,
+      /const \{ tableName, filters = \[\], orderBy, limit, vectorSearch \} = params;/,
+      'the query_table dispatch must take vectorSearch'
+    );
+    assert.match(
+      mindsEyeSrc,
+      /getRows\(tableName, filters, orderBy, limit \?\? 20, vectorSearch\)/,
+      'and hand it to getRows in the vectorSearch position'
+    );
+  });
+
+  it('declares vectorSearch in the tool schema — an undeclared parameter is unusable', () => {
+    // The loop can dispatch it, but the gateway enforces the schema: a parameter the
+    // schema omits cannot be sent, so code and schema have to move together.
+    assert.ok(queryTable.parameters.properties.vectorSearch, 'query_table must declare vectorSearch');
+    assert.equal(queryTable.parameters.properties.vectorSearch.type, 'object');
+  });
+
+  it('leaves the required set alone', () => {
+    assert.deepEqual([...queryTable.parameters.required].sort(), ['reasoning', 'tableName']);
+  });
+
+  it('tells her the score comes back, since that is what makes calibration possible', () => {
+    assert.match(queryTable.parameters.properties.vectorSearch.description, /similarity score/);
+  });
+
+  it('still describes exactly the 23 dispatchable tools', () => {
+    // selectToolDefinitions drops any tool the loop cannot dispatch and warns about any
+    // dispatchable tool with no schema. Editing this row is where that drift starts.
+    assert.equal(toolSchemas.content.tools.length, 23);
+  });
+});
