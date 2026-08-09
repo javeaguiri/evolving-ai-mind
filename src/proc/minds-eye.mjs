@@ -662,7 +662,8 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     // The model's own items go on the chain before anything it asked for is executed —
     // they are what the next turn reads back from cache.
-    input.push(...turn.output.map(item => ({ ...item })));
+    const turnItems = turn.output.map(item => ({ ...item }));
+    input.push(...turnItems);
 
     activeCall = turn.output.find(o => o.type === 'function_call') ?? null;
 
@@ -761,7 +762,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
     } else if (READ_TOOLS.has(action)) {
       const toolResult = await executeReadTool(action, params, traceId);
-      const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult });
+      const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: turnItems });
 
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
@@ -782,7 +783,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         ? { ...params, scope: deriveScope(workingHistory) }
         : params;
       const hkResult = await executeWriteTool(action, enrichedParams, traceId);
-      const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult });
+      const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: turnItems });
 
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
@@ -806,7 +807,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       }
 
       const writeResult = await executeWriteTool(action, params, traceId);
-      const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult });
+      const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult, items: turnItems });
 
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
@@ -833,7 +834,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       // correct, instead of ending the round on a decision nobody gets to make.
       const refusal = await preGateRefusal(action, params, traceId);
       if (refusal) {
-        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal });
+        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal, items: turnItems });
 
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
@@ -863,13 +864,13 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         break;
       }
 
-      await postActionGate({ session, action, params, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
+      await postActionGate({ session, action, params, items: turnItems, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
       earlyExit = true;
       break;
 
     } else if (TRIGGER_TOOLS.has(action)) {
       const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
-      const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult });
+      const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult, items: turnItems });
 
       await insertRow('PGC_SessionEntry', {
         session_id:      session.id,
@@ -983,7 +984,7 @@ function gateButtonConfig(action, params = {}) {
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
-async function postActionGate({ session, action, params, callback, traceId, currentTurnCount, currentSeq }) {
+async function postActionGate({ session, action, params, items, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
   const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
 
@@ -991,7 +992,7 @@ async function postActionGate({ session, action, params, callback, traceId, curr
     session_id:      session.id,
     sequence_number: currentSeq,
     role:            'tool',
-    content:         JSON.stringify({ tool: '__pending__', action, params }),
+    content:         JSON.stringify({ tool: '__pending__', action, params, items }),
   });
 
   await updateRows('PGC_Session',
@@ -1652,9 +1653,15 @@ async function loadPrefsAndPrompt() {
 // ---------------------------------------------------------------------------
 
 async function assembleContext() {
+  // Both sorts carry a unique trailing term. priority ties across most of PGC_Memory, and
+  // LIMIT 5 cuts the tied group at a point Postgres does not promise to keep stable — so
+  // without the tiebreaker two identical queries can return different memories. This block
+  // goes into `instructions`, ahead of the whole transcript, so a reshuffle between rounds
+  // invalidates the round's entire cached prefix. PGC_Workflow.name is already unique; the
+  // term is there so the guarantee rests on the sort rather than on that fact staying true.
   const [workflowsResp, memResp] = await Promise.all([
-    getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50),
-    getRows('PGC_Memory',   [], { column: 'priority', direction: 'desc' }, 5),
+    getRows('PGC_Workflow', [], [{ column: 'name', direction: 'asc' }], 50),
+    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'desc' }, { column: 'id', direction: 'asc' }], 5),
   ]);
 
   const workflowSummary = (workflowsResp.rows ?? [])
@@ -1693,12 +1700,24 @@ function capOutput(text) {
  *
  * Runs once per round, at the start. Within a round the loop appends the gateway's own
  * output items instead, because those carry server-assigned call_ids and are what earn
- * incremental cache credit. Rebuilding from our own shape here costs nothing: a round
- * always opens with a user message, and a user message forfeits prefix credit for its turn
- * regardless — so byte-fidelity with a previous round's items would buy exactly nothing.
+ * incremental cache credit.
  *
- * Keeping PGC_SessionEntry in its existing shape is what lets /explain, chat.mjs and
- * deriveScope go on reading it unchanged.
+ * A round that resumes has to reproduce the previous round's items BYTE FOR BYTE or the
+ * credit is lost at the first divergence, so each tool entry persists the raw `items` the
+ * gateway returned and they are replayed verbatim here. Reconstructing them from {tool,
+ * params} cannot work: `params` has already had reasoning/message/advisory stripped out of
+ * the model's own `arguments` string, so the rebuilt call differs from the one sent.
+ *
+ * This matters on exactly the two resume paths that do NOT append a user message — the
+ * continue gate and an approved action gate. Both re-enter with the transcript ending on a
+ * tool result, which is the shape that earns full credit; before this they re-created the
+ * whole transcript at 1.25x instead of reading it at 0.1x. The followup path appends a user
+ * message and forfeits its first turn either way, which is what the earlier reasoning here
+ * generalised from.
+ *
+ * `items` is additive — /explain, chat.mjs and deriveScope go on reading tool/params/result
+ * unchanged — and absent on every entry written before it existed, which is why the
+ * synthesised form below stays as the fallback rather than being replaced.
  *
  * Entry shapes in, items out:
  *   role 'user'                              -> { role: 'user', content }
@@ -1711,8 +1730,13 @@ function capOutput(text) {
  * resolved it — and must come back as ONE call with one output, or the model sees the same
  * destructive action requested twice.
  *
- * call_ids are synthesised from sequence_number. They only have to be unique and consistent
- * inside this array; nothing downstream matches them against the gateway's originals.
+ * A respond is stored as an assistant entry and comes back as an assistant item, where the
+ * gateway saw a function_call. That is the one deliberate divergence: the alternative is a
+ * call with no output, which the gateway rejects. It costs only the items after it, since a
+ * respond ends its round.
+ *
+ * Synthesised call_ids (the fallback path) only have to be unique and consistent inside this
+ * array. They cannot collide with replayed gateway ids, which carry a provider prefix.
  *
  * @param {Array} workingHistory  PGC_SessionEntry rows in sequence order
  * @returns {Array} canonical items for callLlmWithTools
@@ -1724,6 +1748,17 @@ export function toInputItems(workingHistory = []) {
   const closePending = (output) => {
     items.push({ type: 'function_call_output', call_id: pending.callId, output });
     pending = null;
+  };
+
+  // Replay the gateway's own items for this turn, and report which call the output attaches
+  // to. Returns null when the entry predates `items` or carries none the loop can pair an
+  // output with, so the caller falls back to synthesising the call.
+  const replayItems = (parsed) => {
+    if (!Array.isArray(parsed?.items) || parsed.items.length === 0) return null;
+    const call = parsed.items.find(it => it?.type === 'function_call');
+    if (!call?.call_id) return null;
+    items.push(...parsed.items);
+    return call.call_id;
   };
 
   workingHistory.forEach((entry, i) => {
@@ -1753,13 +1788,16 @@ export function toInputItems(workingHistory = []) {
 
     if (parsed.tool === '__pending__') {
       if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
-      items.push({
-        type:      'function_call',
-        call_id:   callId,
-        name:      parsed.action,
-        arguments: JSON.stringify(parsed.params ?? {}),
-      });
-      pending = { callId, name: parsed.action };
+      const replayedId = replayItems(parsed);
+      if (!replayedId) {
+        items.push({
+          type:      'function_call',
+          call_id:   callId,
+          name:      parsed.action,
+          arguments: JSON.stringify(parsed.params ?? {}),
+        });
+      }
+      pending = { callId: replayedId ?? callId, name: parsed.action };
       return;
     }
 
@@ -1777,15 +1815,18 @@ export function toInputItems(workingHistory = []) {
 
     if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
 
-    items.push({
-      type:      'function_call',
-      call_id:   callId,
-      name:      parsed.tool,
-      arguments: JSON.stringify(parsed.params ?? {}),
-    });
+    const replayedId = replayItems(parsed);
+    if (!replayedId) {
+      items.push({
+        type:      'function_call',
+        call_id:   callId,
+        name:      parsed.tool,
+        arguments: JSON.stringify(parsed.params ?? {}),
+      });
+    }
     items.push({
       type:    'function_call_output',
-      call_id: callId,
+      call_id: replayedId ?? callId,
       output:  capOutput(JSON.stringify(parsed.result ?? null)),
     });
   });
