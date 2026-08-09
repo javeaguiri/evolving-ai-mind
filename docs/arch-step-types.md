@@ -665,6 +665,54 @@ in `PGC_SystemContext` for a complete flat loop example (Spanish vocabulary quiz
 }
 ```
 
+`serv_insert` takes either a row object or an **array of row objects** in `input.row`;
+an array is written as one multi-row INSERT, so an iterator of single-row inserts is the
+wrong shape unless each item targets a different table or needs its own gate. Every object
+in a batch must carry the same column set — SERV rejects a mismatch, because the column
+list comes from the first row and a differing row would otherwise insert nulls silently.
+
+`serv_update` is **one statement**: every row its filters match receives the same values.
+It has no batch form for per-row differing values — use `serv_upsert` for that.
+
+###### `serv_query` with `vectorSearch`
+
+```json
+{
+  "step": "1", "type": "serv_query",
+  "input": {
+    "tableName":    "PGD_Recipes",
+    "vectorSearch": {
+      "column":    "name_embedding",
+      "queryText": "{{input.search}}",
+      "threshold": 0.6
+    },
+    "limit": 5
+  },
+  "output_key": "matches",
+  "on_success": "next",
+  "on_else": "cancel"
+}
+```
+
+Ranks rows by pgvector cosine similarity instead of comparing text, for matching by meaning
+rather than by an exact or `LIKE` comparison. One embedding call, and the cost does not grow
+with the size of the list — which is what makes similarity matching viable where an
+`llm_call` per item would charge on every run forever (`architecture.md` §1: the LLM is not
+called twice for the same problem).
+
+`column` must be a `vector` column on the table; `schema.mjs` creates and maintains one
+automatically for any column named `<name>_embedding`. `queryText` accepts a `{{template}}`.
+`threshold` is the minimum cosine similarity a row must reach, default `0.75`, and is
+**calibrated per use case** — `PGC_DomainHelp` uses `0.40` for `pplx-embed-v1-4b` against
+domain nouns and `arch-data.md` is explicit that the number does not transfer to a different
+kind of text. `vectorSearch` combines with `filters` rather than replacing them: filters
+narrow the candidate set, `vectorSearch` ranks what remains, most-similar first (so `orderBy`
+is redundant alongside it).
+
+Implemented at the SERV boundary in `table.mjs` and reached through `getRows`' 5th positional
+argument. `executeServQuery` passes it through — before Sprint 10 it did not, and a step that
+requested `vectorSearch` received unranked rows with no error.
+
 ##### `serv_upsert`
 ```json
 {
