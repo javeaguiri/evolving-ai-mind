@@ -696,6 +696,87 @@ like invention, and a measurement taken against a lying registry measures the re
 AC4 wants the cleaner reading, **use D3 (the frozen generation-time date, untouched by this)**.
 `import_budget_spreadsheet` itself was deliberately left broken.
 
+### Session 8 — 2026-08-09 — 2C validated live. AC1 mechanism PASS. Checkpoint 3 opened.
+
+**The native loop ran for the first time, and AC1's mechanism is unambiguous.** Session 1131:
+
+```
+turn   in       create   read    read/prev-in   cost
+1      7,434    7,432        0       —          $0.0302
+2      8,273      840    7,432      1.00        $0.0068
+3      8,665      392    8,272      1.00        $0.0059
+4     10,197    1,532    8,664      1.00        $0.0284
+```
+
+`read` equals the previous turn's entire `in` on every turn after the first; `cacheCreation`
+holds at the per-turn increment while the transcript grows. Round cost **$0.071**.
+
+**AC1's cost half is 3.4×, below its own ≥4× threshold — recorded as measured, not rounded up.**
+Creation totalled 10,196 against ~34,569 for the old shape. The ratio grows with round length
+(old cost quadratic in turns, new linear), so a longer round clears 4×; a four-turn round is
+thin evidence either way. **AC2 is not exercised** — no `run_sql` call was made.
+
+**Three defects found by running it, none of which unit tests could have caught.**
+
+1. **Parallel tool calls 400'd the round.** Turn 1 returned TWO `function_call` items; the loop
+   echoed both into `input` but `turn.output.find(...)` executed one, so turn 2 sent two calls
+   and one result. Pre-existing 2c defect — the loop had never executed. Novia's behaviour was
+   *correct*: two independent lookups in one round trip is cheaper than two turns. Fixed by
+   dispatching every call, one session entry per call, one turn counted per round trip.
+2. **`run_workflow` had no input contract.** She dispatched `create_domain` with
+   `{domain, description}`; step 1 reads `input.userInput`; `candidate_domain` became `''`; with
+   no request text the design prompts invented **`daily_journaling`** and asked for approval of
+   it, table names null (run 762). Neither end errors — an unread key is discarded silently, an
+   unsupplied one resolves to undefined. `expectedRunInput` now derives the contract from the
+   steps (two patterns: `{{input.x}}` tokens, and `input_key: "input"` + `items.x`), surfaced on
+   `read_workflow` and enforced as a pre-dispatch refusal on `run_workflow`.
+3. **`create_domain` would invent a domain rather than ask** (v56 → v58). Guard added at 1a/1b/1c
+   — and per the user, the gate asks for a **description, not a name**: `input.userInput` feeds
+   `research_domain_schema`, and the name is derived downstream. Also fixed the duplicate
+   pre-check, which slugified the whole request and compared for equality, so it only ever fired
+   when the user typed the bare slug. Now a semantic match against `PGC_DomainHelp` at the
+   calibrated 0.40. Verified live: *"track my monthly budget and spending categories"* →
+   `budgets_expenses` 0.4756; *"somewhere to keep my recipes"* → `recipes` 0.5445; the inventory
+   request → no match, proceeds. The old check missed all three.
+
+**AC5 closed early, all three gaps** — `serv_query` contract + executor pass-through, and
+`query_table` for Novia's own probing. Calibration evidence against `PGD_Ingredients` (34 rows,
+`name_embedding` live): `"EVOO 32OZ"` → olive oil **0.5155** (next 0.2519); `"ORG TOM DICED 14.5"`
+→ diced tomatoes **0.3609** (next 0.1585); a bus-ticket line tops out at 0.2048. **The default
+0.75 would have missed every true match** — the "does not transfer" warning made concrete before
+it could surface as "lazy matching doesn't work". First consumer shipped the same day:
+`create_domain`'s duplicate check.
+
+**Novia's Checkpoint 3 proposal (session 1131) — good surface, one structural gap.** She found
+the existing domain and categories, gated before every write, kept the expense path alive for
+non-grocery receipts, and answered the Spanish problem *better than the sprint had assumed* —
+translate in the parse step so matching happens in one language, rather than betting on
+cross-lingual embedding similarity. **But her step 6 is UC-P4**: an `llm_call` per receipt
+holding the whole inventory list, which §3b rejects on cost and `architecture.md` §1 forbids.
+Passing embeddings into an LLM is inert. **No alias learning at all.** Cause is visible in the
+tool trace — four calls, none to `PGC_StepType`, so she never saw the `vectorSearch` contract
+and used invented step type names throughout (`db_insert`, `llm`). Sprint 9's AC2 (reads the
+registry unprompted) did **not** reproduce this round.
+
+**Earlier the same day, before the round:** batch-write contract corrected across four artifacts
+(`serv_insert`'s description named `addRows`, which does not exist; `serv_update` never said it
+has no batch form), a silent data-loss bug fixed in SERV (a heterogeneous batch took its column
+list from row 0 and null-filled the rest), and the resume path taught to replay the gateway's own
+items so a gate resume keeps its prefix credit (~$0.12 per resume at a 35k transcript).
+
+**Open, carried:** AC2 unexercised; AC1 cost needs a longer round; `workflow-schema.json` was
+found stale against `PGC_StepType` twice in one commit (`vectorSearch`, composite `orderBy`) —
+L0 checks required fields by presence and never rejects an invented one, so the JSON schema is
+the only layer that catches a made-up field name and it has to track the contract. Two new
+backlog items: session lifecycle (never-closing sessions replay everything and freeze a stale
+picture of the registry) and the duplicate `design_table` prompt rows.
+
+**Next session:** create the inventory domain via `create_domain` v58, then Novia builds the
+receipt workflow. Before approving her design, push back on step 6 without naming the answer —
+*"check `PGC_StepType` for `serv_query`; can the matching be done without an LLM call per
+receipt, and how would this get cheaper the more receipts it sees?"* — which tests whether she
+reaches vector-first + alias learning from the registry rather than being told.
+
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
 **The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
