@@ -337,6 +337,28 @@ function getEmbedColumns(schemaColumns) {
   );
 }
 
+/**
+ * Index of the first row whose column set differs from row 0's, or -1 when they all match.
+ *
+ * A batch insert builds one VALUES tuple per row from the FIRST row's column list, and
+ * validates only that row's names against the schema. So a row carrying a different key set
+ * is not something Postgres can reject: a column row 0 lacks is silently dropped, and one
+ * row 0 has that this row does not is written as null. The insert succeeds and the data is
+ * wrong — which is why this is a rejection rather than a repair.
+ *
+ * Pure — exported for test.
+ *
+ * @param {object[]} rows  non-empty array of row objects
+ * @returns {number} index of the first mismatched row, or -1
+ */
+export function findColumnSetMismatch(rows) {
+  const first = Object.keys(rows[0]).sort().join(',');
+  for (let i = 1; i < rows.length; i++) {
+    if (Object.keys(rows[i]).sort().join(',') !== first) return i;
+  }
+  return -1;
+}
+
 // ---------------------------------------------------------------------------
 // POST /serv/table/insertRow
 // ---------------------------------------------------------------------------
@@ -362,6 +384,14 @@ async function insertRow(req) {
     }
     if (Object.keys(rows[0]).length === 0) {
       return err(400, 'rows must have at least one field', req.correlationId);
+    }
+    const mismatch = findColumnSetMismatch(rows);
+    if (mismatch !== -1) {
+      return err(
+        400,
+        `rows[${mismatch}] has a different column set than rows[0] — every row in a batch insert must carry the same columns`,
+        req.correlationId
+      );
     }
   } else {
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
