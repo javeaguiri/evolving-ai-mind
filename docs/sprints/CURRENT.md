@@ -771,11 +771,40 @@ the only layer that catches a made-up field name and it has to track the contrac
 backlog items: session lifecycle (never-closing sessions replay everything and freeze a stale
 picture of the registry) and the duplicate `design_table` prompt rows.
 
-**Next session:** create the inventory domain via `create_domain` v58, then Novia builds the
-receipt workflow. Before approving her design, push back on step 6 without naming the answer —
-*"check `PGC_StepType` for `serv_query`; can the matching be done without an LLM call per
-receipt, and how would this get cheaper the more receipts it sees?"* — which tests whether she
-reaches vector-first + alias learning from the registry rather than being told.
+**The push-back was run, and she reached the design unaided.** Asked only *"can the item matching
+be done without an LLM call on every receipt, and how would this get cheaper the more receipts it
+processes?"* — with vector search never mentioned — she returned: pgvector cosine as the primary
+matcher, LLM fallback on the sub-threshold residue **batched into one call** rather than per item,
+and alias learning as a normalised `InventoryAlias` child table carrying its own
+`alias_embedding`, with the match query taking the best score across both embeddings. That is §3b's
+design plus two things §3b does not have — the batched residue, and an alias embedding that lets a
+Spanish receipt string match an English canonical name without re-translating. She also
+self-corrected the inert "pass embeddings to the LLM" step from her first proposal.
+
+**Her one real error is the numbers, and it is the interesting one.** She proposes a confidence
+threshold of **0.82**, calibrating down from **0.70**. Measured against `PGD_Ingredients`, true
+grocery matches land at **0.36–0.52** — so both figures sit above every true positive and would
+read as "vector matching does not work". Her instinct is right (she says explicitly the threshold
+should be observed, not guessed) but she guessed the range, and **she still has not read
+`PGC_StepType`** — no tool calls at all on that turn — so she does not know `query_table` now takes
+`vectorSearch` and could settle it against 34 live rows in one call.
+
+**Session 1131 cost $0.4216 over 26 calls** (matches `minds_eye_turn_count` exactly), **$0.0162 per
+turn** against Sprint 9 session 1121's $0.0598 — **3.7× cheaper per turn**, a better read on 2c's
+cost half than the 3.4× off a single four-turn round. Two full proposals, domain exploration, a
+triggered workflow and a redesign for $0.42, against AC3's $1.50 for a build.
+
+**`turn_limit` 12 → 30** (preferences row, live). 2c inverted which budget binds: the turn-limit
+round did 12 turns in **54 seconds** against a 195s budget, stopping with 72% of its wall clock
+unspent and without answering. Wall clock should bind now — watch for `round budget reached` in
+the logs to confirm.
+
+**Next session:** create the inventory domain via `create_domain` v58 — its guard and semantic
+duplicate check are unexercised — then Novia builds the receipt workflow. Do **not** hand her the
+threshold: tell her it is an empirical question she can settle herself and that `PGD_Ingredients`
+has 34 rows with live embeddings. Whether she reaches for `query_table` + `vectorSearch` closes
+both the calibration question and the registry-reading gap in one move; if she asks for the
+numbers instead, that is a finding too.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
