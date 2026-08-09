@@ -1176,7 +1176,7 @@
       "model": "anthropic/claude-sonnet-4-6",
       "max_output_tokens": 10240,
       "round_budget_ms": 195000,
-      "turn_limit": 12,
+      "turn_limit": 30,
       "max_actions_per_session": 8,
       "max_lifetime_turns": 100,
       "tone": "concise but friendly",
