@@ -16,10 +16,10 @@
       {
         "step": "1",
         "type": "js_transform",
-        "description": "Normalise the domain request. Accepts userInput or description — a caller supplying either is supplying the same thing. Emits the request text for the design steps and a slug for the duplicate pre-check.",
+        "description": "Normalise the domain request. Accepts userInput or description — a caller supplying either is supplying the same thing.",
         "input_key": "input",
-        "output_key": "domain_request,candidate_domain",
-        "expression": "(function() { var text = (items.userInput || items.description || '').trim(); return { domain_request: text, candidate_domain: text.toLowerCase().replace(/\\s+/g, '_').replace(/[^a-z0-9_]/g, '') }; })()",
+        "output_key": "domain_request",
+        "expression": "(function() { return { domain_request: (items.userInput || items.description || '').trim() }; })()",
         "on_success": "next",
         "on_else": "cancel"
       },
@@ -65,25 +65,23 @@
         "step": "1c",
         "type": "js_transform",
         "input_key": "domain_answer",
-        "expression": "(function() { var text = (items && items.domain_request || '').trim(); return { domain_request: text, candidate_domain: text.toLowerCase().replace(/\\s+/g, '_').replace(/[^a-z0-9_]/g, '') }; })()",
-        "output_key": "domain_request,candidate_domain",
+        "expression": "(function() { return { domain_request: (items && items.domain_request || '').trim() }; })()",
+        "output_key": "domain_request",
         "on_success": "2",
         "on_else": "cancel",
-        "description": "Re-normalise from the answered gate, so both entry paths reach step 2 with the same two keys."
+        "description": "Normalise the answered gate, so both entry paths reach step 2 with the same key."
       },
       {
         "step": "2",
         "type": "serv_query",
-        "description": "Check whether this domain already exists in PGC_DomainHelp.",
+        "description": "Does a domain covering this request already exist? Matched semantically against PGC_DomainHelp, because the request is a description and an existing domain is only found by what it is for, not by the words used to ask for it. Threshold 0.40 is the calibrated pplx-embed-v1-4b value for this table — exact matches score ~0.55-0.60, unrelated domains ~0.08-0.11.",
         "input": {
           "tableName": "PGC_DomainHelp",
-          "filters": [
-            {
-              "column": "domain",
-              "op": "eq",
-              "value": "{{candidate_domain}}"
-            }
-          ],
+          "vectorSearch": {
+            "column": "embedding",
+            "queryText": "{{domain_request}}",
+            "threshold": 0.4
+          },
           "limit": 1
         },
         "output_key": "existing_domain_check",
@@ -103,7 +101,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Domain already exists. Offer recreate (overwrite registration) or cancel.",
-        "message_template": "Domain *{{candidate_domain}}* already exists. Recreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
+        "message_template": "Domain *{{existing_domain_check.0.domain}}* already covers this — _{{existing_domain_check.0.description}}_\n\nRecreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
         "options": [
           {
             "label": "Recreate",
@@ -125,7 +123,7 @@
         "type": "human_gate",
         "gate_type": "choice",
         "description": "Ask how the domain will be used — shapes research depth and schema complexity.",
-        "message_template": "How will the *{{candidate_domain}}* domain be used?",
+        "message_template": "How will this domain be used?\n\n_You asked for: {{domain_request}}_",
         "options": [
           {
             "value": "professional",
