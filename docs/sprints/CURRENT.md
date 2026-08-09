@@ -1,6 +1,12 @@
 # Sprint 10 — Viability Checkpoints
 
-**Status: SCOPED 2026-08-06. Branch `sprint/10-viability-checkpoints` (to be cut from main).**
+**Status: IN FLIGHT. Scoped 2026-08-06, last updated 2026-08-09. Branch
+`sprint/10-viability-checkpoints` — cut, pushed, and deployed to prod.**
+
+**Checkpoint 1 CLOSED — PASS** (AC10, settled on standing evidence 2026-08-08).
+**Checkpoint 2c deployed and not yet exercised** — the next `/novia` round is its integration
+test and closes AC1 and AC2 together. Nothing else in Checkpoint 2 is measurable before it runs.
+**Checkpoint 3 not started.**
 
 > **This sprint ends in a go/no-go decision.** Its deliverable is not a feature — it is a written
 > recommendation on whether development continues, measured against thresholds committed *in this
