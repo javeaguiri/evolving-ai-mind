@@ -38,7 +38,7 @@ import { ok, err }                                         from '../shared/lambd
 import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
 import { callLlmWithTools }                                from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
-import { runSimulation }                                  from './simulation-engine.mjs';
+import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
@@ -1528,6 +1528,27 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
         const wf = wfResp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
 
+        // Refuse before dispatching, not after — the same shape as preGateRefusal, and for
+        // the same reason: a refusal returned as a tool result costs one turn to correct,
+        // where a wrong dispatch costs a whole run and arrives looking like a healthy one.
+        // Run 762 is why this exists: create_domain was dispatched with { domain,
+        // description }, step 1 read input.userInput, and the run reached a human gate
+        // asking approval for a domain nobody had asked for.
+        const expected = expectedRunInput(wf.steps);
+        const missing  = expected.filter(k => !(k in input));
+        if (missing.length > 0) {
+          const ignored = Object.keys(input).filter(k => !expected.includes(k));
+          console.warn('proc/minds-eye: run_workflow refused — input does not cover what the workflow reads', {
+            workflowName, missing, ignored, traceId,
+          });
+          return {
+            error: `"${workflowName}" reads input keys you did not supply. Supply every key it reads — pass null for any that do not apply — and call again.`,
+            expected_input:        expected,
+            missing,
+            ignored_keys_supplied: ignored,
+          };
+        }
+
         // Ensure the workflow runs in the Novia session thread. The raw SQS
         // callback may have threadId null (e.g. first-message invocation), but
         // threadTs is resolved from session.slack_thread_ts by the caller.
@@ -1921,7 +1942,17 @@ async function executeReadTool(action, params, traceId) {
         );
         const wf = resp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
-        return { name: wf.name, version: wf.version, domain: wf.domain, description: wf.description ?? null, steps: wf.steps };
+        return {
+          name:        wf.name,
+          version:     wf.version,
+          domain:      wf.domain,
+          description: wf.description ?? null,
+          // Derived from the steps, because PGC_Workflow declares no input schema. These
+          // are the keys the workflow READS — supplying a key it does not read is silently
+          // discarded, and omitting one it does read resolves to undefined with no error.
+          expected_input: expectedRunInput(wf.steps),
+          steps:       wf.steps,
+        };
       }
 
       case 'read_prompt': {

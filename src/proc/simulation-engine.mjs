@@ -1698,6 +1698,49 @@ export function collectTemplateStrings(value, out) {
 }
 
 /**
+ * The `input` keys a workflow actually reads — its de facto input contract.
+ *
+ * PGC_Workflow declares no input schema, so before this the only way to know what to pass
+ * a workflow was to read its steps and infer. A caller who guesses gets no error: an
+ * unsupplied key resolves to undefined and a supplied key nothing reads is discarded in
+ * silence. Run 762 is the specimen — `create_domain` was dispatched with { domain,
+ * description }, step 1 read `input.userInput`, and eleven steps later the run was asking
+ * for approval of a domain nobody requested.
+ *
+ * Two consumption patterns, because a workflow has two ways to reach its input:
+ *   {{input.foo}}                      a template token, anywhere at any depth
+ *   input_key: "input" + items.foo     a js_transform reading the whole input object
+ *
+ * Derived rather than declared, so it cannot drift from the steps it describes. It reports
+ * what is READ, which is not the same as what is required — a workflow may read a key it
+ * treats as optional, and nothing here can tell the difference.
+ *
+ * @param {Array} steps  PGC_Workflow.steps
+ * @returns {string[]} sorted, de-duplicated top-level input key names
+ */
+export function expectedRunInput(steps) {
+  const keys = new Set();
+
+  for (const step of Array.isArray(steps) ? steps : []) {
+    for (const str of collectTemplateStrings(step, [])) {
+      for (const ref of extractTemplateRefs(str)) {
+        if (!ref.startsWith('input.')) continue;
+        const key = ref.slice('input.'.length).split(/[.[]/)[0];
+        if (key) keys.add(key);
+      }
+    }
+
+    // A js_transform bound to the whole input object reaches its fields as items.<key>,
+    // which is not template syntax and so is invisible to the walk above.
+    if (step?.input_key === 'input' && typeof step.expression === 'string') {
+      for (const m of step.expression.matchAll(/\bitems\.([a-zA-Z_$][\w$]*)/g)) keys.add(m[1]);
+    }
+  }
+
+  return [...keys].sort();
+}
+
+/**
  * Extract all {{ref}} template variable names from a string.
  * Returns base paths only — "proposed_scaffold.domain" for "{{proposed_scaffold.domain}}".
  */

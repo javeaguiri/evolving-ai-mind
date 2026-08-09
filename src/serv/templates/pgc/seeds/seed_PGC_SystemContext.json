@@ -1445,7 +1445,7 @@
         },
         {
           "name": "read_workflow",
-          "description": "Read a workflow name, version, domain, description and its full steps JSON. Never call twice for the same workflow in one session; the result is already in your history.",
+          "description": "Read a workflow name, version, domain, description, expected_input and its full steps JSON. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. Never call twice for the same workflow in one session; the result is already in your history.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1878,7 +1878,7 @@
         },
         {
           "name": "run_workflow",
-          "description": "Dispatch a registered workflow to the step-executor engine, which then owns the interaction and posts its own results. Pass any context you already know in input so the workflow can skip selection steps. Do not use it for interactive wizards, which will stall waiting for input you cannot give. For a plain data lookup use query_entity instead.",
+          "description": "Dispatch a registered workflow to the step-executor engine, which then owns the interaction and posts its own results. Call read_workflow first and supply every key its expected_input lists, passing null for any that do not apply: this call is refused if input omits one, because a workflow silently discards a key it does not read and silently sees undefined for one you leave out. Do not use it for interactive wizards, which will stall waiting for input you cannot give. For a plain data lookup use query_entity instead.",
           "parameters": {
             "type": "object",
             "properties": {
