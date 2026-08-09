@@ -792,29 +792,39 @@ async function executeServInsert({ step, localState, traceId }) {
 
 // Step input shape:
 //   {
-//     "tableName": "PGD_Recipes",
-//     "filters":   [ { "column": "name", "op": "like", "value": "{{state.search}}" } ],
-//     "orderBy":   { "column": "created_at", "direction": "desc" },
-//     "limit":     20
+//     "tableName":    "PGD_Recipes",
+//     "filters":      [ { "column": "name", "op": "like", "value": "{{state.search}}" } ],
+//     "orderBy":      { "column": "created_at", "direction": "desc" },
+//     "limit":        20,
+//     "vectorSearch": { "column": "name_embedding", "queryText": "{{state.search}}", "threshold": 0.6 }
 //   }
 //
-// filters, orderBy, and limit are all optional.
+// filters, orderBy, limit and vectorSearch are all optional.
 // Template variables in filter values are resolved via resolveInput before the SERV call.
 // Rows array is written to local_state[output_key].
+//
+// vectorSearch ranks by pgvector cosine similarity against a vector column, and combines
+// with filters rather than replacing them. SERV embeds queryText, validates that the column
+// exists and is a vector type, and applies the threshold. It was implemented at the SERV
+// boundary (table.mjs) and reachable through getRows, but this executor never passed it on —
+// so a step that asked for it got unranked rows back and no error. Silently wrong beats
+// loudly broken only if nobody is relying on the ranking, and lazy name matching is entirely
+// the ranking.
 
 async function executeServQuery({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input ?? {}, localState);
-  const { tableName, filters, orderBy, limit } = resolvedInput;
+  const { tableName, filters, orderBy, limit, vectorSearch } = resolvedInput;
 
   if (!tableName) throw new Error('serv_query step missing input.tableName');
 
   console.info('step-executor: serv_query', {
     tableName,
-    filterCount: filters?.length ?? 0,
+    filterCount:  filters?.length ?? 0,
+    vectorColumn: vectorSearch?.column,
     traceId,
   });
 
-  const resp = await getRows(tableName, filters ?? [], orderBy, limit);
+  const resp = await getRows(tableName, filters ?? [], orderBy, limit, vectorSearch);
 
   if (!resp.success) {
     throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
