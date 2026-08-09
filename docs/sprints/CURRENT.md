@@ -636,6 +636,60 @@ aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --region us-east-2
 half of the deploy and reverting code alone would leave v31 and row 46 in place.
 
 
+### Session 7 — 2026-08-09 — Two pre-validation fixes; deployed, round still not run
+
+Both found by reading code rather than by a failing run, and both change what the first live
+round will measure — so they land before it, not after.
+
+**Batch writes were described inconsistently across four artifacts.** `serv_insert`'s
+`PGC_StepType` row claimed the array path "calls `addRows`" — there is no `addRows` in
+`serv-client.mjs` and no such case in `table.mjs`; the path is `insertRows` →
+`POST /serv/table/insertRow` with a `rows` key. `serv_update`'s row never said it **has no
+batch form** (one statement, one set of values applied to every matching row), while
+`serv_insert` advertised "one row or a batch" — so assuming a `serv_update` equivalent was a
+reasonable read. `serv_db_step_shapes` labelled `serv_insert` "create one row" and showed only
+that form. Corrected in `PGC_StepType` (the authority Novia reads — the convention bridge
+deliberately delegates step shape to it) and in both `create_workflow`-facing context rows.
+
+**Fault domain Execution, one real bug behind it:** a batch insert builds every VALUES tuple
+from the FIRST row's column list and validates only that row's names against the schema. A row
+with a different key set cannot fail — a column row 0 lacks is dropped, one row 0 has that it
+lacks goes in as null. It succeeds and the data is wrong. `findColumnSetMismatch` rejects it.
+
+**The premise correction worth recording:** `edit_budget` v6 *does* batch — steps 9a and 16 are
+`serv_upsert` with row arrays, no iterator. The per-row-write iterators are all in system
+workflows (`create_workflow` 20/23g, `create_domain` 22, `fix_workflow` 10/15, `add_entity` 2f),
+and `fix_workflow`'s are legitimate: each item needs its own filters.
+
+**A resumed round was throwing away the prefix credit 2c just bought.** `toInputItems`
+synthesised `call_id` as `call_<seq>` and rebuilt `arguments` from `params` — which has already
+had `reasoning`/`message`/`advisory` stripped out of what the model actually sent. So the
+rebuilt array diverged from the cached one at the first tool call, and everything after it was
+re-created at 1.25× instead of read at 0.1×: **~$0.12 per resume on a 35k transcript**, against
+AC3's $1.50 all-in threshold.
+
+The function's own comment justified this — *"a round always opens with a user message, and a
+user message forfeits prefix credit for its turn regardless."* True of the `followup` path.
+**False of the two that do not append one** — the continue gate and an approved action gate both
+re-enter with the transcript ending on a tool result, the shape that earns full credit. Each
+tool entry now persists the raw `items` the gateway returned and they are replayed verbatim;
+`items` is additive, so `/explain`, `chat.mjs` and `deriveScope` are unaffected and pre-existing
+entries fall back to the synthesised form. Also applied: the `id` tiebreaker on
+`assembleContext`'s `PGC_Memory` read — it sits in `instructions`, ahead of the whole transcript,
+so a reshuffle between rounds invalidated the entire cached prefix. Both composite sorts verified
+deterministic against prod.
+
+**Deployed:** `sam deploy` + `upsert-step-type` (3 updated) + `upsert-system-context` (2 updated),
+verified against the live rows. 823 → 839 unit tests.
+
+**AC4 interaction, flagged not decided.** The `serv_insert` contract now states that elements must
+be row objects and that an array of bare values is rejected — which is exactly D2's defect
+(`import_budget_spreadsheet` step 9). That makes the blind repair easier. Repairing the registry
+is still right — Sprint 9's recurring finding is that a wrong registry makes a correct read look
+like invention, and a measurement taken against a lying registry measures the registry. But if
+AC4 wants the cleaner reading, **use D3 (the frozen generation-time date, untouched by this)**.
+`import_budget_spreadsheet` itself was deliberately left broken.
+
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
 **The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
