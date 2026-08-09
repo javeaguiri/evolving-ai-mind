@@ -665,49 +665,23 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     const turnItems = turn.output.map(item => ({ ...item }));
     input.push(...turnItems);
 
-    activeCall = turn.output.find(o => o.type === 'function_call') ?? null;
+    // A turn may carry SEVERAL tool calls. The model is free to ask for two independent
+    // reads at once, and when it does that is cheaper than two turns, not a mistake to
+    // suppress. But every call it makes has to come back with a result: an unpaired call
+    // is a 400 from the gateway, which is exactly how this loop first failed in prod
+    // (session 1130 — two parallel search_domain_help calls, one result returned).
+    const calls = turn.output.filter(o => o.type === 'function_call');
 
-    let decision;
-    if (activeCall) {
-      let args;
-      try {
-        args = JSON.parse(activeCall.arguments);
-      } catch {
-        // Answer the malformed call as its own tool result. This keeps the chain intact and
-        // costs nothing, where a correction prompt used to cost a whole extra LLM call.
-        console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
-          action: activeCall.name, traceId,
-        });
-        recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
-        activeCall = null;
-        turnCount      += 1;
-        turnsThisRound += 1;
-        longestTurnMs   = Math.max(longestTurnMs, Date.now() - turnStart);
-        continue;
-      }
-      const { reasoning, message, advisory, ...params } = args;
-      decision = { action: activeCall.name, params, reasoning, message, advisory };
+    // Items that are not calls — reasoning, a message block — ride with the first call's
+    // entry, so a rebuilt transcript keeps them ahead of it in the order the gateway sent.
+    const leadingItems = turn.output.filter(o => o.type !== 'function_call').map(i => ({ ...i }));
 
-    } else if (turn.text) {
-      // Answered in prose without calling respond. Treat it as the reply it plainly is,
-      // rather than failing the round on a technicality the user would never see.
-      console.info('proc/minds-eye: text reply with no tool call — treating as respond', { traceId });
-      decision = { action: 'respond', params: {}, message: turn.text };
-
-    } else {
-      console.error('proc/minds-eye: turn produced neither a tool call nor text', { traceId });
-      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, new Error('empty turn')));
-      earlyExit = true;
-      break;
-    }
-
-    // Measured across the whole turn, correction call included — the budget check cares
-    // what a turn costs in wall clock, not how many API calls it took to get there.
+    // Measured across the whole turn — the budget check cares what a turn costs in wall
+    // clock, not how many tool calls it asked for.
     longestTurnMs = Math.max(longestTurnMs, Date.now() - turnStart);
 
-    // Every turn costs exactly 1, regardless of which tool ran or whether it
-    // errored — a tool call and a direct respond are the same cost; only the
-    // JSON-correction retry above adds an extra turn, since it's an extra LLM call.
+    // A turn costs exactly 1 regardless of how many calls it carries: the cost is the LLM
+    // round trip, and parallel calls are one round trip.
     turnCount += 1;
     turnsThisRound += 1;
 
@@ -722,182 +696,241 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       break;
     }
 
-    const { action, params = {}, reasoning, message, advisory } = decision;
-
-    if (action === 'respond') {
-      const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory });
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'assistant',
-        content:         assistantContent,
-      });
-
-      await updateRows('PGC_Session',
-        [{ column: 'id', op: 'eq', value: session.id }],
-        { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
-      );
-
-      if (callback) {
-        let replyText = message ?? '(no message)';
-        // Slack requires ``` to be on its own line; normalize before sending.
-        replyText = replyText.replace(/([^\n])(`{3})/g, '$1\n$2').replace(/(`{3})([^\n])/g, '$1\n$2');
-        if (advisory && prefs.advisory_level !== 'off') {
-          replyText += `\n\n---\n_Advisory: ${advisory}_`;
-        }
-        replyText += `\n\n_Session ${session.id}_`;
-        await enqueueCallback(callback, {
-          type:      'HUMAN_NOTIFICATION',
-          format:    'markdown',
-          traceId,
-          message:   replyText,
-          queryId:   session.query_id,
-          sessionId: session.id,
-        });
-      }
-
-      responded = true;
-      console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
+    if (calls.length === 0 && !turn.text) {
+      console.error('proc/minds-eye: turn produced neither a tool call nor text', { traceId });
+      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, new Error('empty turn')));
+      earlyExit = true;
       break;
+    }
 
-    } else if (READ_TOOLS.has(action)) {
-      const toolResult = await executeReadTool(action, params, traceId);
-      const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: turnItems });
+    // Answered in prose without calling respond. Treat it as the reply it plainly is,
+    // rather than failing the round on a technicality the user would never see.
+    const decisions = calls.length > 0
+      ? calls.map(call => ({ call, args: call.arguments }))
+      : [{ call: null, args: null, textReply: turn.text }];
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         toolEntry,
-      });
+    if (calls.length === 0) {
+      console.info('proc/minds-eye: text reply with no tool call — treating as respond', { traceId });
+    }
 
-      recordToolOutput(toolResult);
-      workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
-      seq += 1;
+    // 'next' — carry on to the next call; 'break' — the round ends here.
+    let control = 'next';
 
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
-      console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
+    for (const [callIndex, entry] of decisions.entries()) {
+      activeCall = entry.call;
 
-    } else if (HOUSEKEEPING_TOOLS.has(action)) {
-      const enrichedParams = action === 'write_memory'
-        ? { ...params, scope: deriveScope(workingHistory) }
-        : params;
-      const hkResult = await executeWriteTool(action, enrichedParams, traceId);
-      const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: turnItems });
+      // Only the first call of a turn carries the turn's non-call items.
+      const entryItems = entry.call
+        ? (callIndex === 0 ? [...leadingItems, { ...entry.call }] : [{ ...entry.call }])
+        : [];
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         hkEntry,
-      });
-
-      recordToolOutput(hkResult);
-      workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
-      seq += 1;
-
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
-      console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
-
-    } else if (INLINE_WRITE_TOOLS.has(action)) {
-      if (actionCount >= prefs.max_actions_per_session) {
-        await postTurnLimitGate(session.id, callback, traceId, true);
-        earlyExit = true;
-        break;
+      let decision;
+      if (entry.call) {
+        let args;
+        try {
+          args = JSON.parse(entry.args);
+        } catch {
+          // Answer the malformed call as its own tool result. This keeps the chain intact
+          // and costs nothing, where a correction prompt used to cost a whole extra LLM
+          // call. The other calls in this turn still run — one bad argument string is not
+          // a reason to drop work the model correctly asked for.
+          console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
+            action: entry.call.name, traceId,
+          });
+          recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
+          activeCall = null;
+          continue;
+        }
+        const { reasoning, message, advisory, ...params } = args;
+        decision = { action: entry.call.name, params, reasoning, message, advisory };
+      } else {
+        decision = { action: 'respond', params: {}, message: entry.textReply };
       }
 
-      const writeResult = await executeWriteTool(action, params, traceId);
-      const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult, items: turnItems });
+      const { action, params = {}, reasoning, message, advisory } = decision;
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         writeEntry,
-      });
+      if (action === 'respond') {
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory });
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'assistant',
+          content:         assistantContent,
+        });
 
-      actionCount += 1;
-      await updateRows('PGC_Session',
-        [{ column: 'id', op: 'eq', value: session.id }],
-        { minds_eye_action_count: actionCount }
-      );
+        await updateRows('PGC_Session',
+          [{ column: 'id', op: 'eq', value: session.id }],
+          { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+        );
 
-      recordToolOutput(writeResult);
-      workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
-      seq += 1;
+        if (callback) {
+          let replyText = message ?? '(no message)';
+          // Slack requires ``` to be on its own line; normalize before sending.
+          replyText = replyText.replace(/([^\n])(`{3})/g, '$1\n$2').replace(/(`{3})([^\n])/g, '$1\n$2');
+          if (advisory && prefs.advisory_level !== 'off') {
+            replyText += `\n\n---\n_Advisory: ${advisory}_`;
+          }
+          replyText += `\n\n_Session ${session.id}_`;
+          await enqueueCallback(callback, {
+            type:      'HUMAN_NOTIFICATION',
+            format:    'markdown',
+            traceId,
+            message:   replyText,
+            queryId:   session.query_id,
+            sessionId: session.id,
+          });
+        }
 
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
-      console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
+        responded = true;
+        console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
+        control = 'break';
+        break;
 
-    } else if (GATED_WRITE_TOOLS.has(action)) {
-      // Refused before the gate, not at it — the loop continues so the next turn can
-      // correct, instead of ending the round on a decision nobody gets to make.
-      const refusal = await preGateRefusal(action, params, traceId);
-      if (refusal) {
-        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal, items: turnItems });
+      } else if (READ_TOOLS.has(action)) {
+        const toolResult = await executeReadTool(action, params, traceId);
+        const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: entryItems, turn: turnCount });
 
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
           role:            'tool',
-          content:         refusalEntry,
+          content:         toolEntry,
         });
 
-        recordToolOutput(refusal);
-        workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+        recordToolOutput(toolResult);
+        workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
         seq += 1;
 
-        // No progress line: this is a failed attempt about to be corrected, which is the
-        // case notifyTurnProgress deliberately stays quiet about.
-        console.info('proc/minds-eye: gated write refused before gate', {
-          action,
-          sessionId: session.id,
-          issueCount: refusal.issues?.length ?? 0,
-          traceId,
-        });
-        continue;
-      }
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
+        console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
-      if (actionCount >= prefs.max_actions_per_session) {
-        await postTurnLimitGate(session.id, callback, traceId, true);
+      } else if (HOUSEKEEPING_TOOLS.has(action)) {
+        const enrichedParams = action === 'write_memory'
+          ? { ...params, scope: deriveScope(workingHistory) }
+          : params;
+        const hkResult = await executeWriteTool(action, enrichedParams, traceId);
+        const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         hkEntry,
+        });
+
+        recordToolOutput(hkResult);
+        workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
+        console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (INLINE_WRITE_TOOLS.has(action)) {
+        if (actionCount >= prefs.max_actions_per_session) {
+          await postTurnLimitGate(session.id, callback, traceId, true);
+          earlyExit = true;
+          control = 'break';
+          break;
+        }
+
+        const writeResult = await executeWriteTool(action, params, traceId);
+        const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         writeEntry,
+        });
+
+        actionCount += 1;
+        await updateRows('PGC_Session',
+          [{ column: 'id', op: 'eq', value: session.id }],
+          { minds_eye_action_count: actionCount }
+        );
+
+        recordToolOutput(writeResult);
+        workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
+        console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (GATED_WRITE_TOOLS.has(action)) {
+        // Refused before the gate, not at it — the loop continues so the next turn can
+        // correct, instead of ending the round on a decision nobody gets to make.
+        const refusal = await preGateRefusal(action, params, traceId);
+        if (refusal) {
+          const refusalEntry = JSON.stringify({ tool: action, params, result: refusal, items: entryItems, turn: turnCount });
+
+          await insertRow('PGC_SessionEntry', {
+            session_id:      session.id,
+            sequence_number: seq,
+            role:            'tool',
+            content:         refusalEntry,
+          });
+
+          recordToolOutput(refusal);
+          workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+          seq += 1;
+
+          // No progress line: this is a failed attempt about to be corrected, which is the
+          // case notifyTurnProgress deliberately stays quiet about.
+          console.info('proc/minds-eye: gated write refused before gate', {
+            action,
+            sessionId: session.id,
+            issueCount: refusal.issues?.length ?? 0,
+            traceId,
+          });
+          continue;
+        }
+
+        if (actionCount >= prefs.max_actions_per_session) {
+          await postTurnLimitGate(session.id, callback, traceId, true);
+          earlyExit = true;
+          control = 'break';
+          break;
+        }
+
+        await postActionGate({ session, action, params, items: entryItems, turn: turnCount, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
         earlyExit = true;
+        control = 'break';
+        break;
+
+      } else if (TRIGGER_TOOLS.has(action)) {
+        const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
+        const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         triggerEntry,
+        });
+
+        recordToolOutput(triggerResult);
+        workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
+        console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
+
+      } else {
+        console.warn('proc/minds-eye: unknown action', { action, traceId });
+        if (callback) {
+          await enqueueCallback(callback, {
+            type:    'HUMAN_NOTIFICATION',
+            traceId,
+            message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
+          });
+        }
+        earlyExit = true;
+        control = 'break';
         break;
       }
-
-      await postActionGate({ session, action, params, items: turnItems, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
-      earlyExit = true;
-      break;
-
-    } else if (TRIGGER_TOOLS.has(action)) {
-      const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
-      const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult, items: turnItems });
-
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         triggerEntry,
-      });
-
-      recordToolOutput(triggerResult);
-      workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
-      seq += 1;
-
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
-      console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
-
-    } else {
-      console.warn('proc/minds-eye: unknown action', { action, traceId });
-      if (callback) {
-        await enqueueCallback(callback, {
-          type:    'HUMAN_NOTIFICATION',
-          traceId,
-          message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
-        });
       }
-      earlyExit = true;
-      break;
-    }
+
+    if (control === 'break') break;
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
@@ -984,7 +1017,7 @@ function gateButtonConfig(action, params = {}) {
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
-async function postActionGate({ session, action, params, items, callback, traceId, currentTurnCount, currentSeq }) {
+async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
   const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
 
@@ -992,7 +1025,7 @@ async function postActionGate({ session, action, params, items, callback, traceI
     session_id:      session.id,
     sequence_number: currentSeq,
     role:            'tool',
-    content:         JSON.stringify({ tool: '__pending__', action, params, items }),
+    content:         JSON.stringify({ tool: '__pending__', action, params, items, turn }),
   });
 
   await updateRows('PGC_Session',
