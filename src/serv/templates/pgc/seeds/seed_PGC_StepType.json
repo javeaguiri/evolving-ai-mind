@@ -272,7 +272,7 @@
   },
   {
     "step_type": "serv_insert",
-    "description": "Inserts one row or a batch of rows into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Single row: returns the inserted row including generated id. Array: calls addRows and returns all inserted rows.",
+    "description": "Inserts one row or a batch of rows into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Single row: returns the inserted row including generated id. Array: one multi-row INSERT in a single request, returning every inserted row. Prefer the array form whenever more than one row is being written — an iterator of single-row serv_insert steps costs one SQS round trip per row and is only the right shape when each item targets a different table or needs its own human_gate.",
     "input_contract": [
       {
         "type": "string",
@@ -284,7 +284,7 @@
         "type": "object|array",
         "field": "input.row",
         "required": true,
-        "description": "Row object or array of row objects. System columns (id, created_at, updated_at) are populated automatically. When an array is supplied the step calls addRows in a single request \u2014 no iterator needed. Supports {{template}} \u2014 a template resolving to an object or array is passed directly."
+        "description": "Row object, or an array of row objects for a batch. System columns (id, created_at, updated_at) are populated automatically. An array is written as one multi-row INSERT \u2014 no iterator needed. Every element must be a row object keyed by column name; an array of bare values (names, ids, strings) is rejected. Every object in a batch must carry the SAME set of columns \u2014 the batch is rejected if they differ, because the column list is taken from the first row. Supports {{template}} \u2014 a template resolving to an object or array is passed directly."
       },
       {
         "type": "string",
@@ -392,7 +392,7 @@
   },
   {
     "step_type": "serv_update",
-    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass updates are rejected. Returns updatedCount and updated rows.",
+    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass updates are rejected. Returns updatedCount and updated rows. This is ONE statement: every row the filters match receives the SAME values, so serv_update has no batch form for per-row differing values. When each record needs its own values, use serv_upsert with a rows array \u2014 one call, no iterator. An iterator of serv_update steps is the right shape only when each item genuinely needs its own filters, as when applying a list of independently-targeted corrections.",
     "input_contract": [
       {
         "type": "string",
@@ -500,7 +500,7 @@
   },
   {
     "step_type": "serv_upsert",
-    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing budget data, syncing recurring records). Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
+    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Always a batch — rows is an array, and the whole set is resolved in one call, never an iterator. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing tabular data, syncing recurring records). Also use it in place of serv_update when each record carries its own values, since serv_update applies one set of values to every row its filters match. Unlike serv_insert, rows here need not share a column set — each is written individually. Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
     "input_contract": [
       {
         "type": "string",
