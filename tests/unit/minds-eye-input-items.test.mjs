@@ -282,3 +282,52 @@ describe('toInputItems — replayed gateway items', () => {
     assert.equal(new Set(ids).size, ids.length, 'call_ids must stay unique');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Parallel tool calls — every call the model makes must come back with a result
+//
+// Session 1130, the first live round of the native loop: the model asked for two
+// independent search_domain_help lookups in one turn. The loop echoed BOTH calls into
+// `input` but took only the first (`turn.output.find`), so turn 2 carried two calls and
+// one result and the gateway answered 400 invalid request.
+//
+// Parallel calls are standard native function calling and cheaper than serial turns —
+// one round trip instead of two. The loop handles all of them.
+// ---------------------------------------------------------------------------
+
+import { readFileSync } from 'node:fs';
+
+const loopSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
+
+describe('runReasoningLoop — parallel tool calls', () => {
+  it('collects EVERY function_call in the turn, not just the first', () => {
+    assert.match(
+      loopSrc,
+      /const calls = turn\.output\.filter\(o => o\.type === 'function_call'\);/,
+      'a find() here leaves later calls unpaired, which the gateway rejects with a 400'
+    );
+    assert.ok(
+      !/activeCall = turn\.output\.find\(/.test(loopSrc),
+      'the single-call shape must be gone, not merely supplemented'
+    );
+  });
+
+  it('iterates them, so each one reaches a dispatch branch', () => {
+    assert.match(loopSrc, /for \(const \[callIndex, entry\] of decisions\.entries\(\)\)/);
+  });
+
+  it('counts ONE turn per LLM round trip regardless of how many calls it carried', () => {
+    // The cost being budgeted is the round trip. Counting per call would make a parallel
+    // turn — the cheaper shape — burn the turn budget faster than the serial one.
+    const perTurn = loopSrc.match(/turnsThisRound \+= 1;/g) ?? [];
+    assert.equal(perTurn.length, 2, 'once in the truncation re-ask path, once per turn');
+  });
+
+  it('carries the turn number onto each persisted entry, so a rebuild can group them', () => {
+    assert.match(loopSrc, /items: entryItems, turn: turnCount/);
+  });
+
+  it('gives only the first call of a turn the turn-level non-call items', () => {
+    assert.match(loopSrc, /callIndex === 0 \? \[\.\.\.leadingItems, \{ \.\.\.entry\.call \}\] : \[\{ \.\.\.entry\.call \}\]/);
+  });
+});
