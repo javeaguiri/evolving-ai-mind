@@ -8,8 +8,8 @@
 four-turn round against a ≥4× threshold; the per-turn read across session 1131 is 3.7×. **AC2
 remains unexercised** — no `run_sql` call has been made in a validating round.
 **AC5 CLOSED 2026-08-09.** AC3 and AC4 not started.
-**Checkpoint 3 opened** — inventory domain live 2026-08-10, but **AC6 is not met**: two
-unmaintained derived columns shipped with it (see Session 9).
+**Checkpoint 3 opened** — inventory domain live 2026-08-10 and **AC6 MET** on the second attempt
+(run 766, one table, no derived columns) after the `minItems` fix (see Session 9).
 
 > **This sprint ends in a go/no-go decision.** Its deliverable is not a feature — it is a written
 > recommendation on whether development continues, measured against thresholds committed *in this
@@ -938,7 +938,36 @@ Embedding spend is **not included and not measured** — `embed-client` logs no 
 or SERV. At this volume (a handful of strings) it is immaterial, but the total above is LLM calls
 only.
 
-Three observations on the schema, none acted on:
+#### Rebuilt after the fix — run 766, and AC6 MET
+
+The user dropped the domain (`delete-domain`, 11:38) and re-ran. **Run 766 produced one table.**
+
+```
+PGD_Inventory (12): id, created_at, updated_at, name, name_embedding, category,
+                    quantity, units, location, status, date_acquired, expiry_date
+```
+
+Registered, queryable, `PGC_EntitySchema` id 46 with no joins. **`item_count` and `level` went with
+the invented table, so AC6's threshold — no unmaintained denormalized columns — is met.** The rest
+of the delta against run 764 is generation variance, not loss: `unit`→`units`,
+`purchase_date`→`date_acquired`, `notes` dropped, defaults on `category` gone.
+
+**A column ceiling was suspected and does not exist.** `columns` carries `minItems: 3` and no
+`maxItems` — a floor cannot drop a column, and both columns thought missing (`units`,
+`expiry_date`) are present.
+
+**Naming drift, second specimen:** run 764 produced `PGD_Items`, run 766 `PGD_Inventory` — singular
+and domain-named, against `PGD_Recipes`/`PGD_Cards`/`PGD_Expenses` everywhere else. Feeds the domain
+validator backlog item.
+
+**Enum inconsistency — CLOSED as a decision, not a defect.** The user's call: the domain was
+specified for **domestic** use, and controlled vocabularies read as a professional-inventory
+requirement. Accepted; no change. Recorded with one caveat for whoever meets it next — `status` got
+a CHECK in *both* runs while `units` and `category` got none in either, so the split is more likely
+arbitrary than driven by the use-case selection. Relevant only if receipt matching later surfaces
+`pcs`/`pieces` variants, at which point the cause will not be the setting.
+
+Three observations on the schema from the first attempt (run 764), retained as the evidence trail:
 
 **1. Enums are inconsistent, not absent.** `status` got
 `chk_items_status: status IN ('new','good','damaged','expired','unusable')`. `unit` (default
