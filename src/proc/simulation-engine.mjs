@@ -293,9 +293,17 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
 
-  if (staticIssues.length > 0) {
+  // L1 gates on hard issues only. Until the frozen-date check no L1 issue carried a
+  // `severity`, so this filter is a no-op for every pre-existing check and the gate keeps
+  // exactly the behaviour it had. A warning must not short-circuit the return below, because
+  // doing so would also skip Levels 2a and 2b — an advisory finding cannot be allowed to
+  // suppress the data-flow trace.
+  const staticHard  = staticIssues.filter(i => i.severity !== 'warning');
+  const staticWarn  = staticIssues.filter(i => i.severity === 'warning');
+
+  if (staticHard.length > 0) {
     console.info('simulation-engine: runSimulation — Level 1 failed', {
-      issueCount: staticIssues.length, traceId,
+      issueCount: staticHard.length, warningCount: staticWarn.length, traceId,
     });
     return {
       passed:              false,
@@ -332,13 +340,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              l2Passed,
       level,
-      total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+      total_issues:        routingMatrix.issues.length + smokeTest.issues.length + staticWarn.length,
       error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
       shape_analysis:      shapeResult,
-      static_analysis:     { passed: true, issues: [] },
+      static_analysis:     { passed: true, issues: staticWarn },
       state_flow:          stateFlow,
       unreferenced_writes: unrefWrites,
       path_results:        [],
@@ -365,13 +373,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const result = {
     passed:              l2Passed,
     level,
-    total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+    total_issues:        routingMatrix.issues.length + smokeTest.issues.length + staticWarn.length,
     error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
     shape_analysis:      shapeResult,
-    static_analysis:     { passed: true, issues: [] },
+    static_analysis:     { passed: true, issues: staticWarn },
     state_flow:          stateFlow,
     unreferenced_writes: unrefWrites,
     path_results:        pathResults,
@@ -661,6 +669,36 @@ export function runLevel1StaticAnalysis(steps) {
     for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
       if (opt.iterator) continue;
       if (typeof opt.description === 'string' && opt.description) templatesToCheck.push(opt.description);
+    }
+
+    // Frozen-date check. A literal date in a step input was written when the workflow was
+    // authored and never changes again, so a workflow that means "today" quietly means the
+    // day it was built, forever. Twice now from the same author: import_budget_spreadsheet
+    // (Sprint 9 D3, three places) and process_receipt step 3, which carried
+    // current_date: "Monday, August 10, 2026" into the prompt that supplies the fallback
+    // purchase date for every future receipt.
+    //
+    // A warning, not a failure: a literal date is legitimate when the workflow means that
+    // specific date — a filter for a historical cutoff, say — and no static check can tell
+    // the two apart. Surfacing it is enough, because the author reads the simulate result
+    // before registering, which is exactly where the two live specimens would have been seen.
+    if (typeof s.input === 'object' && s.input !== null) {
+      const seenDates = new Set();
+      for (const [field, raw] of Object.entries(s.input)) {
+        for (const str of collectTemplateStrings(raw, [])) {
+          if (str.includes('{{')) continue;   // resolved at run time — the correct form
+          const literal = matchDateLiteral(str);
+          if (!literal || seenDates.has(literal)) continue;
+          seenDates.add(literal);
+          issues.push({
+            check:         'frozen_date_literal',
+            step:          stepKey,
+            failure_class: 'frozen_date_literal',
+            severity:      'warning',
+            detail:        `Step "${stepKey}" input.${field} contains the literal date "${literal}", fixed at authoring time. If this is meant to be the current date, it will still be "${literal}" on every future run — compute it at run time in a js_transform step (\`new Date().toISOString().slice(0, 10)\`) and reference that step's output_key instead. Ignore this if the workflow genuinely means that specific date.`,
+          });
+        }
+      }
     }
 
     const stepReads          = new Set();
@@ -1744,6 +1782,27 @@ function isHardSmokeFailure(issue) {
  * Step inputs are plain JSON built by upsert or by an LLM, so there are no cycles to
  * guard against and no prototype chain to walk.
  */
+// Date literals a workflow author actually writes. Deliberately narrow — each alternative
+// requires a four-digit year, because a bare "08/10" or "10 August" is far more likely to be
+// prose than a frozen value, and a false positive on a warning still costs the reader a
+// decision. Returns the matched text, or null.
+const DATE_LITERAL_PATTERNS = [
+  /\b\d{4}-\d{2}-\d{2}\b/,                                                    // 2026-08-10, ISO date or the head of a timestamp
+  /\b\d{1,2}\/\d{1,2}\/\d{4}\b/,                                              // 08/10/2026
+  /\b\d{4}\/\d{1,2}\/\d{1,2}\b/,                                              // 2026/08/10
+  /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/i,  // August 10, 2026
+  /\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i,     // 10 August 2026
+];
+
+export function matchDateLiteral(str) {
+  if (typeof str !== 'string') return null;
+  for (const re of DATE_LITERAL_PATTERNS) {
+    const m = re.exec(str);
+    if (m) return m[0];
+  }
+  return null;
+}
+
 export function collectTemplateStrings(value, out) {
   if (typeof value === 'string') {
     out.push(value);

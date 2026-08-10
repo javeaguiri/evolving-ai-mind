@@ -8,8 +8,20 @@
 four-turn round against a ≥4× threshold; the per-turn read across session 1131 is 3.7×. **AC2
 remains unexercised** — no `run_sql` call has been made in a validating round.
 **AC5 CLOSED 2026-08-09.** AC3 and AC4 not started.
-**Checkpoint 3 opened** — inventory domain live 2026-08-10 and **AC6 MET** on the second attempt
-(run 766, one table, no derived columns) after the `minItems` fix (see Session 9).
+**Checkpoint 2 ANSWERED 2026-08-10 — the user's verdict: cost and stability objectives met, Novia
+is the direction** (Session 11). **AC11 GO recommendation drafted**, provisional pending
+Checkpoint 3.
+**Checkpoint 3 open** — inventory domain live and **AC6 MET** (run 766); `process_receipt`
+(workflow 358) registered with both prompts, **never run**. AC7 fails as built (UC-P4, no
+`vectorSearch`); AC8 and AC9 unmeasured.
+
+> **Next session — the pickup.** The user tests workflow 358 and hands the repairs to Novia in a
+> **new** session. Two symptoms to give her, together in one message (each typed reply costs a
+> full-transcript re-creation, ~$0.22 at 56k): **(1)** `current_date` is frozen at
+> `"Monday, August 10, 2026"` in step 3's input; **(2)** item matching calls the LLM with the whole
+> inventory on every receipt, so cost per receipt rises with use where §3b requires it to fall.
+> **State symptoms, never the fix** — she reached the correct design unaided in Session 8, and the
+> second symptom doubles as AC4's uncontaminated repair specimen.
 
 > **This sprint ends in a go/no-go decision.** Its deliverable is not a feature — it is a written
 > recommendation on whether development continues, measured against thresholds committed *in this
@@ -400,6 +412,79 @@ All workflow runs and all Novia sessions are triggered **by the user from Slack*
 
 ---
 
+## AC11 — Go / No-Go Recommendation
+
+**Drafted 2026-08-10. Provisional: Checkpoints 1 and 2 are answered, Checkpoint 3 is not.**
+
+### Recommendation: **GO.**
+
+Development continues, and **Novia replaces `create_workflow` as the way workflows are built.** The
+two questions this sprint was called to answer — can the system sustain itself economically, and is
+the build mechanism stable — are answered in the affirmative on the evidence below. The third
+checkpoint, which asks whether the result is a second brain rather than a demo, is **unresolved and
+does not block the direction**, but it does block the claim that the MVP is usable end-to-end. It
+resolves with a receipt run, not with more argument.
+
+### Every threshold, marked
+
+| # | Criterion | Threshold | Verdict | Evidence |
+|---|---|---|---|---|
+| **AC10** | AWS fixed cost | ≤ $30/mo | **PASS** | ~$21/mo, stable across several billing cycles |
+| **AC1** | Native tool calling — mechanism | binary | **PASS** | `cacheRead` = previous turn's entire `inputTokens`, every turn, holding at 56k |
+| **AC1** | Native tool calling — cost | ≥ 4× | **MARGINAL** | 3.4× on a four-turn round; 3.7× per-turn across session 1131. Below its own bar, recorded as measured |
+| **AC2** | `run_sql` identifier guidance | 0 failures | **NOT MEASURED** | no `run_sql` call has been made in any validating round |
+| **AC3** | Build cost to a workflow | ≤ $1.50 | **PASS**, substitute evidence | **The clean-room `edit_budget` rebuild was never run.** Cost comes from the `process_receipt` build instead: **$1.376** vs the $1.42 `create_workflow` baseline, registered-to-registered (see Session 11) |
+| **AC4** | Repair, unaided | ≤ $1.00 | **NOT MEASURED** | never run. D2 contaminated (she has read it); D3 is a defect she reproduces by reflex |
+| **AC5** | `serv_query` exposes `vectorSearch` | regression-free | **PASS** | contract, executor pass-through, `query_table`; all 15 seed workflows swept, no new failures |
+| **AC6** | Inventory domain, no unmaintained derived columns | binary | **PASS** | run 766, one table, `item_count`/`level` gone with the padding table |
+| **AC7** | Lazy matching with persisted aliases | named in §3b | **FAIL as built** | workflow 358 has **zero `vectorSearch`** and zero embedding references; it is UC-P4. Repairable, not structural |
+| **AC8** | One routing workflow, both receipt kinds | binary | **NOT MEASURED** | 358 registered and never run; blocked on a frozen `current_date` and the AC7 repair |
+| **AC9** | Per-receipt cost, first vs third | third < first | **NOT MEASURED** | requires AC8 |
+
+**On the vocabulary.** AC11 asks for PASS / MARGINAL / FAIL. Four criteria are marked **NOT
+MEASURED** instead, deliberately: forcing an unrun criterion into one of three grades would
+manufacture a result, which is the specific failure the fixed-in-advance thresholds exist to
+prevent. An unmeasured criterion is a gap in the evidence, not a grade.
+
+### What the GO rests on
+
+1. **Cost, registered-to-registered.** $1.376 against $1.42, for materially more delivered — a
+   workflow, ten intent phrases, two prompts, threshold calibration, domain exploration and a
+   design conversation. The baseline's cost per *delivered working* workflow is several multiples
+   of $1.42 once 4-surviving-from-98-runs is priced in.
+2. **Stability, categorically different in kind.** Two builds, two clean registrations, no
+   regeneration loop, against 98 runs for 4 survivors. **n = 2** — stated as two, not as a rate.
+3. **Adaptation.** Archetype taken from a live artifact rather than reinvented; missing alias and
+   category tables identified; thresholds calibrated unprompted and written to memory; an inert
+   design step self-corrected; and a cross-domain workflow built at the workflow layer with no
+   cross-domain FK — which is `create_domain`'s own stated rule, met without being pointed at it.
+4. **Experience.** Not a measured criterion. The user's judgement: materially better than the
+   `create_workflow` dialogue.
+
+### What the GO does not claim
+
+- **That the receipt use case works.** It has never run. AC7 fails as built, AC8 and AC9 are
+  unmeasured.
+- **That repair is cheaper than regeneration.** AC4 has no number. The claim that Novia is innately
+  better at repair — half of Checkpoint 2's hypothesis — rests on observed behaviour, not
+  measurement.
+- **That the cost curve is settled.** The typed-reply prefix forfeit costs $0.219 per occurrence at
+  a 56k transcript and grows linearly. Identified precisely and scoped, not fixed.
+
+### Conditions on the GO
+
+1. **Fix the restart cost** before the next substantial build — deliver a `followup` as the
+   `function_call_output` of the pending `respond` call rather than as a trailing user message.
+2. **Run a receipt end-to-end.** AC7, AC8 and AC9 all resolve from it, and nothing else does.
+3. **Measure AC4 once, on an uncontaminated specimen.** The UC-P4 gap in workflow 358 is the best
+   available: a real design defect in her own fresh build, with a symptom statable without the
+   diagnosis.
+4. **Release-readiness becomes Sprint 11's opening item**, per the standing decision — deferred
+   four times on the grounds that handoff infrastructure is not worth building for a project that
+   might be cancelled. That condition no longer holds.
+
+---
+
 ## Sprint Close Checklist
 
 - [ ] `node --test tests/unit/*.test.mjs` passes
@@ -412,7 +497,9 @@ All workflow runs and all Novia sessions are triggered **by the user from Slack*
       `study_flashcards` entries corrected against the live workflow list
 - [ ] `docs/backlog.md` updated
 - [ ] `docs/sprints/CURRENT.md` → `docs/sprints/sprint-10.md` with outcome notes
-- [ ] **AC11 — the go/no-go recommendation is written, and every threshold is marked**
+- [x] **AC11 — the go/no-go recommendation is written, and every threshold is marked** — drafted
+      2026-08-10, provisional pending Checkpoint 3's receipt run. See "AC11 — Go / No-Go
+      Recommendation" above.
 
 ---
 
