@@ -965,3 +965,59 @@ describe('L2b data-flow trace — comma-list output_key over a non-destructurabl
     assert.equal(result.smoke_test.steps_tested, 2, 'the trace must not stop at the bad step');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Frozen date literals. Twice from the same author: import_budget_spreadsheet
+// (Sprint 9 D3) and process_receipt step 3, which carried
+// current_date: "Monday, August 10, 2026" into the prompt supplying the fallback
+// purchase date for every future receipt.
+// ---------------------------------------------------------------------------
+
+describe('L1 — frozen date literal in a step input', () => {
+  const dateIssues = (steps) =>
+    (runSimulation({ steps, traceId: 't' }).static_analysis?.issues ?? [])
+      .filter(i => i.failure_class === 'frozen_date_literal');
+
+  const withInput = (input) => ([
+    { step: '1', type: 'llm_call', input, on_success: 'next', on_else: 'cancel', output_key: 'out' },
+    { step: '2', type: 'end' },
+  ]);
+
+  it('flags the process_receipt specimen', () => {
+    const issues = dateIssues(withInput({ prompt: 'parse_receipt', current_date: 'Monday, August 10, 2026' }));
+    assert.equal(issues.length, 1);
+    assert.match(issues[0].detail, /August 10, 2026/);
+    assert.equal(issues[0].severity, 'warning');
+  });
+
+  it('flags ISO and slash forms', () => {
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '2026-08-10' })).length, 1);
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '08/10/2026' })).length, 1);
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '10 August 2026' })).length, 1);
+  });
+
+  it('finds a date nested inside an input object or array', () => {
+    const issues = dateIssues(withInput({
+      prompt: 'p',
+      filters: [{ column: 'day', op: 'eq', value: '2026-08-10' }],
+    }));
+    assert.equal(issues.length, 1);
+  });
+
+  it('does not flag a value resolved at run time', () => {
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', current_date: '{{today.iso}}' })), []);
+  });
+
+  it('does not flag text without a four-digit year', () => {
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', note: 'due on the 10th of August' })), []);
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', version: '1.2.3' })), []);
+  });
+
+  it('is advisory — it must not fail the workflow or suppress Level 2', () => {
+    const steps = withInput({ prompt: 'p', current_date: '2026-08-10' });
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.equal(result.passed, true, 'a warning must not block registration');
+    assert.ok(result.smoke_test, 'Level 2 must still have run');
+    assert.equal(result.static_analysis.issues.length, 1, 'the warning must still be reported');
+  });
+});
