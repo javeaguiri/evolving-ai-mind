@@ -203,10 +203,16 @@ Two things happen in one forward pass over the steps, in document order, sharing
    expression evaluates to `undefined`) is a hard failure. A runtime error against mock
    data is a soft warning (mock state may not match real data shapes). When the
    expression ran cleanly, its real computed result — not a placeholder — is written
-   into `mockState[output_key]` so downstream steps see the actual shape the expression
-   produces. When it didn't (threw, timed out, or returned `undefined`), a `{}`
-   placeholder is written instead and the output key is recorded as **uncertain** —
-   see the cascade rule below.
+   into `mockState` so downstream steps see the actual shape the expression produces.
+   Which keys that result populates is decided by `resolveOutputWrites`
+   (`state-utils.mjs`), the same function the Step Processor writes `local_state` with:
+   a comma-separated `output_key` destructures an object return into one key each, and
+   every other shape — including a single `output_key` over an object return — is one
+   whole-value write. The trace models what the engine would actually leave behind, so
+   an expression that nests its result under its own name is visible here rather than at
+   the first run. When the expression didn't run cleanly (threw, timed out, or returned
+   `undefined`), a `{}` placeholder is written to every declared key instead and each is
+   recorded as **uncertain** — see the cascade rule below.
 2. *Step-input contract check* (`checkStepInputContracts`, Sprint 7 Track I) — for every
    step, resolves its declared input fields against `mockState` (via `resolveInput`/
    `resolvePath` from `template-resolver.mjs` — the same functions the runtime uses) and
@@ -215,9 +221,13 @@ Two things happen in one forward pass over the steps, in document order, sharing
      `serv_query`/`serv_update`/`serv_delete` must be a flat array of `{column, op, value}`
      objects; `updates` on `serv_update` and `row` on `serv_insert` must be plain objects;
      `rows` on `serv_insert`/`serv_upsert` must be an array of objects; `matchColumns` on
-     `serv_upsert` must be an array of strings. These mirror `table.mjs`'s own runtime
-     validators — a mismatch here is a **hard failure**, since the equivalent request
-     throws a 400 at runtime today.
+     `serv_upsert` must be an array of strings; `vectorSearch` on `serv_query` must be an
+     object whose `column` and `queryText` are strings and whose `threshold`/`limit`, if
+     present, are numbers. These mirror `table.mjs`'s own runtime validators — a mismatch
+     here is a **hard failure**, since the equivalent request throws a 400 at runtime
+     today. `vectorSearch` is checked for **type only, never emptiness**: SERV embeds
+     `queryText` as plain text, so a non-string is a design defect, while an empty string
+     is a runtime data condition that every correct workflow exhibits under mock input.
    - `STEP_PATH_CONTRACTS` (dot-path fields, not `{{ }}`-wrapped) — `items_key` on
      `iterator` and `context_key` on `human_gate` must resolve to an array. These fall
      back silently at runtime (`?? []`) rather than throwing, so a mismatch here is a
@@ -237,9 +247,11 @@ Two things happen in one forward pass over the steps, in document order, sharing
    subset, then testing all subsets before the results reach a `human_gate`) depend on
    accumulator state that only becomes meaningful after many real iterations; a single
    mock pass frequently can't reconstruct it, causing the accumulating `js_transform` to
-   throw against placeholder mock data. When a field's entire value is inherited via a
-   bare `{{key}}` reference from a step recorded as uncertain (see above), the shape
-   check for that field is **skipped, not failed** — the upstream problem (if real) is
+   throw against placeholder mock data. When a field reads a step recorded as uncertain
+   (see above) through a bare `{{key}}` reference — the field itself, or any leaf of the
+   object or array it is built from, since a nested token is inherited just as much as a
+   top-level one — the shape check for that field is **skipped, not failed** — the
+   upstream problem (if real) is
    still visible as that step's own soft warning; the downstream check does not compound
    it into a second, misleading hard failure. Absence of confirmation is not proof of a
    defect — a check that can't determine a shape confidently must not report one.

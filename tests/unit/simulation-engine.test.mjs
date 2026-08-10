@@ -817,3 +817,107 @@ describe('L1 numeric indexing on a non-array (run 735 reproduction)', () => {
       'a key any writer of which may produce an array must not be flagged');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Run 763 — create_domain v58. Step 1 declared one output_key over an expression
+// returning an object keyed by that same name, so {{domain_request}} carried an
+// object into a serv_query's vectorSearch.queryText. SERV embeds queryText as
+// plain text, so it reached embed-client as "text.trim is not a function".
+//
+// Two gaps let it through: serv_query declared no contract for vectorSearch, and
+// the trace modelled js_transform output by its own rule rather than the engine's.
+// ---------------------------------------------------------------------------
+
+describe('L2b data-flow trace — serv_query.vectorSearch shape (run 763 reproduction)', () => {
+  const shapeIssues = (result, step) => result.smoke_test.issues.filter(
+    i => i.failure_class === 'serv_input_shape_mismatch' && i.step === step
+  );
+
+  // Step 1's shape is exactly create_domain v58's: one output_key, object return.
+  const brokenSteps = [
+    {
+      step: '1', type: 'js_transform', input_key: 'input',
+      expression: `(function() { return { domain_request: (items.userInput || '').trim() }; })()`,
+      on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
+    },
+    {
+      step: '2', type: 'serv_query',
+      input: {
+        tableName: 'PGC_DomainHelp',
+        vectorSearch: { column: 'embedding', queryText: '{{domain_request}}', threshold: 0.4 },
+        limit: 1,
+      },
+      on_success: 'next', on_else: 'cancel', output_key: 'existing_domain_check',
+    },
+    { step: '3', type: 'end' },
+  ];
+
+  it('flags an object resolved into vectorSearch.queryText', () => {
+    const result = runSimulation({ steps: brokenSteps, traceId: 't' });
+
+    assert.equal(result.passed, false, 'overall simulation must fail');
+    const issue = shapeIssues(result, '2')[0];
+    assert.ok(issue, `expected a shape mismatch on step 2; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.match(issue.detail, /queryText must be a string/);
+  });
+
+  it('does not flag the repaired form, where the expression returns the string itself', () => {
+    const steps = JSON.parse(JSON.stringify(brokenSteps));
+    steps[0].expression = `(function() { return (items.userInput || '').trim(); })()`;
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.deepEqual(shapeIssues(result, '2'), [],
+      'an empty string is a runtime data condition, not a design defect — mock input is always empty');
+    assert.equal(result.passed, true);
+  });
+
+  it('flags a non-numeric threshold', () => {
+    const steps = JSON.parse(JSON.stringify(brokenSteps));
+    steps[0].expression = `(function() { return (items.userInput || '').trim(); })()`;
+    steps[1].input.vectorSearch.threshold = '0.4';
+
+    const issue = shapeIssues(runSimulation({ steps, traceId: 't' }), '2')[0];
+    assert.ok(issue, 'expected a shape mismatch for a stringly-typed threshold');
+    assert.match(issue.detail, /threshold must be a number/);
+  });
+
+  it('skips the check when queryText is inherited from an inconclusive step', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return local_state.never_written.deep.value; })()`,
+        on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
+      },
+      brokenSteps[1],
+      { step: '3', type: 'end' },
+    ];
+
+    assert.deepEqual(shapeIssues(runSimulation({ steps, traceId: 't' }), '2'), [],
+      'a nested token reading a placeholder key cannot be confidently shape-checked');
+  });
+});
+
+describe('L2b data-flow trace — output_key propagation matches the engine', () => {
+  it('models a comma-separated output_key as destructured, not as the whole object', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return { rows: [{ column: 'a', op: 'eq', value: 1 }], label: 'x' }; })()`,
+        on_success: 'next', output_key: 'rows,label',
+      },
+      {
+        step: '2', type: 'serv_query',
+        input: { tableName: 'PGD_Records', filters: '{{rows}}' },
+        on_success: 'next', on_else: 'cancel', output_key: 'found',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.deepEqual(
+      result.smoke_test.issues.filter(i => i.failure_class === 'serv_input_shape_mismatch'),
+      [],
+      'destructured "rows" is a valid filter array; modelling it as the whole return would flag it',
+    );
+  });
+});
