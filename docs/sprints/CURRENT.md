@@ -1057,6 +1057,81 @@ carried AC6 round-budget item is **closed**. Cost note for AC3: at ~61s per turn
 turns, so a 24-step build is several continues — cheap, since the Session 7 resume fix preserves
 prefix credit on each, but interactive rather than unattended.
 
+#### `process_receipt` registered — workflow 358, and it is UC-P4
+
+24 steps, v1, domain `inventory`, 10 `PGC_IntentMap` phrases. Passed L0+L1+L2 —
+`register_workflow` refuses anything that does not.
+
+**What is right.** One entry point serving both receipt kinds (step 6 branches on `is_grocery`;
+the expense write at step 5 runs for every receipt, so the non-grocery path stays alive) — that is
+AC8's actual requirement. Two gates before any write (step 4 reviews the reconstructed receipt,
+step 11 the match plan). Quantity increments read-then-write through 12a→12b→12c rather than
+trusting a counter — **she did not reproduce the `item_count` hazard**. Every batch insert guarded
+against an empty array (12d, 12g, 12i); writes batched, not per-row iterators. Alias rows written
+at 12j.
+
+**Two defects, and the second is the sprint's central design decision.**
+
+**(1) It cannot run.** `parse_receipt` and `match_inventory_items` both return **zero rows** from
+`PGC_Prompt`. Step 3 dies with `prompt not found`. `register_workflow` validated shape, routing and
+data flow and never checked that the prompts its `llm_call` steps name exist. By AC3's own rule —
+*a build that registers but does not run is a FAIL at any price* — this is not delivered. Raised as
+a backlog item (Validation).
+
+**(2) Zero `vectorSearch`. Zero embedding references. In 24 steps.**
+
+```
+step 7:  serv_query PGD_InventoryAlias  limit 500  -> inventory_aliases
+step 8:  serv_query PGD_Inventory       limit 500  -> inventory_items
+step 10: llm_call match_inventory_items   receives both, whole
+```
+
+Every receipt ships the entire inventory and the entire alias list to an LLM. **Cost per receipt
+grows with inventory size, and aliases make the payload bigger rather than the matching cheaper** —
+the exact inverse of §3b, where cost per receipt falls with use, and a direct contradiction of
+`architecture.md` §1. **AC7 is not met by this workflow.**
+
+The sharp part is not that she reached for an LLM. It is that `PGD_Inventory.name_embedding` and
+`PGD_InventoryAlias.alias_name_embedding` both exist, the `serv_query` contract now exposes
+`vectorSearch`, and **she derived the calibration bands for precisely this two turns earlier in the
+same session and wrote them to memory.** Mechanism, columns and numbers all present; the artifact
+uses none of them. Session 8's push-back produced the correct design unaided once already — so the
+question to re-ask is the same one, without supplying the answer: *can the item matching be done
+without an LLM call on every receipt?* Whether she connects her own numbers to her own design is a
+capability signal worth having, and it is cheap.
+
+#### Cost — session 1131 benchmark
+
+| Round | Turns | Window | Start | Cost |
+|---|---|---|---|---|
+| A | 10 | 12:45:34–12:46:39 | cold, 22,295 | $0.24870 |
+| B | 3 | 12:59:59–13:02:57 | cold, 37,997 | $0.34999 |
+| C | 1 | 13:04:39 | **warm**, read 45,431 | $0.11057 |
+| D | 2 | 13:06:14–13:06:26 | cold, 56,244 | $0.24521 |
+| | **16** | | | **$0.95447** |
+
+Plus **$0.4216** recorded for the 08-09 portion → **session all-in ≈ $1.376**, against the $1.42
+`create_workflow` paid build and Sprint 9's $2.73. *Accounting caveat:* `minds_eye_turn_count`
+reads 36 while 26 recorded + 16 measured = 42; today's 16 come straight from `callLlmWithTools`
+log lines, so the gap is in turn persistence, not in the money.
+
+**Within a round the 2c mechanism is flawless** — `cacheRead` equals the previous turn's entire
+`inputTokens` on every turn, holding at 56k; round A's nine follow-on turns cost $0.162 combined.
+**All the cost is in cold starts: $0.451 across three turns, 47% of the day.**
+
+**And a clean natural experiment isolates why.** Rounds C and D both resumed after a **95-second**
+gap; C read 45,431 tokens, D read **zero**. Same gap, opposite outcome — so this is not cache TTL.
+The difference is what the resume carried: a bare continue keeps the prefix, while a resume where
+the user types a reply (entry 43, *"I approve with the following…"*) appends a user message, and
+the recorded rule is that **one trailing user message forfeits the round's whole prefix credit**.
+Expected behaviour, now priced: **$0.219 for that single turn, scaling with transcript length.**
+Worth knowing before AC3 — a build steered by typed replies costs materially more than one steered
+by button clicks, and neither the rule nor the price was visible until now.
+
+**Read the $1.376 carefully: it is inside AC3's PASS band and it is not AC3.** Not clean-room
+(design conversation, schema walkthrough and calibration all preceded it), and the workflow does
+not run. As an **AC8** data point: encouraging on price, incomplete on delivery.
+
 **D2 is now unusable for AC4.** She read `import_budget_spreadsheet`'s full step array in this
 session, and D2 (bare category names into a `serv_insert`) is in it. Session 7 already preferred
 D3 because the `serv_insert` contract fix had made D2 easier; this settles it — "reached the defect
