@@ -351,7 +351,7 @@ together are the alias-learning claim; one number alone is not.
 |---|---|
 | **Release-readiness — test environment, README bootstrap, log hygiene** | **Deferred a fourth time, by explicit decision 2026-08-06.** The reasoning is sound: handoff infrastructure is not worth building for a project that may be cancelled, and the go/no-go comes first. **The operational consequence is accepted, not overlooked** — without a test environment this sprint validates against prod, which is the same condition that caused Sprint 9 to defer AC8. Plan for it. **Becomes Sprint 11's opening item if the decision is go**, at which point it stops being tech debt and becomes the handoff itself: a contributor who cannot stand the system up cannot contribute. |
 | **Extending Novia to create domains** | The question is real and stays open. Answering it needs evidence from `create_domain` running against a genuinely new domain, which AC6 produces. Deciding it in advance, inside a make-or-break sprint, would put two capability questions on one result. |
-| **Archetype / dialog-strategy registry** | Still parked. One real build now exists, so the "revisit with evidence from real builds" condition is technically met — but the evidence points at cost and repair, not at a shape shortage. Revisit if a Checkpoint 3 build shows Novia reinventing a procedure she has already written. |
+| **Archetype / dialog-strategy registry** | **Parked, and Session 10 argues for dropping it rather than revisiting.** The stated condition was to revisit *if a Checkpoint 3 build shows Novia reinventing a procedure she has already written*. The Checkpoint 3 build did the opposite: she called `read_workflow` on `import_budget_spreadsheet` and took its shape before drafting her own 24 steps. The live artifacts already are the registry, they cost nothing to maintain, and unlike a curated set they cannot go stale against the workflows they describe. |
 | **`create_workflow` repairs of any kind** | Retired by the direction. `design_workflow_dialogs` v19 is spliced. Do not run it. |
 | **`/chat` dead code removal** | Independent, still undecided. |
 | **Richer episodic memory, `PGC_Memory` dedup/TTL** | Unchanged from Sprint 9. |
@@ -1004,6 +1004,63 @@ forever while items accumulate. `level integer default 0` is the same shape, der
 count can be a `COUNT(*)` or a view* — is unapplied, and `PGC_Schema.type` / `select_sql` /
 `createView` already exist for it. **Settle this before Checkpoint 3 builds on the schema**, or the
 sprint's test vehicle runs on a domain with two lying columns.
+
+### Session 10 — 2026-08-10 — Novia calibrates the threshold herself, and reads a workflow for its shape
+
+Session 1131 continued into the receipt build. Turn count 36, action count 0 — nothing written yet.
+
+**She settled the calibration empirically, unprompted, and in both languages.** Eight
+`query_table` + `vectorSearch` probes against `PGD_Ingredients` (entries 22–29), then `write_memory`
+(entry 30) so it is not re-derived next session:
+
+| Score | Case |
+|---|---|
+| 1.00 | exact English (`broccoli`) |
+| 0.68 | English near-synonym with qualifier |
+| 0.60 | Spanish clean food name → English (`sal de mar` → sea salt) |
+| 0.49 | Spanish ground-form with qualifier; 2nd place 0.39 |
+| 0.47 | Spanish + label noise (`BROCOLI ORGANICO 500G`) |
+| 0.38 | Spanish near-synonym + noise — she flags this "dangerously low" |
+| ≤0.29 | unresolvable — **`zanahorias` tops out at 0.20 with the wrong item first** |
+| 0.21 | ceiling for genuinely unrelated items |
+
+Better evidence than the 0.36–0.52 band this sprint recorded, because it finds the **failure** case:
+cross-lingual similarity collapses on `zanahorias`. That is the data justifying her own earlier
+design call to translate in the parse step rather than bet on cross-lingual embedding distance —
+she now has the numbers for a decision she had already reasoned to. **AC7's calibration task is
+answered, by her.** The registry-reading gap from the previous round is closed in the same
+stretch: `workflow_convention_bridge` plus four passes over `PGC_StepType` (entries 37–41).
+
+**The archetype came from an artifact, not a registry.** Entry 44 is `read_workflow` on
+`import_budget_spreadsheet`, immediately before submitting 24 steps to `simulate_workflow`. **This
+is the evidence the parked archetype-registry item was waiting for, and it points away from
+building one:** the Out of Scope note said revisit *"if a Checkpoint 3 build shows Novia reinventing
+a procedure she has already written"* — she did the opposite, and a live workflow cannot go stale
+against itself the way a curated registry would.
+
+**Simulation refused the draft, correctly** — 24 steps, 3 issues, all L0 shape: `human_gate` steps 1
+and 4 missing the required `on_cancel`. Caught before registration.
+
+**The round budget is confirmed working, and this is the first time it has been exercised.**
+
+```
+proc/minds-eye: round budget reached — ending round
+  turnsThisRound: 3   elapsedMs: 184,410   longestTurnMs: 102,977   budgetMs: 195,000
+```
+
+Three turns, 184s of 195s, longest turn 103s; `turn_limit: 30` never in play. Session 8 raised the
+turn limit precisely so wall clock would bind, and it does. **What matters is the manner:** Sprint
+9's AC6 failure was a *silent* death — Lambda hit 240s mid-turn, nothing caught it, no notification,
+no session write, the work gone and the SQS message already deleted. Here the guard saw another
+103s turn would not fit, ended the round, posted the continue gate, and the user resumed. The
+carried AC6 round-budget item is **closed**. Cost note for AC3: at ~61s per turn a round buys three
+turns, so a 24-step build is several continues — cheap, since the Session 7 resume fix preserves
+prefix credit on each, but interactive rather than unattended.
+
+**D2 is now unusable for AC4.** She read `import_budget_spreadsheet`'s full step array in this
+session, and D2 (bare category names into a `serv_insert`) is in it. Session 7 already preferred
+D3 because the `serv_insert` contract fix had made D2 easier; this settles it — "reached the defect
+unaided" is no longer measurable on a workflow she has just read. **Use D3.**
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
