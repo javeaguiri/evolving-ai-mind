@@ -885,7 +885,43 @@ Two things this says. **The failed run was free** — it died at step 2 and the 
 step 5, so the defect cost a restart, not money. And **the single most expensive call in the run
 was the retry**: `review-output` rejected `create_domain`'s first response with 11 errors, and
 correcting it cost $0.03967 — more than the call it was correcting, and **38% of the domain's
-whole price**. Worth a look before the derived-column question, since it is the same prompt.
+whole price**.
+
+#### The 11 errors, and why observation 3 below is downstream of one of them
+
+Attempt 1 produced **one** table, `PGD_Items`, 13 columns, 10 carrying a `description` key.
+
+| Count | Ajv error | Cause |
+|---|---|---|
+| 1 | `/tables must NOT have fewer than 2 items` | active schema (prompt id 17 v28) sets `minItems: 2` on `tables` |
+| 10 | `must NOT have additional properties` | 10 columns carried `description`; the column sub-schema is `additionalProperties: false` |
+
+**The ten are a template mismatch.** The prompt's exact-shape block puts `description` on the
+*table* object and shows only `id`, `created_at`, `updated_at` as columns — structural columns
+nobody annotates. The model generalised table → column, which is a fair read of a fill-in-the-blank
+that never shows a described domain column and never says the key set is closed. Fault domain
+**Contract**: allow `description` on columns, or show one domain column with its permitted keys.
+
+**The one is why `item_count` and `level` exist.** Attempt 1 was a coherent single-table inventory
+design. The schema rejected it on cardinality alone, and the model's repair was to invent
+`PGD_ItemLocations` — carrying both derived columns and their check constraints. **The second table
+was manufactured to satisfy a rule, not designed.** `minItems: 2` also reads as a rule from one
+specimen: flashcards, recipes and budgets are naturally multi-table; an inventory is not. It cost
+the retry *and* the two columns AC6's threshold rejects.
+
+**The correction prompt names the location but not the property.** `llm-client.mjs:347` renders
+`- [/tables/0/columns/3] must NOT have additional properties`. Ajv supplies the offending key in
+`params.additionalProperty`, and `review-output.mjs:208-214` **preserves `params`** — it is simply
+never rendered. The model inferred `description` correctly, but that is inference, not instruction.
+One line makes it deterministic.
+
+**Note for anyone reading the session record instead of the code:** `PGC_SessionEntry`'s copy of the
+correction prompt is **lossy** — `llm-harness.mjs:529` renders `- ${e.message}` and drops the
+location `llm-client.mjs:347` actually sent. The diagnostic replica understates what the model was
+told.
+
+Three `PGC_Prompt` rows share `intent_category: create_domain` (ids 1, 5, 17). Untidy, but not a
+tie — selection is `version DESC LIMIT 1`, so id 17 v28 wins deterministically.
 
 Embedding spend is **not included and not measured** — `embed-client` logs no cost line, in PROC
 or SERV. At this volume (a handful of strings) it is immaterial, but the total above is LLM calls
@@ -904,10 +940,15 @@ identical treatment the defect: `unit` is a closed set where free text invites
 probably should not be a text column at all — `budgets_expenses` models the same idea as
 `PGD_SpendingCategories` + `category_id`. Fault domain **Contract**, at `design_table`.
 
-**2. `parent_id` is not FK'd — and neither is anything else.** No `foreign_key` entry exists in
-`PGC_Schema.constraints` for inventory *or* `budgets_expenses`, whose `category_id` appears on
-three tables. Pre-existing and consistent, not introduced here. The hierarchy is reachable only
-because `PGC_EntitySchema` id 45 declares the self-join explicitly:
+**2. `parent_id`'s FK was designed and then lost in registration.** *(Corrected later the same
+session — the first reading, that generation omits FKs, was wrong.)* `create_domain` emitted it:
+`{"name":"fk_itemlocations_parent","column":"parent_id","references":{"table":"PGD_ItemLocations","column":"id"},"onDelete":"CASCADE"}`.
+`PGC_Schema.constraints` for that table holds one unique and two checks and **no FK** — and none
+exists for `budgets_expenses` either, whose `category_id` appears on three tables. So the loss is
+in registration, not in generation: the **registry asserts less than the database**, the Sprint 9
+invariant inverted. Whether the physical constraint exists is **unverified** — there is no route
+to `pg_constraint` through the SERV API. The hierarchy is reachable regardless, because
+`PGC_EntitySchema` id 45 declares the self-join explicitly:
 `{"type":"LEFT","table":"PGD_ItemLocations","alias":"itemlocations","on":"itemlocations.parent_id = r.id"}`.
 On the name, there is a real tension rather than a defect: the convention elsewhere is
 FK-names-the-target (`category_id` → `PGD_SpendingCategories`), which for a self-reference gives
