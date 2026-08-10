@@ -1313,6 +1313,45 @@ scoped, contained fix in `minds-eye.mjs`, not a property of the approach.
    accurate against the live contract — but that is qualitative. **AC11 should mark AC4
    "not measured", not fold it into a PASS.**
 
+### Session 12 — 2026-08-10 — Hardcoded dates: the contract caused them. Deployed.
+
+**The user rejected the first framing and was right to.** "She did not know `new Date()` exists" is
+not an explanation — that is programming 101. The question they asked instead is the useful one:
+*what intrinsics and standard libraries are actually permitted?* Measured through the real gate:
+
+| | |
+|---|---|
+| **Available** | the entire ECMAScript standard library — `Date` (`new Date()`, `Date.now()`), `Math`, `JSON`, `RegExp`, `Map`, `Set`, `Intl`, `Promise` as a value, `parseFloat`, `parseInt` |
+| **Blocked** (AST denylist) | `require`, `eval`, `fetch`, `XMLHttpRequest`, `Function`/`new Function`; member access on `process`, `global`, `__dirname`, `__filename`; `import`, `await`, `async` |
+
+**`PGC_StepType.js_transform` described this as a *"pure* synchronous JS IIFE… 200ms timeout"** —
+wrong on all three counts: the engine allows 500ms, deliberately puts `Date` in the sandbox, and
+the environment is not pure. **That word is why the dates were hardcoded.** An author who takes
+"pure" seriously will not call `Date.now()`, concludes the current date must arrive from outside
+the transform, and passes it in as a step input — where the only thing to put is a literal.
+**Her reasoning was correct and the contract's was wrong.** Fault domain **Contract**, not
+Instruction and certainly not Generation.
+
+**Shipped and deployed:** contract corrected and upserted (verified on the live row); advisory L1
+`frozen_date_literal` check, which walks a step input at any depth, skips strings carrying
+`{{tokens}}`, and names the run-time route. **Warning, not failure** — a literal date is legitimate
+when the workflow means that specific date, and no static check separates the two.
+
+**L1 gained a severity concept to carry it.** Every L1 issue was hard by construction and
+`staticIssues.length > 0` returned early, so an advisory finding would have blocked registration
+*and* suppressed Levels 2a/2b. No pre-existing L1 issue sets `severity`, so the hard-issue filter
+is provably a no-op for all of them; warnings now reach `static_analysis.issues` on the passing
+paths, which previously hardcoded `[]`. All 15 seed workflows sweep identical to baseline — no
+false positives on real specimens. 895 → **901** unit tests.
+
+**Backlog, the open half:** the sandbox object
+`{ JSON, Math, Array, Object, String, Number, Boolean, Date }` reads as an allowlist and is not one
+— `vm.runInNewContext` supplies every intrinsic regardless, which is why `parseFloat` works while
+absent from it, and the contract itself tells authors to use `parseFloat`. Three questions to
+settle: whether a denylist is the intended model, whether to delete the decorative sandbox object
+or make it real, and a stated position on `Date.now()`/`Math.random()` making `js_transform`
+non-deterministic.
+
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
 **The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
