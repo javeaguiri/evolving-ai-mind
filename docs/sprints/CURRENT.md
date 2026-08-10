@@ -1132,6 +1132,49 @@ by button clicks, and neither the rule nor the price was visible until now.
 (design conversation, schema walkthrough and calibration all preceded it), and the workflow does
 not run. As an **AC8** data point: encouraging on price, incomplete on delivery.
 
+#### The two prompts, and why the missing rows were not her fault
+
+`parse_receipt` (id 126) and `match_inventory_items` (id 127) now exist, v1, scoped
+`domain: inventory`, `workflow_name: process_receipt`. **Craft is good**: `input_variables`
+declared with descriptions, `output_schema` complete and matching the JSON the prompt text asks
+for, and **every `{{token}}` the prompt declares is supplied by the calling step** — which is
+precisely the failure class sitting in the backlog unfixed.
+
+**Her diagnosis of the gap was accurate, and understated the system's share.** She reported it as
+*"primarily a system gap, but I should have caught it"*. Verified against the live
+`PGC_StepType.llm_call` contract, it is very nearly all system. Two optional fields are declared
+there: `prompt_category` (*"snake_case slug for a domain-specific prompt not yet in PGC_Prompt"*)
+and `prompt_draft` (*"Full prompt text… **Consumed by `design_workflow_prompts` to insert a new
+`PGC_Prompt` row**"*). **She supplied both, on both `llm_call` steps** — 1,383 and 1,544 characters
+of draft, still sitting in workflow 358. She read the registry and did what it says.
+`design_workflow_prompts` is a `create_workflow`-family step and `register_workflow` bypasses
+`create_workflow` entirely, so on her path the declared consumer does not exist — and
+`create_workflow` is retired by this sprint's direction, so that consumer is on a path we tell
+people not to run. **Same shape as `create_domain`'s derived-field rules with no consumer, and the
+fourth instance of "a correct registry read produces a wrong outcome when the registry describes
+machinery that is not there."** Backlog item revised accordingly: the fix is for
+`register_workflow` to *consume* `prompt_draft` first, and refuse only when no draft was supplied.
+
+**Three defects in what she wrote.**
+
+**(1) D3 reproduced, in a fresh build.** Step 3 carries `"current_date": "Monday, August 10, 2026"`
+— a literal, frozen at generation time — and `parse_receipt` uses it as the fallback for a missing
+purchase date. Every receipt processed after today gets filed to 10 August 2026. **This is the
+exact defect class AC4's D3 specimen tests**, reproduced independently, which says the fault is
+habitual rather than particular to `import_budget_spreadsheet`. It also means AC4 on D3 measures
+whether she can find a bug she writes by reflex — worth knowing before reading that result.
+
+**(2) The output shape mimics the architecture it does not implement.** The prompt returns
+`auto_matched` / `llm_resolved` / `new_items`, and `auto_matched` carries `confidence: "HIGH"`.
+That tiering implies one path resolved without an LLM. **Both tiers come from the same LLM call,
+and the confidence is the model's self-report.** A reviewer reading the gate will see
+"auto-matched: 12 items" and conclude the cheap deterministic path ran. UC-P4 is not merely
+expensive here — it is now *disguised*, which is worse, because the gate makes it look like §3b
+was implemented.
+
+**(3) `max_output_tokens` is null** on `match_inventory_items`, whose output is three arrays
+covering every line of a receipt. A long grocery receipt relies on the default ceiling holding.
+
 **D2 is now unusable for AC4.** She read `import_budget_spreadsheet`'s full step array in this
 session, and D2 (bare category names into a `serv_insert`) is in it. Session 7 already preferred
 D3 because the `serv_insert` contract fix had made D2 easier; this settles it — "reached the defect
