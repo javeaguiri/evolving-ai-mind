@@ -1,12 +1,15 @@
 # Sprint 10 — Viability Checkpoints
 
-**Status: IN FLIGHT. Scoped 2026-08-06, last updated 2026-08-09. Branch
+**Status: IN FLIGHT. Scoped 2026-08-06, last updated 2026-08-10. Branch
 `sprint/10-viability-checkpoints` — cut, pushed, and deployed to prod.**
 
 **Checkpoint 1 CLOSED — PASS** (AC10, settled on standing evidence 2026-08-08).
-**Checkpoint 2c deployed and not yet exercised** — the next `/novia` round is its integration
-test and closes AC1 and AC2 together. Nothing else in Checkpoint 2 is measurable before it runs.
-**Checkpoint 3 not started.**
+**Checkpoint 2c VALIDATED LIVE 2026-08-09 — AC1 mechanism PASS**, cost half measured 3.4× on a
+four-turn round against a ≥4× threshold; the per-turn read across session 1131 is 3.7×. **AC2
+remains unexercised** — no `run_sql` call has been made in a validating round.
+**AC5 CLOSED 2026-08-09.** AC3 and AC4 not started.
+**Checkpoint 3 opened** — inventory domain live 2026-08-10, but **AC6 is not met**: two
+unmaintained derived columns shipped with it (see Session 9).
 
 > **This sprint ends in a go/no-go decision.** Its deliverable is not a feature — it is a written
 > recommendation on whether development continues, measured against thresholds committed *in this
@@ -805,6 +808,121 @@ threshold: tell her it is an empirical question she can settle herself and that 
 has 34 rows with live embeddings. Whether she reaches for `query_table` + `vectorSearch` closes
 both the calibration question and the registry-reading gap in one move; if she asks for the
 numbers instead, that is a finding too.
+
+### Session 9 — 2026-08-10 — Run 763: my own fix broke `create_domain`. Inventory domain live, AC6 not met.
+
+**Run 763 died at step 2 on `getRows failed: text.trim is not a function`, and I introduced it**
+in `6babf17` the day before. v57 declared `output_key: "domain_request,candidate_domain"` over an
+object-returning expression; deleting `candidate_domain` left one key and the object return, and
+the engine destructures an object only when the comma list names more than one key. So
+`local_state.domain_request` held `{ domain_request: "inventory" }`, and step 2's
+`vectorSearch.queryText` was an object where SERV embeds plain text.
+
+**The undetected half was worse than the failure.** Step 1a — the v57 guard that refuses to invent
+a domain when none was described — is a `condition` on `{{domain_request}}`, and an object renders
+as a non-empty string, so it passes every falsy test at `step-executor.mjs:1673-1678`. With empty
+input the guard routed to step 2 instead of the gate. Run 763 cleared it only because a request
+was supplied. **The guard remains unexercised** — worth one deliberate empty-input run.
+
+**`fix_workflow` is not at fault and needs no change.** `TROUBLESHOOT_WORKFLOW` fired
+automatically 3s after the failure and reported `passed: true, issueCount: 0` over all 46 steps at
+L2 with contracts loaded. The repair layer worked; nothing had asked the right question.
+
+**Simulation reproduced the defect exactly and then didn't look at it.** The L2b smoke test writes
+each `js_transform`'s real computed output into `mockState`, so at step 2 it held
+`{ domain_request: "" }` — the bug, faithfully modelled. `STEP_INPUT_CONTRACTS` declared one field
+for `serv_query`: `filters`. AC5 added `vectorSearch` to the `input_contract`, the executor
+pass-through and `workflow-schema.json` and missed this fourth artifact — the third sprint running
+in which a correct read looked like invention because the registry was incomplete.
+
+Five fixes, `cd55ba1` and `af1dc62`, both deployed:
+
+| # | Fix | Fault domain |
+|---|---|---|
+| 1 | Steps 1 and 1c return the trimmed string itself (v58 → **v59**) | Contract (artifact) |
+| 2 | `vectorSearch` validator on `serv_query` — **types only, never emptiness**: SERV embeds `queryText` as plain text so a non-string is a design defect, while an empty string is what every correct workflow resolves to under mock input | Validation |
+| 3 | `resolveOutputWrites` (`state-utils.mjs`) — one `output_key` rule for engine and simulator | Validation |
+| 4 | `queryText`'s type stated at the SERV boundary, beside the presence check already there | Contract (SERV) |
+| 5 | A comma list over a scalar, null or array now **throws** instead of writing a key literally named `"a,b"` | Execution |
+
+Verified rather than asserted: against the real 46-step array the v58 form now fails with
+`queryText must be a string ... got {"domain_request":""}` and the repaired form passes clean;
+all 15 seed workflows swept against a stashed baseline with **no new failures** (the three
+pre-existing FAILs unchanged). `create_domain` dropped 5 issues → 3, both losses false positives
+the old propagation created: step 16d declares `sorted_tables,ddl_items` and the simulator handed
+the whole object to each key, making 16k's `tables.concat` and 17's `items_key` look broken.
+839 → **895 unit tests**.
+
+**Fix 5's siting mattered more than the throw.** The `output_key` write sits after the audit row is
+stamped `completed` and outside the `try` wrapping `executeStep`, so throwing there would have
+escaped unhandled — no audit, no run status, no `TROUBLESHOOT_WORKFLOW`. Writes are resolved
+inside the `try` and applied at the original site, so the `llm_break` early return still precedes
+any `local_state` mutation.
+
+**Residual, deliberate:** the simulator's mock branch for non-`js_transform` steps does not route
+through `resolveOutputWrites`, so a comma list on a `serv_query` is caught at runtime rather than
+at registration. Routing it would make every `llm_call` with a comma list write nothing into mock
+state, and the false-positive unresolved-token findings would cost more than the gap.
+
+#### Inventory domain created — AC6 evidence
+
+`create_domain` v59 produced `PGD_Items` and `PGD_ItemLocations`, plus `PGC_EntitySchema` rows 44
+(`Item`) and 45 (`Itemlocation`). Run 764: 54 steps, 5m 01s, **completed**.
+
+**Cost to create the domain: $0.1054**, five live LLM calls across both runs.
+
+| Run | Step | Prompt | Model | Cost |
+|---|---|---|---|---|
+| 763 (failed) | — | — | — | **$0.0000** |
+| 764 | 5 | `research_domain_schema` | `claude-haiku-4-5` | $0.01215 |
+| 764 | 10 | `create_domain` | `claude-sonnet-4-5` | $0.03707 |
+| 764 | 10 (retry) | `create_domain` **correction, 11 validation errors** | `claude-sonnet-4-5` | $0.03967 |
+| 764 | 16g | `propose_domain_view` | `claude-sonnet-4-5` | $0.01630 |
+| 764 | 17b | `generate_domain_aliases` | `perplexity/sonar` | $0.00024 |
+| | | | **Total** | **$0.10543** |
+
+Two things this says. **The failed run was free** — it died at step 2 and the first `llm_call` is
+step 5, so the defect cost a restart, not money. And **the single most expensive call in the run
+was the retry**: `review-output` rejected `create_domain`'s first response with 11 errors, and
+correcting it cost $0.03967 — more than the call it was correcting, and **38% of the domain's
+whole price**. Worth a look before the derived-column question, since it is the same prompt.
+
+Embedding spend is **not included and not measured** — `embed-client` logs no cost line, in PROC
+or SERV. At this volume (a handful of strings) it is immaterial, but the total above is LLM calls
+only.
+
+Three observations on the schema, none acted on:
+
+**1. Enums are inconsistent, not absent.** `status` got
+`chk_items_status: status IN ('new','good','damaged','expired','unusable')`. `unit` (default
+`'pieces'`) and `category` (default `'Uncategorized'`) are bare text with no constraint — one of
+three enum-shaped columns constrained. The consequence is not only typing: system workflows render
+enum-driven form fields deterministically off `PGC_Schema.constraints`, so `status` presents as a
+dropdown and the other two as free text. **The two want different answers**, which is what makes
+identical treatment the defect: `unit` is a closed set where free text invites
+`pcs`/`pieces`/`piece` and quietly breaks quantity aggregation, while `category` is open-ended and
+probably should not be a text column at all — `budgets_expenses` models the same idea as
+`PGD_SpendingCategories` + `category_id`. Fault domain **Contract**, at `design_table`.
+
+**2. `parent_id` is not FK'd — and neither is anything else.** No `foreign_key` entry exists in
+`PGC_Schema.constraints` for inventory *or* `budgets_expenses`, whose `category_id` appears on
+three tables. Pre-existing and consistent, not introduced here. The hierarchy is reachable only
+because `PGC_EntitySchema` id 45 declares the self-join explicitly:
+`{"type":"LEFT","table":"PGD_ItemLocations","alias":"itemlocations","on":"itemlocations.parent_id = r.id"}`.
+On the name, there is a real tension rather than a defect: the convention elsewhere is
+FK-names-the-target (`category_id` → `PGD_SpendingCategories`), which for a self-reference gives
+`item_location_id` and reads worse. **Before renaming, establish whether reference-table FK
+resolution infers the target table from the column name** — if it does, `parent_id` is
+unresolvable and that join is the only thing carrying it.
+
+**3. AC6 is not met, on its own written threshold.** `PGD_ItemLocations.item_count integer
+default 0` (with `chk_itemlocations_count`) is `card_count` again — the §3a hazard, and AC6 reads
+*"Domain live, no unmaintained denormalized columns"*. Nothing increments it; it will read 0
+forever while items accumulate. `level integer default 0` is the same shape, derivable by walking
+`parent_id`. The recorded sequencing decision — *do not denormalize first; at household scale a
+count can be a `COUNT(*)` or a view* — is unapplied, and `PGC_Schema.type` / `select_sql` /
+`createView` already exist for it. **Settle this before Checkpoint 3 builds on the schema**, or the
+sprint's test vehicle runs on a domain with two lying columns.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
