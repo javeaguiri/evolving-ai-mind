@@ -1180,6 +1180,52 @@ session, and D2 (bare category names into a `serv_insert`) is in it. Session 7 a
 D3 because the `serv_insert` contract fix had made D2 easier; this settles it — "reached the defect
 unaided" is no longer measurable on a workflow she has just read. **Use D3.**
 
+### Session 11 — 2026-08-10 — Checkpoint 2: the user's verdict
+
+**The user's call, recorded as taken: Checkpoint 2's cost and stability objectives are met, and
+Novia is the way forward.** The reasoning, and the one correction it makes to this document.
+
+**Compare registered-to-registered.** AC3 was written as *registered **and running***, but the
+$1.42 it compares against is a *registered* `create_workflow` build — and `create_workflow`'s
+output has needed repair as a matter of course. Holding Novia to "running" against a baseline of
+"registered" was an asymmetry in the criterion, not a standard. **This is a correction to AC3's
+framing, not a threshold relaxed after seeing the result** — the distinction matters because
+Session 1 fixed these thresholds precisely to prevent the latter.
+
+| | Cost | Delivered |
+|---|---|---|
+| `create_workflow` (run 729) | $1.42 | one registered workflow; **4 survived from 98 runs** |
+| Novia (session 1131) | **$1.376** | registered workflow + 10 intent phrases + 2 prompts + threshold calibration + domain exploration + design dialogue |
+
+Marginally cheaper for materially more, and the baseline's cost *per delivered working workflow* is
+several multiples of $1.42 once 4-from-98 is priced in. **2a: PASS** on the ≤$1.50 band.
+
+**Experience is not a measured criterion and is the user's to judge:** "100% better via Novia".
+
+**Adaptation, as evidence.** `read_workflow` used as an archetype rather than reinventing shape;
+the alias and category tables identified as missing and added; thresholds calibrated unprompted and
+written to memory; the inert "pass embeddings to the LLM" step self-corrected in session 8. And the
+cross-domain build is architecturally exact, not merely convenient: `create_domain`'s own prompt
+says *"Cross-domain relationships are managed at the workflow level, not the DB level"*, and
+workflow 358 — registered under `inventory` — queries `PGD_SpendingCategories`, writes
+`PGD_Expenses`, then writes three inventory tables, with **no cross-domain FK and no schema
+coupling**. She met the stated rule without being pointed at it.
+
+**Restart cost is the acknowledged remaining work, and it is precisely identified** — not
+cold-start, not TTL. Rounds C and D resumed 95 seconds apart and one read 45,431 tokens while the
+other read zero. It is the typed-reply forfeit: $0.219 at a 56k transcript, growing linearly. A
+scoped, contained fix in `minds-eye.mjs`, not a property of the approach.
+
+**Two qualifications recorded alongside the verdict, not against it.**
+
+1. **n = 2.** Stability rests on `edit_budget` (357) and `process_receipt` (358) — both L0/L1/L2
+   clean, both registered first time, no regeneration loop. Categorically unlike 98 runs, and still
+   two. The record should say two rather than imply a rate.
+2. **2b has no number.** AC4 was never run. The repair claim can reasonably be judged on observed
+   behaviour — she diagnosed her own inert-embedding step, and her `prompt_draft` account was
+   accurate against the live contract — but that is qualitative. **AC11 should mark AC4
+   "not measured", not fold it into a PASS.**
+
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
 **The transcript prefix-cache fix does not exist.** It was diagnosed as a cache-invalidation
