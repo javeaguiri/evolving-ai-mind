@@ -1654,9 +1654,24 @@ function runJsTransformSmokeTest(steps, traceId) {
           const isFallback = threwSyntax || threwRuntime || result === undefined;
           // A fallback stands in for a computation that produced no value: there is
           // nothing to destructure, so every declared key gets the placeholder.
-          const writes = isFallback
-            ? s.output_key.split(',').map(k => ({ key: k.trim(), value: {} })).filter(w => w.key)
-            : resolveOutputWrites(s.output_key, result);
+          let writes = [];
+          if (isFallback) {
+            writes = s.output_key.split(',').map(k => ({ key: k.trim(), value: {} })).filter(w => w.key);
+          } else {
+            try {
+              writes = resolveOutputWrites(s.output_key, result);
+            } catch (err) {
+              // A comma list over a value that cannot carry named keys. The engine throws
+              // on this at runtime; catching it here turns a run-ending defect into a
+              // pre-registration failure naming the step.
+              issues.push({
+                check:         'output_key_destructure_mismatch',
+                step:          key,
+                failure_class: 'output_key_destructure_mismatch',
+                detail:        `js_transform step "${key}" ${err.message}`,
+              });
+            }
+          }
           for (const { key, value } of writes) {
             const baseOut = key.split('.')[0];
             if (!(baseOut in mockState)) {
@@ -1692,8 +1707,9 @@ function runJsTransformSmokeTest(steps, traceId) {
     }
   }
 
-  // Hard failures (affect passed): syntax errors, void returns, and step-input
-  // shape mismatches on fields that throw at runtime (filters/updates/row/rows).
+  // Hard failures (affect passed): syntax errors, void returns, output_key destructure
+  // mismatches, and step-input shape mismatches on fields that throw at runtime
+  // (filters/updates/row/rows/vectorSearch).
   // Runtime errors and severity:'warning' shape mismatches (items_key/context_key,
   // which fail silently at runtime) are soft — mock state may not match real data shapes.
   //
@@ -1714,6 +1730,7 @@ function runJsTransformSmokeTest(steps, traceId) {
 function isHardSmokeFailure(issue) {
   return issue.failure_class === 'js_transform_syntax_error' ||
          issue.failure_class === 'js_transform_void_return'  ||
+         issue.failure_class === 'output_key_destructure_mismatch' ||
          (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 

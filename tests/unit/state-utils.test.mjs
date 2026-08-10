@@ -83,8 +83,46 @@ describe('resolveOutputWrites — comma-separated output_key', () => {
     assert.deepEqual(writes, [{ key: 'a', value: 1 }, { key: 'b', value: 2 }]);
   });
 
-  it('writes nothing when an array return carries none of the declared keys', () => {
-    assert.deepEqual(resolveOutputWrites('a,b', [{ id: 1 }]), []);
+  it('writes a subset without complaint when the object omits a declared key', () => {
+    // create_workflow step 21a writes skeleton_error_summary only when there is one.
+    const writes = resolveOutputWrites('routing_skeleton,skeleton_error_summary', {
+      routing_skeleton: [{ step: '1' }],
+    });
+    assert.deepEqual(writes, [{ key: 'routing_skeleton', value: [{ step: '1' }] }]);
+  });
+});
+
+describe('resolveOutputWrites — a comma list over a value that cannot carry keys', () => {
+  // The engine used to store the whole value under the raw output_key, creating a
+  // local_state key literally named "a,b" while every downstream {{a}} rendered as its
+  // own literal token. Silent, and wrong for the rest of the run.
+  const cannotDestructure = [
+    ['a string',  'inventory'],
+    ['a number',  42],
+    ['a boolean', true],
+    ['null',      null],
+    ['an array',  [{ id: 1 }]],
+  ];
+
+  for (const [label, value] of cannotDestructure) {
+    it(`throws for ${label}`, () => {
+      assert.throws(
+        () => resolveOutputWrites('sorted_tables,ddl_items', value),
+        /output_key "sorted_tables,ddl_items" names 2 keys/,
+      );
+    });
+  }
+
+  it('names what it got, so the failure is diagnosable from the message alone', () => {
+    assert.throws(() => resolveOutputWrites('a,b', [1]),      /got an array/);
+    assert.throws(() => resolveOutputWrites('a,b', null),     /got null/);
+    assert.throws(() => resolveOutputWrites('a,b', 'text'),   /got a string/);
+  });
+
+  it('does not throw for a single output_key over the same values', () => {
+    for (const [, value] of cannotDestructure) {
+      assert.deepEqual(resolveOutputWrites('only_key', value), [{ key: 'only_key', value }]);
+    }
   });
 });
 

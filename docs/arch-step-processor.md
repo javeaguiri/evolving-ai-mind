@@ -272,6 +272,36 @@ Step 11 — notify
                                            reads  local_state.proposed_scaffold.domain
 ```
 
+#### What output_key writes — `resolveOutputWrites`
+
+One rule, implemented once in `state-utils.mjs` and used both by the Step Processor
+that writes `local_state` and by the simulation engine that models it, so the two
+cannot disagree about what a step leaves behind.
+
+| `output_key` | Step returns | Written |
+|---|---|---|
+| `"summary"` | `"two tables"` | `local_state.summary = "two tables"` |
+| `"summary"` | `{ summary: "two tables" }` | `local_state.summary = { summary: "two tables" }` — the whole object, nested under its own name |
+| `"loop_state.defs"` | `["a"]` | `local_state.loop_state.defs = ["a"]` — dot-paths expand |
+| `"sorted_tables,ddl_items"` | `{ sorted_tables: [...], ddl_items: [...] }` | one key each, destructured |
+| `"sorted_tables,ddl_items"` | `{ sorted_tables: [...] }` | `sorted_tables` only — a key the object omits is skipped, so a step may legitimately produce a subset |
+| `"sorted_tables,ddl_items"` | `"text"`, `42`, `null`, or an array | **throws** — nothing can be destructured |
+
+Row two is the run 763 defect: `create_domain` v58 declared one `output_key` over an
+expression returning an object keyed by that same name, so `{{domain_request}}`
+resolved to `{ domain_request: "inventory" }` and the `serv_query` it fed tried to
+embed an object as text. An expression whose result should land under a single key
+must return the value itself, not an object wrapping it.
+
+The last row throws rather than writing, because there is no correct write. The engine
+previously stored the whole value under the raw `output_key`, producing a `local_state`
+key literally named `"a,b"` while every downstream `{{a}}` rendered as its own literal
+token — silent, and wrong for the remainder of the run. `resolveOutputWrites` is called
+inside the step's failure envelope, so the throw fails the run through the normal path:
+audit row, run status, `WORKFLOW_ERROR` callback, `TROUBLESHOOT_WORKFLOW`. The
+simulation engine reports the same condition as `output_key_destructure_mismatch`
+before the workflow is ever registered.
+
 #### local_state scope and persistence
 
 `local_state` is scoped to a frame. When an iterator frame is pushed, it inherits

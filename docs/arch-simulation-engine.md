@@ -210,7 +210,9 @@ Two things happen in one forward pass over the steps, in document order, sharing
    every other shape — including a single `output_key` over an object return — is one
    whole-value write. The trace models what the engine would actually leave behind, so
    an expression that nests its result under its own name is visible here rather than at
-   the first run. When the expression didn't run cleanly (threw, timed out, or returned
+   the first run. A comma list over a value that cannot carry named keys (scalar, null,
+   array) has no correct write: the engine throws, and the trace reports it as
+   `output_key_destructure_mismatch`, a **hard failure**. When the expression didn't run cleanly (threw, timed out, or returned
    `undefined`), a `{}` placeholder is written to every declared key instead and each is
    recorded as **uncertain** — see the cascade rule below.
 2. *Step-input contract check* (`checkStepInputContracts`, Sprint 7 Track I) — for every

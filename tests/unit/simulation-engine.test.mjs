@@ -921,3 +921,47 @@ describe('L2b data-flow trace — output_key propagation matches the engine', ()
     );
   });
 });
+
+describe('L2b data-flow trace — comma-list output_key over a non-destructurable return', () => {
+  it('fails the workflow rather than modelling a key named "a,b"', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return 'inventory'; })()`,
+        on_success: 'next', output_key: 'domain_request,candidate_domain',
+      },
+      { step: '2', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue = result.smoke_test.issues.find(
+      i => i.failure_class === 'output_key_destructure_mismatch' && i.step === '1'
+    );
+    assert.ok(issue, `expected an output_key_destructure_mismatch; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.match(issue.detail, /names 2 keys/);
+    assert.equal(result.passed, false, 'a destructure mismatch is a hard failure');
+  });
+
+  it('reports it once and keeps tracing the remaining steps', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return ['a']; })()`,
+        on_success: 'next', output_key: 'a,b',
+      },
+      {
+        step: '2', type: 'js_transform',
+        expression: `(function() { return { ok: true }; })()`,
+        on_success: 'next', output_key: 'later',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.equal(
+      result.smoke_test.issues.filter(i => i.failure_class === 'output_key_destructure_mismatch').length,
+      1,
+    );
+    assert.equal(result.smoke_test.steps_tested, 2, 'the trace must not stop at the bad step');
+  });
+});

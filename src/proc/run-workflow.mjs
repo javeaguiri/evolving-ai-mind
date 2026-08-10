@@ -313,9 +313,20 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
 
   const stepStart = Date.now();
   let result;
+  let outputWrites = [];
 
   try {
     result = await executeStep({ step, localState: frame.local_state, run, traceId, breakResolution });
+
+    // Resolve output_key → local_state writes here rather than at the write site below,
+    // so a step whose declared output_key cannot be satisfied by what it returned fails
+    // inside the step's own failure envelope — audit row, run status, WORKFLOW_ERROR
+    // callback, TROUBLESHOOT_WORKFLOW. Below this block the step is already audited as
+    // completed, and a throw there would escape unhandled. Application stays below so
+    // an llm_break still returns before local_state is touched.
+    if (step.output_key && result.outputValue !== undefined) {
+      outputWrites = resolveOutputWrites(step.output_key, result.outputValue);
+    }
   } catch (stepError) {
     await recordStepAudit(run.id, frame.frame_id, frame.current_step, step.type,
       'failed', null, null, stepError.message, Date.now() - stepStart);
@@ -441,18 +452,17 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     );
   }
 
-  // Persist output_key → local_state. The comma-list destructuring rule lives in
-  // state-utils.mjs, shared with the simulation engine so the two cannot diverge.
+  // Persist output_key → local_state, from the writes resolved above. The comma-list
+  // destructuring rule lives in state-utils.mjs, shared with the simulation engine so
+  // the two cannot diverge.
   //
   // `null` is a value, not an absence: a step that initialises a key to null (create_workflow
   // step 20a) is declaring "this key exists and is empty". Dropping it left the key missing
   // from local_state, and template resolution renders a missing key as the literal token —
   // so the LLM received the string "{{user_workflow_feedback}}" as the user's feedback.
   // Only `undefined` (the step produced no output) skips the write.
-  if (step.output_key && result.outputValue !== undefined) {
-    for (const { key, value } of resolveOutputWrites(step.output_key, result.outputValue)) {
-      setPath(frame.local_state, key, value);
-    }
+  for (const { key, value } of outputWrites) {
+    setPath(frame.local_state, key, value);
   }
 
   // ── Handle iterator ────────────────────────────────────────────────────
