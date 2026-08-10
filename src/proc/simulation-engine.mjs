@@ -13,6 +13,7 @@
 
 import vm from 'vm';
 import { resolveInput, resolvePath } from './template-resolver.mjs';
+import { resolveOutputWrites }       from './state-utils.mjs';
 
 // Known valid routing token pattern — "next", "end", "cancel",
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
@@ -1447,12 +1448,38 @@ function arrayOfStringsShape(value) {
   return null;
 }
 
+// vectorSearch is embedded before the query runs: SERV takes plain text and calls
+// embedText on it. A queryText that resolves to anything but a string reaches
+// embed-client.mjs as `text.trim is not a function` — an error naming neither the
+// step nor the field. table.mjs rejects a missing column or queryText; this states
+// the same contract early, against the value the trace has actually resolved.
+//
+// Types only, never emptiness: mock input is empty, so a templated queryText
+// resolves to "" on every correct workflow. Empty is a runtime data condition and
+// table.mjs already refuses it; a non-string is a design defect and this is the
+// only layer that sees it before the run.
+function vectorSearchShape(value) {
+  if (!isPlainObject(value)) return 'must be a non-null object';
+  if (typeof value.column !== 'string') {
+    return `column must be a string, got ${JSON.stringify(value.column)}`;
+  }
+  if (typeof value.queryText !== 'string') {
+    return `queryText must be a string — it is embedded as plain text — got ${JSON.stringify(value.queryText)}`;
+  }
+  for (const numeric of ['threshold', 'limit']) {
+    if (value[numeric] !== undefined && typeof value[numeric] !== 'number') {
+      return `${numeric} must be a number, got ${JSON.stringify(value[numeric])}`;
+    }
+  }
+  return null;
+}
+
 // { stepType: { fieldName: validatorFn } } — fields resolved from step.input
 // via resolveInput. Mirrors table.mjs's own runtime validators (validateFilters,
 // insertRow/updateRows/upsertRows shape checks) — these fields throw a hard
 // error at runtime today, so a mismatch here is a hard L2 failure.
 const STEP_INPUT_CONTRACTS = {
-  serv_query:  { filters: filterArrayShape },
+  serv_query:  { filters: filterArrayShape, vectorSearch: vectorSearchShape },
   serv_update: { filters: filterArrayShape, updates: plainObjectShape },
   serv_delete: { filters: filterArrayShape },
   serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
@@ -1472,6 +1499,20 @@ const STEP_PATH_CONTRACTS = {
 // resolveInput treats as a whole-value passthrough (see template-resolver.mjs).
 const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
 
+// True when any bare "{{key}}" anywhere in a field's raw value — the field itself, or a
+// leaf of the object/array it is built from — reads a key whose own computation was
+// inconclusive. A nested token is inherited just as much as a top-level one, and the
+// mock value behind it is a placeholder either way.
+function readsUncertainKey(raw, uncertainKeys) {
+  if (typeof raw === 'string') {
+    const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
+    return Boolean(bareMatch) && uncertainKeys.has(bareMatch[1].trim().split('.')[0]);
+  }
+  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys));
+  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys));
+  return false;
+}
+
 function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
   const key = String(s.step);
 
@@ -1489,10 +1530,7 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
       // Same reasoning applies to loop-accumulated state a single forward pass
       // over the step array can only partially reconstruct (flat-loop patterns
       // that iterate many times before a downstream step consumes the result).
-      if (typeof raw === 'string') {
-        const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
-        if (bareMatch && uncertainKeys.has(bareMatch[1].trim().split('.')[0])) continue;
-      }
+      if (readsUncertainKey(raw, uncertainKeys)) continue;
 
       const resolved = resolveInput(raw, mockState);
       const problem = validate(resolved);
@@ -1608,14 +1646,21 @@ function runJsTransformSmokeTest(steps, traceId) {
           });
         }
 
-        // Propagate result to mockState for downstream steps
+        // Propagate result to mockState for downstream steps, through the same
+        // output_key rule run-workflow.mjs applies — so what the trace models is what
+        // the engine would actually leave in local_state, including an object return
+        // nested under a single output_key.
         if (s.output_key && typeof s.output_key === 'string') {
           const isFallback = threwSyntax || threwRuntime || result === undefined;
-          const useVal      = isFallback ? {} : result;
-          for (const rawKey of s.output_key.split(',')) {
-            const baseOut = rawKey.trim().split('.')[0];
+          // A fallback stands in for a computation that produced no value: there is
+          // nothing to destructure, so every declared key gets the placeholder.
+          const writes = isFallback
+            ? s.output_key.split(',').map(k => ({ key: k.trim(), value: {} })).filter(w => w.key)
+            : resolveOutputWrites(s.output_key, result);
+          for (const { key, value } of writes) {
+            const baseOut = key.split('.')[0];
             if (!(baseOut in mockState)) {
-              mockState[baseOut] = useVal;
+              mockState[baseOut] = value;
               if (isFallback) uncertainKeys.add(baseOut);
             }
           }

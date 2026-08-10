@@ -38,6 +38,7 @@ import { getRows, insertRow, updateRows }
 import { executeStep, buildDialog, resolveGateOptions, resolveFormFields }
                                 from './step-executor.mjs';
 import { resolvePath }          from './template-resolver.mjs';
+import { resolveOutputWrites }  from './state-utils.mjs';
 import { extractTemplateRefs }  from './simulation-engine.mjs';
 import { shouldWriteEpisodicMemory } from './memory-writer.mjs';
 
@@ -440,23 +441,17 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     );
   }
 
-  // Persist output_key → local_state.
-  // Comma-separated output_key (e.g. "a,b,c") destructures an object return value into
-  // multiple top-level local_state keys simultaneously.
+  // Persist output_key → local_state. The comma-list destructuring rule lives in
+  // state-utils.mjs, shared with the simulation engine so the two cannot diverge.
   //
   // `null` is a value, not an absence: a step that initialises a key to null (create_workflow
   // step 20a) is declaring "this key exists and is empty". Dropping it left the key missing
   // from local_state, and template resolution renders a missing key as the literal token —
   // so the LLM received the string "{{user_workflow_feedback}}" as the user's feedback.
   // Only `undefined` (the step produced no output) skips the write.
-  if (step.output_key && typeof step.output_key === 'string' && result.outputValue !== undefined) {
-    const outKeys = step.output_key.split(',').map(k => k.trim());
-    if (outKeys.length > 1 && typeof result.outputValue === 'object' && result.outputValue !== null) {
-      for (const key of outKeys) {
-        if (key in result.outputValue) setPath(frame.local_state, key, result.outputValue[key]);
-      }
-    } else {
-      setPath(frame.local_state, step.output_key, result.outputValue);
+  if (step.output_key && result.outputValue !== undefined) {
+    for (const { key, value } of resolveOutputWrites(step.output_key, result.outputValue)) {
+      setPath(frame.local_state, key, value);
     }
   }
 

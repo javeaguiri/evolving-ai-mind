@@ -147,6 +147,11 @@ async function getRows(req) {
       if (!vectorSearch.column || !vectorSearch.queryText) {
         return err(400, 'vectorSearch requires column and queryText', req.correlationId);
       }
+      // queryText is embedded as plain text. A non-string reaches embedText as
+      // `text.trim is not a function`, which names neither the field nor the caller.
+      if (typeof vectorSearch.queryText !== 'string') {
+        return err(400, `vectorSearch.queryText must be a string, got ${typeof vectorSearch.queryText}`, req.correlationId);
+      }
       const vsCol = schemaColumns.find(c => c.name === vectorSearch.column);
       if (!vsCol) {
         return err(400, `vectorSearch column "${vectorSearch.column}" not found in schema`, req.correlationId);

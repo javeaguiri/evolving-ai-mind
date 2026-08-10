@@ -19,7 +19,7 @@
         "description": "Normalise the domain request. Accepts userInput or description — a caller supplying either is supplying the same thing.",
         "input_key": "input",
         "output_key": "domain_request",
-        "expression": "(function() { return { domain_request: (items.userInput || items.description || '').trim() }; })()",
+        "expression": "(function() { return (items.userInput || items.description || '').trim(); })()",
         "on_success": "next",
         "on_else": "cancel"
       },
@@ -65,7 +65,7 @@
         "step": "1c",
         "type": "js_transform",
         "input_key": "domain_answer",
-        "expression": "(function() { return { domain_request: (items && items.domain_request || '').trim() }; })()",
+        "expression": "(function() { return (items && items.domain_request || '').trim(); })()",
         "output_key": "domain_request",
         "on_success": "2",
         "on_else": "cancel",
