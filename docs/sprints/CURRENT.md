@@ -909,6 +909,17 @@ was manufactured to satisfy a rule, not designed.** `minItems: 2` also reads as 
 specimen: flashcards, recipes and budgets are naturally multi-table; an inventory is not. It cost
 the retry *and* the two columns AC6's threshold rejects.
 
+**Fixed the same day — the table count is now a suggestion, not a rule.** `minItems: 2` removed
+from `tables` in **both** `create_domain` (v28 → **v29**) and `revise_domain_schema` (v14 → **v15**);
+`maxItems: 10` kept. Changing only `create_domain` would have left an asymmetry where a one-table
+domain can be created but never revised. The guidance moved into the prompt as advice that states
+the failure mode rather than a count: *"Table count follows the domain, not a target … never add a
+table to reach a count — a table invented to satisfy a number arrives with nothing to hold and no
+workflow maintaining it."* A schema can only say "add a table"; it can never say "reconsider",
+which is why this rule could not live there. `minItems: 3` on `columns` is untouched and stays a
+rule — it encodes the mandatory `id`/`created_at`/`updated_at` trio, not a design opinion.
+Deployed via `upsert-prompt.mjs`; verified on the live rows.
+
 **The correction prompt names the location but not the property.** `llm-client.mjs:347` renders
 `- [/tables/0/columns/3] must NOT have additional properties`. Ajv supplies the offending key in
 `params.additionalProperty`, and `review-output.mjs:208-214` **preserves `params`** — it is simply
