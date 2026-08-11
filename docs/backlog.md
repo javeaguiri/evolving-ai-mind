@@ -244,6 +244,26 @@ The system maintains a **capability registry** of approved external integrations
 
 Auth credentials are stored in SSM, never in the database.
 
+> **SUPERSEDED IN PART — 2026-08-11. The table shipped with a different shape and this
+> section has not been rewritten to match; read `docs/arch-data.md` for the live contract.**
+>
+> The two models differ in their unit, not only their columns. This design is **one row per
+> provider** with many named endpoints; what shipped is **one row per operation**:
+> `endpoint` (a full URL), `method`, `auth_ref` (an SSM parameter name), `input_schema`,
+> `output_schema`, and `category: 'external'` — not `'external_api'`, which the CHECK
+> constraint rejects. So the Finnhub example below is three live rows (`finnhub_quote`,
+> `finnhub_candles`, `finnhub_company_profile`), not one.
+>
+> **What the shipped shape does not carry, and someone building `capability_call` must settle
+> first:** `allowed_params` (the parameter whitelist — `input_schema` describes the shape but
+> is not enforced as a boundary), `rate_limit`, and `timeout_ms`. All three currently live in
+> `notes` as prose, which no code reads. The exfiltration argument above is the reason
+> `allowed_params` existed, so it is the one that matters: per-operation rows make the URL
+> fixed rather than templated, which removes part of that risk, but not the parameter-injection
+> half.
+>
+> Steps 1 and 5 of "What needs to be built" are done. Steps 2, 3, 4 and 6 are not.
+
 **New step type: capability_call**
 
 ```json
