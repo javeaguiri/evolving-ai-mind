@@ -56,7 +56,9 @@ For authoritative detail follow the section references in each row.
 | `src/proc/state-utils.mjs` | PROC | `resolveOutputWrites` — pure interpretation of a step's `output_key` against the value the step produced. A comma list destructures an object return into one key each, skipping a key the object omits; a single `output_key` writes the whole value. A comma list over a value that cannot carry named keys (scalar, null, array) **throws** — there is no correct write, and the alternative is a `local_state` key literally named `"a,b"` with every downstream `{{a}}` rendering as its own literal token. Shared by `run-workflow.mjs` (which writes local_state, resolving inside the step's failure envelope) and `simulation-engine.mjs` (which models it and reports the throw as `output_key_destructure_mismatch`), so the simulator cannot disagree with the engine about what a step leaves behind | Changes affect what every step writes to `local_state` and what the data-flow trace believes it wrote |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
-| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
+| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | One of two AWS SDK imports reachable from PROC — changes affect all async dispatch and result delivery |
+| `src/shared/scheduler-client.mjs` | Shared | Amazon EventBridge Scheduler — `upsertSchedule`, `deleteSchedule`, `listSchedules`, plus the pure `validateScheduleName` / `validateScheduleExpression` / `buildScheduledRunMessage`. Isolated for the same reason `sqs-callback.mjs` is: PROC is cloud-agnostic and must not import an AWS SDK. A schedule's target is the **WorkflowQueue**, not a Lambda, because a schedule can only deliver a static payload while a run needs a `PGC_WorkflowRun` row that does not exist until it fires | Changes affect every unattended run; the `SCHEDULED_RUN` message it writes is read by `scheduled-run.mjs` months later |
+| `src/proc/scheduled-run.mjs` | PROC | `SCHEDULED_RUN` handler — resolves the workflow by name, creates the run with `triggered_by: 'schedule'` and `callback: null`, enqueues `execute_top`. **No callback is the defining property**: an unattended run has no thread to reply into, so a `human_gate` in a scheduled workflow suspends with nobody to answer it. Reporting is a `notify` step's job | Changes affect all scheduled runs; nothing downstream distinguishes them from Slack-triggered ones |
 | `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm` (parsed JSON), `callLlmWithTools` (native tool calling; returns the raw item array so callers can echo it forward for prompt-cache credit), `callLlmWithMessages`, `callLlmWithCorrection`; all POST through one `postToGateway` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
 | `src/shared/schema-utils.mjs` | Shared | Pure interpretation of a `PGC_Schema.columns` array — `pickLabelColumn` (which column stands in for a row as its readable value; returns null when none does) | Used by `classify-intent.mjs` (display label for `/m list <table>`) and `step-executor.mjs` (natural key for reference-table FK resolution) — the two differ only in preference order |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
@@ -195,6 +197,14 @@ same reason: neither can block the Experience tier.
 **Two message categories:**
 
 **Category 1 — Fire-and-forget entry messages**
+
+> `SCHEDULED_RUN` is a Category 1 message with one difference worth noting: it is enqueued by
+> **Amazon EventBridge Scheduler**, not by any part of this system. A schedule can only deliver a
+> static payload, so it cannot create the run itself — `scheduled-run.mjs` does that on receipt.
+> This is why scheduling needed no new execution path: the Step Processor never learns that a
+> schedule started the run. Schedules live in the `${AWS::StackName}-schedules` group and fire via
+> `SchedulerInvokeRole`, whose only permission is `sqs:SendMessage` on WorkflowQueue.
+
 Enqueued by `SlackbotFunction` on receipt of a slash command. No `workflowRunId` —
 the workflow run does not exist yet when these are sent. PROC receives the message,
 performs its work (classification, domain creation, help lookup), and routes results
