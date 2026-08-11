@@ -398,15 +398,26 @@ and the `seed_PGC_Schema.json` registry row, never direct DDL. Five columns (`en
 `auth_ref` holds an SSM parameter **name**, never a credential — the table is readable by anything
 that can read PGC.
 
-**No rows, and a deployment trap found while verifying.** `createTableFromTemplate` uses
-`CREATE TABLE IF NOT EXISTS`, so re-running bootstrap **does not add columns to an existing
-table** — but `seedPGCSchema` upserts `ON CONFLICT DO UPDATE`, so it *would* refresh the registry
-row. Running bootstrap now would therefore make `PGC_Schema` assert five columns the database does
-not have: the *"registry must never assert what the database does not"* invariant, inverted, which
-is the exact defect class Session 9 recorded. **So bootstrap is deliberately not run.** Registry
-and database stay in agreement on the 9-column shape; the template describes the intended shape
-for a fresh install. Nothing writes those columns while the tools are stubbed, so nothing needs
-them yet. Adding them physically is the same task as unstubbing invocation, and lands with it.
+**Deployed live, and a bootstrap trap found on the way.** The schema change had to reach the
+running database, not just the template: a registry that says `external` is not a valid category
+is one Novia correctly reads as an implementation gap, and the demo turns on her *not* flagging
+one that no longer exists.
+
+Bootstrap is the wrong instrument. `createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`,
+so it cannot add a column to a table that already exists — while `seedPGCSchema` upserts
+`ON CONFLICT DO UPDATE` and would refresh the registry row regardless. **Running bootstrap would
+have made `PGC_Schema` assert five columns the database does not have**: the *"registry must never
+assert what the database does not"* invariant, inverted, which is the exact defect class Session 9
+recorded.
+
+Applied instead through the routes that move both sides together — `addColumn` ×5,
+`modifyConstraint` ×2 (`chk_capability_category` gains `external`, `chk_capability_method` is new),
+`updateTable` for the description. Verified against `information_schema.columns` rather than
+trusting the responses: all five columns exist physically, nullable, correct types; the registry
+row carries 14 columns and 3 constraints; `PGC_Capability` holds **0 rows**.
+
+The columns exist so that anything reading the registry sees the real contract. Nothing writes
+them while the tools are stubbed.
 
 ---
 
