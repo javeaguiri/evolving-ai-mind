@@ -74,6 +74,7 @@ const READ_TOOLS = new Set([
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
   'run_sql',
+  'list_capabilities', 'list_schedules',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
@@ -82,10 +83,16 @@ const INLINE_WRITE_TOOLS = new Set([
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
+//
+// The four capability/schedule tools are gated even while stubbed. Each one, once wired up,
+// acts on the physical world or commits the system to acting on it unattended — turning
+// something on, or arranging for it to be turned on at 3am. Shipping them ungated now and
+// tightening later means the tightening is a thing someone has to remember.
 const GATED_WRITE_TOOLS = new Set([
   'register_workflow',
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
   'create_view', 'drop_view',
+  'register_capability', 'call_capability', 'schedule_workflow', 'cancel_schedule',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -97,6 +104,22 @@ const TRIGGER_TOOLS = new Set([
 const HOUSEKEEPING_TOOLS = new Set([
   'write_memory',
 ]);
+
+/**
+ * The result of a tool that is declared but not yet wired up.
+ *
+ * Never reports success. A stub returning {ok:true} would have Novia tell the user the lights
+ * are on, and the whole value of a stubbed catalog is that she can describe a mechanism
+ * truthfully — including that it is not built. `would_have` carries the request that a real
+ * implementation would issue, which is what makes the description concrete rather than vague.
+ *
+ * @param {string} capability  Tool name, echoed so the model can see which call this answers
+ * @param {object} wouldHave   The request a real implementation would have made
+ * @param {string} note        What is missing, in terms the model can relay to a person
+ */
+function notImplemented(capability, wouldHave, note) {
+  return { status: 'not_implemented', capability, would_have: wouldHave, note };
+}
 
 // Every name the loop can actually dispatch. The Sets above stay the authority on that —
 // a schema is only sent to the gateway if there is code behind it, because a tool the model
@@ -1301,6 +1324,29 @@ async function buildGateText(action, params, traceId) {
         return `**Drop view: \`${tableName}\`**\n\nThis is irreversible.`;
       }
 
+      // The gate says NOT BUILT on its face. Approving one of these approves a description,
+      // and a card that reads like every other confirmation would imply otherwise.
+      case 'register_capability': {
+        const { capabilityKey, description, endpoint, method } = params;
+        const target = endpoint ? `\n\n\`${method ?? 'POST'} ${endpoint}\`` : '';
+        return `**Register capability: \`${capabilityKey}\`** — _not built yet, nothing will be written_\n\n${description ?? ''}${target}`;
+      }
+
+      case 'call_capability': {
+        const { capabilityKey, input } = params;
+        return `**Call capability: \`${capabilityKey}\`** — _not built yet, nothing will be called_\n\n\`\`\`json\n${JSON.stringify(input ?? {}, null, 2)}\n\`\`\``;
+      }
+
+      case 'schedule_workflow': {
+        const { scheduleName, workflowName, schedule } = params;
+        return `**Schedule: \`${scheduleName}\`** — _not built yet, nothing will be scheduled_\n\nRun \`${workflowName}\` on \`${schedule}\`.`;
+      }
+
+      case 'cancel_schedule': {
+        const { scheduleName } = params;
+        return `**Cancel schedule: \`${scheduleName}\`** — _not built yet, no schedule exists_`;
+      }
+
       default:
         return `**Proposed action:** \`${action}\`\n\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``;
     }
@@ -1504,6 +1550,60 @@ async function executeWriteTool(action, params, traceId) {
         if (!tableName) return { error: 'tableName is required' };
         const { servPost } = await import('../shared/serv-client.mjs');
         return await servPost('/api/v1/serv/schema/deleteTable', { tableName });
+      }
+
+      // --- Capability and scheduling tools — declared, not yet wired up ------------------
+      //
+      // Each returns the request a real implementation would issue. PGC_Capability's external
+      // columns exist in the template and the registry seed but not in the running database,
+      // so nothing here writes a row: registering for real is the same task as invoking for
+      // real, and both wait on the same schema step.
+
+      case 'register_capability': {
+        const { capabilityKey, category = 'external', description, endpoint, method, authRef,
+                inputSchema, outputSchema, status = 'planned' } = params;
+        if (!capabilityKey || !description) {
+          return { error: 'capabilityKey and description are required' };
+        }
+        return notImplemented('register_capability', {
+          table: 'PGC_Capability',
+          row:   { capability_key: capabilityKey, category, description, status,
+                   endpoint: endpoint ?? null, method: method ?? null, auth_ref: authRef ?? null,
+                   input_schema: inputSchema ?? null, output_schema: outputSchema ?? null },
+        },
+        'The capability registry accepts no rows yet. The row above is what would be written. ' +
+        'auth_ref names an SSM parameter holding the credential — never the credential itself.');
+      }
+
+      case 'call_capability': {
+        const { capabilityKey, input = {} } = params;
+        if (!capabilityKey) return { error: 'capabilityKey is required' };
+        return notImplemented('call_capability', {
+          capability_key: capabilityKey,
+          request:        input,
+        },
+        `No invocation path exists, so "${capabilityKey}" was NOT called and nothing changed. ` +
+        'Describe what calling it would do — do not report an outcome.');
+      }
+
+      case 'schedule_workflow': {
+        const { scheduleName, workflowName, schedule, input = {}, enabled = true } = params;
+        if (!scheduleName || !workflowName || !schedule) {
+          return { error: 'scheduleName, workflowName and schedule are required' };
+        }
+        return notImplemented('schedule_workflow', {
+          schedule_name: scheduleName, workflow_name: workflowName,
+          schedule, input, enabled,
+        },
+        'No scheduling service is deployed. Nothing will run on this schedule. The workflow ' +
+        'itself can still be built, registered and run on demand today.');
+      }
+
+      case 'cancel_schedule': {
+        const { scheduleName } = params;
+        if (!scheduleName) return { error: 'scheduleName is required' };
+        return notImplemented('cancel_schedule', { schedule_name: scheduleName },
+          'No scheduling service is deployed, so there is no schedule to cancel.');
       }
 
       default:
@@ -1942,6 +2042,20 @@ async function executeReadTool(action, params, traceId) {
         const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
       }
+
+      case 'list_capabilities': {
+        const { category, status } = params;
+        const filters = [];
+        if (category) filters.push({ column: 'category', op: 'eq', value: category });
+        if (status)   filters.push({ column: 'status',   op: 'eq', value: status });
+        const resp = await getRows('PGC_Capability', filters, { column: 'capability_key', direction: 'asc' }, 100);
+        return { count: resp.count, capabilities: resp.rows ?? [] };
+      }
+
+      case 'list_schedules':
+        return notImplemented('list_schedules', { filter: params ?? {} },
+          'No scheduling service is deployed, so there are no schedules to list — not an empty schedule set. ' +
+          'Treat scheduling as designed but not yet built.');
 
       case 'query_entity': {
         const { entityName, filters = [], limit } = params;

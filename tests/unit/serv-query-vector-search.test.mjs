@@ -22,6 +22,8 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { DISPATCHABLE_TOOLS } from '../../src/proc/minds-eye.mjs';
+
 const executorSrc = readFileSync('src/proc/step-executor.mjs', 'utf8');
 const clientSrc   = readFileSync('src/shared/serv-client.mjs', 'utf8');
 const stepTypes   = JSON.parse(readFileSync('src/serv/templates/pgc/seeds/seed_PGC_StepType.json', 'utf8'));
@@ -129,9 +131,11 @@ describe('query_table — vectorSearch reaches SERV', () => {
     assert.match(queryTable.parameters.properties.vectorSearch.description, /similarity score/);
   });
 
-  it('still describes exactly the 23 dispatchable tools', () => {
+  it('still describes exactly the dispatchable tools, no more and no fewer', () => {
     // selectToolDefinitions drops any tool the loop cannot dispatch and warns about any
     // dispatchable tool with no schema. Editing this row is where that drift starts.
-    assert.equal(toolSchemas.content.tools.length, 23);
+    // Asserted against the live set rather than a literal: a count goes stale every time a
+    // tool is added, and a stale count fails for a reason that has nothing to do with vectorSearch.
+    assert.equal(toolSchemas.content.tools.length, DISPATCHABLE_TOOLS.size);
   });
 });

@@ -339,6 +339,77 @@ together are the alias-learning claim; one number alone is not.
 
 ---
 
+### Checkpoint 4 — Readiness for someone who is not the author
+
+**Added mid-sprint 2026-08-11, at the user's request, with the risk to the other checkpoints
+explicitly accepted by the user.** A friend wants a home intelligence system. The ask is not the
+home system: it is *"how ready is evolving-mind for general consumption"*, measured on a person
+who did not build it.
+
+This is a harder test than Checkpoint 2 and it is worth naming why. Every build so far has been
+the author asking, in a domain the author designed, against workflows the author had already
+shaped. This is a domain nobody designed for, requested by someone else, where Novia has only
+general primitives and must reach the specific solution herself. It is also the first real probe
+of the release-readiness question deferred four sprints running.
+
+**Threshold — two parts, both required:**
+
+| | Criterion |
+|---|---|
+| **Feasible** | The proposal must be buildable on this architecture. Assessed by the user. Already believed true; it fails only if Novia proposes something the system cannot express. |
+| **Convinced** | The friend, after the conversation, is persuaded this could serve his need. Judged by him, reported by the user. |
+
+**The build is deliberately minimal, and generality is the measurement.** Every home-specific
+affordance added here is a thumb on the scale: if the primitives are pre-shaped toward lights and
+thermostats, a good proposal proves nothing. Six general tools, no domain content.
+
+| Tool | Class | State |
+|---|---|---|
+| `list_capabilities` | read | **Real** — reads `PGC_Capability` |
+| `register_capability` | gated write | Stub |
+| `call_capability` | gated write | Stub |
+| `list_schedules` | read | Stub |
+| `schedule_workflow` | gated write | Stub |
+| `cancel_schedule` | gated write | Stub |
+
+**A stub may not report success.** Each returns `{status: 'not_implemented', would_have: {...}}` —
+the request a real implementation would have issued. A stub returning `{ok: true}` would have
+Novia tell the friend the lights are on, and the whole value of a stubbed catalog is that she can
+describe a mechanism truthfully, *including that it is not built*. The gate card says the same on
+its face, because approving one of these approves a description.
+
+**Gated while stubbed**, all four writes. Each one, once wired, acts on the physical world or
+commits the system to acting on it unattended. Shipping them ungated and tightening later makes
+the tightening something someone has to remember.
+
+**What is already real is the strongest part of the demo.** Domain creation, workflow design,
+L0/L1/L2 simulation, registration, `notify` steps and human gates all work today. Only the
+outbound call and the unattended trigger are stubbed — so "tell me if the garage door is open" is
+real end to end apart from the sensor read.
+
+**Decision reversed, on the record.** Sprint 10 previously recorded that adding a capability was
+*"intended to stay a developer action rather than something Novia performs — that fence is not
+yet enforced and the decision is open."* It is now settled the other way: `register_capability`
+is Novia's tool, gated.
+
+**`PGC_Capability` extended under config control** — `src/serv/templates/pgc/PGC_Capability.json`
+and the `seed_PGC_Schema.json` registry row, never direct DDL. Five columns (`endpoint`,
+`method`, `auth_ref`, `input_schema`, `output_schema`), category `'external'`, and a method CHECK.
+`auth_ref` holds an SSM parameter **name**, never a credential — the table is readable by anything
+that can read PGC.
+
+**No rows, and a deployment trap found while verifying.** `createTableFromTemplate` uses
+`CREATE TABLE IF NOT EXISTS`, so re-running bootstrap **does not add columns to an existing
+table** — but `seedPGCSchema` upserts `ON CONFLICT DO UPDATE`, so it *would* refresh the registry
+row. Running bootstrap now would therefore make `PGC_Schema` assert five columns the database does
+not have: the *"registry must never assert what the database does not"* invariant, inverted, which
+is the exact defect class Session 9 recorded. **So bootstrap is deliberately not run.** Registry
+and database stay in agreement on the 9-column shape; the template describes the intended shape
+for a fresh install. Nothing writes those columns while the tools are stubbed, so nothing needs
+them yet. Adding them physically is the same task as unstubbing invocation, and lands with it.
+
+---
+
 ## Acceptance Criteria
 
 | # | Criterion | Checkpoint | Threshold |
@@ -354,6 +425,8 @@ together are the alias-learning claim; one number alone is not.
 | **AC9** | Per-receipt cost measured on first and third use of the same merchant | 3b | Third < first |
 | **AC10** | ~~AWS fixed cost measured per-service for a full billing month~~ — **settled PASS 2026-08-08 on standing evidence: ~$21/month, stable for months. No measurement task.** | 1 | ≤ $30/month ✅ |
 | **AC11** | **Written go/no-go recommendation** against every threshold above, with each marked PASS / MARGINAL / FAIL | — | Exists, and is unambiguous |
+| **AC12** | Six general capability and scheduling tools declared, stubbed, gated, and incapable of reporting success; `PGC_Capability` extended under config control with no rows written | 4 | Catalog live, stubs honest |
+| **AC13** | Novia proposes a home intelligence system from the general primitives alone, unprompted by home-specific content | 4 | Feasible **and** the friend is convinced |
 
 ---
 

@@ -1143,7 +1143,7 @@
     "table_name": "PGC_Capability",
     "target": "pgc",
     "domain": null,
-    "description": "Registry of what this system can currently do. Injected into heavy-lift prompts so the LLM proposes only feasible workflows.",
+    "description": "Registry of what this system can do, including capabilities reached over the network. Internal categories are injected into heavy-lift prompts so the LLM proposes only feasible workflows. Category 'external' describes a third-party service the system can invoke \u2014 one row per operation, so a device or provider offering several operations is several rows. auth_ref holds the SSM parameter NAME carrying the credential, never the credential itself: this table is readable by any tool that can read PGC.",
     "columns": [
       {
         "name": "id",
@@ -1183,6 +1183,31 @@
         "nullable": true
       },
       {
+        "name": "endpoint",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "method",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "auth_ref",
+        "type": "text",
+        "nullable": true
+      },
+      {
+        "name": "input_schema",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
+        "name": "output_schema",
+        "type": "jsonb",
+        "nullable": true
+      },
+      {
         "name": "created_at",
         "type": "timestamptz",
         "nullable": false,
@@ -1205,7 +1230,12 @@
       {
         "type": "check",
         "name": "chk_capability_category",
-        "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution')"
+        "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution', 'external')"
+      },
+      {
+        "type": "check",
+        "name": "chk_capability_method",
+        "expression": "method IS NULL OR method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE')"
       }
     ],
     "triggers": [
