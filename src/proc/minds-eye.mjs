@@ -1338,13 +1338,16 @@ async function buildGateText(action, params, traceId) {
       }
 
       case 'schedule_workflow': {
-        const { scheduleName, workflowName, schedule } = params;
-        return `**Schedule: \`${scheduleName}\`** — _not built yet, nothing will be scheduled_\n\nRun \`${workflowName}\` on \`${schedule}\`.`;
+        const { scheduleName, workflowName, schedule, timezone = 'UTC', enabled = true } = params;
+        const state = enabled ? '' : '\n\nCreated **disabled** — it will not fire until enabled.';
+        return `**Schedule \`${workflowName}\` to run unattended**\n\n`
+             + `\`${schedule}\` (${timezone}), as \`${scheduleName}\`.\n\n`
+             + `This runs with no one present. Approving it means it fires until cancelled.${state}`;
       }
 
       case 'cancel_schedule': {
         const { scheduleName } = params;
-        return `**Cancel schedule: \`${scheduleName}\`** — _not built yet, no schedule exists_`;
+        return `**Cancel schedule: \`${scheduleName}\`**\n\nIt stops firing. The workflow it runs is not affected.`;
       }
 
       default:
@@ -1587,23 +1590,25 @@ async function executeWriteTool(action, params, traceId) {
       }
 
       case 'schedule_workflow': {
-        const { scheduleName, workflowName, schedule, input = {}, enabled = true } = params;
-        if (!scheduleName || !workflowName || !schedule) {
-          return { error: 'scheduleName, workflowName and schedule are required' };
+        const { scheduleName, workflowName, schedule, input = {},
+                enabled = true, timezone, description } = params;
+
+        // Refuse a schedule for a workflow that does not exist, before creating it. An
+        // orphaned schedule fires forever into a log line nobody reads, and unlike a
+        // Slack-triggered run there is no human present to notice the failure.
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], null, 1);
+        if (!wfResp.rows?.length) {
+          return { error: `Workflow "${workflowName}" is not registered — register it before scheduling it.` };
         }
-        return notImplemented('schedule_workflow', {
-          schedule_name: scheduleName, workflow_name: workflowName,
-          schedule, input, enabled,
-        },
-        'No scheduling service is deployed. Nothing will run on this schedule. The workflow ' +
-        'itself can still be built, registered and run on demand today.');
+
+        const { upsertSchedule } = await import('../shared/scheduler-client.mjs');
+        return await upsertSchedule({ scheduleName, workflowName, schedule, input, enabled, timezone, description });
       }
 
       case 'cancel_schedule': {
         const { scheduleName } = params;
-        if (!scheduleName) return { error: 'scheduleName is required' };
-        return notImplemented('cancel_schedule', { schedule_name: scheduleName },
-          'No scheduling service is deployed, so there is no schedule to cancel.');
+        const { deleteSchedule } = await import('../shared/scheduler-client.mjs');
+        return await deleteSchedule(scheduleName);
       }
 
       default:
@@ -2052,10 +2057,10 @@ async function executeReadTool(action, params, traceId) {
         return { count: resp.count, capabilities: resp.rows ?? [] };
       }
 
-      case 'list_schedules':
-        return notImplemented('list_schedules', { filter: params ?? {} },
-          'No scheduling service is deployed, so there are no schedules to list — not an empty schedule set. ' +
-          'Treat scheduling as designed but not yet built.');
+      case 'list_schedules': {
+        const { listSchedules } = await import('../shared/scheduler-client.mjs');
+        return await listSchedules(params.workflowName);
+      }
 
       case 'query_entity': {
         const { entityName, filters = [], limit } = params;

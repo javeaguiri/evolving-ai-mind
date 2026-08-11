@@ -1355,7 +1355,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 2,
+    "version": 3,
     "content": {
       "tools": [
         {
@@ -2028,7 +2028,7 @@
         },
         {
           "name": "list_schedules",
-          "description": "List schedules that run registered workflows unattended. NOT YET IMPLEMENTED. An empty result means no scheduling service is deployed, not that the user has no schedules.",
+          "description": "List the unattended schedules this system is running, with the workflow each one triggers, its expression, timezone and whether it is enabled. An empty result means no schedules have been created.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -2048,13 +2048,13 @@
         },
         {
           "name": "schedule_workflow",
-          "description": "Run an already-registered workflow on a recurring schedule, with no user present. Use a cron or rate expression. The workflow must exist first: design and register it, then schedule it. NOT YET IMPLEMENTED. It returns the schedule it would create and creates nothing. Note that the workflow itself is fully buildable and runnable on demand today; only the unattended trigger is missing.",
+          "description": "Run an already-registered workflow unattended on a recurring schedule, via Amazon EventBridge Scheduler. The workflow must be registered first: design it, register it, then schedule it. Use cron(minute hour day-of-month month day-of-week year) for calendar times, rate(N minutes|hours|days) for intervals, or at(YYYY-MM-DDTHH:MM:SS) for one occurrence. Always set timezone for anything a person experiences as a time of day. Calling it again with the same scheduleName replaces the existing schedule. IMPORTANT: a scheduled run has NO user present and no conversation to reply into, so any human_gate in the workflow will suspend with nobody to answer it. Schedule only workflows that complete unattended, and use a notify step to report results.",
           "parameters": {
             "type": "object",
             "properties": {
               "scheduleName": {
                 "type": "string",
-                "description": "Stable snake_case identifier for the schedule."
+                "description": "Stable identifier: letters, digits, hyphen, underscore or dot, max 64 characters."
               },
               "workflowName": {
                 "type": "string",
@@ -2062,15 +2062,23 @@
               },
               "schedule": {
                 "type": "string",
-                "description": "cron(...) or rate(...) expression, plus timezone where it matters."
+                "description": "cron(0 7 * * ? *), rate(30 minutes) or at(2026-08-12T07:00:00)."
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g. Europe/Madrid. Defaults to UTC."
               },
               "input": {
                 "type": "object",
-                "description": "Input passed to each run."
+                "description": "Input passed to every run. Must cover every key the workflow reads."
               },
               "enabled": {
                 "type": "boolean",
-                "description": "Whether the schedule starts active."
+                "description": "Whether the schedule starts active. Defaults to true."
+              },
+              "description": {
+                "type": "string",
+                "description": "What this schedule is for, in one line."
               },
               "reasoning": {
                 "type": "string",
@@ -2087,7 +2095,7 @@
         },
         {
           "name": "cancel_schedule",
-          "description": "Stop and remove a schedule. Does not affect the workflow it targets. NOT YET IMPLEMENTED.",
+          "description": "Delete a schedule so it stops firing. Does not affect the workflow it targets, which remains registered and runnable on demand.",
           "parameters": {
             "type": "object",
             "properties": {

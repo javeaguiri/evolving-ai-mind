@@ -43,6 +43,7 @@ import { handle as deleteWorkflow }     from './delete-workflow.mjs';
 import { handle as writeMemory }        from './memory-writer.mjs';
 import { handle as mindsEye }           from './minds-eye.mjs';
 import { handle as replay }             from './replay.mjs';
+import { processScheduledRun }          from './scheduled-run.mjs';
 
 /**
  * AWS Lambda handler — called by API Gateway (HTTP) or SQS WorkflowQueue (async).
@@ -115,6 +116,13 @@ async function processSqsBatch(records) {
       // run-workflow.mjs dispatchSqs which handles them generically.
       if (message.type === 'WORKFLOW_STEP') {
         await dispatchSqs(message);
+        continue;
+      }
+      // SCHEDULED_RUN — an EventBridge schedule fired. Category 1: no workflowRunId, because
+      // the run does not exist until this creates it. Delivered by EventBridge Scheduler
+      // itself, not by any part of this system.
+      if (message.type === 'SCHEDULED_RUN') {
+        await processScheduledRun(message);
         continue;
       }
       // DELETE_WORKFLOW — development/testing cleanup

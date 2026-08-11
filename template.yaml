@@ -23,6 +23,11 @@ Globals:
         LOG_LEVEL: info
         SQS_WORKFLOW_URL:       !Ref WorkflowQueue
         SQS_SLACK_RESULTS_URL:  !Ref SlackResultsQueue
+        # A schedule targets the queue by ARN, not URL — the SQS client uses the URL, the
+        # Scheduler target needs the ARN, and they are not interchangeable.
+        SQS_WORKFLOW_ARN:       !GetAtt WorkflowQueue.Arn
+        SCHEDULER_GROUP_NAME:   !Sub '${AWS::StackName}-schedules'
+        SCHEDULER_ROLE_ARN:     !GetAtt SchedulerInvokeRole.Arn
   Api:
     # Every API response gets CORS headers — safe for future REST client
     Cors:
@@ -84,6 +89,66 @@ Resources:
                 Resource:
                   - !GetAtt WorkflowQueue.Arn
                   - !GetAtt SlackResultsQueue.Arn
+        # EventBridge Scheduler — Novia's schedule_workflow / cancel_schedule /
+        # list_schedules tools manage schedules inside this instance's group only.
+        # iam:PassRole is scoped to SchedulerInvokeRole: without it CreateSchedule cannot
+        # attach the role the schedule uses to write to the queue.
+        - PolicyName: SchedulerManagementPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - scheduler:CreateSchedule
+                  - scheduler:UpdateSchedule
+                  - scheduler:DeleteSchedule
+                  - scheduler:GetSchedule
+                  - scheduler:ListSchedules
+                Resource:
+                  - !Sub 'arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/${AWS::StackName}-schedules/*'
+                  - !Sub 'arn:aws:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/${AWS::StackName}-schedules'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SchedulerInvokeRole.Arn
+
+  # The role a SCHEDULE assumes when it fires — not the Lambda's role. Its only power is
+  # putting a message on WorkflowQueue, so a compromised or malformed schedule can enqueue
+  # work and nothing else.
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-SchedulerInvokeRole'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: SchedulerSendToWorkflowQueue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt WorkflowQueue.Arn
+
+  # One group per stack. Scopes ListSchedules to this brain rather than the whole account,
+  # and makes every schedule this instance owns deletable in one operation.
+  # DependsOn BastionRole is load-bearing, not tidiness: CloudFormation acts with the
+  # DEPLOYING identity's credentials, which on this project is the bastion's role. The
+  # grant above has to be in place before this resource is attempted, or the update fails
+  # with AccessDenied and rolls back the whole stack.
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    DependsOn: BastionRole
+    Properties:
+      Name: !Sub '${AWS::StackName}-schedules'
+
   BastionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -100,6 +165,21 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              # EventBridge Scheduler — CloudFormation runs as THIS role when deploying from
+              # the bastion, so the deploying identity needs the permissions for every
+              # resource type the stack creates. Without these, ScheduleGroup creation fails
+              # with AccessDenied on scheduler:GetScheduleGroup and the whole update rolls back.
+              - Effect: Allow
+                Action:
+                  - scheduler:CreateScheduleGroup
+                  - scheduler:GetScheduleGroup
+                  - scheduler:DeleteScheduleGroup
+                  - scheduler:UpdateScheduleGroup
+                  - scheduler:ListScheduleGroups
+                  - scheduler:TagResource
+                  - scheduler:UntagResource
+                  - scheduler:ListTagsForResource
+                Resource: "*"
               # CloudWatch Logs — aws logs tail / filter / query
               - Effect: Allow
                 Action:

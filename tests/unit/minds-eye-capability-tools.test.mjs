@@ -25,8 +25,10 @@ const byName = new Map(selectToolDefinitions(row.content).tools.map(t => [t.name
 
 const CAPABILITY_TOOLS = ['list_capabilities', 'register_capability', 'call_capability'];
 const SCHEDULE_TOOLS   = ['list_schedules', 'schedule_workflow', 'cancel_schedule'];
-const STUBBED          = ['register_capability', 'call_capability',
-                          'list_schedules', 'schedule_workflow', 'cancel_schedule'];
+
+// The scheduling three were stubbed for one day and are now real, backed by EventBridge
+// Scheduler. Only the two capability writes remain declared-but-not-wired.
+const STUBBED          = ['register_capability', 'call_capability'];
 
 const mindsEyeSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
 
@@ -51,9 +53,28 @@ describe('capability and scheduling tools — catalog', () => {
     assert.doesNotMatch(byName.get('list_capabilities').description, /NOT YET IMPLEMENTED/);
   });
 
-  it('warns that an empty schedule list is absence of a service, not absence of schedules', () => {
-    // The failure this prevents: "you have no schedules configured" — reassuring, and false.
-    assert.match(byName.get('list_schedules').description, /not that the user has no schedules/);
+  it('no longer claims the scheduling tools are unimplemented, because they are not', () => {
+    // Session 1151: she flagged call_capability as stubbed and asserted scheduling worked.
+    // Now scheduling really works, so the descriptions must not say otherwise — a tool that
+    // disclaims itself is as misleading as one that oversells.
+    for (const name of SCHEDULE_TOOLS) {
+      assert.doesNotMatch(byName.get(name).description, /NOT YET IMPLEMENTED/,
+        `${name} is implemented — its description must not say otherwise`);
+    }
+  });
+
+  it('tells her a scheduled run has nobody to answer a human_gate', () => {
+    // The failure this prevents is silent: a scheduled workflow containing a gate suspends
+    // forever, with no thread to post into and no one waiting.
+    assert.match(byName.get('schedule_workflow').description, /human_gate/);
+    assert.match(byName.get('schedule_workflow').description, /notify step/);
+  });
+
+  it('names the three expression forms, so she does not invent a fourth', () => {
+    const d = byName.get('schedule_workflow').description;
+    for (const form of ['cron(', 'rate(', 'at(']) {
+      assert.ok(d.includes(form), `schedule_workflow must show the ${form}...) form`);
+    }
   });
 
   it('keeps the credential out of the registry', () => {
@@ -66,11 +87,6 @@ describe('capability and scheduling tools — catalog', () => {
     assert.match(byName.get('call_capability').description, /workflow that calls the capability/);
   });
 
-  it('says the workflow half is real even though the trigger is not', () => {
-    // This is the sentence that keeps a demo honest in the useful direction: most of the
-    // mechanism genuinely exists, and only the unattended trigger is missing.
-    assert.match(byName.get('schedule_workflow').description, /runnable on demand today/);
-  });
 });
 
 describe('capability and scheduling tools — wiring', () => {
@@ -107,13 +123,19 @@ describe('capability and scheduling tools — wiring', () => {
     }
   });
 
-  it('tells the user on the gate card itself that nothing will happen', () => {
+  it('tells the user on the gate card that a stubbed write will not happen', () => {
     // Approving one of these approves a description. A card that reads like every other
     // confirmation would imply the opposite.
-    for (const marker of ['nothing will be written', 'nothing will be called',
-                          'nothing will be scheduled', 'no schedule exists']) {
+    for (const marker of ['nothing will be written', 'nothing will be called']) {
       assert.ok(mindsEyeSrc.includes(marker), `gate text must include "${marker}"`);
     }
+  });
+
+  it('says on the schedule gate that the run happens with nobody present', () => {
+    // The consequential part of approving a schedule is not the schedule, it is that
+    // something will act unattended and repeatedly until cancelled.
+    assert.ok(mindsEyeSrc.includes('This runs with no one present'));
+    assert.ok(mindsEyeSrc.includes('it fires until cancelled'));
   });
 });
 
