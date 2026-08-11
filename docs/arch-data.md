@@ -479,12 +479,18 @@ so a device or provider offering several operations is several rows.
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
-> **The five `external` columns exist in the template and in this registry, not in the running
-> database.** Nothing writes them while `register_capability` and `call_capability` are stubbed.
-> `createTableFromTemplate` uses `CREATE TABLE IF NOT EXISTS` and so cannot add a column to an
-> existing table, while `seedPGCSchema` upserts — so **running bootstrap would make the registry
-> assert columns the database lacks.** Add the columns physically at the same time as unstubbing
-> invocation, and not before.
+> **Live in the database and the registry as of 2026-08-11**, applied through
+> `POST /serv/schema/addColumn` (×5) and `POST /serv/schema/modifyConstraint` (×2), which alter
+> the table and sync `PGC_Schema` in the same call. The table holds no rows: the columns exist so
+> that anything reading the registry sees the real contract, while `register_capability` and
+> `call_capability` remain stubs.
+>
+> **Bootstrap is the wrong tool for a column addition and must not be used for one.**
+> `createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, which cannot add a column to an
+> existing table, while `seedPGCSchema` upserts unconditionally — so on any table that already
+> exists, bootstrap updates the registry and not the database, producing exactly the
+> registry-asserts-what-the-database-lacks defect. Use `addColumn` / `modifyConstraint` /
+> `updateTable`, which move both together.
 
 ---
 
