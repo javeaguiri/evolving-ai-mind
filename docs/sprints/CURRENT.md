@@ -436,8 +436,8 @@ them while the tools are stubbed.
 | **AC9** | Per-receipt cost measured on first and third use of the same merchant | 3b | Third < first |
 | **AC10** | ~~AWS fixed cost measured per-service for a full billing month~~ — **settled PASS 2026-08-08 on standing evidence: ~$21/month, stable for months. No measurement task.** | 1 | ≤ $30/month ✅ |
 | **AC11** | **Written go/no-go recommendation** against every threshold above, with each marked PASS / MARGINAL / FAIL | — | Exists, and is unambiguous |
-| **AC12** | Six general capability and scheduling tools declared, stubbed, gated, and incapable of reporting success; `PGC_Capability` extended under config control with no rows written | 4 | Catalog live, stubs honest |
-| **AC13** | Novia proposes a home intelligence system from the general primitives alone, unprompted by home-specific content | 4 | Feasible **and** the friend is convinced |
+| **AC12** | Six general capability and scheduling tools declared, stubbed, gated, and incapable of reporting success; `PGC_Capability` extended under config control | 4 | Catalog live, stubs honest — **MET 2026-08-11**, catalog v2 at 29 tools, schema live, Finnhub registered `planned` |
+| **AC13** | Novia proposes a home intelligence system from the general primitives alone, unprompted by home-specific content | 4 | Feasible **and** the friend is convinced — **dry run done (session 1151), not yet shown to the friend** |
 
 ---
 
@@ -553,12 +553,27 @@ prevent. An unmeasured criterion is a gap in the evidence, not a grade.
   better at repair — half of Checkpoint 2's hypothesis — rests on observed behaviour, not
   measurement.
 - **That the cost curve is settled.** The typed-reply prefix forfeit costs $0.219 per occurrence at
-  a 56k transcript and grows linearly. Identified precisely and scoped, not fixed.
+  a 56k transcript and grows linearly. ~~Identified precisely and scoped, not fixed.~~ **Fixed and
+  validated live 2026-08-11 on the `respond`-tool path; still open on the prose-reply path — see
+  Condition 1.**
 
 ### Conditions on the GO
 
-1. **Fix the restart cost** before the next substantial build — deliver a `followup` as the
-   `function_call_output` of the pending `respond` call rather than as a trailing user message.
+1. ✅ **DONE, with one path outstanding — 2026-08-11.** **Fix the restart cost** before the next
+   substantial build — deliver a `followup` as the `function_call_output` of the pending `respond`
+   call rather than as a trailing user message.
+
+   Shipped in `b982c99` and **validated live in session 1151**: a typed follow-up read 9,787
+   tokens against the previous turn's `inputTokens` of 9,788 — **ratio 1.00**, where the forfeit
+   would have pinned it to the instructions+tools block. Whole three-turn round cost **$0.079**.
+
+   **The outstanding path was found by the same round.** When Novia answers in prose without
+   calling `respond`, the loop logs *"text reply with no tool call — treating as respond"* and
+   stores the entry with `entryItems = []`. The fix keys off those items, so that respond cannot
+   be reopened as a call: verified on session 1151, where seq 3 carries 1 item and seq 5 carries
+   0. **A typed follow-up after a prose reply still forfeits the round's prefix credit.** Backlog
+   item raised; the fix is to synthesise the `respond` call when the model replies in prose, which
+   is the one case `toInputItems` cannot recover from persisted state alone.
 2. **Run a receipt end-to-end.** AC7, AC8 and AC9 all resolve from it, and nothing else does.
 3. **Measure AC4 once, on an uncontaminated specimen.** The UC-P4 gap in workflow 358 is the best
    available: a real design defect in her own fresh build, with a symptom statable without the
@@ -1435,6 +1450,69 @@ absent from it, and the contract itself tells authors to use `parseFloat`. Three
 settle: whether a denylist is the intended model, whether to delete the decorative sandbox object
 or make it real, and a stated position on `Date.now()`/`Math.random()` making `js_transform`
 non-deterministic.
+
+### Session 13 — 2026-08-11 — Typed-reply fix validated live; Checkpoint 4 built and dry-run
+
+**GO Condition 1 is met on the path that matters, and the round found the path that is still
+open.** Session 1151, three turns, **$0.079**:
+
+```
+turn   in       create   read    read/prev-in   cost
+1      8,672    8,670        0       —          $0.03384
+2      9,788    1,117    8,670      1.00        $0.02095   -> responded
+   (typed follow-up: "Can you translate your proposal to Spanish")
+3     10,759      971    9,787      1.00        $0.02429
+```
+
+Turn 3 is the measurement: a **typed** reply, and the prefix held at 1.00 where the forfeit would
+have pinned `read` to the instructions+tools block. Only 971 tokens were created for a turn whose
+input had grown by ~1,000.
+
+**The gap, found by running it rather than by reading code.** Turn 3 returned
+`itemTypes: ['message']` — she answered in prose without calling `respond` — so the loop stored
+the entry with `entryItems = []`. Verified against the live session: **seq 3 carries 1 item, seq 5
+carries 0.** The fix keys off those items, so a typed follow-up *after a prose reply* still
+forfeits. `toInputItems` cannot recover it from persisted state; the `respond` call has to be
+synthesised at the point the prose reply is stored. Backlog.
+
+**Also shipped, in order:** the `followup` fix (`b982c99`); six capability and scheduling tools,
+gated and honestly stubbed (`1caca50`); `PGC_Capability`'s five external columns deployed live via
+`addColumn`/`modifyConstraint`/`updateTable` (`d8f3df1`); Finnhub registered as three `planned`
+rows with a new `seed_PGC_Capability.json` wired into bootstrap (`71200f8`). 901 → **920** unit
+tests.
+
+**The bootstrap trap, recorded because it nearly cost the invariant.** `createTableFromTemplate`
+issues `CREATE TABLE IF NOT EXISTS` and cannot add a column to an existing table, while
+`seedPGCSchema` upserts unconditionally — so `POST /serv/bootstrap` would have made `PGC_Schema`
+assert five columns the database lacks. Applied through the schema routes instead, which move both
+sides in one call, and verified against `information_schema.columns`.
+
+#### The dry run — AC13's rehearsal, and one statement that must not reach the friend
+
+**What worked, and some of it is behaviour three sprints have been chasing.** She called
+`list_capabilities` **first, unprompted, before designing anything** — the registry-reading
+behaviour that failed to reproduce in Session 8. She read the Finnhub rows and generalised the
+pattern correctly to "your devices need the same registrations", naming real targets (Home
+Assistant, Hue, Ecobee, Nest). She flagged the stub herself: *"Capability registration is currently
+stubbed — `call_capability` is not yet fully live for external network calls."* She closed by
+asking which platform the user owns rather than assuming one. Asked to translate, she produced
+fluent Spanish with every table and technical term intact — which matters, because the friend
+speaks only Spanish.
+
+**The defect: she asserted that scheduling works.** Her caveat covers `call_capability` and then
+says *"the automation logic and data layer can be fully built today; the live device triggers would
+activate once that is enabled"* — while listing "workflows that trigger every 30 min" as buildable.
+There is no scheduler at all. **Cause is visible in the trace: she never called `list_schedules`**,
+made one tool call in the whole round, and generalised "capabilities are stubbed" into "everything
+else is fine." `schedule_workflow`'s description does say NOT YET IMPLEMENTED, so this is weighting,
+not absence of information.
+
+**Read the round for what it is.** Three turns, one tool call, no `PGC_StepType` read, no steps
+drafted, nothing simulated — against Session 10, where she read an archetype workflow, calibrated
+thresholds against live data and submitted 24 steps. This was a good *sales* answer, not a design.
+AC13's "feasible" half is supported; the "convinced" half is untested until the friend sees it, and
+**it should not be shown carrying the scheduling claim** — that is the one statement he could later
+discover was false, which costs more than the gap it conceals.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
