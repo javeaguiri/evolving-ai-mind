@@ -1,6 +1,6 @@
 # Sprint 10 — Viability Checkpoints
 
-**Status: IN FLIGHT. Scoped 2026-08-06, last updated 2026-08-10. Branch
+**Status: IN FLIGHT. Scoped 2026-08-06, last updated 2026-08-11. Branch
 `sprint/10-viability-checkpoints` — cut, pushed, and deployed to prod.**
 
 **Checkpoint 1 CLOSED — PASS** (AC10, settled on standing evidence 2026-08-08).
@@ -15,13 +15,31 @@ Checkpoint 3.
 (workflow 358) registered with both prompts, **never run**. AC7 fails as built (UC-P4, no
 `vectorSearch`); AC8 and AC9 unmeasured.
 
-> **Next session — the pickup.** The user tests workflow 358 and hands the repairs to Novia in a
-> **new** session. Two symptoms to give her, together in one message (each typed reply costs a
-> full-transcript re-creation, ~$0.22 at 56k): **(1)** `current_date` is frozen at
-> `"Monday, August 10, 2026"` in step 3's input; **(2)** item matching calls the LLM with the whole
-> inventory on every receipt, so cost per receipt rises with use where §3b requires it to fall.
-> **State symptoms, never the fix** — she reached the correct design unaided in Session 8, and the
-> second symptom doubles as AC4's uncontaminated repair specimen.
+**Checkpoint 4 added mid-sprint 2026-08-11** (risk accepted by the user) — capability and
+scheduling tools live, **AC12 MET**, **AC13 dry-run only**. Scheduling is **built for real** on
+EventBridge Scheduler, not stubbed.
+
+> **Next session — the pickup, in priority order.**
+>
+> **1. Re-run the home intelligence conversation (AC13).** Scheduling is now real, so session
+> 1151's contradiction — she asserted unattended runs worked when nothing could fire — is gone at
+> the source. Watch whether she describes it accurately *without* being pushed. Do this in Spanish
+> if it is the rehearsal for the friend, who speaks only Spanish; session 1151's translation was
+> fluent and preserved every table.
+>
+> **2. Have her create a schedule herself.** `schedule_workflow` has **never been called through
+> Novia** — the 2026-08-11 smoke test bypassed her by putting the message on the queue directly.
+> The AWS half is proven (run 771); her half is not.
+>
+> **3. Then the Checkpoint 3 backlog, unchanged and untouched all day.** Test workflow 358 and hand
+> the repairs to Novia in a **new** session, both symptoms in one message: **(a)** `current_date`
+> frozen at `"Monday, August 10, 2026"` in step 3's input; **(b)** item matching calls the LLM with
+> the whole inventory on every receipt, so cost per receipt rises with use where §3b requires it to
+> fall. **State symptoms, never the fix.** (b) is AC4's uncontaminated specimen.
+>
+> **Carry into every scheduled build:** a `human_gate` inside a scheduled workflow wedges at
+> `awaiting_human_gate` with nobody to answer it — demonstrated by accident on `ping_core` (run
+> 771). The tool description warns her; nothing enforces it.
 
 > **This sprint ends in a go/no-go decision.** Its deliverable is not a feature — it is a written
 > recommendation on whether development continues, measured against thresholds committed *in this
