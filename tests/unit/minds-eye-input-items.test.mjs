@@ -134,6 +134,82 @@ describe('toInputItems — the gate, which spans two entries', () => {
   });
 });
 
+describe('toInputItems — a typed follow-up closes the respond call', () => {
+  // A trailing user item forfeits the round's whole prefix credit. The typed reply is the
+  // respond call's output, so a resumed round appends instead of ending on a user turn.
+  const respondE = (seq, message, callId) => ({
+    role:            'assistant',
+    sequence_number: seq,
+    content:         JSON.stringify({
+      action: 'respond', message, reasoning: 'r', advisory: 'a',
+      items: [{ type: 'function_call', call_id: callId, name: 'respond', arguments: JSON.stringify({ message }) }],
+    }),
+  });
+
+  it('delivers the reply as the respond call output, with no trailing user item', () => {
+    const items = toInputItems([
+      respondE(5, 'Here is the plan.', 'toolu_01A'),
+      user(6, 'I approve with the following changes'),
+    ]);
+    assert.deepEqual(items, [
+      { type: 'function_call',        call_id: 'toolu_01A', name: 'respond', arguments: '{"message":"Here is the plan."}' },
+      { type: 'function_call_output', call_id: 'toolu_01A', output: '{"user_reply":"I approve with the following changes"}' },
+    ]);
+    assert.ok(!items.some(i => i.role === 'user'), 'a trailing user item is the whole cost being fixed');
+  });
+
+  it('closes an unanswered respond as delivered rather than leaving the call open', () => {
+    const items = toInputItems([respondE(5, 'Done.', 'toolu_01B')]);
+    assert.equal(items.at(-1).type, 'function_call_output');
+    assert.equal(items.at(-1).output, '{"status":"delivered_to_user"}');
+  });
+
+  it('closes an unanswered respond before a continue-gate resume runs more tools', () => {
+    const items = toInputItems([
+      respondE(5, 'Done.', 'toolu_01C'),
+      tool(6, 'list_tables', {}, { tables: [] }),
+    ]);
+    assert.deepEqual(items.map(i => i.type), [
+      'function_call', 'function_call_output', 'function_call', 'function_call_output',
+    ]);
+    assert.equal(items[1].output, '{"status":"delivered_to_user"}');
+  });
+
+  it('leaves everything before the reply byte-identical — the property the credit rests on', () => {
+    const history = [
+      user(1, 'build me a receipt workflow'),
+      tool(2, 'list_tables', {}, { tables: ['PGD_Inventory'] }),
+      respondE(3, 'Here is the plan.', 'toolu_01D'),
+    ];
+    const beforeReply = toInputItems(history);
+    const afterReply  = toInputItems([...history, user(4, 'approved, but batch the residue')]);
+
+    assert.deepEqual(
+      afterReply.slice(0, -1), beforeReply.slice(0, -1),
+      'the resumed round must be an append — only the respond output differs',
+    );
+    assert.equal(afterReply.at(-1).output, '{"user_reply":"approved, but batch the residue"}');
+  });
+
+  it('still renders a pre-items respond as an assistant message, user turn intact', () => {
+    // Every entry written before `items` existed takes this path.
+    const items = toInputItems([assistant(5, 'Here is the plan.'), user(6, 'go ahead')]);
+    assert.deepEqual(items, [
+      { role: 'assistant', content: 'Here is the plan.' },
+      { role: 'user',      content: 'go ahead' },
+    ]);
+  });
+
+  it('does not treat a user message as an approval when a write gate is open', () => {
+    const items = toInputItems([
+      pendingE(10, 'delete_data', { tableName: 'PGD_Cards' }),
+      user(11, 'actually, look at the recipes instead'),
+    ]);
+    assert.equal(items[1].output, '{"status":"awaiting_approval"}', 'a gate is not a respond');
+    assert.deepEqual(items.at(-1), { role: 'user', content: 'actually, look at the recipes instead' });
+  });
+});
+
 describe('toInputItems — truncation', () => {
   it('caps a large tool result', () => {
     const huge  = 'x'.repeat(40000);
