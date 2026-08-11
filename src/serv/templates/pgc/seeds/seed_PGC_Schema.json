@@ -617,7 +617,7 @@
       {
         "type": "check",
         "name": "chk_triggered_by",
-        "expression": "triggered_by IN ('slack', 'api', 'workflow', 'system', 'minds_eye', 'intent_classify')"
+        "expression": "triggered_by IN ('slack', 'api', 'workflow', 'system', 'minds_eye', 'intent_classify', 'schedule')"
       }
     ],
     "triggers": [
