@@ -436,7 +436,7 @@ them while the tools are stubbed.
 | **AC9** | Per-receipt cost measured on first and third use of the same merchant | 3b | Third < first |
 | **AC10** | ~~AWS fixed cost measured per-service for a full billing month~~ — **settled PASS 2026-08-08 on standing evidence: ~$21/month, stable for months. No measurement task.** | 1 | ≤ $30/month ✅ |
 | **AC11** | **Written go/no-go recommendation** against every threshold above, with each marked PASS / MARGINAL / FAIL | — | Exists, and is unambiguous |
-| **AC12** | Six general capability and scheduling tools declared, stubbed, gated, and incapable of reporting success; `PGC_Capability` extended under config control | 4 | Catalog live, stubs honest — **MET 2026-08-11**, catalog v2 at 29 tools, schema live, Finnhub registered `planned` |
+| **AC12** | Six general capability and scheduling tools declared and gated; the capability writes stubbed and incapable of reporting success; **scheduling built for real on EventBridge Scheduler**; `PGC_Capability` extended under config control | 4 | **MET 2026-08-11** — catalog v3 at 29 tools, schema live, Finnhub registered `planned`, scheduling validated end-to-end (run 771) |
 | **AC13** | Novia proposes a home intelligence system from the general primitives alone, unprompted by home-specific content | 4 | Feasible **and** the friend is convinced — **dry run done (session 1151), not yet shown to the friend** |
 
 ---
@@ -1513,6 +1513,54 @@ thresholds against live data and submitted 24 steps. This was a good *sales* ans
 AC13's "feasible" half is supported; the "convinced" half is untested until the friend sees it, and
 **it should not be shown carrying the scheduling claim** — that is the one statement he could later
 discover was false, which costs more than the gap it conceals.
+
+#### Scheduling built for real — AC12 extended, and the stub retired the same day
+
+Session 1151's defect (she asserted scheduling worked when it did not) had two possible
+answers: make her say it is unbuilt, or build it. The user chose build, on the grounds that the
+friend's use case *is* periodic home checks — a demo whose central mechanism is stubbed is
+materially weaker than one that fires.
+
+**Amazon EventBridge Scheduler, targeting the queue that already exists.** A schedule can only
+deliver a *static* payload, but starting a workflow needs a `PGC_WorkflowRun` row that does not
+exist until it fires — so the schedule sends a `SCHEDULED_RUN` message to `SYSSQSWorkflow` and
+PROC creates the run. That is `architecture.md` §3.2's **Category 1 verbatim** (a
+fire-and-forget entry message carrying no `workflowRunId`), so scheduling adds **no new
+execution path** and the Step Processor cannot distinguish a scheduled run from a Slack one.
+
+| Piece | Note |
+|---|---|
+| `shared/scheduler-client.mjs` | Only `@aws-sdk/client-scheduler` import — PROC is cloud-agnostic by rule, same isolation `sqs-callback.mjs` gives SQS |
+| `proc/scheduled-run.mjs` | `callback: null`, because nobody is waiting. Refuses an orphaned schedule loudly rather than retrying forever |
+| `schedule_workflow` | Refuses a workflow that is not registered; `FlexibleTimeWindow: OFF`; upserts rather than returning a conflict the caller cannot resolve |
+
+**Why it took three deploys, and the finding underneath.** The first two rolled back: the
+deploying identity is `BastionEC2Role`, whose IAM grants had been narrowed after initial
+creation to maintain existing roles but not create new ones — and EventBridge Scheduler requires
+a `RoleArn` on every target, with no roleless option. **The template was never the
+non-portable part**: a fresh install's deployer must already hold `iam:CreateRole`, since the
+stack creates two roles today. So the grant went into `template.yaml` as well, scoped to the
+stack's name prefix, with `DependsOn: BastionRole` so CloudFormation grants before it creates.
+An earlier security objection to this was **withdrawn on evidence** — `iam:AttachRolePolicy`,
+`iam:PutRolePolicy` and `iam:PassRole` are already `Resource: "*"` on that role, so it could
+attach `AdministratorAccess` to any existing role and pass it. `CreateRole` does not raise the
+ceiling.
+
+**The smoke test earned its keep twice.** A `SCHEDULED_RUN` message failed on
+`chk_triggered_by` — `'schedule'` was not an accepted value. Fixing it exposed a **pre-existing
+drift**: the live constraint already carried `'minds_eye'` and `'intent_classify'` while the
+template carried neither, so `run_workflow`'s own `triggered_by` had never been under config
+control. Live constraint and both template artifacts now agree on all seven values. The re-run
+produced run **771** — `triggered_by: 'schedule'`, `callback: null`, steps executed — and then
+stopped at `awaiting_human_gate`, **demonstrating by accident the exact hazard
+`schedule_workflow`'s description warns about**: a scheduled run has nobody to answer a gate.
+Run cancelled. 920 → **937** unit tests.
+
+**Cost:** EventBridge Scheduler is billed per invocation and schedules themselves are free to
+hold, so at household frequencies the scheduler is rounding error. **The cost that matters is
+what the scheduled workflow does** — a workflow making an `llm_call` every 15 minutes is the
+thing that would move Checkpoint 1's ~$21/month, not the trigger. Worth stating in
+`schedule_workflow`'s guidance before anyone schedules an LLM-bearing workflow.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
