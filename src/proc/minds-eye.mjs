@@ -750,7 +750,10 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       const { action, params = {}, reasoning, message, advisory } = decision;
 
       if (action === 'respond') {
-        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory });
+        // `items` carries the gateway's own function_call for this respond, exactly as every
+        // tool entry does. A typed follow-up becomes that call's output on rebuild, so the
+        // resumed round appends rather than ending on a user item — see toInputItems.
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems });
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
@@ -1743,6 +1746,10 @@ const MAX_TOOL_OUTPUT_CHARS = 15000;
 
 const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
 
+// A respond whose round ended without the user typing anything back. The call is real and the
+// gateway rejects a call with no output, so it closes here rather than being left open.
+const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' });
+
 function capOutput(text) {
   return text.length > MAX_TOOL_OUTPUT_CHARS
     ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated]`
@@ -1762,20 +1769,21 @@ function capOutput(text) {
  * params} cannot work: `params` has already had reasoning/message/advisory stripped out of
  * the model's own `arguments` string, so the rebuilt call differs from the one sent.
  *
- * This matters on exactly the two resume paths that do NOT append a user message — the
- * continue gate and an approved action gate. Both re-enter with the transcript ending on a
- * tool result, which is the shape that earns full credit; before this they re-created the
- * whole transcript at 1.25x instead of reading it at 0.1x. The followup path appends a user
- * message and forfeits its first turn either way, which is what the earlier reasoning here
- * generalised from.
+ * This matters on every resume path, because all three now re-enter with the transcript
+ * ending on a tool result — the shape that earns full credit. The continue gate and an
+ * approved action gate always did. The followup path did NOT: it appended the typed reply as
+ * a trailing user item, and one trailing user item forfeits the round's whole prefix credit
+ * (measured twice with everything else held constant — $0.219 on a 56k transcript, growing
+ * linearly). A typed reply is delivered as the respond call's output instead, which is also
+ * what it plainly is.
  *
  * `items` is additive — /explain, chat.mjs and deriveScope go on reading tool/params/result
  * unchanged — and absent on every entry written before it existed, which is why the
  * synthesised form below stays as the fallback rather than being replaced.
  *
  * Entry shapes in, items out:
- *   role 'user'                              -> { role: 'user', content }
- *   role 'assistant' {action:'respond',...}  -> { role: 'assistant', content: message }
+ *   role 'user'                              -> the open respond's output, else { role: 'user' }
+ *   role 'assistant' {action:'respond',...}  -> function_call, output supplied by what follows
  *   role 'tool' {tool, params, result}       -> function_call + function_call_output
  *   role 'tool' {tool:'__pending__', ...}    -> function_call, output supplied by what follows
  *   role 'tool' {tool:'__cancelled__', ...}  -> the pending call's output
@@ -1784,10 +1792,11 @@ function capOutput(text) {
  * resolved it — and must come back as ONE call with one output, or the model sees the same
  * destructive action requested twice.
  *
- * A respond is stored as an assistant entry and comes back as an assistant item, where the
- * gateway saw a function_call. That is the one deliberate divergence: the alternative is a
- * call with no output, which the gateway rejects. It costs only the items after it, since a
- * respond ends its round.
+ * A respond is stored as an assistant entry carrying the gateway's own items, and comes back
+ * as the function_call it was. It closes with the user's typed reply when one follows, and
+ * with RESPONSE_DELIVERED_OUTPUT otherwise — the gateway rejects a call with no output, and
+ * a respond that nobody replied to genuinely has none. Entries predating `items`, and prose
+ * replies that never called respond, keep the older assistant rendering.
  *
  * Synthesised call_ids (the fallback path) only have to be unique and consistent inside this
  * array. They cannot collide with replayed gateway ids, which carry a provider prefix.
@@ -1797,10 +1806,14 @@ function capOutput(text) {
  */
 export function toInputItems(workingHistory = []) {
   const items   = [];
-  let   pending = null;   // { callId, name } — a function_call still waiting for its output
+  let   pending = null;   // { callId, name, kind } — a function_call still waiting for its output
 
+  // With no output supplied, what closes the call depends on what opened it: a gated write is
+  // still awaiting approval, a respond was already delivered to the user.
   const closePending = (output) => {
-    items.push({ type: 'function_call_output', call_id: pending.callId, output });
+    const resolved = output
+      ?? (pending.kind === 'respond' ? RESPONSE_DELIVERED_OUTPUT : AWAITING_APPROVAL_OUTPUT);
+    items.push({ type: 'function_call_output', call_id: pending.callId, output: resolved });
     pending = null;
   };
 
@@ -1819,11 +1832,19 @@ export function toInputItems(workingHistory = []) {
     const callId = `call_${entry?.sequence_number ?? i}`;
 
     if (entry?.role === 'user') {
-      // Reachable: the user ignores a gate and sends a new message instead of answering it.
+      const text = String(entry.content ?? '');
+      // A typed follow-up IS the respond call's output, and delivering it there is what keeps
+      // a resumed round append-only. The alternative — a trailing user item — forfeits the
+      // round's entire prefix credit, measured at $0.219 on a 56k transcript.
+      if (pending?.kind === 'respond') {
+        closePending(capOutput(JSON.stringify({ user_reply: text })));
+        return;
+      }
+      // Otherwise the user ignored a gate and sent a new message instead of answering it.
       // The call still has to be closed — an unpaired call followed by a user turn is not
       // a shape the gateway accepts.
-      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
-      items.push({ role: 'user', content: String(entry.content ?? '') });
+      if (pending) closePending();
+      items.push({ role: 'user', content: text });
       return;
     }
 
@@ -1831,9 +1852,18 @@ export function toInputItems(workingHistory = []) {
     try { parsed = JSON.parse(entry?.content); } catch { /* not a JSON entry */ }
 
     if (entry?.role === 'assistant') {
-      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
-      // reasoning and advisory are deliberately dropped: reasoning is per-turn scratch, and
-      // the advisory was already delivered to the user when the round ended.
+      if (pending) closePending();
+      // A respond persisted with the gateway's own items comes back as the function_call it
+      // actually was, left open for whatever resolves it.
+      const respondId = replayItems(parsed);
+      if (respondId) {
+        pending = { callId: respondId, name: 'respond', kind: 'respond' };
+        return;
+      }
+      // Entries written before `items` existed, and prose replies that never called respond,
+      // keep the assistant rendering. reasoning and advisory are deliberately dropped:
+      // reasoning is per-turn scratch, and the advisory was already delivered to the user
+      // when the round ended.
       items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
       return;
     }
@@ -1841,7 +1871,7 @@ export function toInputItems(workingHistory = []) {
     if (!parsed?.tool) return;   // an unreadable tool entry contributes nothing
 
     if (parsed.tool === '__pending__') {
-      if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+      if (pending) closePending();
       const replayedId = replayItems(parsed);
       if (!replayedId) {
         items.push({
@@ -1851,7 +1881,7 @@ export function toInputItems(workingHistory = []) {
           arguments: JSON.stringify(parsed.params ?? {}),
         });
       }
-      pending = { callId: replayedId ?? callId, name: parsed.action };
+      pending = { callId: replayedId ?? callId, name: parsed.action, kind: 'tool' };
       return;
     }
 
@@ -1867,7 +1897,7 @@ export function toInputItems(workingHistory = []) {
       return;
     }
 
-    if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+    if (pending) closePending();
 
     const replayedId = replayItems(parsed);
     if (!replayedId) {
@@ -1885,7 +1915,7 @@ export function toInputItems(workingHistory = []) {
     });
   });
 
-  if (pending) closePending(AWAITING_APPROVAL_OUTPUT);
+  if (pending) closePending();
 
   return items;
 }
