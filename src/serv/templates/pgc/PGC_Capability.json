@@ -1,7 +1,7 @@
 {
   "table_name": "PGC_Capability",
   "target": "pgc",
-  "description": "Registry of what this system can currently do. Injected into heavy-lift prompts so the LLM proposes only feasible workflows and gives honest answers when asked for something not yet supported.",
+  "description": "Registry of what this system can do, including capabilities reached over the network. Internal categories are injected into heavy-lift prompts so the LLM proposes only feasible workflows. Category 'external' describes a third-party service the system can invoke — one row per operation, so a device or provider offering several operations is several rows. auth_ref holds the SSM parameter NAME carrying the credential, never the credential itself: this table is readable by any tool that can read PGC.",
   "columns": [
     { "name": "id",              "type": "serial",      "primaryKey": true },
     { "name": "capability_key",  "type": "text",        "nullable": false, "unique": true },
@@ -10,13 +10,19 @@
     { "name": "status",          "type": "text",        "nullable": false, "default": "'live'" },
     { "name": "available_in",    "type": "jsonb",       "nullable": true },
     { "name": "notes",           "type": "text",        "nullable": true },
+    { "name": "endpoint",        "type": "text",        "nullable": true },
+    { "name": "method",          "type": "text",        "nullable": true },
+    { "name": "auth_ref",        "type": "text",        "nullable": true },
+    { "name": "input_schema",    "type": "jsonb",       "nullable": true },
+    { "name": "output_schema",   "type": "jsonb",       "nullable": true },
     { "name": "created_at",      "type": "timestamptz", "nullable": false, "default": "now()" },
     { "name": "updated_at",      "type": "timestamptz", "nullable": false, "default": "now()" }
   ],
   "foreign_keys": [],
   "constraints": [
     { "type": "check", "name": "chk_capability_status",   "expression": "status IN ('live', 'planned', 'not_supported')" },
-    { "type": "check", "name": "chk_capability_category", "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution')" }
+    { "type": "check", "name": "chk_capability_category", "expression": "category IN ('serv', 'notify', 'llm', 'ui', 'execution', 'external')" },
+    { "type": "check", "name": "chk_capability_method",   "expression": "method IS NULL OR method IN ('GET', 'POST', 'PUT', 'PATCH', 'DELETE')" }
   ],
   "triggers": [
     { "name": "trg_pgc_capability_updated_at", "timing": "BEFORE UPDATE", "function": "set_updated_at()" }

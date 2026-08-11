@@ -456,21 +456,35 @@ LLM produces valid step definitions.
 | updated_at | timestamptz | |
 
 ##### PGC_Capability
-Registry of what this system can currently do. Injected into heavy-lift prompts so the
-LLM proposes only feasible workflows and gives honest answers when asked for something
-not yet supported.
+Registry of what this system can do, including capabilities reached over the network.
+Internal categories are injected into heavy-lift prompts so the LLM proposes only feasible
+workflows and gives honest answers when asked for something not yet supported. Category
+`external` describes a third-party service the system can invoke — **one row per operation**,
+so a device or provider offering several operations is several rows.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
 | capability_key | text UNIQUE | e.g. `serv_table_insert`, `slack_notify`, `llm_agent_call`, `human_gate`, `js_transform` |
-| category | text | `serv`, `notify`, `llm`, `ui`, `execution` |
+| category | text | `serv`, `notify`, `llm`, `ui`, `execution`, `external` |
 | description | text | What this capability does — LLM readable |
 | status | text | `live`, `planned`, `not_supported` |
 | available_in | jsonb | Which Lambda functions expose this — e.g. `["proc", "serv"]` |
 | notes | text | Constraints, limits, or caveats — e.g. `"js_transform requires security gate approval"` |
+| endpoint | text | `external` only — absolute URL the operation is reached at |
+| method | text | `external` only — `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
+| auth_ref | text | `external` only — **the SSM parameter NAME holding the credential, never the credential.** This table is readable by anything that can read PGC |
+| input_schema | jsonb | `external` only — JSON Schema for the request body |
+| output_schema | jsonb | `external` only — JSON Schema for the response |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+> **The five `external` columns exist in the template and in this registry, not in the running
+> database.** Nothing writes them while `register_capability` and `call_capability` are stubbed.
+> `createTableFromTemplate` uses `CREATE TABLE IF NOT EXISTS` and so cannot add a column to an
+> existing table, while `seedPGCSchema` upserts — so **running bootstrap would make the registry
+> assert columns the database lacks.** Add the columns physically at the same time as unstubbing
+> invocation, and not before.
 
 ---
 

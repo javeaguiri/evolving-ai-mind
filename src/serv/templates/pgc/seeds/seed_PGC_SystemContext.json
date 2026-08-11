@@ -1355,7 +1355,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 1,
+    "version": 2,
     "content": {
       "tools": [
         {
@@ -1919,6 +1919,189 @@
             },
             "required": [
               "content",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_capabilities",
+          "description": "List capabilities this system can use, from the PGC_Capability registry. Category 'external' means a third-party service reached over the network (a smart plug, a thermostat API, a monitoring endpoint), one row per operation. Call this before proposing anything that depends on an outside service, so that a proposal names what exists rather than assuming it.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "description": "Filter: serv, notify, llm, ui, execution, or external."
+              },
+              "status": {
+                "type": "string",
+                "description": "Filter: live, planned, or not_supported."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "register_capability",
+          "description": "Register one external service operation so that workflows can invoke it later. One operation per call: a device or provider offering several operations is several registrations. NOT YET IMPLEMENTED. It returns the row it would write and writes nothing. Use it to show a user concretely what registering their service would involve, and say plainly that it is not built.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "capabilityKey": {
+                "type": "string",
+                "description": "Stable snake_case identifier, for example living_room_light_set."
+              },
+              "category": {
+                "type": "string",
+                "description": "Normally 'external' for a third-party service."
+              },
+              "description": {
+                "type": "string",
+                "description": "What the operation does, in plain language."
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Absolute URL the operation is reached at."
+              },
+              "method": {
+                "type": "string",
+                "description": "GET, POST, PUT, PATCH or DELETE."
+              },
+              "authRef": {
+                "type": "string",
+                "description": "Name of the SSM parameter holding the credential. Never the credential itself."
+              },
+              "inputSchema": {
+                "type": "object",
+                "description": "JSON Schema for the request body."
+              },
+              "outputSchema": {
+                "type": "object",
+                "description": "JSON Schema for the response."
+              },
+              "status": {
+                "type": "string",
+                "description": "live, planned, or not_supported."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "capabilityKey",
+              "description",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "call_capability",
+          "description": "Invoke a registered external capability once, now. NOT YET IMPLEMENTED. It returns the request it would have sent and calls nothing, so never report that the action happened. For anything recurring or conditional, the durable answer is a workflow that calls the capability, not repeated direct calls.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "capabilityKey": {
+                "type": "string",
+                "description": "capability_key of a registered capability."
+              },
+              "input": {
+                "type": "object",
+                "description": "Request body, matching the capability's inputSchema."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "capabilityKey",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_schedules",
+          "description": "List schedules that run registered workflows unattended. NOT YET IMPLEMENTED. An empty result means no scheduling service is deployed, not that the user has no schedules.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string",
+                "description": "Filter to schedules targeting one workflow."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "schedule_workflow",
+          "description": "Run an already-registered workflow on a recurring schedule, with no user present. Use a cron or rate expression. The workflow must exist first: design and register it, then schedule it. NOT YET IMPLEMENTED. It returns the schedule it would create and creates nothing. Note that the workflow itself is fully buildable and runnable on demand today; only the unattended trigger is missing.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "scheduleName": {
+                "type": "string",
+                "description": "Stable snake_case identifier for the schedule."
+              },
+              "workflowName": {
+                "type": "string",
+                "description": "name of a registered PGC_Workflow."
+              },
+              "schedule": {
+                "type": "string",
+                "description": "cron(...) or rate(...) expression, plus timezone where it matters."
+              },
+              "input": {
+                "type": "object",
+                "description": "Input passed to each run."
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether the schedule starts active."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "scheduleName",
+              "workflowName",
+              "schedule",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "cancel_schedule",
+          "description": "Stop and remove a schedule. Does not affect the workflow it targets. NOT YET IMPLEMENTED.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "scheduleName": {
+                "type": "string",
+                "description": "Identifier of the schedule to remove."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "scheduleName",
               "reasoning"
             ]
           }
