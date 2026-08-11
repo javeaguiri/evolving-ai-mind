@@ -116,6 +116,10 @@ Resources:
   # work and nothing else.
   SchedulerInvokeRole:
     Type: AWS::IAM::Role
+    # Same reason as ScheduleGroup below: the deploying identity is the bastion, and its
+    # iam:CreateRole grant is added by the BastionRole update in this same stack. Without the
+    # ordering, CloudFormation attempts both in parallel and this one fails with AccessDenied.
+    DependsOn: BastionRole
     Properties:
       RoleName: !Sub '${AWS::StackName}-SchedulerInvokeRole'
       AssumeRolePolicyDocument:
@@ -165,10 +169,20 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              # EventBridge Scheduler — CloudFormation runs as THIS role when deploying from
-              # the bastion, so the deploying identity needs the permissions for every
-              # resource type the stack creates. Without these, ScheduleGroup creation fails
-              # with AccessDenied on scheduler:GetScheduleGroup and the whole update rolls back.
+              # CloudFormation runs as THIS role when deploying from the bastion, so the
+              # deploying identity needs permission for every resource type the stack creates.
+              # The stack has always created IAM roles — a fresh install's deployer must hold
+              # iam:CreateRole or nothing stands up at all — but this role was narrowed after
+              # initial creation, so it could maintain the existing roles and not mint new
+              # ones. Scoped to the stack's own name prefix: not a real containment boundary
+              # while iam:AttachRolePolicy and iam:PassRole below are Resource "*", but it
+              # keeps the grant legible and costs nothing.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-*'
+              # EventBridge Scheduler — same reason: without these, ScheduleGroup creation
+              # fails with AccessDenied on scheduler:GetScheduleGroup and the update rolls back.
               - Effect: Allow
                 Action:
                   - scheduler:CreateScheduleGroup
