@@ -3898,6 +3898,161 @@ paths:
         '404':
           description: Table not found in PGC_Schema
 
+  /api/v1/serv/schema/addForeignKey:
+    post:
+      summary: Add a FOREIGN KEY to an existing table — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY and records the
+        constraint in PGC_Schema.foreign_keys in the same call. Before this route,
+        createTable was the only place a foreign key could ever be created, so a
+        relationship introduced after a domain was built had no route at all:
+        modifyConstraint emits CHECK and nothing else, and updateTable writes the
+        registry without touching DDL — which would leave PGC_Schema asserting a
+        constraint the database does not enforce. Idempotent (DROP CONSTRAINT IF
+        EXISTS, then ADD), so a re-issued request converges. Both tables must be
+        registered in PGC_Schema and share the same target: PGC and PGD are separate
+        databases, so a cross-target foreign key cannot exist physically. The column
+        must already exist — add it with addColumn first. Which database the table
+        lives in is read from PGC_Schema.target, never supplied by the caller.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, foreignKey]
+              properties:
+                tableName:
+                  type: string
+                  example: PGD_Inventory
+                foreignKey:
+                  type: object
+                  required: [name, column, references]
+                  properties:
+                    name:
+                      type: string
+                      description: Constraint name — lowercase alphanumeric and underscore.
+                      example: fk_inventory_category
+                    column:
+                      type: string
+                      description: The referencing column on tableName. Must already exist.
+                      example: category_id
+                    references:
+                      type: object
+                      required: [table, column]
+                      properties:
+                        table:
+                          type: string
+                          example: PGD_InventoryCategory
+                        column:
+                          type: string
+                          example: id
+                    onDelete:
+                      type: string
+                      enum: [CASCADE, SET NULL, RESTRICT, NO ACTION]
+                      default: NO ACTION
+                      example: SET NULL
+            examples:
+              add_lookup_fk:
+                summary: Point a table at a lookup table introduced after it was built
+                value:
+                  tableName: PGD_Inventory
+                  foreignKey:
+                    name: fk_inventory_category
+                    column: category_id
+                    references:
+                      table: PGD_InventoryCategory
+                      column: id
+                    onDelete: SET NULL
+      responses:
+        '200':
+          description: Foreign key applied and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Foreign key was new — appended to the registry
+                  value:
+                    success: true
+                    tableName: PGD_Inventory
+                    foreignKey:
+                      name: fk_inventory_category
+                      column: category_id
+                      references:
+                        table: PGD_InventoryCategory
+                        column: id
+                      onDelete: SET NULL
+                    action: added
+        '400':
+          description: >
+            Invalid identifier, unsupported onDelete action, referencing column does
+            not exist, or the two tables live on different databases
+        '404':
+          description: Table or referenced table not found in PGC_Schema
+
+  /api/v1/serv/schema/addUniqueConstraint:
+    post:
+      summary: Add a UNIQUE constraint to an existing table — DDL + PGC_Schema sync
+      description: >
+        Executes ALTER TABLE ... ADD CONSTRAINT ... UNIQUE over one or more columns
+        and records it in PGC_Schema.constraints with type "unique". modifyConstraint
+        covers CHECK only, so a uniqueness rule discovered after a table was built —
+        a lookup table that must not accumulate duplicate names, for instance — had
+        no route. Idempotent (DROP CONSTRAINT IF EXISTS, then ADD). Every column must
+        already be registered in PGC_Schema. Which database the table lives in is read
+        from PGC_Schema.target, never supplied by the caller.
+      tags: [SERV-Schema]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableName, constraintName, columns]
+              properties:
+                tableName:
+                  type: string
+                  example: PGD_InventoryCategory
+                constraintName:
+                  type: string
+                  example: uq_inventorycategory_name
+                columns:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                  example: [name]
+            examples:
+              enforce_lookup_uniqueness:
+                summary: Stop a lookup table accumulating duplicate entries
+                value:
+                  tableName: PGD_InventoryCategory
+                  constraintName: uq_inventorycategory_name
+                  columns: [name]
+      responses:
+        '200':
+          description: Constraint applied and PGC_Schema updated
+          content:
+            application/json:
+              examples:
+                added:
+                  summary: Constraint was new — appended to the registry
+                  value:
+                    success: true
+                    tableName: PGD_InventoryCategory
+                    constraintName: uq_inventorycategory_name
+                    columns: [name]
+                    action: added
+        '400':
+          description: Invalid identifier, empty columns array, or a column not registered
+        '404':
+          description: Table not found in PGC_Schema
+
   /api/v1/serv/schema/dropConstraint:
     post:
       summary: Drop a named constraint — DDL + PGC_Schema sync
