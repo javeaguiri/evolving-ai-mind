@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions, resolveOptionSource, resolveRevealLabel } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions, resolveOptionSource, resolveDisplayText } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
@@ -1899,7 +1899,7 @@ describe('resolveGateOptions', () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveRevealLabel — the one string in the gate payload nobody resolved
+// resolveDisplayText — the one string in the gate payload nobody resolved
 //
 // Run 776, workflow 358 step 4: button_label "View items ({{parsed_receipt.items.length}})"
 // reached Slack verbatim. `content` was resolved on the same object, and a gate option's
@@ -1908,30 +1908,30 @@ describe('resolveGateOptions', () => {
 // handed it the string.
 // ---------------------------------------------------------------------------
 
-describe('resolveRevealLabel', () => {
+describe('resolveDisplayText', () => {
   const localState = { parsed_receipt: { items: [{ n: 1 }, { n: 2 }, { n: 3 }], store_name: 'ALDI' } };
 
   it('resolves a .length token — the run 776 case', () => {
     assert.equal(
-      resolveRevealLabel('View items ({{parsed_receipt.items.length}})', localState),
+      resolveDisplayText('View items ({{parsed_receipt.items.length}})', localState),
       'View items (3)'
     );
   });
 
   it('resolves a plain value token', () => {
-    assert.equal(resolveRevealLabel('Receipt from {{parsed_receipt.store_name}}', localState), 'Receipt from ALDI');
+    assert.equal(resolveDisplayText('Receipt from {{parsed_receipt.store_name}}', localState), 'Receipt from ALDI');
   });
 
   it('leaves a label with no tokens exactly as written', () => {
-    assert.equal(resolveRevealLabel('🆕 New items', localState), '🆕 New items');
+    assert.equal(resolveDisplayText('🆕 New items', localState), '🆕 New items');
   });
 
   it('passes an absent label through untouched, so the renderer default still applies', () => {
     // Defaulting to '' here would send Slack an empty plain_text, which it rejects
     // outright — the same failure class as the empty container in run 774.
-    assert.equal(resolveRevealLabel(undefined, localState), undefined);
-    assert.equal(resolveRevealLabel(null, localState), null);
-    assert.equal(resolveRevealLabel('', localState), '');
+    assert.equal(resolveDisplayText(undefined, localState), undefined);
+    assert.equal(resolveDisplayText(null, localState), null);
+    assert.equal(resolveDisplayText('', localState), '');
   });
 });
 
@@ -1948,6 +1948,64 @@ describe('buildDialog — reveal labels resolve on the real gate path', () => {
     const reveal = buildDialog(step, localState).fields.find(f => f.type === 'reveal');
     assert.equal(reveal.button_label, 'View items (2)');
     assert.equal(reveal.content.length, 2, 'content still resolves to the array itself');
+  });
+
+  it('resolves a list row\'s item_action label against that row', () => {
+    // Per-item context, like confirm_template beside it — the label is what makes a row's
+    // button say what it acts on, so a shared localState-only resolve would be wrong.
+    const step = {
+      step: '2', type: 'human_gate', gate_type: 'list_selection',
+      message_template: 'Pick one',
+      context_key: 'rows',
+      item_action: { action: 'select', label: 'Open {{item.name}}', on_select: 'next' },
+      options: [{ label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+    };
+    const state = { rows: [{ id: 1, name: 'Aisle A' }, { id: 2, name: 'Aisle B' }] };
+    const list  = buildDialog(step, state).fields.find(f => f.type === 'list');
+    assert.deepEqual(list.items.map(i => i.secondaryAction.label), ['Open Aisle A', 'Open Aisle B']);
+  });
+
+  it('resolves a text_input label and placeholder', () => {
+    const step = {
+      step: '3', type: 'human_gate', gate_type: 'text_input',
+      message_template: 'Notes',
+      input_label:  'Notes for {{store}}',
+      placeholder:  'e.g. {{example}}',
+      options: [{ label: 'Submit', action: 'confirm', on_select: 'next' }],
+    };
+    const box = buildDialog(step, { store: 'ALDI', example: 'damaged tin' })
+      .fields.find(f => f.type === 'textbox');
+    assert.equal(box.label, 'Notes for ALDI');
+    assert.equal(box.placeholder, 'e.g. damaged tin');
+  });
+
+  it('resolves special_buttons labels without re-resolving already-resolved options', () => {
+    // expandedOptions come back from resolveGateOptions already resolved. Running the
+    // combined list through a second pass would re-resolve user data containing braces.
+    const step = {
+      step: '4', type: 'human_gate', gate_type: 'confirm',
+      message_template: 'Go?',
+      options: [{ label: '{{verb}} it', action: 'confirm', on_select: 'next' }],
+      special_buttons: [{ label: 'Skip {{count}} items', action: 'skip', description: '{{count}} left' }],
+    };
+    const buttons = buildDialog(step, { verb: 'Apply', count: 3 })
+      .fields.find(f => f.type === 'actions').buttons;
+    assert.deepEqual(buttons.map(b => b.label), ['Apply it', 'Skip 3 items']);
+    assert.equal(buttons[1].description, '3 left');
+  });
+
+  it('leaves a literal {{ in resolved user data alone — no second pass', () => {
+    // A product genuinely named with braces must survive. It reaches the payload through
+    // an already-resolved option, so nothing may look at it again.
+    const step = {
+      step: '5', type: 'human_gate', gate_type: 'confirm',
+      message_template: 'Go?',
+      options: [{ label: '{{odd_name}}', action: 'confirm', on_select: 'next' }],
+      special_buttons: [{ label: 'Cancel', action: 'cancel' }],
+    };
+    const buttons = buildDialog(step, { odd_name: 'Sauce {{spicy}}' })
+      .fields.find(f => f.type === 'actions').buttons;
+    assert.equal(buttons[0].label, 'Sauce {{spicy}}');
   });
 
   it('resolves button_label on the singular reveal too', () => {
