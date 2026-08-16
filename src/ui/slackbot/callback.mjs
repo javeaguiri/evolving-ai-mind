@@ -1005,6 +1005,16 @@ function buildRevealBlock(field) {
     }
   }
 
+  // A reveal whose collection turned out empty is a legitimate data state, not an
+  // error — the workflow declared a panel over a tier that this run happened not to
+  // fill. Slack rejects a container carrying zero child blocks ("must provide at
+  // least 1 items"), and that rejection fails the entire gate message, leaving the
+  // run suspended at a gate the user never saw (run 774: two of three match tiers
+  // were empty). Say the panel is empty rather than emit an invalid block.
+  if (childBlocks.length === 0) {
+    childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_(none)_' } });
+  }
+
   return {
     type:               'container',
     block_id:           `reveal_${randomUUID()}`,
