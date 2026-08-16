@@ -15,7 +15,7 @@
 import { describe, it }        from 'node:test';
 import assert                  from 'node:assert/strict';
 import { readFileSync }        from 'node:fs';
-import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions, resolveOptionSource } from '../../src/proc/step-executor.mjs';
+import { buildDialog, runSandboxedExpression, buildMemoryRow, resolveGateOptions, resolveOptionSource, resolveRevealLabel } from '../../src/proc/step-executor.mjs';
 import { runSimulation }                      from '../../src/proc/simulation-engine.mjs';
 import { resolvePath, resolveInput, resolveTemplate } from '../../src/proc/template-resolver.mjs';
 
@@ -1895,6 +1895,70 @@ describe('resolveGateOptions', () => {
 
   it('an iterator naming a missing array contributes nothing', () => {
     assert.deepEqual(resolveGateOptions(step, {}).map(o => o.value), ['cancel']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveRevealLabel — the one string in the gate payload nobody resolved
+//
+// Run 776, workflow 358 step 4: button_label "View items ({{parsed_receipt.items.length}})"
+// reached Slack verbatim. `content` was resolved on the same object, and a gate option's
+// label/value/description are resolved immediately above — so this was an omission, not a
+// decision. `.length` on an array has always been supported by the resolver; nothing ever
+// handed it the string.
+// ---------------------------------------------------------------------------
+
+describe('resolveRevealLabel', () => {
+  const localState = { parsed_receipt: { items: [{ n: 1 }, { n: 2 }, { n: 3 }], store_name: 'ALDI' } };
+
+  it('resolves a .length token — the run 776 case', () => {
+    assert.equal(
+      resolveRevealLabel('View items ({{parsed_receipt.items.length}})', localState),
+      'View items (3)'
+    );
+  });
+
+  it('resolves a plain value token', () => {
+    assert.equal(resolveRevealLabel('Receipt from {{parsed_receipt.store_name}}', localState), 'Receipt from ALDI');
+  });
+
+  it('leaves a label with no tokens exactly as written', () => {
+    assert.equal(resolveRevealLabel('🆕 New items', localState), '🆕 New items');
+  });
+
+  it('passes an absent label through untouched, so the renderer default still applies', () => {
+    // Defaulting to '' here would send Slack an empty plain_text, which it rejects
+    // outright — the same failure class as the empty container in run 774.
+    assert.equal(resolveRevealLabel(undefined, localState), undefined);
+    assert.equal(resolveRevealLabel(null, localState), null);
+    assert.equal(resolveRevealLabel('', localState), '');
+  });
+});
+
+describe('buildDialog — reveal labels resolve on the real gate path', () => {
+  const localState = { parsed_receipt: { items: [{ n: 1 }, { n: 2 }] } };
+
+  it('resolves button_label on a reveals[] entry alongside its content', () => {
+    const step = {
+      step: '4', type: 'human_gate', gate_type: 'confirm',
+      message_template: 'Review',
+      reveals: [{ content: '{{parsed_receipt.items}}', button_label: 'View items ({{parsed_receipt.items.length}})' }],
+      options: [{ label: 'Approve', action: 'confirm', on_select: 'next' }],
+    };
+    const reveal = buildDialog(step, localState).fields.find(f => f.type === 'reveal');
+    assert.equal(reveal.button_label, 'View items (2)');
+    assert.equal(reveal.content.length, 2, 'content still resolves to the array itself');
+  });
+
+  it('resolves button_label on the singular reveal too', () => {
+    const step = {
+      step: '4', type: 'human_gate', gate_type: 'confirm',
+      message_template: 'Review',
+      reveal: { content: '{{parsed_receipt.items}}', button_label: '{{parsed_receipt.items.length}} items' },
+      options: [{ label: 'Approve', action: 'confirm', on_select: 'next' }],
+    };
+    const reveal = buildDialog(step, localState).fields.find(f => f.type === 'reveal');
+    assert.equal(reveal.button_label, '2 items');
   });
 });
 
