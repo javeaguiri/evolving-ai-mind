@@ -812,6 +812,11 @@ Use instead of `serv_query` for domains with child tables or when full entity di
 }
 ```
 
+**Message text — `message_template`, or `message`.** `executeNotify` reads
+`step.message_template ?? step.message`, so either name works and the contract records both
+via `one_of`. **Write `message_template`** — it is what every other notify step uses; the
+alias is documented because the engine honours it, not as a form to reach for.
+
 **`reveal` / `reveals` (optional, Sprint 7 Track D2)** — same shape and resolution as `human_gate`'s (see §"`reveal` / `reveals`" below): `reveal` is a single `{ button_label, content }` object; `reveals` is an inline array or a `{{template}}` reference to a `local_state` array of the same shape. Rendered by `postHumanNotification` via the shared `buildRevealBlock()` helper, appended after the message content.
 
 ```json

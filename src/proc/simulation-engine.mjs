@@ -161,13 +161,28 @@ export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
       // not a per-type exception list.
       if (nested && field.field === 'output_key') continue;
 
-      const val = resolvePath(step, field.field);
-      if (val === undefined || val === null || val === '') {
+      // `one_of` — the engine accepts several names for one thing, so requiring a single
+      // name would reject a step the engine runs perfectly. executeNotify reads
+      // `message_template ?? message`, and L0 rejecting the second form meant a live,
+      // working workflow could not be re-registered (flashcard_quiz_session step 20).
+      // The requirement is that the group is satisfied, not that a particular name is used.
+      const names   = Array.isArray(field.one_of) && field.one_of.length > 0
+        ? field.one_of
+        : [field.field];
+      const present = names.some(name => {
+        const v = resolvePath(step, name);
+        return v !== undefined && v !== null && v !== '';
+      });
+
+      if (!present) {
+        const label = names.length > 1
+          ? `one of ${names.map(n => `"${n}"`).join(' or ')}`
+          : `required field "${field.field}"`;
         issues.push({
           check:         'missing_required_field',
           step:          stepKey,
           failure_class: 'missing_required_field',
-          detail:        `${step.type} step "${stepKey}" is missing required field "${field.field}". ${field.description ?? ''}`.trim(),
+          detail:        `${step.type} step "${stepKey}" is missing ${label}. ${field.description ?? ''}`.trim(),
         });
       }
     }

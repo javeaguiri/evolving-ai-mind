@@ -131,8 +131,15 @@ so a required field is a dot path resolved against the step. Adding a step type,
 making one of its fields required, changes what Level 0 enforces with no code change.
 It replaced a hand-written map covering five of the nineteen step types.
 
-Two structural rules qualify it, both stated once rather than as per-type exceptions:
+Three rules qualify it, all stated once rather than as per-type exceptions:
 
+- A required field may carry **`one_of`** — a list of names the engine treats as the same
+  thing — and is satisfied when any one of them is present. `executeNotify` reads
+  `message_template ?? message`, so requiring a single name reported a missing field on a
+  live, working notify (`flashcard_quiz_session` step 20) and, because `register_workflow`
+  refuses anything failing Level 0, made that workflow unregisterable as written. The
+  requirement is that the group is satisfied, not that a particular name is used; the
+  failure detail names every alternative.
 - An iterator's `item_step` is held to the same contract, reported against its
   parent's key (`"6.item_step"`).
 - `output_key` is not required *in* an `item_step`: the iterator collects each item's
