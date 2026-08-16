@@ -11,31 +11,47 @@ remains unexercised** — no `run_sql` call has been made in a validating round.
 **Checkpoint 2 ANSWERED 2026-08-10 — the user's verdict: cost and stability objectives met, Novia
 is the direction** (Session 11). **AC11 GO recommendation drafted**, provisional pending
 Checkpoint 3.
-**Checkpoint 3 open** — inventory domain live and **AC6 MET** (run 766); `process_receipt`
-(workflow 358) registered with both prompts, **never run**. AC7 fails as built (UC-P4, no
-`vectorSearch`); AC8 and AC9 unmeasured.
+**Checkpoint 3 — `process_receipt` RUNS END TO END as of 2026-08-16. AC8 MET** (runs 775/776
+grocery, 778 restaurant → correct expense category, inventory untouched). Alias matching
+proven live (776: 3 auto + 2 LLM-resolved). **AC7 still fails as specified** — aliases persist
+but there is zero `vectorSearch`, so the whole inventory still goes to the LLM and cost per
+receipt *rises* with pantry size (2,708 → 6,050 tokens across 775/776). **AC9 cannot pass on
+that design.** The inventory domain was remodelled the same day (category as a shared lookup,
+not a per-item child) — cause was a user instruction to run 768, **not** a `create_domain`
+defect.
 
 **Checkpoint 4 added mid-sprint 2026-08-11** (risk accepted by the user) — capability and
 scheduling tools live, **AC12 MET**, **AC13 dry-run only**. Scheduling is **built for real** on
 EventBridge Scheduler, not stubbed.
 
-> **Next session — the pickup, in priority order.**
+> **Next session — the pickup, in priority order. Updated 2026-08-16.**
 >
-> **1. Re-run the home intelligence conversation (AC13).** Scheduling is now real, so session
-> 1151's contradiction — she asserted unattended runs worked when nothing could fire — is gone at
-> the source. Watch whether she describes it accurately *without* being pushed. Do this in Spanish
-> if it is the rehearsal for the friend, who speaks only Spanish; session 1151's translation was
-> fluent and preserved every table.
+> **1. AC4 — hand Novia the cost-scaling defect, in a NEW session, symptom only.** This is the
+> uncontaminated specimen and it is now *measured*, not merely suspected: step 10's input went
+> 2,708 → 6,050 tokens between runs 775 and 776 as the pantry filled. State it as
+> *"processing a receipt costs more each time, and it gets worse as the pantry fills up"* —
+> **never the diagnosis**. Reaching it means reaching `vectorSearch`, so this closes AC7 as
+> well. **Do not hand her `current_date`**: it is a fallback that only fires on a receipt with
+> no readable date, so on every run so far it is latent — "the date is frozen" would be handing
+> her the answer.
 >
-> **2. Have her create a schedule herself.** `schedule_workflow` has **never been called through
+> **2. AC9 follows from 1, and only from 1.** A third same-merchant receipt on today's design
+> measures a *bigger* number. The threshold is "third < first"; it cannot pass until the
+> full-inventory send is gone.
+>
+> **3. Re-run the home intelligence conversation (AC13).** Scheduling is real, so session 1151's
+> contradiction is gone at the source. Watch whether she describes it accurately *without* being
+> pushed. Spanish if it is the rehearsal for the friend. **New caveat found 2026-08-16:** no step
+> type reaches a `PGC_Capability` endpoint, so a scheduled workflow still cannot call anything
+> external. If she proposes a workflow that polls a device, that is a second false claim of the
+> same kind — read the proposal knowing half of it is unbuildable, or land `capability_call` first.
+>
+> **4. Have her create a schedule herself.** `schedule_workflow` has **never been called through
 > Novia** — the 2026-08-11 smoke test bypassed her by putting the message on the queue directly.
 > The AWS half is proven (run 771); her half is not.
 >
-> **3. Then the Checkpoint 3 backlog, unchanged and untouched all day.** Test workflow 358 and hand
-> the repairs to Novia in a **new** session, both symptoms in one message: **(a)** `current_date`
-> frozen at `"Monday, August 10, 2026"` in step 3's input; **(b)** item matching calls the LLM with
-> the whole inventory on every receipt, so cost per receipt rises with use where §3b requires it to
-> fall. **State symptoms, never the fix.** (b) is AC4's uncontaminated specimen.
+> **Carry:** a validation finding against a workflow known to run is evidence about the validator
+> first. Twice on 2026-08-16 a "broken workflow" was a broken check.
 >
 > **Carry into every scheduled build:** a `human_gate` inside a scheduled workflow wedges at
 > `awaiting_human_gate` with nobody to answer it — demonstrated by accident on `ping_core` (run
@@ -450,7 +466,7 @@ them while the tools are stubbed.
 | **AC5** | `serv_query` exposes `vectorSearch`; contract and `PGC_StepType` row updated; L0/L1 unaffected on all seed workflows | 3b | Regression-free |
 | **AC6** | Inventory domain created via `create_domain`, with the derived-column question settled rather than inherited | 3a | Domain live, no unmaintained denormalized columns |
 | **AC7** | Lazy matching resolves a real receipt's items against inventory, threshold calibrated, confirmations persisted as aliases | 3b | Named in 3b |
-| **AC8** | One routing workflow, built by Novia, handles both receipt kinds end-to-end from Slack | 3c | Binary — both kinds |
+| **AC8** | One routing workflow, built by Novia, handles both receipt kinds end-to-end from Slack | 3c | Binary — both kinds — **MET 2026-08-16** (runs 775/776 grocery, 778 restaurant) |
 | **AC9** | Per-receipt cost measured on first and third use of the same merchant | 3b | Third < first |
 | **AC10** | ~~AWS fixed cost measured per-service for a full billing month~~ — **settled PASS 2026-08-08 on standing evidence: ~$21/month, stable for months. No measurement task.** | 1 | ≤ $30/month ✅ |
 | **AC11** | **Written go/no-go recommendation** against every threshold above, with each marked PASS / MARGINAL / FAIL | — | Exists, and is unambiguous |
@@ -1579,6 +1595,74 @@ hold, so at household frequencies the scheduler is rounding error. **The cost th
 what the scheduled workflow does** — a workflow making an `llm_call` every 15 minutes is the
 thing that would move Checkpoint 1's ~$21/month, not the trigger. Worth stating in
 `schedule_workflow`'s guidance before anyone schedules an LLM-bearing workflow.
+
+### Session 14 — 2026-08-16 — Checkpoint 3 runs end to end. AC8 met; seven engine defects on the way
+
+**`process_receipt` works, both kinds, from Slack, with no hand-repair between build and
+run — AC8 MET.** Three live runs did it:
+
+| Run | Receipt | Outcome |
+|---|---|---|
+| 775 | ALDI, €35.95 | 14 items, 14 aliases, expense 197 |
+| 776 | ALDI JAVEA II, €56.23 | **3 auto-matched + 2 LLM-resolved**, 7 new, expense 198 |
+| 778 | EL BANCALET, €7.50 | `is_grocery: false` → step 6 routed 6→13, inventory untouched, expense 199 to *Dining Out* |
+
+Run 776 is the first time alias matching has demonstrably matched anything — 775's inventory
+was empty, so its `auto_matched: 0` proved nothing.
+
+**AC7 is closer but still fails as specified.** Aliases persist and match, but there is still
+**zero `vectorSearch`**: steps 7/8 read the whole inventory and step 10 sends all of it to the
+LLM. Step 10's input went 2,708 → 6,050 tokens between runs 775 and 776 — **cost per receipt
+rises with pantry size**, the inverse of §3b. **AC9 therefore cannot pass on the current design**
+and a third receipt would measure a bigger number, not a smaller one. This is the
+uncontaminated AC4 specimen: a real design defect in Novia's own build, statable as a symptom
+("processing a receipt costs more each time") without the diagnosis.
+
+**The inventory domain was remodelled — and the attribution was corrected on the record.**
+`PGD_InventoryCategory` held 14 rows for 6 distinct names because it was modelled as a *child*
+of an item (`inventory_id` FK, unique on `(inventory_id, name)`), so every item minted its own
+private category. Run 766's `create_domain` output did **not** produce that: it designed one
+table with `category` and `location` as separate text columns. The live tables came from **run
+768**, whose input was *"inventory with a 1:m relationship to a category table…"* — the user's
+own instruction. **No generator defect, so no creation-time prompt root to trace**, which is
+why the artifacts were fixed directly rather than through `create_domain`.
+
+Category is now a shared lookup (`uq_inventorycategory_name`, `fk_inventory_category` ON DELETE
+SET NULL, `name_embedding` populated), items carry `category_id`, and the axis conflation is
+closed: the prompt now states that a category is *what the item is, never where it is kept*.
+`pantry` was retired and its three items remapped to `bakery`/`spreads`/`sauces`. Verified by
+run 776 writing **0 new category rows** for 7 new items, where the old design would have written 7.
+
+**Seven engine defects found and fixed, six of them Execution.** Every one was found by running
+the thing, not by reading it:
+
+| Fix | Found by |
+|---|---|
+| A reveal over an empty collection emitted a container with zero `child_blocks` — Slack rejects it, failing the whole gate message and wedging the run at `awaiting_human_gate` | Run 774 |
+| `serv_query` never forwarded a `columns` projection, so vector columns rode into prompts | Reading step 8 before run 776 — 28 × 2560 floats would have shipped |
+| `{{tokens}}` in a reveal's `button_label` reached Slack verbatim | User's run 776 report |
+| Same omission in `item_action.label`, `input_label`, `placeholder`, `special_buttons` | Audit after the above |
+| `item_label_template` used a private regex accepting only single-word keys | Writing its contract entry |
+| **L2 returned a 500 on any gate whose `options` is a `{{template}}` reference** — `.find` on a string throws. `register_workflow` gates on L0+L1+L2, so **no workflow with a runtime-built option set could be registered at all** | Verifying the contract change |
+| L0 rejected `notify` steps using `message` — the engine reads `message_template ?? message` | **User pushback on a false positive I reported** |
+
+Also added: `addForeignKey` and `addUniqueConstraint` (`createTable` was the only place either
+could ever be created, and `updateTable` would have made the registry assert what the database
+does not); L0 `one_of`; the `human_gate` contract gained six fields it never declared.
+
+**Two reporting failures of mine, both corrected by the user.** I reported
+`flashcard_quiz_session` as failing L0 when it works — the contract was wrong, not the workflow.
+And a sweep script read a 500 as a validation failure. Both times "the tool says it is broken"
+was the tool. Worth carrying: **a validation finding against a workflow known to run is evidence
+about the validator first.**
+
+**937 → 981 unit tests.** All 16 live workflows now sweep clean at L0+L1 — zero issues, zero
+500s, which was not true at the start of the day.
+
+**Filed, not fixed:** no step type reaches a `PGC_Capability` endpoint (so a scheduled workflow
+cannot call anything external — `call_capability` is Novia's agent tool, a different execution
+path); and `/help` never shows a domain's workflows or how to start one, though `PGC_IntentMap`
+already holds the phrases.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
