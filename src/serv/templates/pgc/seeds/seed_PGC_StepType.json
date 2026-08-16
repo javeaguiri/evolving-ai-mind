@@ -931,7 +931,14 @@
         "type": "string",
         "field": "message_template",
         "required": true,
-        "description": "Message text \u2014 supports {{template}} substitution from local_state"
+        "one_of": ["message_template", "message"],
+        "description": "Message text \u2014 supports {{template}} substitution from local_state. The engine reads message_template first and falls back to `message`, so either name satisfies this requirement; prefer message_template, which is what every other notify step uses."
+      },
+      {
+        "type": "string",
+        "field": "message",
+        "required": false,
+        "description": "Accepted alias for message_template, read only when message_template is absent. Documented because the engine honours it, not because it is the form to reach for \u2014 write message_template in new steps."
       },
       {
         "type": "string",

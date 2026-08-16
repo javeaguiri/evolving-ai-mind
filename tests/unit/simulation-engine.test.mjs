@@ -1077,3 +1077,53 @@ describe('runSimulation — a gate whose options are built at runtime', () => {
     assert.match(r.path_results[0].failure_reason, /explicit gate decision/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// L0 one_of — the engine accepts several names for one thing
+//
+// executeNotify reads `message_template ?? message`. The contract declared only the
+// first, required, so L0 reported a missing required field on flashcard_quiz_session
+// step 20 — a live, working notify. Because register_workflow refuses anything failing
+// L0, that workflow could not be re-registered as written. The requirement is that the
+// group is satisfied, not that a particular name is used.
+// ---------------------------------------------------------------------------
+
+describe('runLevel0ShapeCheck — one_of satisfies a requirement by group', () => {
+  const contracts = [{
+    step_type: 'notify',
+    input_contract: [
+      { field: 'message_template', required: true, one_of: ['message_template', 'message'],
+        description: 'Message text' },
+      { field: 'message', required: false, description: 'Accepted alias' },
+    ],
+  }];
+  const run = step => runLevel0ShapeCheck([step], { stepTypeContracts: contracts });
+
+  it('accepts the canonical name', () => {
+    const r = run({ step: '1', type: 'notify', message_template: 'Done' });
+    assert.equal(r.issues.length, 0);
+  });
+
+  it('accepts the alias — the flashcard_quiz_session step 20 case', () => {
+    const r = run({ step: '20', type: 'notify', message: 'Quiz complete! {{all_cards.length}} cards.' });
+    assert.equal(r.issues.length, 0, 'a step the engine runs must not fail shape validation');
+  });
+
+  it('still fails when neither is present, and names both', () => {
+    const r = run({ step: '1', type: 'notify' });
+    assert.equal(r.issues.length, 1);
+    assert.equal(r.issues[0].failure_class, 'missing_required_field');
+    assert.match(r.issues[0].detail, /one of "message_template" or "message"/);
+  });
+
+  it('an empty string does not satisfy the group', () => {
+    const r = run({ step: '1', type: 'notify', message_template: '', message: '' });
+    assert.equal(r.issues.length, 1);
+  });
+
+  it('a required field without one_of is unchanged — single-name message preserved', () => {
+    const single = [{ step_type: 'end', input_contract: [{ field: 'output_key', required: true, description: 'Key' }] }];
+    const r = runLevel0ShapeCheck([{ step: '1', type: 'end' }], { stepTypeContracts: single });
+    assert.match(r.issues[0].detail, /missing required field "output_key"/);
+  });
+});
