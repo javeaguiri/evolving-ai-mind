@@ -286,27 +286,28 @@ async function executeHumanGate({ step, localState, run, traceId }) {
  * @returns {Array}            Fully resolved options, iterator entries expanded
  */
 /**
- * resolveRevealLabel — a reveal's button_label is author-written display text and may
- * carry {{tokens}} exactly as its sibling `content` does, and exactly as a gate option's
- * label does just below. It was the one string in the gate payload nobody resolved, so
- * `View items ({{parsed_receipt.items.length}})` reached Slack verbatim (run 776).
+ * resolveDisplayText — every author-written string that ends up in front of the user may
+ * carry {{tokens}}. Gate option labels and message_template always resolved; five other
+ * display strings never did, so `View items ({{parsed_receipt.items.length}})` reached
+ * Slack verbatim (run 776). Applied to all of them: reveal button labels, a list row's
+ * item_action label, the text_input label and placeholder, and special_buttons.
  *
  * Resolution belongs here and not in the renderer: the experience layer never sees
- * local_state, and giving it the ability to would put procedure-tier state behind a
- * rendering decision.
+ * local_state, and giving it access would put procedure-tier state behind a rendering
+ * decision.
  *
- * An absent label is passed through untouched rather than defaulted to '': the renderer
- * supplies its own default, and an empty plain_text is rejected outright by Slack — the
- * same class of failure as an empty container (run 774).
+ * An absent value is passed through untouched rather than defaulted to '': callers supply
+ * their own defaults, and an empty plain_text is rejected outright by Slack — the same
+ * class of failure as an empty container (run 774).
  *
- * @param {string|undefined} label
+ * @param {string|undefined} text
  * @param {object} localState
  * @returns {string|undefined}
  */
-export function resolveRevealLabel(label, localState) {
-  return (typeof label === 'string' && label !== '')
-    ? resolveTemplate(label, localState)
-    : label;
+export function resolveDisplayText(text, localState) {
+  return (typeof text === 'string' && text !== '')
+    ? resolveTemplate(text, localState)
+    : text;
 }
 
 export function resolveGateOptions(step, localState) {
@@ -434,7 +435,9 @@ export function buildDialog(step, localState) {
           if (show) {
             secondaryAction = {
               action: step.item_action.action,
-              label:  step.item_action.label ?? 'Select',
+              // Resolved against the per-item state, like confirm_template below — the
+              // label is what makes a row's button say what it acts on.
+              label:  resolveDisplayText(step.item_action.label, { ...localState, item }) ?? 'Select',
               style:  step.item_action.style,
               ...(step.item_action.confirm_template ? {
                 confirm: resolveTemplate(step.item_action.confirm_template, { ...localState, item }),
@@ -525,9 +528,9 @@ export function buildDialog(step, localState) {
       fields.push({
         type:      'textbox',
         name:      'user_input',
-        label:       step.input_label   ?? 'Your input',
+        label:       resolveDisplayText(step.input_label, localState) ?? 'Your input',
         multiline:   step.multiline     ?? false,
-        ...(step.placeholder ? { placeholder: step.placeholder } : {}),
+        ...(step.placeholder ? { placeholder: resolveDisplayText(step.placeholder, localState) } : {}),
       });
       break;
     }
@@ -659,7 +662,7 @@ export function buildDialog(step, localState) {
   if (step.reveal) {
     fields.push({
       type:         'reveal',
-      button_label: resolveRevealLabel(step.reveal.button_label, localState),
+      button_label: resolveDisplayText(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -676,7 +679,7 @@ export function buildDialog(step, localState) {
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     fields.push({
       type:         'reveal',
-      button_label: resolveRevealLabel(r.button_label, localState),
+      button_label: resolveDisplayText(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }
@@ -684,7 +687,14 @@ export function buildDialog(step, localState) {
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
   const isChoice = step.gate_type === 'choice';
-  const resolvedSpecialButtons = step.special_buttons ?? [];
+  // Resolved here rather than in the map below, which also carries expandedOptions —
+  // those came back from resolveGateOptions already resolved, and running them through
+  // a second pass would re-resolve user data that legitimately contains braces.
+  const resolvedSpecialButtons = (step.special_buttons ?? []).map(b => ({
+    ...b,
+    ...(b.label       !== undefined ? { label:       resolveDisplayText(String(b.label), localState) }       : {}),
+    ...(b.description !== undefined ? { description: resolveDisplayText(String(b.description), localState) } : {}),
+  }));
   fields.push({
     type:    'actions',
     // o.modal forwarded so callback.mjs encodes it into button value for interactive.mjs.
@@ -1744,7 +1754,7 @@ async function executeNotify({ step, localState, traceId }) {
   const reveals = [];
   if (step.reveal) {
     reveals.push({
-      button_label: resolveRevealLabel(step.reveal.button_label, localState),
+      button_label: resolveDisplayText(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -1757,7 +1767,7 @@ async function executeNotify({ step, localState, traceId }) {
   }
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     reveals.push({
-      button_label: resolveRevealLabel(r.button_label, localState),
+      button_label: resolveDisplayText(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }
