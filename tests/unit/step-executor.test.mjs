@@ -2008,6 +2008,39 @@ describe('buildDialog — reveal labels resolve on the real gate path', () => {
     assert.equal(buttons[0].label, 'Sauce {{spicy}}');
   });
 
+  it('item_label_template resolves through the shared resolver, not a private regex', () => {
+    // Live shape (create_workflow step 24): single-word keys against each element.
+    const step = {
+      step: '6', type: 'human_gate', gate_type: 'review_object',
+      message_template: 'Review',
+      context_key: 'draft.steps',
+      item_label_template: 'Step {{step}} ({{type}}): {{description}}',
+      item_secondary_key: 'on_success',
+      options: [{ label: 'OK', action: 'confirm', on_select: 'next' }],
+    };
+    const state = { draft: { steps: [
+      { step: '1', type: 'llm_call', description: 'Parse it', on_success: 'next' },
+    ] } };
+    const list = buildDialog(step, state).fields.find(f => f.type === 'review_object');
+    assert.equal(list.items[0].key, 'Step 1 (llm_call): Parse it');
+  });
+
+  it('item_label_template now accepts dotted paths and .length, which the old regex could not', () => {
+    const step = {
+      step: '6', type: 'human_gate', gate_type: 'review_object',
+      message_template: 'Review',
+      context_key: 'draft.tables',
+      item_label_template: '{{tableName}} — {{columns.length}} cols, owner {{meta.owner}}',
+      item_secondary_key: 'columns',
+      options: [{ label: 'OK', action: 'confirm', on_select: 'next' }],
+    };
+    const state = { draft: { tables: [
+      { tableName: 'PGD_Thing', columns: [{ name: 'a' }, { name: 'b' }], meta: { owner: 'ops' } },
+    ] } };
+    const list = buildDialog(step, state).fields.find(f => f.type === 'review_object');
+    assert.equal(list.items[0].key, 'PGD_Thing — 2 cols, owner ops');
+  });
+
   it('resolves button_label on the singular reveal too', () => {
     const step = {
       step: '4', type: 'human_gate', gate_type: 'confirm',

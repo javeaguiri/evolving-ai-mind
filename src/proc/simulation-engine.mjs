@@ -55,6 +55,23 @@ const MAX_GATE_FIELDS = 40;
 // wants them, but they never block a workflow, so they are not "why it failed".
 // ---------------------------------------------------------------------------
 
+/**
+ * staticOptions / staticSpecialButtons — a gate's `options` and `special_buttons` may each
+ * be an inline array OR a {{template}} reference to an array a preceding step built.
+ * `buildDialog` resolves both; simulation is a pure function with no local_state, so a
+ * template reference contributes no statically-known options — it is not an empty gate,
+ * it is an unknown one, and callers must already treat it that way (see `optionsAreStatic`).
+ *
+ * Returning [] rather than the raw value is what keeps every call site honest. Spreading a
+ * string yields its individual characters, and `.find` on one throws outright: L2 crashed
+ * with a 500 on `list_entity` step 27 — a live `list_selection` gate whose options are
+ * `"{{list_view.gate_options}}"`. Because `register_workflow` refuses any array failing
+ * L0+L1+L2, that crash meant no workflow with a dynamic option list could be registered
+ * at all.
+ */
+const staticOptions        = s => (Array.isArray(s?.options)         ? s.options         : []);
+const staticSpecialButtons = s => (Array.isArray(s?.special_buttons) ? s.special_buttons : []);
+
 function buildErrorSummary({ shapeIssues = [], staticIssues = [], routingMatrix = null, smokeTest = null }) {
   const lines = [];
 
@@ -501,7 +518,7 @@ export function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_else)    routingValues.push({ field: 'on_else',    value: s.on_else });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
@@ -578,7 +595,7 @@ export function runLevel1StaticAnalysis(steps) {
       // check is skipped for either field once dynamic; on_cancel (checked
       // unconditionally below) still guarantees a cancel path exists.
       const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
-      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+      const allGateOptions = [...staticOptions(s), ...staticSpecialButtons(s)];
       const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
       if (!hasCancel) {
         issues.push({
@@ -666,7 +683,7 @@ export function runLevel1StaticAnalysis(steps) {
     // are resolved via resolveTemplate at runtime; unresolved refs must be caught here.
     // Skip iterator-scoped options: their tokens resolve against iterator items at runtime,
     // not against local_state, so L1 cannot validate them statically.
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.iterator) continue;
       if (typeof opt.description === 'string' && opt.description) templatesToCheck.push(opt.description);
     }
@@ -886,7 +903,7 @@ export function runLevel1StaticAnalysis(steps) {
       });
     }
     // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.output_key && typeof opt.output_key === 'string') {
         const baseOut = opt.output_key.split('.')[0];
         outputKeysSoFar.add(baseOut);
@@ -1011,7 +1028,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
         // No explicit decision — auto-continue with the first non-cancel option so that
         // paths which pass through a loop gate en route to a later failure step don't
         // need to enumerate every loop iteration explicitly.
-        const defaultOption = (currentStep.options ?? []).find(
+        const defaultOption = staticOptions(currentStep).find(
           o => o.on_select !== 'cancel' && o.action !== 'cancel'
         );
         if (!defaultOption) {
@@ -1024,7 +1041,9 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
             terminal:            currentKey,
             expected_terminal:   path.expected_terminal,
             failure_step:        currentKey,
-            failure_reason:      `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" and no non-cancel default option exists`,
+            failure_reason:      typeof currentStep.options === 'string'
+              ? `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}", whose options are built at runtime (${currentStep.options}). A dynamic option set cannot be auto-continued because simulation has no local_state to resolve it against — declare an explicit gate decision for this step.`
+              : `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" and no non-cancel default option exists`,
             local_state_transitions: transitions,
           };
         }
@@ -1068,7 +1087,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
       // For choice gates, find the option matching user_response (by action or value) and
       // write its value — mirrors what resume_gate does in production.
       if (currentStep.gate_type === 'choice' && currentStep.output_key && decision.user_response !== undefined) {
-        const matchedOpt = (currentStep.options ?? []).find(
+        const matchedOpt = staticOptions(currentStep).find(
           o => o.action === decision.user_response || o.value === decision.user_response
         );
         localState[currentStep.output_key] = matchedOpt?.value ?? decision.user_response;
@@ -1311,7 +1330,7 @@ function runRoutingMatrix(steps, traceId) {
       if (tt) targets.add(tt);
       if (ft) targets.add(ft);
     } else if (s.type === 'human_gate') {
-      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
         const ot = resolveTarget(key, opt.on_select);
         if (ot) targets.add(ot);
       }
@@ -1731,12 +1750,12 @@ function runJsTransformSmokeTest(steps, traceId) {
       // with the first, so a downstream condition reading it has something of the right shape.
       if (s.action_key && typeof s.action_key === 'string') {
         const baseAction = s.action_key.split('.')[0];
-        const firstOpt   = (s.options ?? [])[0];
+        const firstOpt   = staticOptions(s)[0];
         if (!(baseAction in mockState)) {
           mockState[baseAction] = firstOpt?.value ?? firstOpt?.action ?? 'mock_action';
         }
       }
-      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
         if (opt.output_key && typeof opt.output_key === 'string') {
           const baseOut = opt.output_key.split('.')[0];
           if (!(baseOut in mockState)) mockState[baseOut] = 'mock_value';

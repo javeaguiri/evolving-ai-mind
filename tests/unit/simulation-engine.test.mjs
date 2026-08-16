@@ -1021,3 +1021,59 @@ describe('L1 — frozen date literal in a step input', () => {
     assert.equal(result.static_analysis.issues.length, 1, 'the warning must still be reported');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dynamic option sets — options as a {{template}} reference, not an array
+//
+// buildDialog accepts both forms; the simulator handled the string form in two places
+// (optionsAreStatic, the iterator body) and ignored it in eight others. `.find` on a
+// string throws, so L2 returned a 500 for `list_entity` step 27 — a live list_selection
+// gate whose options are "{{list_view.gate_options}}". Since register_workflow refuses
+// any array failing L0+L1+L2, no workflow with a runtime-built option set could be
+// registered at all.
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — a gate whose options are built at runtime', () => {
+  const steps = [
+    { step: '1', type: 'js_transform', expression: '(function(){ return { gate_options: [] }; })()',
+      output_key: 'view', on_success: 'next', on_else: 'cancel' },
+    { step: '2', type: 'human_gate', gate_type: 'list_selection',
+      message_template: 'Pick one',
+      context_key: 'view.rows',
+      options: '{{view.gate_options}}',
+      on_cancel: 'cancel', on_success: 'next', on_else: 'cancel' },
+    { step: '3', type: 'end' },
+  ];
+
+  it('does not throw — the string form reaches every options reader', () => {
+    // The regression itself: this used to raise TypeError inside executeSimPath and
+    // surface as a 500 rather than as a validation result.
+    assert.doesNotThrow(() => runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'happy', decisions: [
+        { step: '2', outcome: 'gate', user_response: 'confirm', on_select: 'next' },
+      ], expected_terminal: 'end' }],
+    }));
+  });
+
+  it('an explicit gate decision routes a dynamic gate normally', () => {
+    const r = runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'happy', decisions: [
+        { step: '2', outcome: 'gate', user_response: 'confirm', on_select: 'next' },
+      ], expected_terminal: 'end' }],
+    });
+    assert.equal(r.path_results[0].terminal, 'end');
+  });
+
+  it('without a decision it says the options are dynamic, not that none exist', () => {
+    // The old message ("no non-cancel default option exists") was false for this gate:
+    // options exist, they are just not knowable without local_state.
+    const r = runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'nodecision', decisions: [], expected_terminal: 'end' }],
+    });
+    assert.match(r.path_results[0].failure_reason, /built at runtime/);
+    assert.match(r.path_results[0].failure_reason, /explicit gate decision/);
+  });
+});

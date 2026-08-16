@@ -588,8 +588,13 @@ export function buildDialog(step, localState) {
         const primaryKey    = step.item_primary_key    ?? 'tableName';
         const secondaryKey  = step.item_secondary_key  ?? 'columns';
         items = ctx.map(item => {
+          // The shared resolver, not a private regex. The regex here accepted only
+          // single-word keys, so {{a.b}} and {{xs.length}} silently rendered as
+          // themselves — the same class of defect as an unresolved button_label, hidden
+          // inside one gate type. Item properties shadow local_state, preserving the
+          // single-key behaviour every live template relies on.
           const label = labelTemplate
-            ? labelTemplate.replace(/\{\{(\w+)\}\}/g, (_, k) => item[k] ?? '')
+            ? resolveTemplate(labelTemplate, { ...localState, ...item, item })
             : (item[primaryKey] ?? String(item));
           const raw   = item[secondaryKey];
           let value;
