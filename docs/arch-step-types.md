@@ -522,7 +522,12 @@ message is built:
 | string | the container's `section`/`mrkdwn` child block text, directly |
 | array of strings | the same child block text, one `• ` bullet per line |
 
-`button_label` becomes the container's `title`. Both fields are required and must be
+`button_label` becomes the container's `title`, and **carries `{{tokens}}` like any other
+author-written string** — `"View items ({{parsed_receipt.items.length}})"` renders the count.
+Resolved in `step-executor.mjs` (`resolveRevealLabel`), never in the renderer, which has no
+access to `local_state`. Before Sprint 10 it was the one string in the gate payload nobody
+resolved, so a token in it reached Slack verbatim while its sibling `content` resolved
+normally. Both fields are required and must be
 non-empty — L1 validation rejects steps where either is missing. `callback.mjs`
 renders each panel with `randomUUID()` in `block_id`, `is_collapsible: true`,
 `default_collapsed: true`, posted directly in the gate message. See

@@ -285,6 +285,30 @@ async function executeHumanGate({ step, localState, run, traceId }) {
  * @param {object} localState
  * @returns {Array}            Fully resolved options, iterator entries expanded
  */
+/**
+ * resolveRevealLabel — a reveal's button_label is author-written display text and may
+ * carry {{tokens}} exactly as its sibling `content` does, and exactly as a gate option's
+ * label does just below. It was the one string in the gate payload nobody resolved, so
+ * `View items ({{parsed_receipt.items.length}})` reached Slack verbatim (run 776).
+ *
+ * Resolution belongs here and not in the renderer: the experience layer never sees
+ * local_state, and giving it the ability to would put procedure-tier state behind a
+ * rendering decision.
+ *
+ * An absent label is passed through untouched rather than defaulted to '': the renderer
+ * supplies its own default, and an empty plain_text is rejected outright by Slack — the
+ * same class of failure as an empty container (run 774).
+ *
+ * @param {string|undefined} label
+ * @param {object} localState
+ * @returns {string|undefined}
+ */
+export function resolveRevealLabel(label, localState) {
+  return (typeof label === 'string' && label !== '')
+    ? resolveTemplate(label, localState)
+    : label;
+}
+
 export function resolveGateOptions(step, localState) {
   const resolvedOptions = typeof step.options === 'string'
     ? (resolvePath(localState, step.options.replace(/^\{\{|\}\}$/g, '')) ?? [])
@@ -635,7 +659,7 @@ export function buildDialog(step, localState) {
   if (step.reveal) {
     fields.push({
       type:         'reveal',
-      button_label: step.reveal.button_label,
+      button_label: resolveRevealLabel(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -652,7 +676,7 @@ export function buildDialog(step, localState) {
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     fields.push({
       type:         'reveal',
-      button_label: r.button_label,
+      button_label: resolveRevealLabel(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }
@@ -1720,7 +1744,7 @@ async function executeNotify({ step, localState, traceId }) {
   const reveals = [];
   if (step.reveal) {
     reveals.push({
-      button_label: step.reveal.button_label,
+      button_label: resolveRevealLabel(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -1733,7 +1757,7 @@ async function executeNotify({ step, localState, traceId }) {
   }
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     reveals.push({
-      button_label: r.button_label,
+      button_label: resolveRevealLabel(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }
