@@ -813,7 +813,7 @@ async function executeServInsert({ step, localState, traceId }) {
 
 async function executeServQuery({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input ?? {}, localState);
-  const { tableName, filters, orderBy, limit, vectorSearch } = resolvedInput;
+  const { tableName, filters, orderBy, limit, vectorSearch, columns } = resolvedInput;
 
   if (!tableName) throw new Error('serv_query step missing input.tableName');
 
@@ -821,10 +821,11 @@ async function executeServQuery({ step, localState, traceId }) {
     tableName,
     filterCount:  filters?.length ?? 0,
     vectorColumn: vectorSearch?.column,
+    columnCount:  columns?.length ?? 0,
     traceId,
   });
 
-  const resp = await getRows(tableName, filters ?? [], orderBy, limit, vectorSearch);
+  const resp = await getRows(tableName, filters ?? [], orderBy, limit, vectorSearch, columns);
 
   if (!resp.success) {
     throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
