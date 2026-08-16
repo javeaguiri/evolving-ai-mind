@@ -713,6 +713,30 @@ Implemented at the SERV boundary in `table.mjs` and reached through `getRows`' 5
 argument. `executeServQuery` passes it through — before Sprint 10 it did not, and a step that
 requested `vectorSearch` received unranked rows with no error.
 
+###### `serv_query` with `columns`
+
+```json
+{
+  "step": "8", "type": "serv_query",
+  "input": {
+    "tableName": "PGD_Inventory",
+    "columns":   ["id", "name", "quantity", "unit", "category_id"],
+    "limit":     500
+  },
+  "output_key": "inventory_items"
+}
+```
+
+`columns` is a SELECT list. Omit it and every column comes back, **including vector columns** —
+and an embedding is thousands of numbers per row. A step that reads whole rows and passes them
+to a later `llm_call` therefore pays for every embedding it never looks at, on every run, with
+the bill growing as the table grows. Name the columns the step actually uses whenever the table
+carries a `*_embedding` column.
+
+Reached through `getRows`' 6th positional argument. `executeServQuery` forwards it — before
+Sprint 10 it destructured five fields and dropped this one, so no workflow could project
+columns at all.
+
 ##### `serv_upsert`
 ```json
 {

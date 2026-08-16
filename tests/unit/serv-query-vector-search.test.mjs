@@ -34,7 +34,7 @@ describe('executeServQuery — vectorSearch reaches SERV', () => {
   it('destructures vectorSearch from the resolved input', () => {
     assert.match(
       executorSrc,
-      /const \{ tableName, filters, orderBy, limit, vectorSearch \} = resolvedInput;/,
+      /const \{ tableName, filters, orderBy, limit, vectorSearch, columns \} = resolvedInput;/,
       'executeServQuery must destructure vectorSearch — dropping it loses the ranking silently'
     );
   });
@@ -42,7 +42,7 @@ describe('executeServQuery — vectorSearch reaches SERV', () => {
   it('passes vectorSearch to getRows in the 5th position', () => {
     assert.match(
       executorSrc,
-      /getRows\(tableName, filters \?\? \[\], orderBy, limit, vectorSearch\)/,
+      /getRows\(tableName, filters \?\? \[\], orderBy, limit, vectorSearch, columns\)/,
       'the 5th positional argument of getRows is vectorSearch'
     );
   });
@@ -84,6 +84,49 @@ describe('serv_query contract — vectorSearch is declared, and L0 is unaffected
   it('says vectorSearch combines with filters rather than replacing them', () => {
     const field = servQuery.input_contract.find(f => f.field === 'input.vectorSearch');
     assert.match(field.description, /[Cc]ombines with filters/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The same drop, one argument further along — input.columns
+//
+// getRows has always accepted a column whitelist; executeServQuery destructured
+// only five fields and never forwarded it, so no workflow could project columns.
+// That is invisible until a table carries a vector column: an embedding is 2560
+// numbers per row, and a step that reads whole rows and hands them to a later
+// llm_call pays for every one of them, on every run, growing with the table.
+// A projection is standard SQL, so the harness accepts it rather than the prompts
+// working around it.
+// ---------------------------------------------------------------------------
+
+describe('serv_query — columns reaches SERV', () => {
+  it('passes columns to getRows in the 6th position', () => {
+    assert.match(
+      executorSrc,
+      /getRows\(tableName, filters \?\? \[\], orderBy, limit, vectorSearch, columns\)/,
+      'the 6th positional argument of getRows is columns'
+    );
+  });
+
+  it('declares input.columns as an optional array', () => {
+    const field = servQuery.input_contract.find(f => f.field === 'input.columns');
+    assert.ok(field, 'a capability the contract does not declare is invisible to the generator');
+    assert.equal(field.type, 'array');
+    assert.equal(field.required, false, 'making it required would fail every existing serv_query step');
+  });
+
+  it('tells the author WHY to use it, not merely that it exists', () => {
+    // "Omit to return every column" alone reads as a micro-optimisation. The cost is
+    // the point: this is the difference between a receipt costing the same forever and
+    // costing more every time the pantry grows.
+    const field = servQuery.input_contract.find(f => f.field === 'input.columns');
+    assert.match(field.description, /embedding/i);
+    assert.match(field.description, /llm_call/);
+  });
+
+  it('still leaves the required set exactly as it was', () => {
+    const required = servQuery.input_contract.filter(f => f.required).map(f => f.field).sort();
+    assert.deepEqual(required, ['input.tableName', 'output_key']);
   });
 });
 

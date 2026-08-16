@@ -359,6 +359,12 @@
         "description": "Rank rows by pgvector cosine similarity instead of comparing text. Shape: { column, queryText, threshold?, limit? }. column must be a vector column on the table — one is created automatically for any column named <name>_embedding, and it is populated from its source column on every insert and update. queryText is the text to match and takes a {{template}}. threshold is the minimum cosine similarity a row must reach to be returned, 0 to 1, default 0.75; it is CALIBRATED PER USE CASE, not inherited — a threshold tuned for one kind of text does not carry to another, so verify it against real examples of both matches and non-matches before relying on it. Combines with filters rather than replacing them: filters narrow the candidate set, vectorSearch ranks what remains. Rows come back most-similar first, so orderBy is not needed with it."
       },
       {
+        "type": "array",
+        "field": "input.columns",
+        "required": false,
+        "description": "Column names to return, as a SELECT list of strings. Omit to return every column. Name the columns the step actually uses whenever the table carries a vector column: an embedding is thousands of numbers per row, so a query that returns whole rows and hands them to a later llm_call pays for all of them, on every run, and the cost grows with the table."
+      },
+      {
         "type": "string",
         "field": "output_key",
         "required": true,
