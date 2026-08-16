@@ -219,6 +219,42 @@
         "field": "reveals",
         "required": false,
         "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
+      },
+      {
+        "type": "object",
+        "field": "item_action",
+        "required": false,
+        "description": "list_selection only \u2014 the action applied uniformly to every row that does not carry its own secondaryAction. Shape: { action, label, style?, condition?, confirm_template?, on_select }. `on_select` is required and routes directly, never via a matching options[] entry. `label` defaults to 'Select' and takes {{tokens}} resolved against THAT ROW plus local_state, so a button can name what it acts on ({{item.name}}); `confirm_template` resolves the same way and, when present, makes the row's button open a confirmation first. `condition` is evaluated per row and hides the action where it is false."
+      },
+      {
+        "type": "string",
+        "field": "item_label_template",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the label rendered for each element, e.g. \"Step {{step}} ({{type}}): {{description}}\". Tokens resolve against that element's own properties first, then local_state, and accept the full path syntax every other template does. Takes precedence over item_primary_key. Omit it when a single field is label enough."
+      },
+      {
+        "type": "string",
+        "field": "item_primary_key",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the property of each element used as its label when item_label_template is absent. Default 'tableName'. Ignored entirely when item_label_template is set."
+      },
+      {
+        "type": "string",
+        "field": "item_secondary_key",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the property of each element rendered as its value. Default 'columns'. An array value is flattened to its members' names with system columns (id, created_at, updated_at, domain, target, foreignKeys, constraints, triggers) removed; any other value passes through as-is."
+      },
+      {
+        "type": "string",
+        "field": "placeholder",
+        "required": false,
+        "description": "text_input only (DEPRECATED gate type \u2014 use a form with a textarea field). Ghost text shown inside the empty input. Takes {{tokens}}. A form field carries its own placeholder and does not read this."
+      },
+      {
+        "type": "boolean",
+        "field": "multiline",
+        "required": false,
+        "description": "text_input only (DEPRECATED gate type \u2014 use a form with a textarea field, whose type already carries this). Renders the input as a multi-line box rather than a single line. Default false."
       }
     ],
     "output_contract": null,
