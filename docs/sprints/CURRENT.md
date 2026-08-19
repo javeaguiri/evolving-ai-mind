@@ -28,18 +28,21 @@ EventBridge Scheduler, not stubbed.
 >
 > **AC4 is MET ($0.672) and AC2 is MET — see Session 15.** The queue is now:
 >
-> **A. Apply Novia's two offered fixes to `process_receipt`** — step 8c `queryText` →
-> `{{item.name_original}}`, and a `js_transform` supplying `current_date`. Both are hers, both
-> agreed, neither applied. Then recalibrate the alias threshold off 0.4, which was chosen for a
-> cross-lingual comparison that will no longer exist.
+> **A. ✅ DONE — both fixes applied and proven by run 780** (workflow 358 v4; see Session 16).
+> **What replaces it: fix the two Execution defects run 780 exposed** — the `columns` projection
+> dropped under `vectorSearch`, and every `llm_call` sending its resolved input twice. Both are
+> system code, both are in backlog High Priority, and together they are what stands between
+> AC9 and a measurement. Then recalibrate the alias threshold off 0.4, which was chosen for a
+> cross-lingual comparison that no longer exists and which admitted two wrong merges on run 780.
 >
 > **B. The correction workflow.** `PGD_Inventory` 25 is "Ink Cartridge" and is a red wine
 > (`CAPERUCITA TINTA`). Rename, merge, and write an alias — **keyed on the raw receipt string,
 > never on the wrong English**, or buying real ink increments the wine. This is what makes the
 > alias table load-bearing rather than redundant.
 >
-> **C. Then the MASYMAS receipt in raw Spanish** — closes AC7, measures AC9, tests the threshold.
-> Do not paste an English rendering: it makes the alias table same-language by accident.
+> **C. ✅ DONE — MASYMAS run in raw Spanish as run 780.** AC7's mechanism is proven live; AC9 is
+> still unmeasured and now waits on A, not on the workflow. **Repeat a receipt after A** — that is
+> the measurement.
 >
 > **D. The prefix forfeit is now the dominant cost term** — 58% of session 1161. A gate resume
 > forfeits it too, which the sprint had not recorded. See backlog.
@@ -577,9 +580,9 @@ resolves with a receipt run, not with more argument.
 | **AC4** | Repair, unaided | ≤ $1.00 | **PASS** | session 1161, **$0.672** all-in — defect reached unaided, repaired to workflow 358 v3 with per-item `vectorSearch`. Session total $1.109 includes a language review that is not AC4 |
 | **AC5** | `serv_query` exposes `vectorSearch` | regression-free | **PASS** | contract, executor pass-through, `query_table`; all 15 seed workflows swept, no new failures |
 | **AC6** | Inventory domain, no unmaintained derived columns | binary | **PASS** | run 766, one table, `item_count`/`level` gone with the padding table |
-| **AC7** | Lazy matching with persisted aliases | named in §3b | **STRUCTURALLY CLOSED, UNRUN** | v3 (2026-08-19) does per-item `vectorSearch` on both tables — the "zero `vectorSearch`" finding no longer holds. Two blockers before it can be claimed: step 8c queries the Spanish alias index with English text, and no receipt has been run on v3 |
+| **AC7** | Lazy matching with persisted aliases | named in §3b | **MECHANISM PROVEN LIVE, threshold not calibrated** | run 780 on v4: per-item `vectorSearch` on both tables, alias search same-language (`alias_candidates` 14), 13 aliases persisted as raw strings, 2 auto-matched. The one clause outstanding is "threshold calibrated" — 0.4 was chosen for a cross-lingual comparison that no longer exists, and it admitted two wrong merges |
 | **AC8** | One routing workflow, both receipt kinds | binary | **NOT MEASURED** | 358 registered and never run; blocked on a frozen `current_date` and the AC7 repair |
-| **AC9** | Per-receipt cost, first vs third | third < first | **NOT MEASURED** | requires AC8 |
+| **AC9** | Per-receipt cost, first vs third | third < first | **NOT MEASURED — blocker changed** | run 780 costs $0.1095, step 10 input 12,460 tokens. Pantry contribution is bounded now; the residue is two Execution defects (projection dropped under `vectorSearch`; payload sent twice). Fix those, then repeat a receipt |
 
 **On the vocabulary.** AC11 asks for PASS / MARGINAL / FAIL. Four criteria are marked **NOT
 MEASURED** instead, deliberately: forcing an unrun criterion into one of three grades would
@@ -1868,6 +1871,52 @@ conversational maintenance cheap. Promoted to backlog High Priority.
    51 → ~65. It closes AC7, measures AC9, and tests the threshold's real selectivity at the point
    where the 8N cap stops binding. Pasting the English rendering would make the alias table
    same-language by accident and render the fix untestable.
+
+### Session 16 — 2026-08-19 — Run 780: both fixes work live; the number is inflated by two engine defects
+
+**Workflow 358 v4, 28 steps, registered 10:24 and run at 10:28. Both of Novia's offered fixes are
+applied and both are proven by the run, not by inspection.**
+
+| Fix | Evidence from run 780 |
+|---|---|
+| Step 1b `js_transform` — `new Date().toISOString().slice(0, 10)` | `current_date = 2026-08-19`. The receipt carried no readable date, so `parse_receipt` fell back to it and produced `purchase_date = 2026-08-19`. **First live exercise of D3's fallback path with a real date** |
+| Step 8c — `queryText: {{item.name_original}}` on `alias_name_embedding` | **`alias_candidates = 14`**, where the `name_en` binding returned effectively none. Step 8 correctly left on `{{item.name_en}}` → `inventory_candidates = 15` from a 51-row pantry |
+
+**The receipt was pasted as raw Spanish**, as the pickup required — 14 of 15 `name_original` values
+are Spanish (`PEPINO HOLANDES`, `BONIATO ROJO`, `CHOC NEG 85% VALOR`) and all 13 aliases written are
+raw strings, so the alias table stayed monolingual. Outcome: 15 items → 2 auto-matched, 7
+LLM-resolved, 6 new; 6 items inserted; expense recorded; 81 steps, no errors. **Run cost $0.1095**
+($0.0409 parse + $0.0686 match).
+
+**Step 10's input measured 12,460 tokens against run 776's 6,050 — and the comparison does not
+hold.** Run 780 is 15 items against 12, a 51-row pantry against 28, and a rewritten prompt (v2).
+The pantry contribution *is* now bounded — 15 + 14 candidates instead of all 51 items and 56
+aliases — so the scaling design is working. The absolute figure is inflated by two Execution defects,
+**both verified by direct probe rather than inferred**:
+
+1. **`columns` is ignored when `vectorSearch` is present.** Same table, same projection:
+   `{"columns":["id","name"], "vectorSearch":{…}}` returns **16 columns**; without `vectorSearch` it
+   returns 3. Candidate rows arrive at ~346 chars instead of ~45 — roughly 8× — carrying
+   `created_at`, `updated_at`, `description`, `location`, `condition`, `notes`, `value`,
+   `expiry_date`, almost all null. **Vectors are still nulled, so `52e2393`'s protection holds**;
+   this is the projection not surviving the vector path.
+2. **The payload is sent twice.** `llm-harness.mjs:424` sends `userInput || JSON.stringify(resolvedInput)`
+   as the user message while `assembleInstructions` has already substituted the same `{{tokens}}`
+   into the system prompt. Confirmed in the diagnostic: `Rustic Sliced Bread` appears exactly once
+   in each message. This affects **every `llm_call` whose prompt inlines the tokens it is passed**,
+   which is the authoring convention. Recorded as a design question, not a patch — the harness
+   cannot know the prompt already embedded them.
+
+Together these are most of the 12,460; the projection alone is ~6,600 chars of dead weight and the
+duplication doubles what remains. **AC9's blocker has changed character**: it is no longer a design
+flaw in the workflow but two engine defects sitting on a working design.
+
+**Two matching-quality findings, which are the 0.4 threshold showing up in live data.**
+`PANU BOL MIN SELEX` (mini bread rolls) was aliased to inventory 17, **Rustic Sliced Bread** — a
+different product folded into an existing one. `ARANDANOS DESH ALT` (dehydrated blueberries) matched
+inventory 6, **Blueberries 300g** — fresh, the exact conflation the pre-run probe predicted at 0.551.
+Neither is an engine fault: the LLM arbitrated on candidates a loose threshold admitted. Both
+strengthen the case for recalibrating off 0.4 now that matching is same-language.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
