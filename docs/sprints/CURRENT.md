@@ -460,9 +460,9 @@ them while the tools are stubbed.
 | # | Criterion | Checkpoint | Threshold |
 |---|---|---|---|
 | **AC1** | Novia's loop uses native function calling; in a live round `cache_read` exceeds the `instructions` block on **every** turn after the first and grows with the transcript, while `cache_creation` holds near the per-turn increment | 2c | Mechanism: binary. Cost: creation component down ≥ 4× |
-| **AC2** | A5 — `run_sql` table-name guidance; no `run_sql` call in the validating round fails on an identifier | 2c | 0 identifier failures |
+| **AC2** | A5 — `run_sql` table-name guidance; no `run_sql` call in the validating round fails on an identifier | 2c | 0 identifier failures — **MET 2026-08-19** (session 1161: one `run_sql`, CamelCase double-quoted, no failure) |
 | **AC3** | Novia rebuilds `edit_budget` clean-room, without sight of workflow 357, to a **running** workflow | 2a | ≤ $1.50 all-in |
-| **AC4** | Novia diagnoses and repairs D2 or D3 given the symptom only | 2b | ≤ $1.00, unaided |
+| **AC4** | Novia diagnoses and repairs a defect given the symptom only. **Specimen changed** — D2/D3 were contaminated; the specimen used is the cost-scaling defect in her own build (workflow 358) | 2b | ≤ $1.00, unaided — **diagnosis MET 2026-08-19 at $0.104** (session 1161, 4 turns, defect reached unaided). **Repair not yet built**, so the criterion is half closed; $0.896 of budget remains |
 | **AC5** | `serv_query` exposes `vectorSearch`; contract and `PGC_StepType` row updated; L0/L1 unaffected on all seed workflows | 3b | Regression-free |
 | **AC6** | Inventory domain created via `create_domain`, with the derived-column question settled rather than inherited | 3a | Domain live, no unmaintained denormalized columns |
 | **AC7** | Lazy matching resolves a real receipt's items against inventory, threshold calibrated, confirmations persisted as aliases | 3b | Named in 3b |
@@ -550,9 +550,9 @@ resolves with a receipt run, not with more argument.
 | **AC10** | AWS fixed cost | ≤ $30/mo | **PASS** | ~$21/mo, stable across several billing cycles |
 | **AC1** | Native tool calling — mechanism | binary | **PASS** | `cacheRead` = previous turn's entire `inputTokens`, every turn, holding at 56k |
 | **AC1** | Native tool calling — cost | ≥ 4× | **MARGINAL** | 3.4× on a four-turn round; 3.7× per-turn across session 1131. Below its own bar, recorded as measured |
-| **AC2** | `run_sql` identifier guidance | 0 failures | **NOT MEASURED** | no `run_sql` call has been made in any validating round |
+| **AC2** | `run_sql` identifier guidance | 0 failures | **PASS** (n=1) | session 1161: one `run_sql`, `"PGD_Inventory"` double-quoted, no identifier failure |
 | **AC3** | Build cost to a workflow | ≤ $1.50 | **PASS**, substitute evidence | **The clean-room `edit_budget` rebuild was never run.** Cost comes from the `process_receipt` build instead: **$1.376** vs the $1.42 `create_workflow` baseline, registered-to-registered (see Session 11) |
-| **AC4** | Repair, unaided | ≤ $1.00 | **NOT MEASURED** | never run. D2 contaminated (she has read it); D3 is a defect she reproduces by reflex |
+| **AC4** | Repair, unaided | ≤ $1.00 | **PARTIAL — diagnosis PASS** | session 1161, **$0.104**, 4 turns, defect reached unaided on a fresh specimen (workflow 358's cost scaling). Repair not yet built |
 | **AC5** | `serv_query` exposes `vectorSearch` | regression-free | **PASS** | contract, executor pass-through, `query_table`; all 15 seed workflows swept, no new failures |
 | **AC6** | Inventory domain, no unmaintained derived columns | binary | **PASS** | run 766, one table, `item_count`/`level` gone with the padding table |
 | **AC7** | Lazy matching with persisted aliases | named in §3b | **FAIL as built** | workflow 358 has **zero `vectorSearch`** and zero embedding references; it is UC-P4. Repairable, not structural |
@@ -1663,6 +1663,55 @@ about the validator first.**
 cannot call anything external — `call_capability` is Novia's agent tool, a different execution
 path); and `/help` never shows a domain's workflows or how to start one, though `PGC_IntentMap`
 already holds the phrases.
+
+### Session 15 — 2026-08-19 — AC4 diagnosis reached unaided, $0.104. AC2 met.
+
+**The symptom, stated verbatim and nothing more:** *"Processing a receipt costs more in LLM tokens
+each time, and it gets worse as the pantry fills up."* The LLM-token framing narrows the cost axis
+away from AWS deliberately; it names no step, no mechanism and no fix.
+
+**Session 1161 — four turns, four tool calls, $0.10404.**
+
+```
+turn      in   create     read   read/prev in        $
+1      8,851    8,849        0            —    0.03594
+2     15,676    6,826    8,849         1.00    0.03115
+3     18,039    2,363   15,675         1.00    0.01666
+4     18,234      195   18,038         1.00    0.02029
+```
+
+`read_memory` → `read_workflow` → `query_table` (PGC_Prompt) → `run_sql`. She named step 10
+`match_inventory_items` as the culprit, steps 7/8 as flat reads at `limit: 500`, and the root cause
+as *"a vector pre-filter that was never implemented at the DB query level — the vector columns are
+never used to pre-filter."* **Verified against the live workflow: steps 7/8/9 all carry
+`vectorSearch: null`.** Her Option A ("columns already optimised") is also correct — that was the
+2026-08-16 projection fix.
+
+**"Unaided" carries one qualifier, recorded rather than argued away.** Her first move recovered her
+own build notes (memory 309/310/311), and the thresholds she proposes — 0.60 / 0.82 — are quoted
+from them, along with the "vector matching runs on English-translated names only" design line. The
+*diagnosis* came from `read_workflow`; the *fix parameters* came pre-computed from her past self.
+That is the memory layer working as designed, and it is not a hint from the user — but it makes the
+number a diagnosis cost, not a from-cold reasoning cost.
+
+**The stale-memory hazard resolved itself.** Memory 310 asserts `PGD_InventoryCategory` is a
+per-item child table, which stopped being true on 2026-08-16. Memory 306 — the remodelling note —
+returned in the same result set and corrected it. No intervention needed.
+
+**One real error, and it is the thing to watch on the repair.** Her Option B proposes a
+`serv_vector_search` step type, which does not exist; the mechanism is `serv_query` with a
+`vectorSearch` input object, declared in the contract. **She never read `PGC_StepType` this round**,
+so she invented a plausible name that L0 would reject at registration. Whether she reads the
+contract when told to implement separates an Instruction finding from a Generation one.
+
+**AC2 met in passing.** One `run_sql`, `"PGD_Inventory"` correctly double-quoted per the guidance
+now carried in the tool's own description, no identifier failure — the first `run_sql` in any
+validating round. **AC1's mechanism reconfirmed**: `read/prev in` = 1.00 on every turn after the
+first.
+
+**The prose-reply forfeit reproduced live.** Turn 4 returned `itemTypes: ['message']` and logged
+*"text reply with no tool call — treating as respond"* — GO Condition 1's open path. A typed
+follow-up into this session forfeits the round's prefix credit: ~18k tokens re-created, ~$0.07 here.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
