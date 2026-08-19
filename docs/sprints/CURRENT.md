@@ -24,7 +24,29 @@ defect.
 scheduling tools live, **AC12 MET**, **AC13 dry-run only**. Scheduling is **built for real** on
 EventBridge Scheduler, not stubbed.
 
-> **Next session — the pickup, in priority order. Updated 2026-08-16.**
+> **Next session — the pickup, in priority order. Updated 2026-08-19.**
+>
+> **AC4 is MET ($0.672) and AC2 is MET — see Session 15.** The queue is now:
+>
+> **A. Apply Novia's two offered fixes to `process_receipt`** — step 8c `queryText` →
+> `{{item.name_original}}`, and a `js_transform` supplying `current_date`. Both are hers, both
+> agreed, neither applied. Then recalibrate the alias threshold off 0.4, which was chosen for a
+> cross-lingual comparison that will no longer exist.
+>
+> **B. The correction workflow.** `PGD_Inventory` 25 is "Ink Cartridge" and is a red wine
+> (`CAPERUCITA TINTA`). Rename, merge, and write an alias — **keyed on the raw receipt string,
+> never on the wrong English**, or buying real ink increments the wine. This is what makes the
+> alias table load-bearing rather than redundant.
+>
+> **C. Then the MASYMAS receipt in raw Spanish** — closes AC7, measures AC9, tests the threshold.
+> Do not paste an English rendering: it makes the alias table same-language by accident.
+>
+> **D. The prefix forfeit is now the dominant cost term** — 58% of session 1161. A gate resume
+> forfeits it too, which the sprint had not recorded. See backlog.
+>
+> ---
+>
+> **Superseded pickup, kept for the record — updated 2026-08-16.**
 >
 > **1. AC4 — hand Novia the cost-scaling defect, in a NEW session, symptom only.** This is the
 > uncontaminated specimen and it is now *measured*, not merely suspected: step 10's input went
@@ -462,7 +484,7 @@ them while the tools are stubbed.
 | **AC1** | Novia's loop uses native function calling; in a live round `cache_read` exceeds the `instructions` block on **every** turn after the first and grows with the transcript, while `cache_creation` holds near the per-turn increment | 2c | Mechanism: binary. Cost: creation component down ≥ 4× |
 | **AC2** | A5 — `run_sql` table-name guidance; no `run_sql` call in the validating round fails on an identifier | 2c | 0 identifier failures — **MET 2026-08-19** (session 1161: one `run_sql`, CamelCase double-quoted, no failure) |
 | **AC3** | Novia rebuilds `edit_budget` clean-room, without sight of workflow 357, to a **running** workflow | 2a | ≤ $1.50 all-in |
-| **AC4** | Novia diagnoses and repairs a defect given the symptom only. **Specimen changed** — D2/D3 were contaminated; the specimen used is the cost-scaling defect in her own build (workflow 358) | 2b | ≤ $1.00, unaided — **diagnosis MET 2026-08-19 at $0.104** (session 1161, 4 turns, defect reached unaided). **Repair not yet built**, so the criterion is half closed; $0.896 of budget remains |
+| **AC4** | Novia diagnoses and repairs a defect given the symptom only. **Specimen changed** — D2/D3 were contaminated; the specimen used is the cost-scaling defect in her own build (workflow 358) | 2b | ≤ $1.00, unaided — **MET 2026-08-19 at $0.672** (session 1161: diagnosis $0.104, repair to v3 $0.568, defect reached unaided, `serv_vector_search` self-corrected against `PGC_StepType`). Under budget on the measured criterion |
 | **AC5** | `serv_query` exposes `vectorSearch`; contract and `PGC_StepType` row updated; L0/L1 unaffected on all seed workflows | 3b | Regression-free |
 | **AC6** | Inventory domain created via `create_domain`, with the derived-column question settled rather than inherited | 3a | Domain live, no unmaintained denormalized columns |
 | **AC7** | Lazy matching resolves a real receipt's items against inventory, threshold calibrated, confirmations persisted as aliases | 3b | Named in 3b |
@@ -552,10 +574,10 @@ resolves with a receipt run, not with more argument.
 | **AC1** | Native tool calling — cost | ≥ 4× | **MARGINAL** | 3.4× on a four-turn round; 3.7× per-turn across session 1131. Below its own bar, recorded as measured |
 | **AC2** | `run_sql` identifier guidance | 0 failures | **PASS** (n=1) | session 1161: one `run_sql`, `"PGD_Inventory"` double-quoted, no identifier failure |
 | **AC3** | Build cost to a workflow | ≤ $1.50 | **PASS**, substitute evidence | **The clean-room `edit_budget` rebuild was never run.** Cost comes from the `process_receipt` build instead: **$1.376** vs the $1.42 `create_workflow` baseline, registered-to-registered (see Session 11) |
-| **AC4** | Repair, unaided | ≤ $1.00 | **PARTIAL — diagnosis PASS** | session 1161, **$0.104**, 4 turns, defect reached unaided on a fresh specimen (workflow 358's cost scaling). Repair not yet built |
+| **AC4** | Repair, unaided | ≤ $1.00 | **PASS** | session 1161, **$0.672** all-in — defect reached unaided, repaired to workflow 358 v3 with per-item `vectorSearch`. Session total $1.109 includes a language review that is not AC4 |
 | **AC5** | `serv_query` exposes `vectorSearch` | regression-free | **PASS** | contract, executor pass-through, `query_table`; all 15 seed workflows swept, no new failures |
 | **AC6** | Inventory domain, no unmaintained derived columns | binary | **PASS** | run 766, one table, `item_count`/`level` gone with the padding table |
-| **AC7** | Lazy matching with persisted aliases | named in §3b | **FAIL as built** | workflow 358 has **zero `vectorSearch`** and zero embedding references; it is UC-P4. Repairable, not structural |
+| **AC7** | Lazy matching with persisted aliases | named in §3b | **STRUCTURALLY CLOSED, UNRUN** | v3 (2026-08-19) does per-item `vectorSearch` on both tables — the "zero `vectorSearch`" finding no longer holds. Two blockers before it can be claimed: step 8c queries the Spanish alias index with English text, and no receipt has been run on v3 |
 | **AC8** | One routing workflow, both receipt kinds | binary | **NOT MEASURED** | 358 registered and never run; blocked on a frozen `current_date` and the AC7 repair |
 | **AC9** | Per-receipt cost, first vs third | third < first | **NOT MEASURED** | requires AC8 |
 
@@ -1709,9 +1731,143 @@ now carried in the tool's own description, no identifier failure — the first `
 validating round. **AC1's mechanism reconfirmed**: `read/prev in` = 1.00 on every turn after the
 first.
 
-**The prose-reply forfeit reproduced live.** Turn 4 returned `itemTypes: ['message']` and logged
-*"text reply with no tool call — treating as respond"* — GO Condition 1's open path. A typed
-follow-up into this session forfeits the round's prefix credit: ~18k tokens re-created, ~$0.07 here.
+#### The repair — v3, and the bound is narrower than it reads
+
+**Told to do Option B and to check `PGC_StepType` first, she did both.** `process_receipt` v3, 27
+steps: the two bulk reads are gone, replaced by iterators over `parsed_receipt.items` running
+`serv_query` with `vectorSearch` per item — `PGD_Inventory` at top-8 and `PGD_InventoryAlias` at
+top-5, both threshold 0.4 — each followed by a `js_transform` that flattens and dedupes on row id.
+She read the contract and **self-corrected the `serv_vector_search` error** without being told.
+
+Her before/after table is accurate against the live row, with one exception: *"everything from step
+10 onward is untouched"* is wrong at step 10 itself, whose input bindings moved to
+`{{inventory_candidates}}` / `{{alias_candidates}}`. The prompt text is untouched; the step is not.
+
+**The scaling claim is directionally right and its bound is looser than stated.** The prompt now
+carries at most `8 × items` inventory rows and `5 × items` alias rows, and no term mentions pantry
+size — so "scales with the receipt, not the pantry" holds. But the *hard* cap is 8N, not her
+estimated 20–50: an 18-item receipt caps at 144 rows against a 51-row pantry, so at today's size
+the cap does not bind and the entire saving comes from the 0.4 threshold's selectivity. **The
+guarantee is structural; the saving today is threshold-driven, and has not been measured on a run.**
+
+#### The alias search was left in the wrong language — found by probe, not by running it
+
+Step 8c queries `alias_name_embedding` with `{{item.name_en}}`, but every stored alias is the raw
+OCR string (`name_original`, written by step 12i). Measured directly against the live table:
+
+```
+query "ground coffee"          → CAFE MOLIDO TUESTE NAT   0.392   ← correct alias, below the 0.4 floor
+query "CAFE MOLIDO TUESTE NAT" → CAFE MOLIDO TUESTE NAT   1.000
+                                 CAFE MOL. NAT: DESCAFE   0.594
+query "sweet potato"           → PATATA ROJA              0.307
+                                 BATATA GRANEL            0.233   ← correct alias, out-ranked
+```
+
+Cross-lingual similarity does not merely score low — it **scrambles the ordering**, so the rows that
+clear 0.4 are noise. Same-language matching is excellent, which is what makes the fix a single token.
+
+**No receipt can surface this, and that is the finding.** Inventory names were created from
+`name_en` and `parse_receipt` emits `name_en` again every run, so the inventory search always has a
+clean same-language match to offer (`sweet potato → Sweet Potato` 0.961). The alias path is
+therefore **strictly redundant while translation is stable**, and its failure presents as a silent
+non-improvement rather than a visible defect. Probing is the only cheap way to see it.
+
+#### The case that makes aliases load-bearing — and it was already in the data
+
+`PGD_Inventory` **id 25 is "Ink Cartridge", quantity 1**. Its alias row 30 reads **`CAPERUCITA
+TINTA`** — a red wine. In general Spanish *tinta* is ink; in wine labelling it is also a red-grape
+term, so **"ink" is a defensible reading of the input** and no `parse_receipt` prompt rule fixes it.
+No fault domain in the triage table covers this: it is a case that *requires* a human correction.
+
+That retires the "redundant" reading above. Translation here is stably **wrong**, so the inventory
+path finds ink every time and can never recover it. Only an alias keyed to the raw string can — and
+only if step 8c queries with `name_original`. **The one-token fix is what makes corrections stick.**
+
+#### The language review — user-worded, and it found a second real bug
+
+Asked *"review the process receipt workflow for language translation related issues"* — no
+diagnosis, one tool call, reasoning over the transcript she already held:
+
+| # | Her finding | Verdict |
+|---|---|---|
+| 1 | `name_en` exists by step 8 | Non-issue, correctly cleared |
+| 2 | **Frozen `current_date` in step 3** | **Correct** — verified live as `"Monday, August 10, 2026"`, nine days stale. D3's defect class, found unprompted in a review about something else |
+| 3 | Aliases stored Spanish, searched English | **Right diagnosis, wrong fix** |
+| 4 | `name_original` lost if the alias write is skipped | Minor — and contradicted by her own Issue 3 fix, which discards it unconditionally |
+| 5 | Prompt implies Spanish-only; currency enum `USD/MXN/EUR` | Cosmetic |
+
+**Her Issue 3 fix was to store `name_en` as the alias string.** That duplicates the inventory index
+exactly (`PGD_Inventory.name` *is* `name_en`), cannot express the wine case, and would bake a bad
+translation in permanently while *appearing* healthy as alias scores jumped. **The analytical error
+is a misapplied measurement:** she quotes memory 298's bands correctly, but they were measured
+Spanish-query → **English** names and say nothing about Spanish → Spanish. She wanted a monolingual
+vector space — the right instinct, applied to the wrong side of the comparison.
+
+**Shown the counterexample as a plain user observation** — *"There's an item called Ink Cartridge.
+It's not ink, it's a red wine, Caperucita Tinta. How would your alias fix handle that?"* — **she
+reversed it**: *"Issue 3 as I originally framed it was wrong."* She reached Option A unaided —
+`queryText: {{item.name_original}}`, keep storing the raw string, no schema change — on the correct
+reasoning that `name_en` is unstable and `name_original` is stable, and stated the real trade-off
+(two stores, two Spanish names, two alias rows) accurately.
+
+**This is the sprint's first evidence on maintainability, and it is Checkpoint 4's actual premise.**
+A defect was reached, a wrong fix proposed, and the wrong fix reversed — by an owner supplying an
+observation anyone would make, never a diagnosis. Until now Checkpoint 4 rested on a sales
+conversation.
+
+**One gap she did not revisit: the 0.4 threshold.** It was chosen for cross-lingual matching. Once
+both sides are the same language, memory 298's own bands are auto ≥0.82 / fallback 0.60–0.81, and
+`PAN MOLDE RUSTICO` clears 0.402 against a coffee query. Not a correctness problem — the LLM
+arbitrates — but it spends tokens on junk candidates, which is what v3 existed to stop.
+
+#### Cost — AC4 is under budget; the prefix forfeit is now the dominant term
+
+| | |
+|---|---|
+| **AC4 as specified** (diagnosis + repair, turns 1–12) | **$0.672** against ≤ $1.00 — **MET** |
+| Language review + self-correction (turns 13–15) | $0.437 — additional scope, not AC4 |
+| **Session 1161 total** | **$1.109** |
+| **Of which prefix forfeits** | **$0.647 — 58%** |
+
+**AC4 did not overrun.** The session total exceeds $1.00; the measured criterion does not, and the
+extra spend bought two further defects found and a wrong fix reversed. The user's reading — that the
+objective is met — is recorded, and the accounting supports it without needing the allowance.
+
+**Four full forfeits, and one is a path the sprint has not recorded.** Every round restart
+re-creates the entire transcript, and the cost grows linearly with it:
+
+```
+turn  in       create   read   cause
+5     19,184   19,182   0      typed reply after a prose response — GO Condition 1's known path
+11    46,457   46,456   0      GATE RESUME after propose_workflow_fix approval — NOT the known path
+13    47,627   47,625   0      typed reply after a prose response
+15    52,164   52,162   0      typed reply after a prose response   ($0.209)
+```
+
+Turn 11 is new. Step 2e records gate resume as *"DONE — needed no code"*, and the `__pending__`
+pairing does work; the **prefix** still misses completely on the rebuild. First candidate cause is
+the `instructions` block differing between rounds — `assembleContext` re-runs on resume and
+`PGC_Memory` still has no tiebreaker with ~91 rows tied at priority 8, so byte zero can move between
+rounds even though it cannot move within one. **That is the tiebreaker fix dismissed in the
+superseded 2C kit** — correctly dismissed for within-round misses, never tested against this case.
+
+GO Condition 1 records this as *"$0.219 per occurrence at a 56k transcript"*, framed as contained.
+It is now measured four times in one session as **the majority of all spend**, growing with the
+transcript. On this evidence it is the main remaining cost lever and the one change that would make
+conversational maintenance cheap. Promoted to backlog High Priority.
+
+#### Open, carried to the next session
+
+1. **Apply both fixes** — step 8c `queryText` → `{{item.name_original}}`, and the `js_transform`
+   for `current_date`. She has offered; neither is applied.
+2. **Recalibrate the alias threshold** once matching is same-language — 0.4 is loose.
+3. **A correction workflow** — rename an item, merge a duplicate, write an alias keyed on the raw
+   string. `PGD_Inventory` 25 is its first test case and is wrong in the pantry right now. **Key it
+   on the raw receipt string, never on the wrong English** — otherwise buying real ink makes wine.
+4. **Then the MASYMAS receipt, in raw Spanish OCR** — ~18 items, a new merchant, growing the pantry
+   51 → ~65. It closes AC7, measures AC9, and tests the threshold's real selectivity at the point
+   where the 8N cap stops binding. Pasting the English rendering would make the alias table
+   same-language by accident and render the fix untestable.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
