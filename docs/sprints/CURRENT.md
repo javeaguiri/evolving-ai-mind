@@ -26,7 +26,23 @@ EventBridge Scheduler, not stubbed.
 
 > **Next session — the pickup, in priority order. Updated 2026-08-19.**
 >
-> **AC4 is MET ($0.672) and AC2 is MET — see Session 15.** The queue is now:
+> **AC4 is MET ($0.672) and AC2 is MET — see Session 15. Run 780 proves both of Novia's fixes
+> live — see Session 16.**
+>
+> **0. FIRST, BY USER INSTRUCTION 2026-08-19: fix the vector threshold.** 0.4 was chosen for a
+> cross-lingual comparison that no longer exists on either step, and run 780 shows it admitting
+> wrong merges — `PANU BOL MIN SELEX` (mini bread rolls) folded into inventory 17 *Rustic Sliced
+> Bread*, and `ARANDANOS DESH ALT` (dehydrated) into inventory 6 *Blueberries 300g* (fresh). Two
+> separate thresholds to calibrate, not one: step 8 is English→English on `name_embedding`, step 8c
+> is now raw-string→raw-string on `alias_name_embedding`, and memory 298's bands
+> (auto ≥0.60 / fallback 0.40–0.59 for names; auto ≥0.82 / fallback 0.60–0.81 for aliases) were
+> measured against **neither** of those pairings. **Probe first, against live rows** — the probes
+> are free and settled three questions in one session today. **Then decide the route:** the
+> calibration is mine to produce, but the workflow edit is a domain artifact, so it goes through
+> Novia's `propose_workflow_fix` unless the user directs otherwise. Worth raising with her as one
+> message together with the two engine defects, since a re-run measures all three.
+>
+> The rest of the queue:
 >
 > **A. ✅ DONE — both fixes applied and proven by run 780** (workflow 358 v4; see Session 16).
 > **What replaces it: fix the two Execution defects run 780 exposed** — the `columns` projection
