@@ -24,10 +24,33 @@ defect.
 scheduling tools live, **AC12 MET**, **AC13 dry-run only**. Scheduling is **built for real** on
 EventBridge Scheduler, not stubbed.
 
-> **Next session — the pickup, in priority order. Updated 2026-08-19.**
+> **Next session — the pickup, in priority order. Updated 2026-08-22.**
 >
 > **AC4 is MET ($0.672) and AC2 is MET — see Session 15. Run 780 proves both of Novia's fixes
-> live — see Session 16.**
+> live — see Session 16. Both Execution defects are FIXED AND DEPLOYED — see Session 17.**
+>
+> **1. THE RECEIPT RE-RUN. Everything else waits on it.** Same merchant as a prior receipt, so the
+> comparison is third-against-first and not a new-merchant number. It measures **AC9** and it is the
+> regression test for the duplication fix, which touches every `llm_call` in the system. Watch step
+> 10's input tokens against run 780's 12,460.
+>
+> **2. AC11's table needs its pass, and it is the sprint deliverable.** It still marks AC8 NOT
+> MEASURED and still says the receipt use case "has never run" and that "AC4 has no number" — all
+> three contradict this document's own header. Pending the user's call on how AC7 and AC9 are marked.
+>
+> **3. Checkpoint 4 waits on the Spanish friend** (user decision, 2026-08-22). The "Convinced" half
+> is judged by him; nothing on this side unblocks it.
+>
+> **Off this sprint by user decision (2026-08-22): the vector-threshold calibration.** It goes to
+> **Novia, next sprint**. AC7's "threshold calibrated" clause therefore does not close here — the
+> mechanism is proven, the calibration is not. Run 780's two wrong merges (`PANU BOL MIN SELEX` into
+> *Rustic Sliced Bread*; `ARANDANOS DESH ALT` into *Blueberries 300g*) are the specimens to hand her,
+> and the two thresholds are separate: step 8 is English→English on `name_embedding`, step 8c is raw
+> string→raw string on `alias_name_embedding`.
+>
+> ---
+>
+> **Superseded pickup, kept for the record — updated 2026-08-19.**
 >
 > **0. FIRST, BY USER INSTRUCTION 2026-08-19: fix the vector threshold.** 0.4 was chosen for a
 > cross-lingual comparison that no longer exists on either step, and run 780 shows it admitting
@@ -1933,6 +1956,68 @@ different product folded into an existing one. `ARANDANOS DESH ALT` (dehydrated 
 inventory 6, **Blueberries 300g** — fresh, the exact conflation the pre-run probe predicted at 0.551.
 Neither is an engine fault: the LLM arbitrated on candidates a loose threshold admitted. Both
 strengthen the case for recalibrating off 0.4 now that matching is same-language.
+
+### Session 17 — 2026-08-22 — Both Execution defects fixed and deployed. AC9's blocker is gone.
+
+**User decisions taken at the top of the session, and they reshape what is left:**
+
+| Decision | Consequence |
+|---|---|
+| **Vector-threshold tuning goes to Novia, next sprint** | Pickup item 0 leaves this sprint. AC7's outstanding clause — "threshold calibrated" — does not close here |
+| **Checkpoint 3 is satisfied** | It passes on its own binary threshold, which is AC8, and AC8 is met (runs 775/776/778) |
+| **Checkpoint 4 waits on the Spanish friend's availability** | AC13's "Convinced" half is judged by him; it cannot be scheduled from this side |
+| **AC9 to be measured, not passed by inspection** | The user's initial position was PASS by inspection on qualitative evidence; on the argument below it was changed to measure it |
+
+**On AC9 and inspection.** The qualitative observation offered was that some inventory items are
+categorized via vector search. That is real, and it is evidence for **AC7** — lazy matching
+resolving items and persisting aliases, already recorded as mechanism-proven-live on run 780. AC9
+asks a different question: does per-receipt cost *fall* on repeat use of the same merchant, third
+against first. The only same-merchant progression measured runs the other way (2,708 → 6,050 tokens
+across 775/776), and nothing has been measured since the mechanism landed. Grading it PASS would
+have been the one move AC11's own vocabulary note rules out — *"forcing an unrun criterion into one
+of three grades would manufacture a result, which is the specific failure the fixed-in-advance
+thresholds exist to prevent."* On a make-or-break sprint, on the criterion that *is* the economic
+thesis, that is the worst place to blur. **Agreed: fix the two defects, then measure.**
+
+**Both Execution defects are fixed, deployed to prod, and the first is re-probed live.**
+
+| Defect | Fix | Evidence |
+|---|---|---|
+| `columns` dropped under `vectorSearch` | `getRows` built its select list inside the standard branch only. Built once above the branch now, so both paths project and both validate `columns` | Re-probe, same table and projection: **16 columns → 3**, row 0 **377 chars → 75**. A 5× cut per candidate row, against the 8× estimated in backlog |
+| Every `llm_call` sent its input twice | `assembleInstructions` returns `{ instructions, inlinedKeys }`; `buildStepUserMessage` sends only the residue | Unit-tested directly. Not yet measured live — the receipt re-run is the measurement |
+
+**A third defect surfaced from re-probing rather than trusting the response shape**, which is what
+the backlog entry asked for. With the projection fixed the row still carried `name_embedding: null`:
+the truncation pass walks every vector column in the *schema* and assigned `clean[col]`
+unconditionally, so for a column the projection excluded `v` is `undefined`, `v == null` is true, and
+the key is written back in as null. The projection honoured by the SELECT, then partly undone on the
+way out. Fixed, redeployed, re-probed: `{"id": 17, "name": "Rustic Sliced Bread", "similarity":
+0.5116...}`, 75 chars. **Whole-row reads are unchanged** — 16 columns, vector truncated to
+`'[0,-8...'` — so `52e2393`'s protection holds.
+
+**On the duplication fix, three things that make it a fix rather than a gamble:**
+
+1. **Detection happens during substitution, not by scanning `prompt_text` up front.** `contextMap` is
+   substituted before `resolvedInput`, so a context value containing `{{item}}` puts that token into
+   the text before the input pass reaches it. A raw scan would miss it and send the value twice
+   anyway. There is a unit test for exactly this case.
+2. **No input key is lost.** Every key either reaches the prompt or reaches the user message. A
+   prompt declaring no tokens is unchanged; an explicit `user_input` still wins. Asserted directly.
+3. **Fingerprints do not move.** `computeFingerprint` hashes `resolvedInput` and `userInput`, never
+   the effective user message, so recorded replay corpora keep hitting. The user message is still
+   fully determined by hashed components. The diagnostic `PGC_SessionEntry` records what was actually
+   sent, so run-780-style evidence stays honest.
+
+**Scope, stated plainly:** the duplication fix touches **every `llm_call` in the system**, not only
+`process_receipt`. That is where most of the saving is, and it also means the receipt re-run is the
+regression test for all 15 seed workflows. 997 unit tests pass, 16 of them new. No seed changed.
+
+**What is now open.** The receipt re-run, which measures AC9 and regression-tests the duplication fix
+in one go. And **AC11's table has gone stale against this document's own header** — it still marks
+AC8 NOT MEASURED ("358 registered and never run") and its "What the GO does not claim" section still
+says the receipt use case *"has never run"* and that *"AC4 has no number"*, when AC4 is $0.672 and
+marked PASS two rows above. The sprint's deliverable cannot ship contradicting itself; the pass is
+pending the user's call on how AC7 and AC9 are marked.
 
 ### Session 3 — 2026-08-08 — 2C is not buildable. The premise was wrong.
 
