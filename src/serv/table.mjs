@@ -163,6 +163,16 @@ async function getRows(req) {
 
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 100), 1000);
 
+    // --- Column projection ---
+    // Built once, above the branch: both the vector and the standard path
+    // project through it, and both validate against the same schema.
+    let selectList = '*';
+    if (columns?.length) {
+      const invalid = columns.find(c => !validColumns.has(c));
+      if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
+      selectList = columns.map(c => `"${c}"`).join(', ');
+    }
+
     const dbClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
       : pgcClient;
@@ -190,7 +200,7 @@ async function getRows(req) {
         : `WHERE ${vectorCondition}`;
 
       const sql = `
-        SELECT *, 1 - (${vsCol} <=> $${vecIdx}::vector) AS similarity
+        SELECT ${selectList}, 1 - (${vsCol} <=> $${vecIdx}::vector) AS similarity
         FROM "${tableName}"
         ${combinedWhere}
         ORDER BY ${vsCol} <=> $${vecIdx}::vector
@@ -208,13 +218,6 @@ async function getRows(req) {
       const { whereClause, values } = buildWhereClause(filters);
 
       const orderClause = buildOrderClause(orderTerms);
-
-      let selectList = '*';
-      if (columns?.length) {
-        const invalid = columns.find(c => !validColumns.has(c));
-        if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
-        selectList = columns.map(c => `"${c}"`).join(', ');
-      }
 
       const sql = `
         SELECT ${selectList} FROM "${tableName}"

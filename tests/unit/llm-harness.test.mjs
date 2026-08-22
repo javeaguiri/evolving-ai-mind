@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert           from 'node:assert/strict';
-import { assembleInstructions, STEP_TYPE_CONTRACT_COLUMNS, describeStateDrift } from '../../src/proc/llm-harness.mjs';
+import { assembleInstructions, buildStepUserMessage, STEP_TYPE_CONTRACT_COLUMNS, describeStateDrift } from '../../src/proc/llm-harness.mjs';
 import { computeFingerprint }                               from '../../src/proc/fingerprint.mjs';
 
 // A6 (diagnostic) — the local_state diff reads local_state_keys off the candidate fingerprint,
@@ -60,7 +60,7 @@ function makeContextRow(key, content, opts = {}) {
 describe('assembleInstructions — context injection', () => {
   it('substitutes resolvedInput tokens into prompt_text', () => {
     const promptRow = makePromptRow({ prompt_text: 'Hello {{name}}.' });
-    const result = assembleInstructions(
+    const { instructions: result } = assembleInstructions(
       promptRow, { name: 'Alice' }, [], [], 'test_intent'
     );
     assert.equal(result, 'Hello Alice.');
@@ -69,7 +69,7 @@ describe('assembleInstructions — context injection', () => {
   it('substitutes inject_always context rows', () => {
     const promptRow  = makePromptRow({ prompt_text: 'Rules: {{global_rule}}' });
     const contextRow = makeContextRow('global_rule', 'No harm.', { inject_always: true });
-    const result     = assembleInstructions(promptRow, {}, [contextRow], [], 'anything');
+    const { instructions: result }     = assembleInstructions(promptRow, {}, [contextRow], [], 'anything');
     assert.equal(result, 'Rules: No harm.');
   });
 
@@ -78,7 +78,7 @@ describe('assembleInstructions — context injection', () => {
     const contextRow = makeContextRow('routing', 'Use step:N format.', {
       inject_for: ['generate_workflow_steps'],
     });
-    const result = assembleInstructions(
+    const { instructions: result } = assembleInstructions(
       promptRow, {}, [contextRow], [], 'generate_workflow_steps'
     );
     assert.equal(result, 'Ctx: Use step:N format.');
@@ -89,7 +89,7 @@ describe('assembleInstructions — context injection', () => {
     const contextRow = makeContextRow('routing', 'Use step:N format.', {
       inject_for: ['other_intent'],
     });
-    const result = assembleInstructions(
+    const { instructions: result } = assembleInstructions(
       promptRow, {}, [contextRow], [], 'generate_workflow_steps'
     );
     // {{routing}} placeholder remains unresolved (no substitution found)
@@ -100,7 +100,7 @@ describe('assembleInstructions — context injection', () => {
     const promptRow  = makePromptRow({ prompt_text: 'Val: {{key}}.' });
     const contextRow = makeContextRow('key', 'from_context', { inject_always: true });
     // resolvedInput also has 'key' — should win
-    const result = assembleInstructions(
+    const { instructions: result } = assembleInstructions(
       promptRow, { key: 'from_input' }, [contextRow], [], 'test_intent'
     );
     assert.equal(result, 'Val: from_input.');
@@ -109,20 +109,115 @@ describe('assembleInstructions — context injection', () => {
   it('JSON-stringifies object context values', () => {
     const promptRow  = makePromptRow({ prompt_text: 'Data: {{obj}}.' });
     const contextRow = makeContextRow('obj', { a: 1, b: 2 }, { inject_always: true });
-    const result     = assembleInstructions(promptRow, {}, [contextRow], [], 'test_intent');
+    const { instructions: result }     = assembleInstructions(promptRow, {}, [contextRow], [], 'test_intent');
     assert.equal(result, 'Data: {"a":1,"b":2}.');
   });
 
   it('null contextRows is handled gracefully', () => {
     const promptRow = makePromptRow({ prompt_text: 'No context.' });
-    const result    = assembleInstructions(promptRow, {}, null, [], 'test_intent');
+    const { instructions: result }    = assembleInstructions(promptRow, {}, null, [], 'test_intent');
     assert.equal(result, 'No context.');
   });
 
   it('replaces all occurrences of the same placeholder', () => {
     const promptRow = makePromptRow({ prompt_text: '{{x}} and {{x}} again.' });
-    const result    = assembleInstructions(promptRow, { x: 'hello' }, [], [], 'test_intent');
+    const { instructions: result }    = assembleInstructions(promptRow, { x: 'hello' }, [], [], 'test_intent');
     assert.equal(result, 'hello and hello again.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// inlinedKeys — which input keys the prompt already consumed
+//
+// Run 780: `Rustic Sliced Bread` appeared once in the system entry and once in the
+// user entry of session 1163. assembleInstructions substitutes {{tokens}} into the
+// prompt, then the caller sent JSON.stringify(resolvedInput) as the user message —
+// the same bytes twice, on every llm_call whose prompt inlines the tokens it is
+// passed, which is what the authoring convention encourages.
+// ---------------------------------------------------------------------------
+
+describe('assembleInstructions — inlinedKeys', () => {
+  it('reports an input key whose token was substituted', () => {
+    const promptRow = makePromptRow({ prompt_text: 'Hello {{name}}.' });
+    const { inlinedKeys } = assembleInstructions(promptRow, { name: 'Alice' }, [], [], 'test_intent');
+    assert.deepEqual(inlinedKeys, ['name']);
+  });
+
+  it('omits an input key the prompt never declares', () => {
+    const promptRow = makePromptRow({ prompt_text: 'Hello {{name}}.' });
+    const { inlinedKeys } = assembleInstructions(
+      promptRow, { name: 'Alice', extra: 'unused' }, [], [], 'test_intent'
+    );
+    assert.deepEqual(inlinedKeys, ['name'], 'a key the prompt did not consume must still reach the model');
+  });
+
+  it('does not report context keys — only input keys are candidates for removal', () => {
+    const promptRow  = makePromptRow({ prompt_text: 'Rules: {{global_rule}}' });
+    const contextRow = makeContextRow('global_rule', 'No harm.', { inject_always: true });
+    const { inlinedKeys } = assembleInstructions(promptRow, {}, [contextRow], [], 'anything');
+    assert.deepEqual(inlinedKeys, []);
+  });
+
+  it('reports a key inlined via a context value that itself carries the token', () => {
+    // Detection happens during substitution, not by scanning prompt_text up front:
+    // contextMap is substituted first, so a context value containing {{item}} puts
+    // the token into the text before the input pass reaches it.
+    const promptRow  = makePromptRow({ prompt_text: 'Ctx: {{wrapper}}' });
+    const contextRow = makeContextRow('wrapper', 'Match against {{item}}.', { inject_always: true });
+    const { instructions, inlinedKeys } = assembleInstructions(
+      promptRow, { item: 'olive oil' }, [contextRow], [], 'anything'
+    );
+    assert.equal(instructions, 'Ctx: Match against olive oil.');
+    assert.deepEqual(inlinedKeys, ['item'], 'scanning raw prompt_text would miss this one');
+  });
+
+  it('returns an empty list when the prompt declares no tokens', () => {
+    const promptRow = makePromptRow({ prompt_text: 'Static prompt.' });
+    const { inlinedKeys } = assembleInstructions(promptRow, { a: 1, b: 2 }, [], [], 'test_intent');
+    assert.deepEqual(inlinedKeys, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildStepUserMessage — the residue, and only the residue
+// ---------------------------------------------------------------------------
+
+describe('buildStepUserMessage', () => {
+  it('an explicit user_input always wins', () => {
+    const msg = buildStepUserMessage('what is the total?', { a: 1 }, []);
+    assert.equal(msg, 'what is the total?', 'user_input is a real contract, not a fallback');
+  });
+
+  it('drops the keys the prompt inlined', () => {
+    const msg = buildStepUserMessage('', { name: 'Alice', extra: 'keep' }, ['name']);
+    assert.deepEqual(JSON.parse(msg), { extra: 'keep' });
+  });
+
+  it('sends an empty object when every key was inlined', () => {
+    const msg = buildStepUserMessage('', { name: 'Alice' }, ['name']);
+    assert.equal(msg, '{}', 'the gateway still needs a valid input string');
+  });
+
+  it('sends the whole input when the prompt inlined nothing', () => {
+    const input = { a: 1, b: 2 };
+    const msg   = buildStepUserMessage('', input, []);
+    assert.deepEqual(JSON.parse(msg), input, 'a prompt with no tokens must lose nothing');
+  });
+
+  it('treats a missing inlinedKeys as nothing inlined', () => {
+    const msg = buildStepUserMessage('', { a: 1 }, undefined);
+    assert.deepEqual(JSON.parse(msg), { a: 1 });
+  });
+
+  it('no input key is lost — inlined plus residue is the whole input', () => {
+    const input  = { one: 1, two: 2, three: 3 };
+    const inlined = ['two'];
+    const residue = JSON.parse(buildStepUserMessage('', input, inlined));
+    assert.deepEqual(
+      [...Object.keys(residue), ...inlined].sort(),
+      Object.keys(input).sort(),
+      'every key either reached the prompt or reaches the user message'
+    );
   });
 });
 
@@ -134,7 +229,7 @@ describe('assembleInstructions — memory block injection', () => {
   it('appends memory block when memories provided', () => {
     const promptRow = makePromptRow({ prompt_text: 'Base prompt.' });
     const memories  = [{ memory_type: 'semantic', content: 'Design decision A.' }];
-    const result    = assembleInstructions(promptRow, {}, [], memories, 'test_intent');
+    const { instructions: result }    = assembleInstructions(promptRow, {}, [], memories, 'test_intent');
     assert.ok(result.includes('--- MEMORY ---'));
     assert.ok(result.includes('--- END MEMORY ---'));
     assert.ok(result.includes('Design decision A.'));
@@ -142,7 +237,7 @@ describe('assembleInstructions — memory block injection', () => {
 
   it('omits memory block when memories array is empty', () => {
     const promptRow = makePromptRow({ prompt_text: 'Base prompt.' });
-    const result    = assembleInstructions(promptRow, {}, [], [], 'test_intent');
+    const { instructions: result }    = assembleInstructions(promptRow, {}, [], [], 'test_intent');
     assert.ok(!result.includes('--- MEMORY ---'));
     assert.equal(result, 'Base prompt.');
   });
@@ -151,7 +246,7 @@ describe('assembleInstructions — memory block injection', () => {
     const promptRow  = makePromptRow({ prompt_text: 'Rules: {{rule}}.' });
     const contextRow = makeContextRow('rule', 'Be concise.', { inject_always: true });
     const memories   = [{ memory_type: 'procedural', content: 'Preserve gate at step 3.' }];
-    const result     = assembleInstructions(promptRow, {}, [contextRow], memories, 'test_intent');
+    const { instructions: result }     = assembleInstructions(promptRow, {}, [contextRow], memories, 'test_intent');
     const rulesIdx   = result.indexOf('Rules: Be concise.');
     const memIdx     = result.indexOf('--- MEMORY ---');
     assert.ok(rulesIdx < memIdx, 'rules appear before memory block');
@@ -159,7 +254,7 @@ describe('assembleInstructions — memory block injection', () => {
 
   it('null memories is handled gracefully', () => {
     const promptRow = makePromptRow({ prompt_text: 'Base.' });
-    const result    = assembleInstructions(promptRow, {}, [], null, 'test_intent');
+    const { instructions: result }    = assembleInstructions(promptRow, {}, [], null, 'test_intent');
     assert.equal(result, 'Base.');
   });
 });
