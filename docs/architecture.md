@@ -944,9 +944,21 @@ When `vectorSearch` is present:
 3. Each result row gains a `similarity` float field (0–1)
 4. Standard `filters` can combine with `vectorSearch` to pre-qualify rows before ranking
 
-**Vector columns are stripped from getRows responses.** The `embedding` field is
-never returned to callers. Direct SQL via the bastion is the appropriate path for
-inspection or debugging.
+**`columns` projects on both paths.** The optional `columns` whitelist is validated
+against the schema and applied whether or not `vectorSearch` is present; `similarity`
+is appended to the projection on the vector path, since it is that path's computed
+output. This is not cosmetic. A candidate row read whole and then handed to an
+`llm_call` costs its full width on every run, and the width grows with the table — the
+projection is what keeps that bounded. Both the validation and the select list are
+built once, above the branch, because a projection built inside one branch is a
+projection the other branch silently ignores. That was a live defect: the same call
+returned 16 columns with `vectorSearch` and 3 without.
+
+**Vector columns are truncated, not stripped.** A vector column that the projection
+returned comes back as its first five characters plus `...` — enough to tell populated
+from null without paying for 2,560 numbers. A vector column the projection *excluded*
+is absent entirely, not re-added as null. Direct SQL via the bastion is the appropriate
+path for inspecting a vector's actual contents.
 
 ---
 

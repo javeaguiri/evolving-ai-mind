@@ -119,6 +119,20 @@ Processor resolves step keys by string equality — `parseInt` is never used.
 fields are available to the prompt template via `{{variable}}` substitution.
 Output is the parsed JSON object from the LLM, stored at `output_key` in `local_state`.
 
+**What reaches the model, and where.** The prompt text becomes the system message, with
+every `{{token}}` it declares already substituted. The user message is then one of two
+things: an explicit `input.user_input` if the step supplies one — a real contract for
+steps carrying genuine user-facing text — or, otherwise, the resolved `input` as JSON
+**minus the keys the prompt already inlined**. A key the prompt consumed is not sent
+twice; a key the prompt never declared still arrives, so a prompt that declares no
+tokens at all is unaffected. Every input key reaches the model exactly once, by one
+route or the other.
+
+Inlining is determined during substitution rather than by scanning the prompt text in
+advance, because system-context values are substituted first and one of them may itself
+contain an input token. An author does not need to do anything to get this: writing
+`{{items}}` into the prompt is what tells the harness the value is already delivered.
+
 **Right-brain hooks in `llm_call`.** Every `llm_call` step has two right-brain
 mechanisms wired into it by the Step Processor — no workflow definition changes needed:
 
@@ -732,11 +746,18 @@ requested `vectorSearch` received unranked rows with no error.
 }
 ```
 
-`columns` is a SELECT list. Omit it and every column comes back, **including vector columns** —
-and an embedding is thousands of numbers per row. A step that reads whole rows and passes them
-to a later `llm_call` therefore pays for every embedding it never looks at, on every run, with
-the bill growing as the table grows. Name the columns the step actually uses whenever the table
-carries a `*_embedding` column.
+`columns` is a SELECT list. Omit it and every column comes back — including every nullable
+column the domain has never populated, and a truncated placeholder for each vector column. A
+step that reads whole rows and passes them to a later `llm_call` pays for all of it on every
+run, and the bill grows as the table gains columns. Measured on `PGD_Inventory`: a whole row is
+377 characters, the three columns the matching step actually reads are 75. Name the columns the
+step uses.
+
+**It projects with `vectorSearch` too**, and `similarity` is appended to whatever you asked for.
+This was a live defect until 2026-08-22: the select list was built inside the non-vector branch
+only, so the identical call returned 16 columns with `vectorSearch` and 3 without — silently, on
+exactly the step type the projection exists to make affordable. A vector column the projection
+excludes is now absent rather than returned as null.
 
 Reached through `getRows`' 6th positional argument. `executeServQuery` forwards it — before
 Sprint 10 it destructured five fields and dropped this one, so no workflow could project
