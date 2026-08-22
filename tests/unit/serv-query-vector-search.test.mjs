@@ -131,6 +131,52 @@ describe('serv_query — columns reaches SERV', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The projection has to survive the vector path too
+//
+// Run 780: the same table and the same projection returned 3 columns without
+// vectorSearch and all 16 with it. getRows built its select list inside the
+// standard branch only, so the vector branch always emitted SELECT *. Candidate
+// rows arrived at ~346 chars instead of ~45 and every one of them was then sent
+// to an llm_call — which is the exact cost the projection exists to remove, on
+// the one step type that motivated adding it.
+// ---------------------------------------------------------------------------
+
+const tableSrc = readFileSync('src/serv/table.mjs', 'utf8');
+
+describe('getRows — columns projects on the vector path as well as the standard one', () => {
+  it('the vector SELECT projects through selectList', () => {
+    assert.match(
+      tableSrc,
+      /SELECT \$\{selectList\}, 1 - \(\$\{vsCol\} <=> \$\$\{vecIdx\}::vector\) AS similarity/,
+      'SELECT * on the vector path ignores the caller\'s columns and returns whole rows'
+    );
+  });
+
+  it('still returns similarity — the projection must not drop the ranking score', () => {
+    assert.match(tableSrc, /AS similarity/, 'similarity is the vector path\'s computed output');
+  });
+
+  it('builds the select list once, above the branch, so both paths validate columns', () => {
+    const hoisted = tableSrc.indexOf('let selectList');
+    const branch  = tableSrc.indexOf('if (vectorSearch) {\n      // --- pgvector cosine similarity search ---');
+    assert.ok(hoisted > 0, 'selectList must exist');
+    assert.ok(branch > 0, 'the vector branch must exist');
+    assert.ok(
+      hoisted < branch,
+      'a select list built inside one branch is a select list the other branch silently ignores'
+    );
+  });
+
+  it('rejects an unknown column before either path runs', () => {
+    assert.match(
+      tableSrc,
+      /const invalid = columns\.find\(c => !validColumns\.has\(c\)\);/,
+      'validation lives with the hoisted build, so the vector path gets it too'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Novia's own query_table tool — the same pass-through, one layer up
 //
 // serv_query lets her BUILD a workflow that matches semantically. query_table lets
