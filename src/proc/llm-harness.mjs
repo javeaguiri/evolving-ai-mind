@@ -148,19 +148,31 @@ export function selectInjectedContext(contextRows, resolvedInput, intentCategory
  * Step input values (resolvedInput) take precedence over contextRows —
  * a key present in resolvedInput will not be overwritten by a context row.
  *
+ * Also reports which resolvedInput keys were actually inlined into the prompt,
+ * so the caller can leave them out of the user message instead of sending the
+ * same value twice. Inlining is detected during substitution rather than by
+ * scanning prompt_text up front: a context value may itself contain an input
+ * token, and that token is substituted here too.
+ *
  * @param {object}   promptRow       PGC_Prompt row
  * @param {object}   resolvedInput   Step input resolved against local_state
  * @param {object[]} contextRows     All PGC_SystemContext rows
  * @param {object[]} memories        Budget-selected PGC_Memory rows
  * @param {string}   intentCategory  Used to match inject_for arrays
- * @returns {string}                 Final instructions string
+ * @returns {{instructions: string, inlinedKeys: string[]}}
+ *   instructions — final instructions string
+ *   inlinedKeys  — resolvedInput keys whose {{token}} was found and substituted
  */
 export function assembleInstructions(promptRow, resolvedInput, contextRows, memories, intentCategory) {
   const contextMap = selectInjectedContext(contextRows, resolvedInput, intentCategory);
 
+  const inputKeys      = new Set(Object.keys(resolvedInput ?? {}));
+  const inlinedKeys    = [];
   const allSubstitutions = { ...contextMap, ...resolvedInput };
   let instructions = Object.entries(allSubstitutions).reduce((text, [key, val]) => {
     const placeholder    = `{{${key}}}`;
+    if (!text.includes(placeholder)) return text;
+    if (inputKeys.has(key)) inlinedKeys.push(key);
     const substitution   = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
     return text.split(placeholder).join(substitution);
   }, promptRow.prompt_text ?? '');
@@ -169,7 +181,30 @@ export function assembleInstructions(promptRow, resolvedInput, contextRows, memo
     instructions += '\n\n' + formatMemoryBlock(memories);
   }
 
-  return instructions;
+  return { instructions, inlinedKeys };
+}
+
+/**
+ * The user message for an llm_call.
+ *
+ * An explicit step.input.user_input always wins — it is a real contract for steps
+ * that carry genuine user-facing text. Otherwise the resolved input is sent as
+ * JSON, minus the keys the prompt already inlined: sending those again is the
+ * same bytes twice, once in the system message and once here.
+ *
+ * @param {string}   userInput     resolved step.input.user_input ('' when absent)
+ * @param {object}   resolvedInput Step input resolved against local_state
+ * @param {string[]} inlinedKeys   keys assembleInstructions substituted into the prompt
+ * @returns {string} user message as sent to the gateway
+ */
+export function buildStepUserMessage(userInput, resolvedInput, inlinedKeys) {
+  if (userInput) return userInput;
+
+  const inlined  = new Set(inlinedKeys ?? []);
+  const residue  = Object.fromEntries(
+    Object.entries(resolvedInput ?? {}).filter(([key]) => !inlined.has(key))
+  );
+  return JSON.stringify(residue);
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +308,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
     });
   }
 
-  let instructions = assembleInstructions(
+  let { instructions, inlinedKeys } = assembleInstructions(
     promptRow, resolvedInput, contextRows, memories, intentCategory
   );
 
@@ -288,6 +323,11 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
   }
 
   const userInput = resolveTemplate(step.input?.user_input ?? '', localState);
+
+  // The keys the prompt inlined are dropped from the user message — see
+  // buildStepUserMessage. Computed once so the call, the truncation retry, the
+  // parse retry and the diagnostic session all record the same bytes.
+  const userMessage = buildStepUserMessage(userInput, resolvedInput, inlinedKeys);
 
   // Request fingerprint (docs/arch-replay.md §3) — computed at the seam from the
   // assembled request, before the LLM is called. Hashes the same injected context
@@ -421,7 +461,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
     rawOutput = await callLlm(
       resolvedModel,
       instructions,
-      userInput || JSON.stringify(resolvedInput),
+      userMessage,
       promptRow.output_schema,
       traceId,
       promptRow.max_output_tokens ?? undefined,
@@ -434,7 +474,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
         rawOutput = await callLlmWithResumption(
           resolvedModel,
           instructions,
-          userInput || JSON.stringify(resolvedInput),
+          userMessage,
           promptRow.output_schema,
           traceId,
           promptRow.max_output_tokens ?? undefined,
@@ -453,7 +493,7 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
       rawOutput = await callLlmWithCorrection(
         resolvedModel,
         instructions,
-        userInput || JSON.stringify(resolvedInput),
+        userMessage,
         promptRow.output_schema,
         [{ message: parseErr.message }],
         parseErr.rawOutput,
@@ -512,14 +552,13 @@ export async function executeLlmCall({ step, localState, run, traceId, breakReso
       });
       if (sessionResp.success) {
         const sessionId = sessionResp.row.id;
-        const effectiveUserMsg = userInput || JSON.stringify(resolvedInput);
         let seq = 1;
         await insertRow('PGC_SessionEntry', {
           session_id: sessionId, sequence_number: seq++, role: 'system', content: instructions,
         });
         await insertRow('PGC_SessionEntry', {
           session_id: sessionId, sequence_number: seq++, role: 'user',
-          content: typeof effectiveUserMsg === 'string' ? effectiveUserMsg : JSON.stringify(effectiveUserMsg),
+          content: userMessage,
         });
         await insertRow('PGC_SessionEntry', {
           session_id: sessionId, sequence_number: seq++, role: 'assistant',

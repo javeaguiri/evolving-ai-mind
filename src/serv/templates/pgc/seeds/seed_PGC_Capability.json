@@ -1,0 +1,169 @@
+[
+  {
+    "category": "external",
+    "status": "planned",
+    "available_in": [
+      "proc"
+    ],
+    "notes": "Auth is a query_param named \"token\", value from SSM at auth_ref. Rate limit 60/minute across all Finnhub operations. Timeout 5000ms. Not callable yet: call_capability is stubbed and no capability_call step type exists.",
+    "capability_key": "finnhub_quote",
+    "description": "Finnhub real-time stock quote for one symbol. Returns current price, open, high, low and previous close.",
+    "endpoint": "https://finnhub.io/api/v1/quote",
+    "method": "GET",
+    "auth_ref": "/evolving-mind-ai/finnhub-api-key",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "Ticker symbol, e.g. AAPL"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "type": "number",
+          "description": "current price"
+        },
+        "h": {
+          "type": "number",
+          "description": "high"
+        },
+        "l": {
+          "type": "number",
+          "description": "low"
+        },
+        "o": {
+          "type": "number",
+          "description": "open"
+        },
+        "pc": {
+          "type": "number",
+          "description": "previous close"
+        },
+        "t": {
+          "type": "integer",
+          "description": "unix timestamp"
+        }
+      }
+    }
+  },
+  {
+    "category": "external",
+    "status": "planned",
+    "available_in": [
+      "proc"
+    ],
+    "notes": "Auth is a query_param named \"token\", value from SSM at auth_ref. Rate limit 60/minute across all Finnhub operations. Timeout 5000ms. Not callable yet: call_capability is stubbed and no capability_call step type exists.",
+    "capability_key": "finnhub_candles",
+    "description": "Finnhub OHLCV candles for one symbol over a time range, at a given resolution.",
+    "endpoint": "https://finnhub.io/api/v1/stock/candle",
+    "method": "GET",
+    "auth_ref": "/evolving-mind-ai/finnhub-api-key",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "resolution": {
+          "type": "string",
+          "description": "1, 5, 15, 30, 60, D, W or M"
+        },
+        "from": {
+          "type": "integer",
+          "description": "unix timestamp"
+        },
+        "to": {
+          "type": "integer",
+          "description": "unix timestamp"
+        }
+      },
+      "required": [
+        "symbol",
+        "resolution",
+        "from",
+        "to"
+      ]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "c": {
+          "type": "array"
+        },
+        "h": {
+          "type": "array"
+        },
+        "l": {
+          "type": "array"
+        },
+        "o": {
+          "type": "array"
+        },
+        "v": {
+          "type": "array"
+        },
+        "t": {
+          "type": "array"
+        },
+        "s": {
+          "type": "string",
+          "description": "ok or no_data"
+        }
+      }
+    }
+  },
+  {
+    "category": "external",
+    "status": "planned",
+    "available_in": [
+      "proc"
+    ],
+    "notes": "Auth is a query_param named \"token\", value from SSM at auth_ref. Rate limit 60/minute across all Finnhub operations. Timeout 5000ms. Not callable yet: call_capability is stubbed and no capability_call step type exists.",
+    "capability_key": "finnhub_company_profile",
+    "description": "Finnhub company profile for one symbol: name, exchange, industry, market capitalisation, country.",
+    "endpoint": "https://finnhub.io/api/v1/stock/profile2",
+    "method": "GET",
+    "auth_ref": "/evolving-mind-ai/finnhub-api-key",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol"
+      ]
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "exchange": {
+          "type": "string"
+        },
+        "finnhubIndustry": {
+          "type": "string"
+        },
+        "marketCapitalization": {
+          "type": "number"
+        },
+        "country": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        }
+      }
+    }
+  }
+]

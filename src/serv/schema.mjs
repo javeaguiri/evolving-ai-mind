@@ -14,6 +14,8 @@
 //   POST   /serv/schema/modifyColumn     — ALTER TABLE ... ALTER COLUMN TYPE + PGC_Schema sync
 //   POST   /serv/schema/dropColumn       — ALTER TABLE ... DROP COLUMN CASCADE + PGC_Schema sync
 //   POST   /serv/schema/modifyConstraint — DROP + ADD CONSTRAINT + PGC_Schema sync
+//   POST   /serv/schema/addForeignKey       — ALTER TABLE ... ADD FOREIGN KEY + PGC_Schema sync
+//   POST   /serv/schema/addUniqueConstraint — ALTER TABLE ... ADD UNIQUE + PGC_Schema sync
 //   POST   /serv/schema/listTables          — list all entries in PGC_Schema
 //   POST   /serv/schema/listPhysicalTables  — list physical tables from DB catalog (registered/orphaned)
 //   POST   /serv/schema/getTable            — get one entry by table_name
@@ -69,6 +71,8 @@ export async function handle(req) {
     case 'updateTable':      return updateTable(req);
     case 'modifyConstraint': return modifyConstraint(req);
     case 'dropConstraint':   return dropConstraint(req);
+    case 'addForeignKey':       return addForeignKey(req);
+    case 'addUniqueConstraint': return addUniqueConstraint(req);
     case 'deleteTable':      return deleteTable(req);
     default:
       return err(404, `SERV-Schema route "${req.subRoute}" not found`, req.correlationId);
@@ -838,6 +842,217 @@ async function modifyConstraint(req) {
   } catch (error) {
     console.error('schema modifyConstraint error:', error.message);
     return err(500, `modifyConstraint failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Foreign keys and UNIQUE constraints on an EXISTING table.
+//
+// createTable was the only place either could ever be created, so a table that
+// needed one after the fact had no route at all: a reference table introduced
+// later, or a relationship whose direction turned out wrong. modifyConstraint
+// emits CHECK and nothing else, and updateTable writes PGC_Schema without
+// touching DDL — which would leave the registry asserting a constraint the
+// database does not enforce, the one thing this module exists to prevent.
+// ---------------------------------------------------------------------------
+
+const COLUMN_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+const ON_DELETE_ACTIONS   = new Set(['CASCADE', 'SET NULL', 'RESTRICT', 'NO ACTION']);
+
+// upsertForeignKey — pure. Appends when the named FK is new, replaces it when it
+// is not, so a re-issued request converges rather than duplicating the entry.
+export function upsertForeignKey(existing, foreignKey) {
+  const keys = existing ?? [];
+  if (keys.some(fk => fk.name === foreignKey.name)) {
+    return keys.map(fk => (fk.name === foreignKey.name ? foreignKey : fk));
+  }
+  return [...keys, foreignKey];
+}
+
+// validateForeignKey — pure. Returns an error string, or null when the spec is
+// safe to render into DDL. Every identifier reaching the SQL string is checked
+// here; nothing in the payload is interpolated before this passes.
+export function validateForeignKey(foreignKey) {
+  if (!foreignKey || typeof foreignKey !== 'object') return 'foreignKey is required';
+
+  const { name, column, references, onDelete = 'NO ACTION' } = foreignKey;
+
+  if (!name || !COLUMN_NAME_PATTERN.test(name)) {
+    return `Invalid constraint name "${name}" — must be lowercase alphanumeric + underscore`;
+  }
+  if (!column || !COLUMN_NAME_PATTERN.test(column)) {
+    return `Invalid column name "${column}" — must be lowercase alphanumeric + underscore`;
+  }
+  if (!references?.table || !TABLE_NAME_PATTERN.test(references.table)) {
+    return `Invalid referenced table "${references?.table}"`;
+  }
+  if (!references?.column || !COLUMN_NAME_PATTERN.test(references.column)) {
+    return `Invalid referenced column "${references?.column}"`;
+  }
+  if (!ON_DELETE_ACTIONS.has(onDelete.toUpperCase())) {
+    return `onDelete "${onDelete}" is not allowed — use ${[...ON_DELETE_ACTIONS].join(', ')}`;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/addForeignKey
+// ---------------------------------------------------------------------------
+
+async function addForeignKey(req) {
+  const { tableName, foreignKey } = req.body;
+
+  if (!tableName) return err(400, 'tableName is required', req.correlationId);
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+
+  const invalid = validateForeignKey(foreignKey);
+  if (invalid) return err(400, invalid, req.correlationId);
+
+  const { name, column, references } = foreignKey;
+  const onDelete = (foreignKey.onDelete ?? 'NO ACTION').toUpperCase();
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
+
+  try {
+    await pgcClient.connect();
+
+    // `target` is read from PGC_Schema, never from the caller — see modifyConstraint.
+    const reg = await pgcClient.query(
+      `SELECT target, columns, foreign_keys FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+
+    // Both ends must be registered and live on the same database — PGC and PGD are
+    // separate connections, so a cross-target foreign key cannot exist physically and
+    // would otherwise be recorded in the registry as though it did.
+    const refReg = await pgcClient.query(
+      `SELECT target FROM "PGC_Schema" WHERE table_name = $1`, [references.table]
+    );
+    if (refReg.rows.length === 0) {
+      return err(404, `Referenced table "${references.table}" not found in PGC_Schema`, req.correlationId);
+    }
+    const target = reg.rows[0].target;
+    if (refReg.rows[0].target !== target) {
+      return err(400, `Cannot reference "${references.table}" (${refReg.rows[0].target}) from "${tableName}" (${target}) — different databases`, req.correlationId);
+    }
+
+    // The column must already exist. A foreign key on a column nobody added is the
+    // registry/database divergence in miniature, and the DDL error it raises is opaque.
+    const cols = Array.isArray(reg.rows[0].columns) ? reg.rows[0].columns : [];
+    if (!cols.some(c => c.name === column)) {
+      return err(400, `Column "${column}" does not exist on "${tableName}" — add it first`, req.correlationId);
+    }
+
+    if (target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
+
+    await dbClient.query(`ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${name}"`);
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" ADD CONSTRAINT "${name}" FOREIGN KEY ("${column}") ` +
+      `REFERENCES "${references.table}" ("${references.column}") ON DELETE ${onDelete}`
+    );
+
+    const existing = reg.rows[0].foreign_keys ?? [];
+    const action   = existing.some(fk => fk.name === name) ? 'updated' : 'added';
+    const entry    = { name, column, references: { table: references.table, column: references.column }, onDelete };
+
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET foreign_keys = $1::jsonb, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify(upsertForeignKey(existing, entry)), tableName]
+    );
+
+    console.info(`schema: foreign key "${name}" on "${tableName}" ${action}`);
+    return ok({ success: true, tableName, foreignKey: entry, action }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema addForeignKey error:', error.message);
+    return err(500, `addForeignKey failed: ${error.message}`, req.correlationId);
+  } finally {
+    await dbClient.end();
+    if (dbClient !== pgcClient) await pgcClient.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /serv/schema/addUniqueConstraint
+// ---------------------------------------------------------------------------
+
+async function addUniqueConstraint(req) {
+  const { tableName, constraintName, columns } = req.body;
+
+  if (!tableName || !constraintName) {
+    return err(400, 'tableName and constraintName are required', req.correlationId);
+  }
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    return err(400, `Invalid table name "${tableName}"`, req.correlationId);
+  }
+  if (!COLUMN_NAME_PATTERN.test(constraintName)) {
+    return err(400, `Invalid constraint name "${constraintName}"`, req.correlationId);
+  }
+  if (!Array.isArray(columns) || columns.length === 0) {
+    return err(400, 'columns must be a non-empty array', req.correlationId);
+  }
+  const badColumn = columns.find(c => !COLUMN_NAME_PATTERN.test(c ?? ''));
+  if (badColumn !== undefined) {
+    return err(400, `Invalid column name "${badColumn}"`, req.correlationId);
+  }
+
+  const pgcClient = getClient(process.env.PGC_DATABASE_URL);
+  let dbClient = pgcClient;
+
+  try {
+    await pgcClient.connect();
+
+    const reg = await pgcClient.query(
+      `SELECT target, columns, constraints FROM "PGC_Schema" WHERE table_name = $1`, [tableName]
+    );
+    if (reg.rows.length === 0) {
+      return err(404, `Table "${tableName}" not found in PGC_Schema`, req.correlationId);
+    }
+
+    const registered = Array.isArray(reg.rows[0].columns) ? reg.rows[0].columns : [];
+    const missing    = columns.find(c => !registered.some(rc => rc.name === c));
+    if (missing !== undefined) {
+      return err(400, `Column "${missing}" does not exist on "${tableName}"`, req.correlationId);
+    }
+
+    const target = reg.rows[0].target;
+    if (target === 'pgd') {
+      dbClient = getClient(process.env.PGD_DATABASE_URL);
+      await dbClient.connect();
+    }
+
+    const colList = columns.map(c => `"${c}"`).join(', ');
+    await dbClient.query(`ALTER TABLE "${tableName}" DROP CONSTRAINT IF EXISTS "${constraintName}"`);
+    await dbClient.query(
+      `ALTER TABLE "${tableName}" ADD CONSTRAINT "${constraintName}" UNIQUE (${colList})`
+    );
+
+    const existing = reg.rows[0].constraints ?? [];
+    const action   = existing.some(c => c.name === constraintName) ? 'updated' : 'added';
+    const entry    = { name: constraintName, type: 'unique', columns };
+
+    await pgcClient.query(
+      `UPDATE "PGC_Schema" SET constraints = $1::jsonb, updated_at = now() WHERE table_name = $2`,
+      [JSON.stringify([...existing.filter(c => c.name !== constraintName), entry]), tableName]
+    );
+
+    console.info(`schema: unique constraint "${constraintName}" on "${tableName}" ${action}`);
+    return ok({ success: true, tableName, constraintName, columns, action }, req.correlationId);
+
+  } catch (error) {
+    console.error('schema addUniqueConstraint error:', error.message);
+    return err(500, `addUniqueConstraint failed: ${error.message}`, req.correlationId);
   } finally {
     await dbClient.end();
     if (dbClient !== pgcClient) await pgcClient.end();

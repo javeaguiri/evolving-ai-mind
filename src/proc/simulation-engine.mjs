@@ -13,6 +13,7 @@
 
 import vm from 'vm';
 import { resolveInput, resolvePath } from './template-resolver.mjs';
+import { resolveOutputWrites }       from './state-utils.mjs';
 
 // Known valid routing token pattern — "next", "end", "cancel",
 // a bare step key (e.g. "3", "3a", "1R"), or "step:<key>" for backwards compatibility.
@@ -53,6 +54,23 @@ const MAX_GATE_FIELDS = 40;
 // Only gating issues appear here. Soft warnings are in `issues` for anyone who
 // wants them, but they never block a workflow, so they are not "why it failed".
 // ---------------------------------------------------------------------------
+
+/**
+ * staticOptions / staticSpecialButtons — a gate's `options` and `special_buttons` may each
+ * be an inline array OR a {{template}} reference to an array a preceding step built.
+ * `buildDialog` resolves both; simulation is a pure function with no local_state, so a
+ * template reference contributes no statically-known options — it is not an empty gate,
+ * it is an unknown one, and callers must already treat it that way (see `optionsAreStatic`).
+ *
+ * Returning [] rather than the raw value is what keeps every call site honest. Spreading a
+ * string yields its individual characters, and `.find` on one throws outright: L2 crashed
+ * with a 500 on `list_entity` step 27 — a live `list_selection` gate whose options are
+ * `"{{list_view.gate_options}}"`. Because `register_workflow` refuses any array failing
+ * L0+L1+L2, that crash meant no workflow with a dynamic option list could be registered
+ * at all.
+ */
+const staticOptions        = s => (Array.isArray(s?.options)         ? s.options         : []);
+const staticSpecialButtons = s => (Array.isArray(s?.special_buttons) ? s.special_buttons : []);
 
 function buildErrorSummary({ shapeIssues = [], staticIssues = [], routingMatrix = null, smokeTest = null }) {
   const lines = [];
@@ -143,13 +161,28 @@ export function runLevel0ShapeCheck(steps, { stepTypeContracts = null } = {}) {
       // not a per-type exception list.
       if (nested && field.field === 'output_key') continue;
 
-      const val = resolvePath(step, field.field);
-      if (val === undefined || val === null || val === '') {
+      // `one_of` — the engine accepts several names for one thing, so requiring a single
+      // name would reject a step the engine runs perfectly. executeNotify reads
+      // `message_template ?? message`, and L0 rejecting the second form meant a live,
+      // working workflow could not be re-registered (flashcard_quiz_session step 20).
+      // The requirement is that the group is satisfied, not that a particular name is used.
+      const names   = Array.isArray(field.one_of) && field.one_of.length > 0
+        ? field.one_of
+        : [field.field];
+      const present = names.some(name => {
+        const v = resolvePath(step, name);
+        return v !== undefined && v !== null && v !== '';
+      });
+
+      if (!present) {
+        const label = names.length > 1
+          ? `one of ${names.map(n => `"${n}"`).join(' or ')}`
+          : `required field "${field.field}"`;
         issues.push({
           check:         'missing_required_field',
           step:          stepKey,
           failure_class: 'missing_required_field',
-          detail:        `${step.type} step "${stepKey}" is missing required field "${field.field}". ${field.description ?? ''}`.trim(),
+          detail:        `${step.type} step "${stepKey}" is missing ${label}. ${field.description ?? ''}`.trim(),
         });
       }
     }
@@ -292,9 +325,17 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const stateFlow     = level1Result.state_flow;
   const unrefWrites   = level1Result.unreferenced_writes;
 
-  if (staticIssues.length > 0) {
+  // L1 gates on hard issues only. Until the frozen-date check no L1 issue carried a
+  // `severity`, so this filter is a no-op for every pre-existing check and the gate keeps
+  // exactly the behaviour it had. A warning must not short-circuit the return below, because
+  // doing so would also skip Levels 2a and 2b — an advisory finding cannot be allowed to
+  // suppress the data-flow trace.
+  const staticHard  = staticIssues.filter(i => i.severity !== 'warning');
+  const staticWarn  = staticIssues.filter(i => i.severity === 'warning');
+
+  if (staticHard.length > 0) {
     console.info('simulation-engine: runSimulation — Level 1 failed', {
-      issueCount: staticIssues.length, traceId,
+      issueCount: staticHard.length, warningCount: staticWarn.length, traceId,
     });
     return {
       passed:              false,
@@ -331,13 +372,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
     return {
       passed:              l2Passed,
       level,
-      total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+      total_issues:        routingMatrix.issues.length + smokeTest.issues.length + staticWarn.length,
       error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
       paths_run:           0,
       paths_passed:        0,
       paths_failed:        0,
       shape_analysis:      shapeResult,
-      static_analysis:     { passed: true, issues: [] },
+      static_analysis:     { passed: true, issues: staticWarn },
       state_flow:          stateFlow,
       unreferenced_writes: unrefWrites,
       path_results:        [],
@@ -364,13 +405,13 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const result = {
     passed:              l2Passed,
     level,
-    total_issues:        routingMatrix.issues.length + smokeTest.issues.length,
+    total_issues:        routingMatrix.issues.length + smokeTest.issues.length + staticWarn.length,
     error_summary:       buildErrorSummary({ routingMatrix, smokeTest }),
     paths_run:           pathResults.length,
     paths_passed:        pathsPassed,
     paths_failed:        pathsFailed,
     shape_analysis:      shapeResult,
-    static_analysis:     { passed: true, issues: [] },
+    static_analysis:     { passed: true, issues: staticWarn },
     state_flow:          stateFlow,
     unreferenced_writes: unrefWrites,
     path_results:        pathResults,
@@ -492,7 +533,7 @@ export function runLevel1StaticAnalysis(steps) {
     if (s.on_success) routingValues.push({ field: 'on_success', value: s.on_success });
     if (s.on_else)    routingValues.push({ field: 'on_else',    value: s.on_else });
     if (s.on_complete) routingValues.push({ field: 'on_complete', value: s.on_complete });
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.on_select) routingValues.push({ field: `options[${opt.action ?? opt.value}].on_select`, value: opt.on_select });
     }
 
@@ -569,7 +610,7 @@ export function runLevel1StaticAnalysis(steps) {
       // check is skipped for either field once dynamic; on_cancel (checked
       // unconditionally below) still guarantees a cancel path exists.
       const optionsAreStatic = typeof s.options !== 'string' && typeof s.special_buttons !== 'string';
-      const allGateOptions = [...(s.options ?? []), ...(s.special_buttons ?? [])];
+      const allGateOptions = [...staticOptions(s), ...staticSpecialButtons(s)];
       const hasCancel = !optionsAreStatic || allGateOptions.some(o => o.action === 'cancel' || o.value === 'cancel');
       if (!hasCancel) {
         issues.push({
@@ -657,9 +698,39 @@ export function runLevel1StaticAnalysis(steps) {
     // are resolved via resolveTemplate at runtime; unresolved refs must be caught here.
     // Skip iterator-scoped options: their tokens resolve against iterator items at runtime,
     // not against local_state, so L1 cannot validate them statically.
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.iterator) continue;
       if (typeof opt.description === 'string' && opt.description) templatesToCheck.push(opt.description);
+    }
+
+    // Frozen-date check. A literal date in a step input was written when the workflow was
+    // authored and never changes again, so a workflow that means "today" quietly means the
+    // day it was built, forever. Twice now from the same author: import_budget_spreadsheet
+    // (Sprint 9 D3, three places) and process_receipt step 3, which carried
+    // current_date: "Monday, August 10, 2026" into the prompt that supplies the fallback
+    // purchase date for every future receipt.
+    //
+    // A warning, not a failure: a literal date is legitimate when the workflow means that
+    // specific date — a filter for a historical cutoff, say — and no static check can tell
+    // the two apart. Surfacing it is enough, because the author reads the simulate result
+    // before registering, which is exactly where the two live specimens would have been seen.
+    if (typeof s.input === 'object' && s.input !== null) {
+      const seenDates = new Set();
+      for (const [field, raw] of Object.entries(s.input)) {
+        for (const str of collectTemplateStrings(raw, [])) {
+          if (str.includes('{{')) continue;   // resolved at run time — the correct form
+          const literal = matchDateLiteral(str);
+          if (!literal || seenDates.has(literal)) continue;
+          seenDates.add(literal);
+          issues.push({
+            check:         'frozen_date_literal',
+            step:          stepKey,
+            failure_class: 'frozen_date_literal',
+            severity:      'warning',
+            detail:        `Step "${stepKey}" input.${field} contains the literal date "${literal}", fixed at authoring time. If this is meant to be the current date, it will still be "${literal}" on every future run — compute it at run time in a js_transform step (\`new Date().toISOString().slice(0, 10)\`) and reference that step's output_key instead. Ignore this if the workflow genuinely means that specific date.`,
+          });
+        }
+      }
     }
 
     const stepReads          = new Set();
@@ -847,7 +918,7 @@ export function runLevel1StaticAnalysis(steps) {
       });
     }
     // Collect writes — option-level output_key (modal writes on confirm/review_object gates)
-    for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
       if (opt.output_key && typeof opt.output_key === 'string') {
         const baseOut = opt.output_key.split('.')[0];
         outputKeysSoFar.add(baseOut);
@@ -972,7 +1043,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
         // No explicit decision — auto-continue with the first non-cancel option so that
         // paths which pass through a loop gate en route to a later failure step don't
         // need to enumerate every loop iteration explicitly.
-        const defaultOption = (currentStep.options ?? []).find(
+        const defaultOption = staticOptions(currentStep).find(
           o => o.on_select !== 'cancel' && o.action !== 'cancel'
         );
         if (!defaultOption) {
@@ -985,7 +1056,9 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
             terminal:            currentKey,
             expected_terminal:   path.expected_terminal,
             failure_step:        currentKey,
-            failure_reason:      `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" and no non-cancel default option exists`,
+            failure_reason:      typeof currentStep.options === 'string'
+              ? `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}", whose options are built at runtime (${currentStep.options}). A dynamic option set cannot be auto-continued because simulation has no local_state to resolve it against — declare an explicit gate decision for this step.`
+              : `Path "${path.path_name}" has no decision entry for human_gate step "${currentKey}" and no non-cancel default option exists`,
             local_state_transitions: transitions,
           };
         }
@@ -1029,7 +1102,7 @@ function executeSimPath(steps, path, mockOutputs, runInput) {
       // For choice gates, find the option matching user_response (by action or value) and
       // write its value — mirrors what resume_gate does in production.
       if (currentStep.gate_type === 'choice' && currentStep.output_key && decision.user_response !== undefined) {
-        const matchedOpt = (currentStep.options ?? []).find(
+        const matchedOpt = staticOptions(currentStep).find(
           o => o.action === decision.user_response || o.value === decision.user_response
         );
         localState[currentStep.output_key] = matchedOpt?.value ?? decision.user_response;
@@ -1272,7 +1345,7 @@ function runRoutingMatrix(steps, traceId) {
       if (tt) targets.add(tt);
       if (ft) targets.add(ft);
     } else if (s.type === 'human_gate') {
-      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
         const ot = resolveTarget(key, opt.on_select);
         if (ot) targets.add(ot);
       }
@@ -1447,12 +1520,38 @@ function arrayOfStringsShape(value) {
   return null;
 }
 
+// vectorSearch is embedded before the query runs: SERV takes plain text and calls
+// embedText on it. A queryText that resolves to anything but a string reaches
+// embed-client.mjs as `text.trim is not a function` — an error naming neither the
+// step nor the field. table.mjs rejects a missing column or queryText; this states
+// the same contract early, against the value the trace has actually resolved.
+//
+// Types only, never emptiness: mock input is empty, so a templated queryText
+// resolves to "" on every correct workflow. Empty is a runtime data condition and
+// table.mjs already refuses it; a non-string is a design defect and this is the
+// only layer that sees it before the run.
+function vectorSearchShape(value) {
+  if (!isPlainObject(value)) return 'must be a non-null object';
+  if (typeof value.column !== 'string') {
+    return `column must be a string, got ${JSON.stringify(value.column)}`;
+  }
+  if (typeof value.queryText !== 'string') {
+    return `queryText must be a string — it is embedded as plain text — got ${JSON.stringify(value.queryText)}`;
+  }
+  for (const numeric of ['threshold', 'limit']) {
+    if (value[numeric] !== undefined && typeof value[numeric] !== 'number') {
+      return `${numeric} must be a number, got ${JSON.stringify(value[numeric])}`;
+    }
+  }
+  return null;
+}
+
 // { stepType: { fieldName: validatorFn } } — fields resolved from step.input
 // via resolveInput. Mirrors table.mjs's own runtime validators (validateFilters,
 // insertRow/updateRows/upsertRows shape checks) — these fields throw a hard
 // error at runtime today, so a mismatch here is a hard L2 failure.
 const STEP_INPUT_CONTRACTS = {
-  serv_query:  { filters: filterArrayShape },
+  serv_query:  { filters: filterArrayShape, vectorSearch: vectorSearchShape },
   serv_update: { filters: filterArrayShape, updates: plainObjectShape },
   serv_delete: { filters: filterArrayShape },
   serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
@@ -1472,6 +1571,20 @@ const STEP_PATH_CONTRACTS = {
 // resolveInput treats as a whole-value passthrough (see template-resolver.mjs).
 const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
 
+// True when any bare "{{key}}" anywhere in a field's raw value — the field itself, or a
+// leaf of the object/array it is built from — reads a key whose own computation was
+// inconclusive. A nested token is inherited just as much as a top-level one, and the
+// mock value behind it is a placeholder either way.
+function readsUncertainKey(raw, uncertainKeys) {
+  if (typeof raw === 'string') {
+    const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
+    return Boolean(bareMatch) && uncertainKeys.has(bareMatch[1].trim().split('.')[0]);
+  }
+  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys));
+  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys));
+  return false;
+}
+
 function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
   const key = String(s.step);
 
@@ -1489,10 +1602,7 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
       // Same reasoning applies to loop-accumulated state a single forward pass
       // over the step array can only partially reconstruct (flat-loop patterns
       // that iterate many times before a downstream step consumes the result).
-      if (typeof raw === 'string') {
-        const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
-        if (bareMatch && uncertainKeys.has(bareMatch[1].trim().split('.')[0])) continue;
-      }
+      if (readsUncertainKey(raw, uncertainKeys)) continue;
 
       const resolved = resolveInput(raw, mockState);
       const problem = validate(resolved);
@@ -1608,14 +1718,36 @@ function runJsTransformSmokeTest(steps, traceId) {
           });
         }
 
-        // Propagate result to mockState for downstream steps
+        // Propagate result to mockState for downstream steps, through the same
+        // output_key rule run-workflow.mjs applies — so what the trace models is what
+        // the engine would actually leave in local_state, including an object return
+        // nested under a single output_key.
         if (s.output_key && typeof s.output_key === 'string') {
           const isFallback = threwSyntax || threwRuntime || result === undefined;
-          const useVal      = isFallback ? {} : result;
-          for (const rawKey of s.output_key.split(',')) {
-            const baseOut = rawKey.trim().split('.')[0];
+          // A fallback stands in for a computation that produced no value: there is
+          // nothing to destructure, so every declared key gets the placeholder.
+          let writes = [];
+          if (isFallback) {
+            writes = s.output_key.split(',').map(k => ({ key: k.trim(), value: {} })).filter(w => w.key);
+          } else {
+            try {
+              writes = resolveOutputWrites(s.output_key, result);
+            } catch (err) {
+              // A comma list over a value that cannot carry named keys. The engine throws
+              // on this at runtime; catching it here turns a run-ending defect into a
+              // pre-registration failure naming the step.
+              issues.push({
+                check:         'output_key_destructure_mismatch',
+                step:          key,
+                failure_class: 'output_key_destructure_mismatch',
+                detail:        `js_transform step "${key}" ${err.message}`,
+              });
+            }
+          }
+          for (const { key, value } of writes) {
+            const baseOut = key.split('.')[0];
             if (!(baseOut in mockState)) {
-              mockState[baseOut] = useVal;
+              mockState[baseOut] = value;
               if (isFallback) uncertainKeys.add(baseOut);
             }
           }
@@ -1633,12 +1765,12 @@ function runJsTransformSmokeTest(steps, traceId) {
       // with the first, so a downstream condition reading it has something of the right shape.
       if (s.action_key && typeof s.action_key === 'string') {
         const baseAction = s.action_key.split('.')[0];
-        const firstOpt   = (s.options ?? [])[0];
+        const firstOpt   = staticOptions(s)[0];
         if (!(baseAction in mockState)) {
           mockState[baseAction] = firstOpt?.value ?? firstOpt?.action ?? 'mock_action';
         }
       }
-      for (const opt of [...(s.options ?? []), ...(s.special_buttons ?? [])]) {
+      for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
         if (opt.output_key && typeof opt.output_key === 'string') {
           const baseOut = opt.output_key.split('.')[0];
           if (!(baseOut in mockState)) mockState[baseOut] = 'mock_value';
@@ -1647,8 +1779,9 @@ function runJsTransformSmokeTest(steps, traceId) {
     }
   }
 
-  // Hard failures (affect passed): syntax errors, void returns, and step-input
-  // shape mismatches on fields that throw at runtime (filters/updates/row/rows).
+  // Hard failures (affect passed): syntax errors, void returns, output_key destructure
+  // mismatches, and step-input shape mismatches on fields that throw at runtime
+  // (filters/updates/row/rows/vectorSearch).
   // Runtime errors and severity:'warning' shape mismatches (items_key/context_key,
   // which fail silently at runtime) are soft — mock state may not match real data shapes.
   //
@@ -1669,6 +1802,7 @@ function runJsTransformSmokeTest(steps, traceId) {
 function isHardSmokeFailure(issue) {
   return issue.failure_class === 'js_transform_syntax_error' ||
          issue.failure_class === 'js_transform_void_return'  ||
+         issue.failure_class === 'output_key_destructure_mismatch' ||
          (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 
@@ -1682,6 +1816,27 @@ function isHardSmokeFailure(issue) {
  * Step inputs are plain JSON built by upsert or by an LLM, so there are no cycles to
  * guard against and no prototype chain to walk.
  */
+// Date literals a workflow author actually writes. Deliberately narrow — each alternative
+// requires a four-digit year, because a bare "08/10" or "10 August" is far more likely to be
+// prose than a frozen value, and a false positive on a warning still costs the reader a
+// decision. Returns the matched text, or null.
+const DATE_LITERAL_PATTERNS = [
+  /\b\d{4}-\d{2}-\d{2}\b/,                                                    // 2026-08-10, ISO date or the head of a timestamp
+  /\b\d{1,2}\/\d{1,2}\/\d{4}\b/,                                              // 08/10/2026
+  /\b\d{4}\/\d{1,2}\/\d{1,2}\b/,                                              // 2026/08/10
+  /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/i,  // August 10, 2026
+  /\b\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i,     // 10 August 2026
+];
+
+export function matchDateLiteral(str) {
+  if (typeof str !== 'string') return null;
+  for (const re of DATE_LITERAL_PATTERNS) {
+    const m = re.exec(str);
+    if (m) return m[0];
+  }
+  return null;
+}
+
 export function collectTemplateStrings(value, out) {
   if (typeof value === 'string') {
     out.push(value);
@@ -1695,6 +1850,49 @@ export function collectTemplateStrings(value, out) {
     for (const v of Object.values(value)) collectTemplateStrings(v, out);
   }
   return out;
+}
+
+/**
+ * The `input` keys a workflow actually reads — its de facto input contract.
+ *
+ * PGC_Workflow declares no input schema, so before this the only way to know what to pass
+ * a workflow was to read its steps and infer. A caller who guesses gets no error: an
+ * unsupplied key resolves to undefined and a supplied key nothing reads is discarded in
+ * silence. Run 762 is the specimen — `create_domain` was dispatched with { domain,
+ * description }, step 1 read `input.userInput`, and eleven steps later the run was asking
+ * for approval of a domain nobody requested.
+ *
+ * Two consumption patterns, because a workflow has two ways to reach its input:
+ *   {{input.foo}}                      a template token, anywhere at any depth
+ *   input_key: "input" + items.foo     a js_transform reading the whole input object
+ *
+ * Derived rather than declared, so it cannot drift from the steps it describes. It reports
+ * what is READ, which is not the same as what is required — a workflow may read a key it
+ * treats as optional, and nothing here can tell the difference.
+ *
+ * @param {Array} steps  PGC_Workflow.steps
+ * @returns {string[]} sorted, de-duplicated top-level input key names
+ */
+export function expectedRunInput(steps) {
+  const keys = new Set();
+
+  for (const step of Array.isArray(steps) ? steps : []) {
+    for (const str of collectTemplateStrings(step, [])) {
+      for (const ref of extractTemplateRefs(str)) {
+        if (!ref.startsWith('input.')) continue;
+        const key = ref.slice('input.'.length).split(/[.[]/)[0];
+        if (key) keys.add(key);
+      }
+    }
+
+    // A js_transform bound to the whole input object reaches its fields as items.<key>,
+    // which is not template syntax and so is invisible to the walk above.
+    if (step?.input_key === 'input' && typeof step.expression === 'string') {
+      for (const m of step.expression.matchAll(/\bitems\.([a-zA-Z_$][\w$]*)/g)) keys.add(m[1]);
+    }
+  }
+
+  return [...keys].sort();
 }
 
 /**

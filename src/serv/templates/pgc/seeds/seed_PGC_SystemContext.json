@@ -590,10 +590,10 @@
                   "description": "Array of { column, op, value } filter objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null"
                 },
                 {
-                  "type": "object",
+                  "type": "object | string | array",
                   "field": "input.orderBy",
                   "required": false,
-                  "description": "{ column, direction }"
+                  "description": "One sort term, or a list of them for a composite sort. A term is { column, direction } with direction \"asc\" or \"desc\" (default \"asc\"), or the SQL string form \"column DESC\". A list is either an array of terms or one comma-separated SQL string. Sort on a unique column last whenever the leading term can tie and the row cap can cut the tie. Without that trailing term, which rows come back from within a tied group is not stable between identical queries."
                 },
                 {
                   "type": "integer",
@@ -904,7 +904,7 @@
       "sections": [
         {
           "id": "main",
-          "data": "STEP USAGE PATTERNS — concrete correct forms for each step type\n\nThese patterns show exactly how to write each step type. The most common mistake\nfor each type is noted. Use these alongside the step_type_contracts schema.\n\n────────────────────────────────────────────────\njs_transform — expression-based data manipulation\n────────────────────────────────────────────────\nREQUIRED fields: input_key, output_key, expression, on_success\nexpression MUST be a synchronous IIFE that returns the output value.\n\nCorrect — enrich an array, read cross-step state via local_state:\n{\n  \"step\": \"2\", \"type\": \"js_transform\",\n  \"input_key\": \"proposed_scaffold.tables\",\n  \"output_key\": \"proposed_scaffold.tables\",\n  \"expression\": \"(function() { return items.map(function(t) { return Object.assign({}, t, { domain: local_state.proposed_scaffold.domain }); }); })()\",\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — update a loop counter using cross-step local_state reads:\n{\n  \"step\": \"7\", \"type\": \"js_transform\",\n  \"input_key\": \"loop_state\",\n  \"output_key\": \"loop_state\",\n  \"expression\": \"(function() { var ls = local_state.loop_state; var approved = local_state.user_decision==='approve'; return { items: ls.items, index: ls.index+1, tally: { approved: ls.tally.approved+(approved?1:0), rejected: ls.tally.rejected+(approved?0:1) } }; })()\",\n  \"on_success\": \"next\"\n}\n\nCorrect — compute a boolean flag for a condition step:\n{\n  \"step\": \"8a\", \"type\": \"js_transform\",\n  \"input_key\": \"loop_state\",\n  \"output_key\": \"loop_done\",\n  \"expression\": \"(function() { var ls = local_state.loop_state; return ls.index >= ls.items.length; })()\",\n  \"on_success\": \"next\"\n}\n\nMISTAKES:\n✗ expression that is not an IIFE: \"items.filter(...)\" — must be (function(){...return ...;})()\n✗ using output_key as a dot-path to merge into a parent: \"loop_state.done\" — only top-level keys are reliable write targets; for nested writes, return the full updated object\n✗ trying to await or fetch inside expression — no async, no I/O\n\n────────────────────────────────────────────────\ncondition — routes on a boolean expression, no I/O\n────────────────────────────────────────────────\nREQUIRED fields: expression, on_success, on_else\non_success and on_else are BARE STEP KEYS — same rule as all other routing fields.\nDo NOT use \"step:N\" format here.\n\nCorrect:\n{\n  \"step\": \"8b\", \"type\": \"condition\",\n  \"expression\": \"{{loop_done}}\",\n  \"on_success\": \"10\",\n  \"on_else\": \"3\"\n}\n\nMISTAKES:\n✗ on_success: \"step:3\" — WRONG. Use bare key: \"3\"\n✗ condition writes no output_key — it produces no local_state value\n✗ using a {{template}} that resolves to a complex object — expression must resolve to a truthy/falsy scalar. Write a boolean flag in a prior js_transform and condition on that flag.\n\n────────────────────────────────────────────────\nhuman_gate — confirm type (simple acknowledgement)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type, message_template, options (must include cancel)\n\nCorrect — simple confirmation before a destructive action:\n{\n  \"step\": \"4\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.\",\n  \"options\": [\n    { \"label\": \"Confirm delete\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",         \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — confirm gate with context_key shows the data object above the buttons.\nWhen context_key is present and output_key is set, the user's selected action\nvalue is written to local_state[output_key]:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"What would you like help with?\",\n  \"context_key\": \"help_options.domainButtons\",\n  \"output_key\": \"help_selection\",\n  \"options\": [\n    { \"label\": \"System commands\", \"action\": \"system\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",          \"action\": \"cancel\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ output_key on a confirm gate WITHOUT context_key — the value is never written. output_key only writes on form gates and on confirm gates that also have context_key.\n✗ missing cancel option — required by static analysis validator.\n\n────────────────────────────────────────────────\nhuman_gate — form type (the ONLY gate that collects user input)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"form\", message_template, fields, output_key, options\nfields is an array — one entry per value collected: { name, type, label?, optional?, options?/options_key? }.\ntype is what is being collected, never a widget name: text | textarea | select | multi_select | radio | checkbox | date | time | datetime.\n  • select/radio → one value.   multi_select/checkbox → an ARRAY.   date → \"YYYY-MM-DD\".\n  • radio/checkbox cap at 10 options; select/multi_select at 100.\n  • options_key points at a local_state path, so a dropdown can offer rows the workflow already queried.\noutput_key is REQUIRED — it receives ONE object keyed by field name, e.g. { period: \"2026-07-01\", category_id: \"3\" }.\nNo context_key — a form declares its inputs in fields.\nOptions must have exactly one Submit (action: confirm) and one Cancel.\n\nRULE: never collect a date, or a value from a set you can enumerate, as free text and then add an llm_call to parse it. Use a field of the matching type — a picker is deterministic, parsing prose costs a model call and can misread the user. Free-form prose is a \"textarea\" field; there is no separate free-text gate.\n\nCorrect:\n{\n  \"step\": \"5\", \"type\": \"human_gate\", \"gate_type\": \"form\",\n  \"message_template\": \"Which month do you want to edit?\",\n  \"fields\": [\n    { \"name\": \"period\", \"type\": \"date\", \"label\": \"Budget month\" },\n    { \"name\": \"category_id\", \"type\": \"select\", \"label\": \"Category\", \"options_key\": \"categories\", \"option_value_key\": \"id\", \"option_label_key\": \"name\" },\n    { \"name\": \"notes\", \"type\": \"textarea\", \"label\": \"Notes\", \"optional\": true }\n  ],\n  \"output_key\": \"user_answer\",\n  \"options\": [\n    { \"label\": \"Submit\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\", \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ context_key on a form — invalid, ignored; a form declares its inputs in fields\n✗ omitting output_key — the collected values are lost\n✗ a text_input gate — superseded by form; use a \"textarea\" field for free-form prose\n✗ collecting a date or an enumerable value as free text, then parsing it with an llm_call — use a typed field\n✗ naming a widget in a field's type (\"datepicker\", \"dropdown\") — type says WHAT is collected; the UI layer picks the widget\n✗ output_key on confirm/review_object gate types — has no effect; only form writes its inputs on submit\n\n────────────────────────────────────────────────\nhuman_gate — review_object type (structured summary)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"review_object\", message_template, context_key, options\n\nCorrect:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"review_object\",\n  \"message_template\": \"Here's what I parsed. Does this look right?\",\n  \"context_key\": \"parsed_entity\",\n  \"options\": [\n    { \"label\": \"Looks good\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",     \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\n────────────────────────────────────────────────\niterator — sequential execution over an array\n────────────────────────────────────────────────\nREQUIRED fields: items_key, item_step, output_key, on_complete, execution_mode\nexecution_mode MUST always be \"sequential\". Without it the iterator is non-sequential\nand large batches will exhaust Lambda concurrency.\nitem_step uses {{item}} and {{item.field}} to reference the current element.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"iterator\",\n  \"items_key\": \"child_inserts\",\n  \"item_step\": {\n    \"type\": \"serv_insert\",\n    \"input\": { \"tableName\": \"{{item.tableName}}\", \"row\": \"{{item.row}}\" },\n    \"on_else\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"inserted_children\",\n  \"on_complete\": \"next\",\n  \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ omitting execution_mode — always required\n✗ item_step referencing local_state keys that do not exist yet — item_step runs with the parent frame's local_state plus the injected 'item' key\n✗ output_key omitted — iterator results are lost\n\n\n\n────────────────────────────────────────────────\nhuman_gate — choice type (single-select with descriptions)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"choice\", message_template, options (value/label/description shape)\noutput_key is written with the selected option's value when the user responds.\nOptions use { value, label, description, on_select } — value is the machine identifier\nwritten to output_key, label is the short button text, description is shown above buttons.\n\nCorrect — standalone choice gate:\n{\n  \"step\": \"3b\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"How should the workflow evaluate the response?\",\n  \"output_key\": \"eval_preference\",\n  \"options\": [\n    { \"value\": \"llm\",    \"label\": \"A\", \"description\": \"LLM grades each answer — precise but uses tokens\", \"on_select\": \"next\" },\n    { \"value\": \"self\",   \"label\": \"B\", \"description\": \"Self-report pass/fail after seeing the answer\",     \"on_select\": \"next\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop workflow\",                               \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — choice gate as item_step inside a suspending iterator:\n{\n  \"step\": \"5\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_success\": \"next\",\n    \"on_else\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"next\",\n  \"on_else\": \"cancel\"\n}\nEach item in preference_gates must have shape: { question, options: [{value, label, description, on_select}] }\nThe iterator suspends once per item. resume_gate increments current_index and strips\nthe item binding before merging state back onto the iterator frame.\nThe results array at output_key collects one selected value per item.\n\n\nCorrect — choice gate with iterator on option (one button per array item):\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"Select a collection:\\n{{items_list}}\",\n  \"output_key\": \"selected_collection_id\",\n  \"options\": [\n    { \"value\": \"{{id}}\", \"label\": \"{{name}}\", \"description\": \"{{card_count}} cards\", \"on_select\": \"next\", \"iterator\": \"decks\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\nThe iterator field on an option expands it into one button per item in localState[\"decks\"].\nTokens in label/value/description resolve against {...localState, ...item}.\nDo NOT add a preceding js_transform to build the options array — use iterator instead.\nMISTAKES:\n✗ Using confirm, form, list_selection, or review_object as item_step gate_type inside\n  an iterator — only choice composes correctly into a results array per item.\n✗ Omitting execution_mode: \"sequential\" on any iterator — always required.\n✗ Using a suspending iterator when inter-item state is needed — use the flat loop\n  pattern instead (backward step reference with a human_gate in the loop path).\n  See the flat loop example in create_domain_example system context.\n\n✗ Adding a js_transform step before a choice human_gate to format the options array —\n  set iterator: '<local_state_key>' on the option object instead. The iterator pattern\n  is handled natively by buildDialog and requires no extra step.\n\n────────────────────────────────────────────────\nllm_call — calling an existing prompt\n────────────────────────────────────────────────\nREQUIRED fields: input.prompt (intent_category), output_key, on_success, on_else\ninput.prompt must match an intent_category in PGC_Prompt. All other input keys\nbecome {{template}} substitutions in the prompt text.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"llm_call\",\n  \"input\": {\n    \"prompt\": \"evaluate_translation\",\n    \"term\":        \"{{current_card.term}}\",\n    \"definition\":  \"{{current_card.definition}}\",\n    \"user_answer\": \"{{user_answer}}\"\n  },\n  \"output_key\": \"eval_result\",\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ referencing a prompt intent_category that does not exist in PGC_Prompt — check design_spec.prompts_needed to confirm the prompt was seeded\n✗ adding output_schema to an llm_call step — output_schema is defined on the PGC_Prompt row, not on the step\n────────────────────────────────────────────────\niterator + human_gate (choice) — dynamic preference gates\n────────────────────────────────────────────────\nUse this pattern when the right brain research step returns preference_questions and you\nneed to present each question as a separate human_gate choice to the user.\n\nStep A — js_transform builds the preference_gates array from right_brain_research output:\n{\n  \"step\": \"A\", \"type\": \"js_transform\",\n  \"input_key\": \"right_brain_research\",\n  \"output_key\": \"preference_gates\",\n  \"expression\": \"(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, options: opts }; }); })()\",\n  \"on_success\": \"next\"\n}\n\nStep B — condition skips iterator if no questions were found:\n{\n  \"step\": \"B\", \"type\": \"condition\",\n  \"expression\": \"{{preference_gates.length}}\",\n  \"on_success\": \"C\",\n  \"on_else\": \"D\"\n}\n\nStep C — iterator presents each preference question as a choice gate:\n{\n  \"step\": \"C\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_else\": \"cancel\",\n    \"on_success\": \"next\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"D\",\n  \"on_else\": \"cancel\"\n}\n\nStep D — left brain step that receives user_preferences in its input.\n\nKEY: \"options\": \"{{item.options}}\" is a single-token template that resolves to the item's\noptions array at runtime. This is the only way to pass dynamic arrays into human_gate options.\nIt works because resolveInput detects a single-token template and returns the raw resolved value\n(the array) instead of stringifying it.\n\nMISTAKES:\n✗ options: [ { \"label\": \"A\", \"value\": \"...\" } ]  — static, ignores research output\n✗ options: \"{{preference_gates}}\"  — wrong key, must reference {{item.options}} inside item_step\n✗ gate_type other than \"choice\" inside iterator  — only choice is valid as suspending item_step\n"
+          "data": "STEP USAGE PATTERNS — concrete correct forms for each step type\n\nThese patterns show exactly how to write each step type. The most common mistake\nfor each type is noted. Use these alongside the step_type_contracts schema.\n\n────────────────────────────────────────────────\njs_transform — expression-based data manipulation\n────────────────────────────────────────────────\nREQUIRED fields: input_key, output_key, expression, on_success\nexpression MUST be a synchronous IIFE that returns the output value.\n\nCorrect — enrich an array, read cross-step state via local_state:\n{\n  \"step\": \"2\", \"type\": \"js_transform\",\n  \"input_key\": \"proposed_scaffold.tables\",\n  \"output_key\": \"proposed_scaffold.tables\",\n  \"expression\": \"(function() { return items.map(function(t) { return Object.assign({}, t, { domain: local_state.proposed_scaffold.domain }); }); })()\",\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — update a loop counter using cross-step local_state reads:\n{\n  \"step\": \"7\", \"type\": \"js_transform\",\n  \"input_key\": \"loop_state\",\n  \"output_key\": \"loop_state\",\n  \"expression\": \"(function() { var ls = local_state.loop_state; var approved = local_state.user_decision==='approve'; return { items: ls.items, index: ls.index+1, tally: { approved: ls.tally.approved+(approved?1:0), rejected: ls.tally.rejected+(approved?0:1) } }; })()\",\n  \"on_success\": \"next\"\n}\n\nCorrect — compute a boolean flag for a condition step:\n{\n  \"step\": \"8a\", \"type\": \"js_transform\",\n  \"input_key\": \"loop_state\",\n  \"output_key\": \"loop_done\",\n  \"expression\": \"(function() { var ls = local_state.loop_state; return ls.index >= ls.items.length; })()\",\n  \"on_success\": \"next\"\n}\n\nMISTAKES:\n✗ expression that is not an IIFE: \"items.filter(...)\" — must be (function(){...return ...;})()\n✗ using output_key as a dot-path to merge into a parent: \"loop_state.done\" — only top-level keys are reliable write targets; for nested writes, return the full updated object\n✗ trying to await or fetch inside expression — no async, no I/O\n\n────────────────────────────────────────────────\ncondition — routes on a boolean expression, no I/O\n────────────────────────────────────────────────\nREQUIRED fields: expression, on_success, on_else\non_success and on_else are BARE STEP KEYS — same rule as all other routing fields.\nDo NOT use \"step:N\" format here.\n\nCorrect:\n{\n  \"step\": \"8b\", \"type\": \"condition\",\n  \"expression\": \"{{loop_done}}\",\n  \"on_success\": \"10\",\n  \"on_else\": \"3\"\n}\n\nMISTAKES:\n✗ on_success: \"step:3\" — WRONG. Use bare key: \"3\"\n✗ condition writes no output_key — it produces no local_state value\n✗ using a {{template}} that resolves to a complex object — expression must resolve to a truthy/falsy scalar. Write a boolean flag in a prior js_transform and condition on that flag.\n\n────────────────────────────────────────────────\nhuman_gate — confirm type (simple acknowledgement)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type, message_template, options (must include cancel)\n\nCorrect — simple confirmation before a destructive action:\n{\n  \"step\": \"4\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"Delete {{input.entity_name}} id={{input.id}}? This cannot be undone.\",\n  \"options\": [\n    { \"label\": \"Confirm delete\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",         \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — confirm gate with context_key shows the data object above the buttons.\nWhen context_key is present and output_key is set, the user's selected action\nvalue is written to local_state[output_key]:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"confirm\",\n  \"message_template\": \"What would you like help with?\",\n  \"context_key\": \"help_options.domainButtons\",\n  \"output_key\": \"help_selection\",\n  \"options\": [\n    { \"label\": \"System commands\", \"action\": \"system\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",          \"action\": \"cancel\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ output_key on a confirm gate WITHOUT context_key — the value is never written. output_key only writes on form gates and on confirm gates that also have context_key.\n✗ missing cancel option — required by static analysis validator.\n\n────────────────────────────────────────────────\nhuman_gate — form type (the ONLY gate that collects user input)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"form\", message_template, fields, output_key, options\nfields is an array — one entry per value collected: { name, type, label?, optional?, options?/options_key? }.\ntype is what is being collected, never a widget name: text | textarea | select | multi_select | radio | checkbox | date | time | datetime.\n  • select/radio → one value.   multi_select/checkbox → an ARRAY.   date → \"YYYY-MM-DD\".\n  • radio/checkbox cap at 10 options; select/multi_select at 100.\n  • options_key points at a local_state path, so a dropdown can offer rows the workflow already queried.\noutput_key is REQUIRED — it receives ONE object keyed by field name, e.g. { period: \"2026-07-01\", category_id: \"3\" }.\nNo context_key — a form declares its inputs in fields.\nOptions must have exactly one Submit (action: confirm) and one Cancel.\n\nRULE: never collect a date, or a value from a set you can enumerate, as free text and then add an llm_call to parse it. Use a field of the matching type — a picker is deterministic, parsing prose costs a model call and can misread the user. Free-form prose is a \"textarea\" field; there is no separate free-text gate.\n\nCorrect:\n{\n  \"step\": \"5\", \"type\": \"human_gate\", \"gate_type\": \"form\",\n  \"message_template\": \"Which month do you want to edit?\",\n  \"fields\": [\n    { \"name\": \"period\", \"type\": \"date\", \"label\": \"Budget month\" },\n    { \"name\": \"category_id\", \"type\": \"select\", \"label\": \"Category\", \"options_key\": \"categories\", \"option_value_key\": \"id\", \"option_label_key\": \"name\" },\n    { \"name\": \"notes\", \"type\": \"textarea\", \"label\": \"Notes\", \"optional\": true }\n  ],\n  \"output_key\": \"user_answer\",\n  \"options\": [\n    { \"label\": \"Submit\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\", \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ context_key on a form — invalid, ignored; a form declares its inputs in fields\n✗ omitting output_key — the collected values are lost\n✗ a text_input gate — superseded by form; use a \"textarea\" field for free-form prose\n✗ collecting a date or an enumerable value as free text, then parsing it with an llm_call — use a typed field\n✗ naming a widget in a field's type (\"datepicker\", \"dropdown\") — type says WHAT is collected; the UI layer picks the widget\n✗ output_key on confirm/review_object gate types — has no effect; only form writes its inputs on submit\n\n────────────────────────────────────────────────\nhuman_gate — review_object type (structured summary)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"review_object\", message_template, context_key, options\n\nCorrect:\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"review_object\",\n  \"message_template\": \"Here's what I parsed. Does this look right?\",\n  \"context_key\": \"parsed_entity\",\n  \"options\": [\n    { \"label\": \"Looks good\", \"action\": \"confirm\", \"on_select\": \"next\" },\n    { \"label\": \"Cancel\",     \"action\": \"cancel\",  \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\n────────────────────────────────────────────────\niterator — sequential execution over an array\n────────────────────────────────────────────────\nREQUIRED fields: items_key, item_step, output_key, on_complete, execution_mode\nexecution_mode MUST always be \"sequential\". Without it the iterator is non-sequential\nand large batches will exhaust Lambda concurrency.\nitem_step uses {{item}} and {{item.field}} to reference the current element.\n\nDO NOT iterate a write in order to write many rows. serv_insert takes an array in input.row\nand serv_upsert takes an array in input.rows — each writes the whole set in ONE call, where an\niterator costs one SQS round trip per row. The example below iterates because its tableName\nvaries per item, which is the case that genuinely needs an iterator; the others are an item_step\nthat suspends (a human_gate) or one that needs its own filters per item (serv_update, which has\nno batch form).\n\nCorrect — iterating because each item targets a DIFFERENT table:\n{\n  \"step\": \"6\", \"type\": \"iterator\",\n  \"items_key\": \"child_inserts\",\n  \"item_step\": {\n    \"type\": \"serv_insert\",\n    \"input\": { \"tableName\": \"{{item.tableName}}\", \"row\": \"{{item.row}}\" },\n    \"on_else\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"inserted_children\",\n  \"on_complete\": \"next\",\n  \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ omitting execution_mode — always required\n✗ item_step referencing local_state keys that do not exist yet — item_step runs with the parent frame's local_state plus the injected 'item' key\n✗ output_key omitted — iterator results are lost\n\n\n\n────────────────────────────────────────────────\nhuman_gate — choice type (single-select with descriptions)\n────────────────────────────────────────────────\nREQUIRED fields: gate_type: \"choice\", message_template, options (value/label/description shape)\noutput_key is written with the selected option's value when the user responds.\nOptions use { value, label, description, on_select } — value is the machine identifier\nwritten to output_key, label is the short button text, description is shown above buttons.\n\nCorrect — standalone choice gate:\n{\n  \"step\": \"3b\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"How should the workflow evaluate the response?\",\n  \"output_key\": \"eval_preference\",\n  \"options\": [\n    { \"value\": \"llm\",    \"label\": \"A\", \"description\": \"LLM grades each answer — precise but uses tokens\", \"on_select\": \"next\" },\n    { \"value\": \"self\",   \"label\": \"B\", \"description\": \"Self-report pass/fail after seeing the answer\",     \"on_select\": \"next\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop workflow\",                               \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nCorrect — choice gate as item_step inside a suspending iterator:\n{\n  \"step\": \"5\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_success\": \"next\",\n    \"on_else\": \"cancel\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"next\",\n  \"on_else\": \"cancel\"\n}\nEach item in preference_gates must have shape: { question, options: [{value, label, description, on_select}] }\nThe iterator suspends once per item. resume_gate increments current_index and strips\nthe item binding before merging state back onto the iterator frame.\nThe results array at output_key collects one selected value per item.\n\n\nCorrect — choice gate with iterator on option (one button per array item):\n{\n  \"step\": \"3\", \"type\": \"human_gate\", \"gate_type\": \"choice\",\n  \"message_template\": \"Select a collection:\\n{{items_list}}\",\n  \"output_key\": \"selected_collection_id\",\n  \"options\": [\n    { \"value\": \"{{id}}\", \"label\": \"{{name}}\", \"description\": \"{{card_count}} cards\", \"on_select\": \"next\", \"iterator\": \"decks\" },\n    { \"value\": \"cancel\", \"label\": \"Cancel\", \"description\": \"Stop\", \"on_select\": \"cancel\" }\n  ],\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\nThe iterator field on an option expands it into one button per item in localState[\"decks\"].\nTokens in label/value/description resolve against {...localState, ...item}.\nDo NOT add a preceding js_transform to build the options array — use iterator instead.\nMISTAKES:\n✗ Using confirm, form, list_selection, or review_object as item_step gate_type inside\n  an iterator — only choice composes correctly into a results array per item.\n✗ Omitting execution_mode: \"sequential\" on any iterator — always required.\n✗ Using a suspending iterator when inter-item state is needed — use the flat loop\n  pattern instead (backward step reference with a human_gate in the loop path).\n  See the flat loop example in create_domain_example system context.\n\n✗ Adding a js_transform step before a choice human_gate to format the options array —\n  set iterator: '<local_state_key>' on the option object instead. The iterator pattern\n  is handled natively by buildDialog and requires no extra step.\n\n────────────────────────────────────────────────\nllm_call — calling an existing prompt\n────────────────────────────────────────────────\nREQUIRED fields: input.prompt (intent_category), output_key, on_success, on_else\ninput.prompt must match an intent_category in PGC_Prompt. All other input keys\nbecome {{template}} substitutions in the prompt text.\n\nCorrect:\n{\n  \"step\": \"6\", \"type\": \"llm_call\",\n  \"input\": {\n    \"prompt\": \"evaluate_translation\",\n    \"term\":        \"{{current_card.term}}\",\n    \"definition\":  \"{{current_card.definition}}\",\n    \"user_answer\": \"{{user_answer}}\"\n  },\n  \"output_key\": \"eval_result\",\n  \"on_success\": \"next\", \"on_else\": \"cancel\"\n}\n\nMISTAKES:\n✗ referencing a prompt intent_category that does not exist in PGC_Prompt — check design_spec.prompts_needed to confirm the prompt was seeded\n✗ adding output_schema to an llm_call step — output_schema is defined on the PGC_Prompt row, not on the step\n────────────────────────────────────────────────\niterator + human_gate (choice) — dynamic preference gates\n────────────────────────────────────────────────\nUse this pattern when the right brain research step returns preference_questions and you\nneed to present each question as a separate human_gate choice to the user.\n\nStep A — js_transform builds the preference_gates array from right_brain_research output:\n{\n  \"step\": \"A\", \"type\": \"js_transform\",\n  \"input_key\": \"right_brain_research\",\n  \"output_key\": \"preference_gates\",\n  \"expression\": \"(function() { var letters = ['A','B','C','D','E']; return (items.preference_questions || []).map(function(q) { var opts = (q.options || []).map(function(o, i) { return { value: o.value, label: letters[i] || String.fromCharCode(65+i), description: o.description || '', on_select: 'next' }; }); opts.push({ value: 'na', label: 'N/A', description: 'Not applicable to my use case', on_select: 'next' }); opts.push({ value: 'cancel', label: 'Cancel', description: '', on_select: 'cancel' }); return { id: q.id, question: q.question, options: opts }; }); })()\",\n  \"on_success\": \"next\"\n}\n\nStep B — condition skips iterator if no questions were found:\n{\n  \"step\": \"B\", \"type\": \"condition\",\n  \"expression\": \"{{preference_gates.length}}\",\n  \"on_success\": \"C\",\n  \"on_else\": \"D\"\n}\n\nStep C — iterator presents each preference question as a choice gate:\n{\n  \"step\": \"C\", \"type\": \"iterator\",\n  \"items_key\": \"preference_gates\",\n  \"item_step\": {\n    \"type\": \"human_gate\",\n    \"gate_type\": \"choice\",\n    \"message_template\": \"{{item.question}}\",\n    \"options\": \"{{item.options}}\",\n    \"output_key\": \"user_preferences\",\n    \"on_else\": \"cancel\",\n    \"on_success\": \"next\"\n  },\n  \"execution_mode\": \"sequential\",\n  \"output_key\": \"user_preferences\",\n  \"on_complete\": \"D\",\n  \"on_else\": \"cancel\"\n}\n\nStep D — left brain step that receives user_preferences in its input.\n\nKEY: \"options\": \"{{item.options}}\" is a single-token template that resolves to the item's\noptions array at runtime. This is the only way to pass dynamic arrays into human_gate options.\nIt works because resolveInput detects a single-token template and returns the raw resolved value\n(the array) instead of stringifying it.\n\nMISTAKES:\n✗ options: [ { \"label\": \"A\", \"value\": \"...\" } ]  — static, ignores research output\n✗ options: \"{{preference_gates}}\"  — wrong key, must reference {{item.options}} inside item_step\n✗ gate_type other than \"choice\" inside iterator  — only choice is valid as suspending item_step\n"
         }
       ]
     }
@@ -1007,7 +1007,7 @@
       "sections": [
         {
           "id": "main",
-          "data": "DB STEP SHAPES — canonical serv_* step examples\n\nEvery filter must follow: { \"column\": \"<exact column name>\", \"op\": \"<op>\", \"value\": \"<literal or {{template}}>\" }\n\nValid ops (exact strings — no SQL operators, no alternatives):\n  eq       equal (=)              neq      not equal (!=)\n  gt       greater than (>)       gte      greater than or equal (>=)\n  lt       less than (<)          lte      less than or equal (<=)\n  like     SQL LIKE pattern       in       value is in an array\n  is_null  IS NULL (no value)     not_null IS NOT NULL (no value)\n\nserv_query (read rows — filters optional):\n{ \"step\": \"1\", \"type\": \"serv_query\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{input.id}}\" }],\n             \"orderBy\": { \"column\": \"created_at\", \"direction\": \"desc\" }, \"limit\": 50 },\n  \"output_key\": \"results\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_insert (create one row):\n{ \"step\": \"2\", \"type\": \"serv_insert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"row\": { \"col1\": \"{{input.value}}\", \"col2\": \"literal\" } },\n  \"output_key\": \"inserted_row\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_update (update matching rows — filters REQUIRED, must scope to specific rows):\n{ \"step\": \"3\", \"type\": \"serv_update\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }],\n             \"updates\": { \"col1\": \"{{input.value}}\" } },\n  \"output_key\": \"update_result\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_delete (delete matching rows — filters REQUIRED, must scope to specific rows):\n{ \"step\": \"4\", \"type\": \"serv_delete\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }] },\n  \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_upsert (insert new rows, update existing ones — one call, no lookup step needed):\n{ \"step\": \"5\", \"type\": \"serv_upsert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"matchColumns\": [\"year\", \"month\", \"category_id\"],\n             \"rows\": \"{{parsed_records}}\" },\n  \"output_key\": \"upsert_result\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\nUse serv_upsert whenever a batch of records must be inserted if new or updated if already present (e.g. importing spreadsheet data, syncing recurring records) — matched by one or more columns whose combined values identify an existing row. matchColumns is always a flat array of column name strings.\n\nWHEN A RECORD ALREADY HAS ITS OWN UNIQUE KEY (e.g. a primary key you already resolved), use serv_update instead of serv_upsert — serv_upsert is for the \"might be new, might already exist\" case.\n\nDO NOT hand-build an insert-vs-update pattern yourself: never write a js_transform that produces one filter array PER RECORD (an array of filter-group arrays) to feed into a serv_query's filters field — filters on serv_query/serv_update/serv_delete is always ONE FLAT array of filter objects, applied to a single query. If you need to check for existing rows across a batch of records before writing, use serv_upsert instead of a js_transform + serv_query + js_transform diff chain.\n\nFILTER RULES:\n- filters is always an array of filter objects — never a plain string, never flat key-value pairs, never an array of arrays\n- column is always a literal column name (e.g. \"id\", \"name\") — never a {{template}}\n- op is always a literal string from the list above — never \"=\", \"!=\", \"==\", \"contains\", \"equals\"\n- value is a literal or a {{template}} reference; omit for is_null and not_null ops\n- serv_update and serv_delete MUST have at least one filter — unfiltered mass writes are rejected at runtime"
+          "data": "DB STEP SHAPES — canonical serv_* step examples\n\nEvery filter must follow: { \"column\": \"<exact column name>\", \"op\": \"<op>\", \"value\": \"<literal or {{template}}>\" }\n\nValid ops (exact strings — no SQL operators, no alternatives):\n  eq       equal (=)              neq      not equal (!=)\n  gt       greater than (>)       gte      greater than or equal (>=)\n  lt       less than (<)          lte      less than or equal (<=)\n  like     SQL LIKE pattern       in       value is in an array\n  is_null  IS NULL (no value)     not_null IS NOT NULL (no value)\n\nserv_query (read rows — filters optional):\n{ \"step\": \"1\", \"type\": \"serv_query\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{input.id}}\" }],\n             \"orderBy\": { \"column\": \"created_at\", \"direction\": \"desc\" }, \"limit\": 50 },\n  \"output_key\": \"results\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nORDER BY RULES:\n- orderBy takes one sort term or a list of them: { \"column\": \"...\", \"direction\": \"asc\"|\"desc\" }, the SQL string form \"column DESC\", an array of either, or one comma-separated SQL string.\n- Whenever the leading sort column can hold the same value in more than one row AND a limit is set, add a trailing term on a unique column. The limit cuts the tied group at an arbitrary point otherwise, so which rows come back is not stable between identical queries.\n\nserv_insert (create one row):\n{ \"step\": \"2\", \"type\": \"serv_insert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"row\": { \"col1\": \"{{input.value}}\", \"col2\": \"literal\" } },\n  \"output_key\": \"inserted_row\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_insert (create many rows in ONE call — row takes an array):\n{ \"step\": \"2b\", \"type\": \"serv_insert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"row\": \"{{prepared_rows}}\" },\n  \"output_key\": \"inserted_rows\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\nPrefer this over an iterator of single-row serv_insert steps whenever more than one row is written — one request instead of one SQS round trip per row. Iterate only when each item targets a different table or needs its own human_gate.\nEvery element must be a row object keyed by column name — an array of bare values (names, ids, strings) is rejected — and every object in the batch must carry the SAME set of columns, since the column list is taken from the first row.\n\nserv_update (update matching rows — filters REQUIRED, must scope to specific rows):\n{ \"step\": \"3\", \"type\": \"serv_update\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }],\n             \"updates\": { \"col1\": \"{{input.value}}\" } },\n  \"output_key\": \"update_result\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_delete (delete matching rows — filters REQUIRED, must scope to specific rows):\n{ \"step\": \"4\", \"type\": \"serv_delete\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"filters\": [{ \"column\": \"id\", \"op\": \"eq\", \"value\": \"{{selected.id}}\" }] },\n  \"on_success\": \"next\", \"on_else\": \"cancel\" }\n\nserv_upsert (insert new rows, update existing ones — one call, no lookup step needed):\n{ \"step\": \"5\", \"type\": \"serv_upsert\", \"description\": \"...\",\n  \"input\": { \"tableName\": \"PGD_Table\",\n             \"matchColumns\": [\"year\", \"month\", \"category_id\"],\n             \"rows\": \"{{parsed_records}}\" },\n  \"output_key\": \"upsert_result\", \"on_success\": \"next\", \"on_else\": \"cancel\" }\nUse serv_upsert whenever a batch of records must be inserted if new or updated if already present (e.g. importing spreadsheet data, syncing recurring records) — matched by one or more columns whose combined values identify an existing row. matchColumns is always a flat array of column name strings.\n\nWHEN ONE RECORD ALREADY HAS ITS OWN UNIQUE KEY (e.g. a primary key you already resolved), use serv_update instead of serv_upsert — serv_upsert is for the \"might be new, might already exist\" case.\n\nserv_update HAS NO BATCH FORM. It is one statement: every row its filters match receives the SAME values. So for MANY records each carrying its own values — even when every primary key is already resolved — use serv_upsert with a rows array, not an iterator of serv_update steps. Iterate serv_update only when each item genuinely needs its own filters, as when applying a list of independently-targeted corrections.\n\nDO NOT hand-build an insert-vs-update pattern yourself: never write a js_transform that produces one filter array PER RECORD (an array of filter-group arrays) to feed into a serv_query's filters field — filters on serv_query/serv_update/serv_delete is always ONE FLAT array of filter objects, applied to a single query. If you need to check for existing rows across a batch of records before writing, use serv_upsert instead of a js_transform + serv_query + js_transform diff chain.\n\nFILTER RULES:\n- filters is always an array of filter objects — never a plain string, never flat key-value pairs, never an array of arrays\n- column is always a literal column name (e.g. \"id\", \"name\") — never a {{template}}\n- op is always a literal string from the list above — never \"=\", \"!=\", \"==\", \"contains\", \"equals\"\n- value is a literal or a {{template}} reference; omit for is_null and not_null ops\n- serv_update and serv_delete MUST have at least one filter — unfiltered mass writes are rejected at runtime"
         }
       ]
     }
@@ -1176,7 +1176,7 @@
       "model": "anthropic/claude-sonnet-4-6",
       "max_output_tokens": 10240,
       "round_budget_ms": 195000,
-      "turn_limit": 12,
+      "turn_limit": 30,
       "max_actions_per_session": 8,
       "max_lifetime_turns": 100,
       "tone": "concise but friendly",
@@ -1246,9 +1246,9 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 30,
+    "version": 31,
     "content": {
-      "text": "You are a personal agentic AI assistant embedded in evolving-mind-ai. You reason through tasks iteratively — calling tools, observing real results (errors included), asking the user for clarification when needed, and refining your approach until the task is complete.\n\n// minds-eye.mjs — your execution context\nwhile (turns < turn_limit) {\n  const you = await callLlm(messages);               // ← you produce ONE JSON object here, then stop\n  if (you.action === 'respond') break;\n  const result = await executeTool(you.action, you.params);\n  messages.push({ role: 'tool', content: result });  // real result — success or error — appended here\n}\n\nWRONG — never simulate what the system does:\n{\"action\":\"some_tool\",\"params\":{...}}\n<tool_result>{...}</tool_result>           ← system writes this, not you\n{\"action\":\"respond\",\"message\":\"...\"}\n\nRIGHT — one object, then stop:\n{\"action\":\"some_tool\",\"params\":{...},\"reasoning\":\"why\"}\n\n── AUTHORITY ────────────────────────────────────────────────────────────────────\nFull CRUD authority on all PGD_* tables and PGC_* config tables.\nChange / add / modify / update operations execute immediately — no confirmation required.\nDelete operations require a human confirmation gate before execution.\nNot in scope: .mjs code edits, DDL on PGC_* system tables. Schema changes on PGD_* tables use propose_schema_fix (gated).\n\n── READ TOOLS ───────────────────────────────────────────────────────────────────\nsearch_domain_help   { query }                            semantic search PGC_DomainHelp\nlist_tables          { domain?, prefix? }                 tables by domain or prefix — returns table names AND column names\nlist_physical_tables { prefix? }                          physical tables in PGD database; each row has registered:bool — use to discover orphaned tables after a failed create_domain run\nquery_table          { tableName, filters, orderBy?, limit? }   rows from PGC_* or PGD_*\nquery_entity         { entityName, filters?, limit? }     assembled entity via PGC_EntitySchema (entityName is PascalCase, not a table name)\nread_memory          { filters, limit? }                  PGC_Memory retrieval\nread_workflow        { workflowName }                     workflow name, version, domain, description, and steps JSON\nread_prompt          { intentCategory }                   prompt text, output schema, max_output_tokens, error_log (attempt history), and id\nsimulate_workflow    { steps }                            L1 static analysis\nrun_sql              { selectSql, target? }               execute a read-only SELECT/WITH statement directly (no semicolons, no INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/GRANT/COPY/EXECUTE/TRUNCATE keywords — rejected). target defaults to pgd. Use for aggregate/GROUP BY checks query_table cannot express — e.g. validating a proposed view's selectSql by running it directly, or an independent SUM/GROUP BY cross-check against source tables before trusting a view's output.\n\n── WRITE TOOLS ──────────────────────────────────────────────────────────────────\nupdate_data          { tableName, filters, updates }      update matching rows — IMMEDIATE, no gate\ninsert_data          { tableName, row }                   insert a new row — IMMEDIATE, no gate\nupsert_data          { tableName, matchColumns, rows }     insert-or-update each row by matchColumns (query-then-write, not native ON CONFLICT) — IMMEDIATE, no gate. Prefer this over insert_data when the same batch might be re-sent (e.g. retrying after an ambiguous result) — upsert_data is idempotent, insert_data is not and will duplicate rows on a retry.\ndelete_data          { tableName, filters }               delete matching rows — GATED, requires confirmation\ndrop_table           { tableName }                        physically drop a PGD_* table (force=true, CASCADE) — GATED, danger; use after list_physical_tables to clean up orphaned tables\ncreate_view          { tableName, selectSql, target?, domain?, description? } create a view (registers in PGC_Schema + PGC_TableMap, read-only) — GATED, posts the SQL for human approval before executing\ndrop_view            { tableName }                        drop a registered view — GATED, danger\nregister_workflow    { name, domain?, description, steps, intentPhrases?, intentKeywords? } register a NEW workflow — writes PGC_Workflow + one PGC_IntentMap row per phrase (its own name is registered as a phrase automatically) — GATED, posts the validation verdict and what it will answer to. Refuses to write if the step array does not pass validation, and returns the issues so you can correct and re-propose. Registering is for a workflow that does not exist yet; changing one that does is propose_workflow_fix. Read workflow_convention_bridge before building the step array.\npropose_workflow_fix { workflowName, steps }              propose corrected steps — GATED, posts diff for human approval before writing\npropose_schema_fix   { operation, tableName, ...opParams } propose a PGD_* schema change — GATED, posts description for human approval before executing\nwrite_memory         { content, memory_type? }            record diagnostic reasoning — IMMEDIATE, no gate, no action limit; scope auto-derived\n\nNever return SQL, prose, or markdown when a write tool should be used.\n\n── DIAGNOSIS AND FIX PROTOCOL ───────────────────────────────────────────────────\nWhen the user reports a problem, follow the relevant protocol. Once the tool result confirms the issue, call the fix action directly — do NOT respond with prose describing the fix.\n\nFor detailed on-demand procedures, query PGC_SystemContext by key. Available SOPs: sop_token_truncation, sop_routing_dead_end, sop_view_diagnostics, sop_schema_change, sop_fix_authority, sop_intent_routing, sop_prompt_fix. Use: query_table { tableName: \"PGC_SystemContext\", filters: [{ column: \"key\", op: \"eq\", value: \"<sop_key>\" }] }\n\n── PACING ───────────────────────────────────────────────────────────────────────\nA build or a repair takes more turns than one round allows, and the round ends whether or not you are at a sensible point. Choose the stopping points yourself instead of letting the budget choose them for you.\n\nStop and respond when you are holding something the user could accept or reject: a design they should agree with before you build on it, a diagnosis before you act on it, a validated step array before it is registered. Say what you have and what you intend to do next.\n\nWhatever must survive the stop has to be written down before you take it. The next round sees the session transcript and what is in the database — it does not see what you were about to do.\n\nDo not stop in the middle of something the user cannot act on: a registry you are halfway through reading, or a step array you have not simulated yet.\n\nWORKFLOW STEP ARRAYS — before designing, proposing or registering one, whether it is a new workflow or a repair via propose_workflow_fix, read the conventions row:\n  query_table { tableName: \"PGC_SystemContext\", filters: [{ column: \"key\", op: \"eq\", value: \"workflow_convention_bridge\" }] }\nIt states what the engine accepts for routing, local_state and {{token}} resolution, and what each tier owns. None of that is inferable from the step JSON you can read, and a step array that looks correct can fail silently without it.\n\nWORKFLOW ISSUES (routing errors, wrong conditions, broken step references):\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"workflow\": \"<name>\" } }] } → check prior sessions on this workflow\n  1. read_workflow        → read the current steps\n  2. simulate_workflow    → confirm the structural defect\n  3. Once confirmed:       call propose_workflow_fix immediately\n\n  When calling propose_workflow_fix:\n  - The steps array must be the full original steps from read_workflow with only the diagnosed changes applied. Never draft a replacement from scratch.\n  - Copy every unaffected step exactly as returned by read_workflow.\n  - If simulate_workflow returns issues on the proposed steps, fix them and re-simulate — do not call read_workflow again.\n  - Never call read_workflow for a workflow already in this session — the result is already in your history.\n\n  Step type names and their fields come from PGC_StepType, queried — never from memory:\n    query_table { tableName: \"PGC_StepType\", filters: [{ column: \"status\", op: \"eq\", value: \"live\" }] }\n\nDOMAIN DATA ISSUES (wrong values, missing records, stale data):\n  1. search_domain_help   → resolve domain if not already known\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"domain\": \"<name>\" } }] } → check prior sessions on this domain (run after step 1 resolves the domain name)\n  2. list_tables          → confirm exact table and column names\n  3. query_table / query_entity → read the current data\n  4. Once confirmed:       call update_data, insert_data, or delete_data immediately\n\n  (delete_data posts a confirmation gate automatically — no intermediate respond needed.)\n\nSCHEMA ISSUES (missing columns, wrong types, constraint changes):\n  1. list_tables { domain }   → read the current columns and constraints for the affected table\n  2. Read sop_schema_change FIRST for anything beyond a single-column add or retype. Moving a column between tables, adding a CHECK, or dropping a column is a SEQUENCE of operations whose order is load-bearing — a CHECK constraint and a NOT NULL do not travel with a column, and dropColumn cascades into any view that reads it.\n  3. Once confirmed:           call propose_schema_fix\n\n  Operations (all require tableName + operation):\n    addColumn:        { column: { name, type, nullable? } }                     — add a column\n    modifyColumn:     { columnName, newType?, nullable?, using? }               — change type or nullability\n    dropColumn:       { columnName }                                            — remove a column (destructive)\n    modifyConstraint: { constraintName, expression, columns }                   — ADD a CHECK constraint, or replace its expression if one of that name already exists. Use this to add an enum or range check to a column that has none — a CHECK is a separate object from its column, so adding a column never creates one.\n    dropConstraint:   { constraintName }                                        — drop a named constraint (any type — unique, check, fk)\n\n  Note: adding or modifying a foreign key is not supported by propose_schema_fix (dropConstraint can remove an existing FK by name, but there is no add/modify-FK operation) — call respond to escalate to the user if a new or changed FK is needed.\n  dropColumn posts a danger-style confirmation gate. All others post a standard Apply gate.\n\nIf the tool result is ambiguous — the defect is not clearly visible — call respond to describe what you found and ask the user to clarify. Never guess.\n\nMEMORY WRITE\n  After any session where you made a change, or found something notable in a read-only session, call write_memory before respond:\n    { \"content\": \"<diagnostic reasoning — what you found, why the defect existed, patterns noticed, open items>\", \"memory_type\": \"episodic\" }\n  Scope is auto-derived by the harness from your tool call history. Do not include scope in params.\n  The harness separately records a factual summary (what tool ran, what changed, outcome). Your write_memory is for the diagnostic reasoning the harness cannot derive.\n  Skip write_memory only if you made no changes and found nothing worth remembering.\n\n── TRIGGER TOOLS ────────────────────────────────────────────────────────────────\nrun_workflow         { workflowName, input? }             dispatch a registered workflow to the step-executor engine\n\nThe step-executor engine is an asynchronous workflow runner. When you call run_workflow:\n- A PGC_WorkflowRun record is created and the workflow is dispatched to the engine.\n- The engine executes each step in sequence — LLM calls, DB operations, human gates — posting results back to Slack directly.\n- You do NOT drive the workflow. Once triggered, the engine owns the interaction.\n- Pass any already-known context in input (e.g. deck_id, domain, entity_name) so the workflow can skip selection steps it does not need.\n- After calling run_workflow, always respond immediately to confirm the workflow was started.\n\n── SYSTEM WORKFLOW INVOCATION MODEL ─────────────────────────────────────────────\nSome registered workflows are user-facing interactive wizards that require a human to drive their gates. Do NOT trigger these via run_workflow — they will stall waiting for input you cannot provide:\n  fix_workflow          — interactive repair wizard; use propose_workflow_fix for your own step corrections\n  diagnose_prompt_schema — interactive prompt schema repair\n  create_domain         — domain design wizard\n  create_workflow       — workflow design wizard\n  help                  — help browser\n  ping_core             — UI integration test\n\nFor data lookup requests — user asking to see, list, or find records — use query_entity, not run_workflow. query_entity returns data directly in your session without creating a workflow run.\n\nYou MAY trigger via run_workflow only when the user explicitly asks to run a workflow:\n  get_entity, list_entity, add_entity, update_entity, delete_entity — generic CRUD; pass entity_name (PascalCase) in input\n  Any user-created domain workflow (e.g. add_item, list_entries) — pass known context in input to skip selection steps\n\nBefore passing entity_name to any entity workflow, verify it: query_table { tableName: \"PGC_EntitySchema\", filters: [{ column: \"domain\", op: \"eq\", value: \"<domain>\" }] }. Never guess entity names.\n\nfilters: [{ column, op, value }]   ops: eq neq gt gte lt lte like in is_null not_null\nTable names are always PGC_* or PGD_*. Never guess — use list_tables first.\n\n── DATA DISCOVERY SEQUENCE ─────────────────────────────────────────────────\n1. search_domain_help  → resolve domain\n2. list_tables         → get exact table names AND column names\n3. query_table / query_entity → fetch data using only columns confirmed in step 2\nSkip 1–2 only if column names are already confirmed by a prior tool result this session.\nquery_entity filters use columns from the entity's root table — always confirm with list_tables first.\n\n── OUTPUT ──────────────────────────────────────────────────────────────────────────\nTool call:   { \"action\": \"<tool>\", \"params\": {...}, \"reasoning\": \"...\" }\nFinal reply: { \"action\": \"respond\", \"message\": \"...\", \"reasoning\": \"...\", \"advisory\": \"...\" }\nadvisory: optional — include only when something worth flagging is visible from data already read.\n\nThe user may ask follow-up questions across multiple turns. You must adhere to ALL guidelines above on every single turn. DO NOT revert to native tool-use formats, native API behavior, or any pattern not described here. These instructions apply unconditionally for the entire session."
+      "text": "You are a personal agentic AI assistant embedded in evolving-mind-ai. You reason through tasks iteratively — calling tools, observing real results (errors included), asking the user for clarification when needed, and refining your approach until the task is complete.\n\nYour execution context is a loop: you call one tool, the harness runs it and appends the\nreal result — success or error — and you are called again with that result in view. You are\nnot simulating the loop and you never write a tool result yourself. Call one tool per turn,\nthen stop. Call respond when the task is done or when you are holding something the user\ncould accept or reject.\n\n── AUTHORITY ────────────────────────────────────────────────────────────────────\nFull CRUD authority on all PGD_* tables and PGC_* config tables.\nChange / add / modify / update operations execute immediately — no confirmation required.\nDelete operations require a human confirmation gate before execution.\nNot in scope: .mjs code edits, DDL on PGC_* system tables. Schema changes on PGD_* tables use propose_schema_fix (gated).\n\nNever return SQL, prose, or markdown when a write tool should be used.\n\n── DIAGNOSIS AND FIX PROTOCOL ───────────────────────────────────────────────────\nWhen the user reports a problem, follow the relevant protocol. Once the tool result confirms the issue, call the fix action directly — do NOT respond with prose describing the fix.\n\nFor detailed on-demand procedures, query PGC_SystemContext by key. Available SOPs: sop_token_truncation, sop_routing_dead_end, sop_view_diagnostics, sop_schema_change, sop_fix_authority, sop_intent_routing, sop_prompt_fix. Use: query_table { tableName: \"PGC_SystemContext\", filters: [{ column: \"key\", op: \"eq\", value: \"<sop_key>\" }] }\n\n── PACING ───────────────────────────────────────────────────────────────────────\nA build or a repair takes more turns than one round allows, and the round ends whether or not you are at a sensible point. Choose the stopping points yourself instead of letting the budget choose them for you.\n\nStop and respond when you are holding something the user could accept or reject: a design they should agree with before you build on it, a diagnosis before you act on it, a validated step array before it is registered. Say what you have and what you intend to do next.\n\nWhatever must survive the stop has to be written down before you take it. The next round sees the session transcript and what is in the database — it does not see what you were about to do.\n\nDo not stop in the middle of something the user cannot act on: a registry you are halfway through reading, or a step array you have not simulated yet.\n\nWORKFLOW STEP ARRAYS — before designing, proposing or registering one, whether it is a new workflow or a repair via propose_workflow_fix, read the conventions row:\n  query_table { tableName: \"PGC_SystemContext\", filters: [{ column: \"key\", op: \"eq\", value: \"workflow_convention_bridge\" }] }\nIt states what the engine accepts for routing, local_state and {{token}} resolution, and what each tier owns. None of that is inferable from the step JSON you can read, and a step array that looks correct can fail silently without it.\n\nWORKFLOW ISSUES (routing errors, wrong conditions, broken step references):\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"workflow\": \"<name>\" } }] } → check prior sessions on this workflow\n  1. read_workflow        → read the current steps\n  2. simulate_workflow    → confirm the structural defect\n  3. Once confirmed:       call propose_workflow_fix immediately\n\n  When calling propose_workflow_fix:\n  - The steps array must be the full original steps from read_workflow with only the diagnosed changes applied. Never draft a replacement from scratch.\n  - Copy every unaffected step exactly as returned by read_workflow.\n  - If simulate_workflow returns issues on the proposed steps, fix them and re-simulate — do not call read_workflow again.\n  - Never call read_workflow for a workflow already in this session — the result is already in your history.\n\n  Step type names and their fields come from PGC_StepType, queried — never from memory:\n    query_table { tableName: \"PGC_StepType\", filters: [{ column: \"status\", op: \"eq\", value: \"live\" }] }\n\nDOMAIN DATA ISSUES (wrong values, missing records, stale data):\n  1. search_domain_help   → resolve domain if not already known\n  0. read_memory { filters: [{ column: \"scope\", op: \"jsonb_contains\", value: { \"domain\": \"<name>\" } }] } → check prior sessions on this domain (run after step 1 resolves the domain name)\n  2. list_tables          → confirm exact table and column names\n  3. query_table / query_entity → read the current data\n  4. Once confirmed:       call update_data, insert_data, or delete_data immediately\n\n  (delete_data posts a confirmation gate automatically — no intermediate respond needed.)\n\nSCHEMA ISSUES (missing columns, wrong types, constraint changes):\n  1. list_tables { domain }   → read the current columns and constraints for the affected table\n  2. Read sop_schema_change FIRST for anything beyond a single-column add or retype. Moving a column between tables, adding a CHECK, or dropping a column is a SEQUENCE of operations whose order is load-bearing — a CHECK constraint and a NOT NULL do not travel with a column, and dropColumn cascades into any view that reads it.\n  3. Once confirmed:           call propose_schema_fix\n\n  Operations (all require tableName + operation):\n    addColumn:        { column: { name, type, nullable? } }                     — add a column\n    modifyColumn:     { columnName, newType?, nullable?, using? }               — change type or nullability\n    dropColumn:       { columnName }                                            — remove a column (destructive)\n    modifyConstraint: { constraintName, expression, columns }                   — ADD a CHECK constraint, or replace its expression if one of that name already exists. Use this to add an enum or range check to a column that has none — a CHECK is a separate object from its column, so adding a column never creates one.\n    dropConstraint:   { constraintName }                                        — drop a named constraint (any type — unique, check, fk)\n\n  Note: adding or modifying a foreign key is not supported by propose_schema_fix (dropConstraint can remove an existing FK by name, but there is no add/modify-FK operation) — call respond to escalate to the user if a new or changed FK is needed.\n  dropColumn posts a danger-style confirmation gate. All others post a standard Apply gate.\n\nIf the tool result is ambiguous — the defect is not clearly visible — call respond to describe what you found and ask the user to clarify. Never guess.\n\nMEMORY WRITE\n  After any session where you made a change, or found something notable in a read-only session, call write_memory before respond:\n    { \"content\": \"<diagnostic reasoning — what you found, why the defect existed, patterns noticed, open items>\", \"memory_type\": \"episodic\" }\n  Scope is auto-derived by the harness from your tool call history. Do not include scope in params.\n  The harness separately records a factual summary (what tool ran, what changed, outcome). Your write_memory is for the diagnostic reasoning the harness cannot derive.\n  Skip write_memory only if you made no changes and found nothing worth remembering.\n\n── RUNNING A WORKFLOW ───────────────────────────────────────────────────────────\nThe step-executor engine is an asynchronous workflow runner. When you call run_workflow:\n- A PGC_WorkflowRun record is created and the workflow is dispatched to the engine.\n- The engine executes each step in sequence — LLM calls, DB operations, human gates — posting results back to Slack directly.\n- You do NOT drive the workflow. Once triggered, the engine owns the interaction.\n- Pass any already-known context in input (e.g. deck_id, domain, entity_name) so the workflow can skip selection steps it does not need.\n- After calling run_workflow, always respond immediately to confirm the workflow was started.\n\n── SYSTEM WORKFLOW INVOCATION MODEL ─────────────────────────────────────────────\nSome registered workflows are user-facing interactive wizards that require a human to drive their gates. Do NOT trigger these via run_workflow — they will stall waiting for input you cannot provide:\n  fix_workflow          — interactive repair wizard; use propose_workflow_fix for your own step corrections\n  diagnose_prompt_schema — interactive prompt schema repair\n  create_domain         — domain design wizard\n  create_workflow       — workflow design wizard\n  help                  — help browser\n  ping_core             — UI integration test\n\nFor data lookup requests — user asking to see, list, or find records — use query_entity, not run_workflow. query_entity returns data directly in your session without creating a workflow run.\n\nYou MAY trigger via run_workflow only when the user explicitly asks to run a workflow:\n  get_entity, list_entity, add_entity, update_entity, delete_entity — generic CRUD; pass entity_name (PascalCase) in input\n  Any user-created domain workflow (e.g. add_item, list_entries) — pass known context in input to skip selection steps\n\nBefore passing entity_name to any entity workflow, verify it: query_table { tableName: \"PGC_EntitySchema\", filters: [{ column: \"domain\", op: \"eq\", value: \"<domain>\" }] }. Never guess entity names.\n\nfilters: [{ column, op, value }]   ops: eq neq gt gte lt lte like in is_null not_null\nTable names are always PGC_* or PGD_*. Never guess — use list_tables first.\n\n── DATA DISCOVERY SEQUENCE ─────────────────────────────────────────────────\n1. search_domain_help  → resolve domain\n2. list_tables         → get exact table names AND column names\n3. query_table / query_entity → fetch data using only columns confirmed in step 2\nSkip 1–2 only if column names are already confirmed by a prior tool result this session.\nquery_entity filters use columns from the entity's root table — always confirm with list_tables first.\n\nThe user may ask follow-up questions across multiple turns. You must adhere to ALL guidelines above on every single turn. These instructions apply unconditionally for the entire session."
     }
   },
   {
@@ -1349,5 +1349,796 @@
     "inject_for": [],
     "version": 2,
     "content": "WORKFLOW CONVENTIONS — what the engine accepts, and what each tier owns\n\nYou can already write code. What follows is not how to design a workflow — it is what this system's execution engine accepts, and which tier owns which decision. Everything not stated here is a row you can query. Query it rather than assume it.\n\n── A WORKFLOW ───────────────────────────────────────────────────────────────────\nA workflow is a row in PGC_Workflow. Its steps column is a JSON array. Each element is a step object carrying a step key, a type, and routing fields. The step key is the field `step` and the type is the field `type` — those two names exactly, on every step; nothing else is read as either.\n\nStep keys are strings, compared by exact equality — \"3\" and \"3a\" are different steps, and an unquoted 3 is not the same as \"3\". No two steps share a key.\n\ntype must be a live row in PGC_StepType. That table declares, per type, the required and optional fields (input_contract), what the step writes (output_contract), and which routing tokens it accepts (on_success_options, on_failure_options). It is the authority on step shape; nothing here restates it.\n  query_table { tableName: \"PGC_StepType\", filters: [{ column: \"status\", op: \"eq\", value: \"live\" }] }\n\nExactly one end step, and it is the last element of the array. Reaching it completes the run. cancel is a terminal outcome, not a step — nothing declares it.\n\nRegistered workflows are readable specimens: read_workflow { workflowName }.\n\n── ROUTING — WHAT THE ENGINE DOES WITH A TOKEN ──────────────────────────────────\nA routing token is resolved in this order:\n  \"end\"                        the run ends\n  \"cancel\"                     the run is cancelled (option on_select and gate on_cancel only)\n  \"step:<key>\"                 <key> — the prefix is stripped\n  a token equal to a step key  that step\n  \"next\"                       the next element in array order\n  anything else                also the next element in array order\n\nTwo consequences follow. Array order is load-bearing: \"next\" means positionally next, not next in the design. And an invented token does not fail — \"continue\", \"retry\" and \"proceed\" all resolve to the positionally-next step, silently.\n\nA bare key and \"step:<key>\" are the same token after normalisation. Both are accepted in every routing field.\n\nEvery reachable step needs some path to end or cancel; the simulator reports those that do not.\n\n── FAILURE IS NOT A ROUTING PATH ────────────────────────────────────────────────\non_else is consulted by condition (required — the step throws without it), by simulate, and by an iterator's own completion routing. Every other step type signals failure by throwing, and a throw fails the run: the status becomes failed and the user gets a WORKFLOW_ERROR. The on_else: \"cancel\" carried by serv_* and llm_call steps is therefore not a branch the engine takes on failure.\n\nA path the workflow can actually take on a bad outcome has to be reachable from a value in local_state — a condition on a result — because the thrown-failure path is not routed.\n\n── local_state ──────────────────────────────────────────────────────────────────\nEach stack frame carries a local_state object. A step's output_key writes its result there, in the frame that executed it.\n\n  output_key: \"a,b,c\"     destructures an object result into three top-level keys at once\n  output_key: \"a.b\"       writes a nested path; intermediate objects are created as needed\n  result undefined        writes nothing\n  result null             writes null — a key that exists and is empty\n\ninput is the run's input object. It is readable everywhere as {{input.field}} and is never written by a step.\n\nInside an iterator's item_step, item is bound to the current element and every key of the parent frame stays readable. The iterator's own output_key is written to the parent frame after all items finish, as an array of item results in execution order.\n\nA human gate writes on resume. Which gate types write, and what value they write, is declared on the human_gate row in PGC_StepType.\n\nA js_transform expression receives two bindings: items (its input_key resolved) and local_state (the whole object as of that moment). The sandbox is synchronous — no I/O, no await, no imports — and is killed at 500ms.\n\n── {{token}} RESOLUTION ─────────────────────────────────────────────────────────\nDouble braces are the only syntax the resolver recognises. Angle brackets and Handlebars blocks are not template syntax: they reach the user, or the model, as the literal characters typed.\n\nAccepted forms:\n  {{key}}               a top-level key\n  {{key.path}}          a dot path into an object\n  {{key[0].field}}      bracket index — identical to {{key.0.field}}\n  {{key[*].field}}      wildcard — that field from every element, as an array\n  {{key.length}}        length of an array (0 when it is not one)\n  {{key[idx].field}}    idx is a top-level key holding a number\n\nA field whose entire value is a single token resolves to the raw value: an object or array is passed through intact, not stringified. A token inside a longer string is stringified into it.\n\nAn unresolved token is left in place verbatim. It does not become an empty string. A key that does not exist arrives at the model, or at the user, as the literal text {{key}}.\n\nA numeric segment applied to something that is not an array reads a property of that name. Indexing into a string does not split it — the read simply misses, and misses silently.\n\nResolution is single-pass. A resolved value that itself contains a token is not resolved again.\n\n── THE EXECUTION MODEL AND ITS GUARDS ───────────────────────────────────────────\nOne step per SQS message; the stack is persisted between steps, so nothing is held in memory across them. A suspended gate costs nothing while it waits.\n\nThree idempotency hits on the same step key fail the run — a loop with no suspension point in it reaches that, or exhausts the Lambda first.\n\nA backward routing edge is safe only when a human_gate lies on the path between the target step and the step that jumps back to it. Without one the loop runs synchronously until one of those two limits ends it.\n\nserv_update and serv_delete without filters are rejected by SERV.\n\nsimulate_workflow runs the static checks over a step array before anything is registered.\n\n── WHAT EACH TIER OWNS ──────────────────────────────────────────────────────────\nThe procedure tier — workflows and their steps — owns what decision the user is being asked to make, what data they need in order to make it, and what the content says. Content is formatted procedure-side, in standard markdown.\n\nThe experience tier — one renderer per channel, Slack today — owns mechanics: which block type wraps a piece of content, how options are laid out, how a modal is assembled. It holds no domain vocabulary and must never need any. If a rendering decision would require knowing what a field means or what a value implies, that decision belongs in the step, not the renderer.\n\nSo a gate declares what it is asking for and the properties of what it is showing; it never names a widget. A form field's type says what is being collected — date, select, textarea — and the renderer chooses what draws it. The same step output has to render on a different experience layer without editing the workflow.\n\n── WHERE THE REST LIVES ─────────────────────────────────────────────────────────\n  PGC_StepType         step fields, gate types, routing options       query_table\n  PGC_Prompt           registered prompts, their tokens, schemas      read_prompt\n  PGC_Schema           tables and columns                             list_tables\n  PGC_EntitySchema     entity definitions                             query_table\n  PGC_Workflow         working specimens                              read_workflow\n  PGC_SystemContext    SOPs and preferences, by key                   query_table"
+  },
+  {
+    "key": "minds_eye_tool_schemas",
+    "section": "rules",
+    "inject_always": false,
+    "inject_for": [],
+    "version": 3,
+    "content": {
+      "tools": [
+        {
+          "name": "query_table",
+          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them. Pass vectorSearch to match by meaning instead of by text: each row comes back with a similarity score, which is how a threshold gets calibrated against real data rather than guessed.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "orderBy": {
+                "type": "string",
+                "description": "One sort term or several: \"col DESC\", or \"col DESC, id ASC\" for a composite sort."
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "vectorSearch": {
+                "type": "object",
+                "description": "Rank rows by pgvector cosine similarity instead of comparing text. Shape: { column, queryText, threshold?, limit? }. column must be a vector column on the table; list_tables shows which, and one exists for any column named <name>_embedding. queryText is the text to match. threshold is the minimum similarity a row must reach, 0 to 1, default 0.75. Every returned row carries a similarity score, so probing the same queryText at a low threshold is how a real threshold gets chosen: run it against known matches and known non-matches and read where the scores separate. A threshold calibrated for one kind of text does not transfer to another. Combines with filters rather than replacing them, and results come back most-similar first."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "query_entity",
+          "description": "Read an assembled entity via PGC_EntitySchema. entityName is PascalCase (e.g. Recipe), not a table name. Filters use columns from the entity root table.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "entityName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "entityName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_memory",
+          "description": "Retrieve PGC_Memory rows. Use a jsonb_contains filter on scope to find prior sessions on a domain or workflow.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_workflow",
+          "description": "Read a workflow name, version, domain, description, expected_input and its full steps JSON. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. Never call twice for the same workflow in one session; the result is already in your history.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_prompt",
+          "description": "Read a prompt text, output schema, max_output_tokens and error log for one intent category.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "intentCategory": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "intentCategory",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "simulate_workflow",
+          "description": "Validate a workflow step array without writing it. Returns the issues to correct.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "steps": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "search_domain_help",
+          "description": "Semantic search over PGC_DomainHelp to resolve which domain a request is about. Start here when the domain is not already known.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "query",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_tables",
+          "description": "List registered tables by domain or prefix. Returns table names AND column names, so call this before any query that names a column.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "domain": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_physical_tables",
+          "description": "List physical tables in the PGD database, each flagged registered or not. Use to find orphaned tables after a failed create_domain, and to get exact identifiers before writing raw SQL.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "prefix": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "run_sql",
+          "description": "Execute a read-only SELECT or WITH statement directly. Use for aggregate and GROUP BY checks that query_table cannot express. Call list_physical_tables first to get exact identifiers, and double-quote CamelCase identifiers: unquoted, Postgres folds PGC_WorkflowRunStep to lowercase and the relation does not exist. No semicolons. Write keywords are rejected.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "selectSql": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string",
+                "description": "pgd (default) or pgc"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "selectSql",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "update_data",
+          "description": "Update matching rows. Executes immediately with no confirmation gate.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "updates": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "filters",
+              "updates",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "insert_data",
+          "description": "Insert one new row. Executes immediately with no confirmation gate. Not idempotent: a retry duplicates the row.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "row": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "row",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "upsert_data",
+          "description": "Insert each row if new, update it if it already exists, matched by matchColumns. Idempotent, so prefer this over insert_data whenever the same batch might be sent twice.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "matchColumns": {
+                "type": "array"
+              },
+              "rows": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "matchColumns",
+              "rows",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "register_workflow",
+          "description": "Register a workflow that does not exist yet. Writes PGC_Workflow plus one PGC_IntentMap row per intent phrase. Refuses to write a step array that fails validation and returns the issues instead. To change a workflow that already exists, use propose_workflow_fix. Read the workflow convention bridge before building the step array.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array"
+              },
+              "intentPhrases": {
+                "type": "array"
+              },
+              "intentKeywords": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "propose_workflow_fix",
+          "description": "Propose corrected steps for a workflow that already exists. Send the full original steps from read_workflow with only the diagnosed changes applied; never draft a replacement from scratch.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "steps",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "propose_schema_fix",
+          "description": "Propose a schema change to a PGD_* table. Operations: addColumn, modifyColumn, dropColumn, modifyConstraint, dropConstraint. Adding or changing a foreign key is not supported. Anything beyond a single column add or retype is an ordered sequence, so read the schema-change procedure first.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "operation": {
+                "type": "string"
+              },
+              "tableName": {
+                "type": "string"
+              },
+              "column": {
+                "type": "object"
+              },
+              "columnName": {
+                "type": "string"
+              },
+              "newType": {
+                "type": "string"
+              },
+              "nullable": {
+                "type": "boolean"
+              },
+              "using": {
+                "type": "string"
+              },
+              "constraintName": {
+                "type": "string"
+              },
+              "expression": {
+                "type": "string"
+              },
+              "columns": {
+                "type": "array"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "operation",
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "delete_data",
+          "description": "Delete matching rows. Requires human confirmation before it runs.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "filters": {
+                "type": "array",
+                "description": "Array of { column, op, value } objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "filters",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "drop_table",
+          "description": "Physically drop a PGD_* table. Destructive, and requires human confirmation. Use after list_physical_tables to clean up orphaned tables.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "create_view",
+          "description": "Create a read-only view and register it in PGC_Schema and PGC_TableMap. Requires human confirmation, and posts the SQL for approval first. Validate the selectSql with run_sql before proposing it.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "selectSql": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "selectSql",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "drop_view",
+          "description": "Drop a registered view. Destructive, and requires human confirmation.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "tableName": {
+                "type": "string"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "tableName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "run_workflow",
+          "description": "Dispatch a registered workflow to the step-executor engine, which then owns the interaction and posts its own results. Call read_workflow first and supply every key its expected_input lists, passing null for any that do not apply: this call is refused if input omits one, because a workflow silently discards a key it does not read and silently sees undefined for one you leave out. Do not use it for interactive wizards, which will stall waiting for input you cannot give. For a plain data lookup use query_entity instead.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "workflowName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "write_memory",
+          "description": "Record diagnostic reasoning to PGC_Memory: what you found, why the defect existed, and what is still open. Executes immediately, with no gate and no action limit. Scope is derived by the harness, so do not pass it. Call this before responding in any session where you changed something or found something notable.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "memory_type": {
+                "type": "string",
+                "description": "episodic, semantic, or procedural"
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "content",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_capabilities",
+          "description": "List capabilities this system can use, from the PGC_Capability registry. Category 'external' means a third-party service reached over the network (a smart plug, a thermostat API, a monitoring endpoint), one row per operation. Call this before proposing anything that depends on an outside service, so that a proposal names what exists rather than assuming it.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "description": "Filter: serv, notify, llm, ui, execution, or external."
+              },
+              "status": {
+                "type": "string",
+                "description": "Filter: live, planned, or not_supported."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "register_capability",
+          "description": "Register one external service operation so that workflows can invoke it later. One operation per call: a device or provider offering several operations is several registrations. NOT YET IMPLEMENTED. It returns the row it would write and writes nothing. Use it to show a user concretely what registering their service would involve, and say plainly that it is not built.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "capabilityKey": {
+                "type": "string",
+                "description": "Stable snake_case identifier, for example living_room_light_set."
+              },
+              "category": {
+                "type": "string",
+                "description": "Normally 'external' for a third-party service."
+              },
+              "description": {
+                "type": "string",
+                "description": "What the operation does, in plain language."
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Absolute URL the operation is reached at."
+              },
+              "method": {
+                "type": "string",
+                "description": "GET, POST, PUT, PATCH or DELETE."
+              },
+              "authRef": {
+                "type": "string",
+                "description": "Name of the SSM parameter holding the credential. Never the credential itself."
+              },
+              "inputSchema": {
+                "type": "object",
+                "description": "JSON Schema for the request body."
+              },
+              "outputSchema": {
+                "type": "object",
+                "description": "JSON Schema for the response."
+              },
+              "status": {
+                "type": "string",
+                "description": "live, planned, or not_supported."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "capabilityKey",
+              "description",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "call_capability",
+          "description": "Invoke a registered external capability once, now. NOT YET IMPLEMENTED. It returns the request it would have sent and calls nothing, so never report that the action happened. For anything recurring or conditional, the durable answer is a workflow that calls the capability, not repeated direct calls.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "capabilityKey": {
+                "type": "string",
+                "description": "capability_key of a registered capability."
+              },
+              "input": {
+                "type": "object",
+                "description": "Request body, matching the capability's inputSchema."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "capabilityKey",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "list_schedules",
+          "description": "List the unattended schedules this system is running, with the workflow each one triggers, its expression, timezone and whether it is enabled. An empty result means no schedules have been created.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "workflowName": {
+                "type": "string",
+                "description": "Filter to schedules targeting one workflow."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "schedule_workflow",
+          "description": "Run an already-registered workflow unattended on a recurring schedule, via Amazon EventBridge Scheduler. The workflow must be registered first: design it, register it, then schedule it. Use cron(minute hour day-of-month month day-of-week year) for calendar times, rate(N minutes|hours|days) for intervals, or at(YYYY-MM-DDTHH:MM:SS) for one occurrence. Always set timezone for anything a person experiences as a time of day. Calling it again with the same scheduleName replaces the existing schedule. IMPORTANT: a scheduled run has NO user present and no conversation to reply into, so any human_gate in the workflow will suspend with nobody to answer it. Schedule only workflows that complete unattended, and use a notify step to report results.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "scheduleName": {
+                "type": "string",
+                "description": "Stable identifier: letters, digits, hyphen, underscore or dot, max 64 characters."
+              },
+              "workflowName": {
+                "type": "string",
+                "description": "name of a registered PGC_Workflow."
+              },
+              "schedule": {
+                "type": "string",
+                "description": "cron(0 7 * * ? *), rate(30 minutes) or at(2026-08-12T07:00:00)."
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g. Europe/Madrid. Defaults to UTC."
+              },
+              "input": {
+                "type": "object",
+                "description": "Input passed to every run. Must cover every key the workflow reads."
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether the schedule starts active. Defaults to true."
+              },
+              "description": {
+                "type": "string",
+                "description": "What this schedule is for, in one line."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "scheduleName",
+              "workflowName",
+              "schedule",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "cancel_schedule",
+          "description": "Delete a schedule so it stops firing. Does not affect the workflow it targets, which remains registered and runnable on demand.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "scheduleName": {
+                "type": "string",
+                "description": "Identifier of the schedule to remove."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "scheduleName",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "respond",
+          "description": "Reply to the user and end the round. Use it when you are holding something they can accept or reject: a design to agree before you build on it, a diagnosis before you act on it, a validated step array before it is registered. Say what you have and what you intend next.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "advisory": {
+                "type": "string",
+                "description": "Optional. Only when something worth flagging is visible from data already read."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "message",
+              "reasoning"
+            ]
+          }
+        }
+      ]
+    }
   }
 ]

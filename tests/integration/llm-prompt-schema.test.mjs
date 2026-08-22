@@ -126,7 +126,7 @@ async function probePrompt(row, contextRows, t) {
   const { model, output_schema, probe_input, max_output_tokens, intent_category } = row;
   // Use the real assembleInstructions — same code path as Lambda.
   // probe_input acts as resolvedInput; no memory injection in probe tests.
-  const instructions = assembleInstructions(row, probe_input ?? {}, contextRows, null, intent_category);
+  const { instructions } = assembleInstructions(row, probe_input ?? {}, contextRows, null, intent_category);
 
   // Warn if any {{placeholders}} remain unresolved after context + probe_input
   const unresolved = [...instructions.matchAll(/\{\{[^}]+\}\}/g)].map(m => m[0]);

@@ -80,7 +80,7 @@
   },
   {
     "step_type": "js_transform",
-    "description": "Runs a pure synchronous JS IIFE expression via acorn AST gate + vm.runInNewContext(200ms timeout). Two sandbox bindings: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation. IMPORTANT: PostgreSQL numeric, decimal, and money columns are returned as strings by the DB driver \u2014 always wrap in parseFloat() or Number() before arithmetic (e.g. parseFloat(local_state.row.price) * qty). Skipping this turns + into string concatenation and silently produces wrong values.",
+    "description": "Runs a synchronous JS IIFE expression: acorn AST gate, then vm.runInNewContext with a 500ms timeout. EXECUTION ENVIRONMENT \u2014 the full ECMAScript standard library is available, not a curated subset: Date (including new Date() and Date.now()), Math, JSON, RegExp, Map, Set, Array, Object, String, Number, Boolean, parseFloat, parseInt, Intl. Computing the current date inside the expression is correct and supported \u2014 do NOT take a date as a step input literal, because a literal is fixed when the workflow is authored and will still be that date on every future run; use new Date().toISOString().slice(0, 10) and write it to an output_key. Blocked by the AST gate: require, eval, fetch, XMLHttpRequest, Function and new Function; member access on process, global, __dirname, __filename; import, await, and async functions. Nothing else is restricted. Two sandbox bindings: (1) items \u2014 the resolved value of input_key from local_state. (2) local_state \u2014 the full workflow state object; use local_state.key_name to read any prior step output. Expression must return the output value. No async, no I/O, no Node globals. Use for data transforms, score tallies, filter operations, loop state mutations, boolean flag computation. IMPORTANT: PostgreSQL numeric, decimal, and money columns are returned as strings by the DB driver \u2014 always wrap in parseFloat() or Number() before arithmetic (e.g. parseFloat(local_state.row.price) * qty). Skipping this turns + into string concatenation and silently produces wrong values.",
     "input_contract": [
       {
         "type": "string",
@@ -219,6 +219,42 @@
         "field": "reveals",
         "required": false,
         "description": "Array version of reveal \u2014 renders one reveal panel per entry (e.g. one per table). Each entry is { button_label: string, content: string | array }; same content rendering rules as reveal (basic mrkdwn for strings, automatic Slack table for an array of plain record objects). Supports an inline JSON array or a {{template}} reference to a local_state array of {button_label, content} objects. Use instead of reveal when the number of panels is determined at runtime."
+      },
+      {
+        "type": "object",
+        "field": "item_action",
+        "required": false,
+        "description": "list_selection only \u2014 the action applied uniformly to every row that does not carry its own secondaryAction. Shape: { action, label, style?, condition?, confirm_template?, on_select }. `on_select` is required and routes directly, never via a matching options[] entry. `label` defaults to 'Select' and takes {{tokens}} resolved against THAT ROW plus local_state, so a button can name what it acts on ({{item.name}}); `confirm_template` resolves the same way and, when present, makes the row's button open a confirmation first. `condition` is evaluated per row and hides the action where it is false."
+      },
+      {
+        "type": "string",
+        "field": "item_label_template",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the label rendered for each element, e.g. \"Step {{step}} ({{type}}): {{description}}\". Tokens resolve against that element's own properties first, then local_state, and accept the full path syntax every other template does. Takes precedence over item_primary_key. Omit it when a single field is label enough."
+      },
+      {
+        "type": "string",
+        "field": "item_primary_key",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the property of each element used as its label when item_label_template is absent. Default 'tableName'. Ignored entirely when item_label_template is set."
+      },
+      {
+        "type": "string",
+        "field": "item_secondary_key",
+        "required": false,
+        "description": "review_object only, and only when context_key resolves to an ARRAY \u2014 the property of each element rendered as its value. Default 'columns'. An array value is flattened to its members' names with system columns (id, created_at, updated_at, domain, target, foreignKeys, constraints, triggers) removed; any other value passes through as-is."
+      },
+      {
+        "type": "string",
+        "field": "placeholder",
+        "required": false,
+        "description": "text_input only (DEPRECATED gate type \u2014 use a form with a textarea field). Ghost text shown inside the empty input. Takes {{tokens}}. A form field carries its own placeholder and does not read this."
+      },
+      {
+        "type": "boolean",
+        "field": "multiline",
+        "required": false,
+        "description": "text_input only (DEPRECATED gate type \u2014 use a form with a textarea field, whose type already carries this). Renders the input as a multi-line box rather than a single line. Default false."
       }
     ],
     "output_contract": null,
@@ -272,7 +308,7 @@
   },
   {
     "step_type": "serv_insert",
-    "description": "Inserts one row or a batch of rows into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Single row: returns the inserted row including generated id. Array: calls addRows and returns all inserted rows.",
+    "description": "Inserts one row or a batch of rows into any PGC or PGD table. Table must be registered in PGC_TableMap with allow_insert: true. Single row: returns the inserted row including generated id. Array: one multi-row INSERT in a single request, returning every inserted row. Prefer the array form whenever more than one row is being written — an iterator of single-row serv_insert steps costs one SQS round trip per row and is only the right shape when each item targets a different table or needs its own human_gate.",
     "input_contract": [
       {
         "type": "string",
@@ -284,7 +320,7 @@
         "type": "object|array",
         "field": "input.row",
         "required": true,
-        "description": "Row object or array of row objects. System columns (id, created_at, updated_at) are populated automatically. When an array is supplied the step calls addRows in a single request \u2014 no iterator needed. Supports {{template}} \u2014 a template resolving to an object or array is passed directly."
+        "description": "Row object, or an array of row objects for a batch. System columns (id, created_at, updated_at) are populated automatically. An array is written as one multi-row INSERT \u2014 no iterator needed. Every element must be a row object keyed by column name; an array of bare values (names, ids, strings) is rejected. Every object in a batch must carry the SAME set of columns \u2014 the batch is rejected if they differ, because the column list is taken from the first row. Supports {{template}} \u2014 a template resolving to an object or array is passed directly."
       },
       {
         "type": "string",
@@ -326,7 +362,7 @@
   },
   {
     "step_type": "serv_query",
-    "description": "Reads rows from a PGC or PGD table with optional filters, ordering, and limit. Writes the rows array to output_key. Empty result (no matching rows) is not an error \u2014 returns an empty array.",
+    "description": "Reads rows from a PGC or PGD table with optional filters, ordering, limit, and semantic (vector) matching. Writes the rows array to output_key. Empty result (no matching rows) is not an error \u2014 returns an empty array. Use vectorSearch when rows must be matched by MEANING rather than by an exact or LIKE comparison \u2014 resolving a free-text name against a stored list, for example. Matching that way costs one embedding call rather than an llm_call per item, and does not grow with the size of the list.",
     "input_contract": [
       {
         "type": "string",
@@ -341,16 +377,28 @@
         "description": "Array of { column, op, value } filter objects. Ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains"
       },
       {
-        "type": "object",
+        "type": "object | string | array",
         "field": "input.orderBy",
         "required": false,
-        "description": "{ column, direction } \u2014 direction is \"asc\" or \"desc\""
+        "description": "One sort term, or a list of them for a composite sort. A term is { column, direction } with direction \"asc\" or \"desc\" (default \"asc\"), or the SQL string form \"column DESC\". A list is either an array of terms or one comma-separated SQL string. Sort on a unique column last whenever the leading term can tie and the row cap can cut the tie. Without that trailing term, which rows come back from within a tied group is not stable between identical queries."
       },
       {
         "type": "integer",
         "field": "input.limit",
         "required": false,
         "description": "Maximum number of rows to return"
+      },
+      {
+        "type": "object",
+        "field": "input.vectorSearch",
+        "required": false,
+        "description": "Rank rows by pgvector cosine similarity instead of comparing text. Shape: { column, queryText, threshold?, limit? }. column must be a vector column on the table — one is created automatically for any column named <name>_embedding, and it is populated from its source column on every insert and update. queryText is the text to match and takes a {{template}}. threshold is the minimum cosine similarity a row must reach to be returned, 0 to 1, default 0.75; it is CALIBRATED PER USE CASE, not inherited — a threshold tuned for one kind of text does not carry to another, so verify it against real examples of both matches and non-matches before relying on it. Combines with filters rather than replacing them: filters narrow the candidate set, vectorSearch ranks what remains. Rows come back most-similar first, so orderBy is not needed with it."
+      },
+      {
+        "type": "array",
+        "field": "input.columns",
+        "required": false,
+        "description": "Column names to return, as a SELECT list of strings. Omit to return every column. Name the columns the step actually uses whenever the table carries a vector column: an embedding is thousands of numbers per row, so a query that returns whole rows and hands them to a later llm_call pays for all of them, on every run, and the cost grows with the table."
       },
       {
         "type": "string",
@@ -392,7 +440,7 @@
   },
   {
     "step_type": "serv_update",
-    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass updates are rejected. Returns updatedCount and updated rows.",
+    "description": "Updates rows in a PGC or PGD table matching the given filters. Filters must be non-empty \u2014 unfiltered mass updates are rejected. Returns updatedCount and updated rows. This is ONE statement: every row the filters match receives the SAME values, so serv_update has no batch form for per-row differing values. When each record needs its own values, use serv_upsert with a rows array \u2014 one call, no iterator. An iterator of serv_update steps is the right shape only when each item genuinely needs its own filters, as when applying a list of independently-targeted corrections.",
     "input_contract": [
       {
         "type": "string",
@@ -500,7 +548,7 @@
   },
   {
     "step_type": "serv_upsert",
-    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing budget data, syncing recurring records). Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
+    "description": "Inserts or updates each row in rows depending on whether an existing row matches all matchColumns values. Always a batch — rows is an array, and the whole set is resolved in one call, never an iterator. Use this instead of a serv_query lookup + js_transform diff + conditional serv_insert/serv_update chain whenever a batch of records needs to be inserted if new or updated if already present (e.g. importing tabular data, syncing recurring records). Also use it in place of serv_update when each record carries its own values, since serv_update applies one set of values to every row its filters match. Unlike serv_insert, rows here need not share a column set — each is written individually. Workaround upsert — no table currently declares a compound unique constraint on matchColumns, so matching is query-then-write (LIMIT 1 on the first row satisfying matchColumns), not a native INSERT ... ON CONFLICT.",
     "input_contract": [
       {
         "type": "string",
@@ -883,7 +931,14 @@
         "type": "string",
         "field": "message_template",
         "required": true,
-        "description": "Message text \u2014 supports {{template}} substitution from local_state"
+        "one_of": ["message_template", "message"],
+        "description": "Message text \u2014 supports {{template}} substitution from local_state. The engine reads message_template first and falls back to `message`, so either name satisfies this requirement; prefer message_template, which is what every other notify step uses."
+      },
+      {
+        "type": "string",
+        "field": "message",
+        "required": false,
+        "description": "Accepted alias for message_template, read only when message_template is absent. Documented because the engine honours it, not because it is the form to reach for \u2014 write message_template in new steps."
       },
       {
         "type": "string",

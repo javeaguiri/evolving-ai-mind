@@ -1,75 +1,191 @@
-# Sprint 10 — NOT YET SCOPED
+# Sprint 11 — Usability and Administration
 
-**Status: awaiting scope.** Sprint 9 closed 2026-08-06. Retro phase ✅ (see
-`docs/sprints/sprint-09.md` §RETRO). **Scope, branch and acceptance criteria still to be agreed
-with the user** — the candidates below are the carry-forward position, not a plan.
+**Status: SCOPED 2026-08-22. Branch `sprint/11-usability-and-admin`.**
 
-> Read before scoping: `docs/sprints/sprint-09.md` §RETRO, `docs/backlog.md`, and
-> `docs/arch-minds-eye.md` §12.7 — OQ1 is now answered and OQ6 closed; OQ5 is partly answered.
+> **Read before implementing:** `docs/sprints/sprint-10.md` §RETRO (especially items 1, 2 and 3),
+> `docs/backlog.md` §High Priority, and `docs/arch-minds-eye.md` §12.
 
 ---
 
-## Where Sprint 9 left the system
+## Sprint Goal
 
-Novia can design, simulate and register a workflow from a Slack conversation with no
-`create_workflow` involvement. What she cannot yet do unaided is **repair** one — and the two
-things standing in the way of finding out are both diagnosed and unbuilt.
+**Make what the system already does discoverable, correctable, and pleasant to use.**
 
-Three ACs did not close, and they are not independent:
+Sprint 10 answered whether the project should continue. It should. What it also showed is that a
+household second brain accumulates two kinds of debt the moment it is genuinely used: **things the
+user cannot find** and **things the user cannot fix**. `process_receipt` has run five times and is
+invisible in `/help`. Aliases and categories accumulate automatically and have no maintenance path,
+so a single mis-match compounds on every subsequent shop.
 
-| Carried | Why it did not close | Unblocked by |
+Neither is a research question. Both are ordinary product work, and this sprint is deliberately
+shaped as ordinary product work after a make-or-break one.
+
+**Branch:** `sprint/11-usability-and-admin`
+
+---
+
+## Why this shape
+
+The items below came from **use**, not from a plan — which is the right source, and also means the
+scope will grow as the administrative workflows surface more dialog defects. That is expected. The
+standing instruction is to **record new findings in `docs/backlog.md` rather than absorb them
+mid-sprint**, unless the user says "add to sprint".
+
+---
+
+## Tracks
+
+### Track A — `/help` tells the truth (opening item)
+
+**The case, reported from use.** Selecting a domain at `/help`'s level-1 gate renders step 4's
+`js_transform`, which composes the panel from **`PGC_DomainHelp.commands` and nothing else**. It
+never names a workflow and never says how to start one. Live, on three domains:
+
+| Domain | `/help` says | Reality |
 |---|---|---|
-| **AC5** second half — `edit_budget` runs end-to-end through the Novia path | the runtime needed repairs made outside that path | AC8 |
-| **AC6** — session compression at the turn-limit gate | a round dies at the 240s Lambda ceiling before reaching the gate | the transcript fix |
-| **AC8** — Novia repairs `edit_budget` step 5 unaided | deferred for measurement validity, not time | the transcript fix |
+| `inventory` | five generic `/m` CRUD lines | never mentions `process_receipt` (358), the domain's only real workflow |
+| `budgets_expenses` | `/m import budget`, `/m budget report` | never mentions `edit_budget` (357) — registered, intent-routed, invisible |
+| `flashcards` | `/m review`, `/m study`, `/m quiz` | the domain holds exactly one workflow; **two of the three route nowhere** |
 
-**The transcript prefix-cache fix is the unlock for all three**, which is why it is the lead
-candidate rather than merely the cheapest.
+**The drift runs in both directions** — it under-reports everything built since the domain was
+created and over-reports workflows that were deleted. **The answer is already stored and nothing
+reads it:** `PGC_Workflow` rows carry `domain`, `name`, `description` and `intent_keywords`.
+
+**Acceptance:** AC1.
+
+### Track B — The inventory correction workflow
+
+Four verbs over the same two tables, designed as **one** workflow rather than four:
+
+1. **Rename** an item (`PGD_Inventory` 25 is a red wine recorded as "Ink Cartridge")
+2. **Merge** a duplicate into another item, moving quantities and aliases with it
+3. **Recategorise** an item, and **aggregate** two `PGD_InventoryCategory` rows that mean the same thing
+4. **Fix an alias** — repoint or delete one that resolves to the wrong product
+
+**This is containment, not cleanup.** An alias hit is precisely the path that avoids human review,
+so a wrong alias applies itself silently on every future shop. Run 782 stored `PAN MOLD INT ALTEZ`
+(wholemeal sliced bread) against inventory 17 *Rustic Sliced Bread*.
+
+**Non-negotiable:** aliases are keyed on the **raw receipt string**, never on the English rendering.
+Keying the wine's correction on "Ink Cartridge" would make a real ink purchase increment the wine.
+
+**Built by Novia**, per the Sprint 10 direction. This is also the sprint's second data point on
+whether she handles a *maintenance* workflow as well as she handled a greenfield one.
+
+**Acceptance:** AC2.
+
+### Track C — The vector thresholds, calibrated by Novia
+
+**Two thresholds, not one**, and memory 298's bands were measured against neither pairing:
+
+| Step | Comparison | Column |
+|---|---|---|
+| 8 | English → English | `name_embedding` |
+| 8c | raw string → raw string | `alias_name_embedding` |
+
+0.4 was inherited from a cross-lingual comparison that no longer exists on either step. **Three
+wrong merges are the specimens:** `PANU BOL MIN SELEX` (mini bread rolls) → *Rustic Sliced Bread*;
+`ARANDANOS DESH ALT` (dehydrated) → *Blueberries 300g* (fresh); `PAN MOLD INT ALTEZ` → *Rustic
+Sliced Bread*.
+
+Probes against live rows are free. The workflow edit is a domain artifact, so it goes through
+`propose_workflow_fix`.
+
+**Acceptance:** AC3.
+
+### Track D — Administrative workflows, and the dialog defects they surface
+
+The user will identify further administrative workflows during the sprint. **Two dialog defects are
+already known and are in scope:**
+
+**D1 — A table inside a reveal window cannot be scrolled vertically.** Left/right works; up/down
+does not, so any table taller than the viewport has unreachable rows. This bounds every workflow
+that presents a list for review — choosing which duplicate to merge means seeing all of them.
+**Fault domain: Experience.** Establish what Block Kit actually permits before designing; the answer
+may be pagination at the renderer, which would be a **contract change** between `/proc` and
+`/ui/slack`, not a rendering tweak. No domain vocabulary in `/ui/slack` either way.
+
+**D2 — Recategorise / aggregate categories.** Covered by Track B, listed here because it was
+reported as a dialog problem: there is no route to it from any surface the user touches.
+
+**Acceptance:** AC4.
+
+### Track E — Retest `edit_budget`
+
+Workflow 357 is at v6 and its runtime half has never been validated end-to-end through the Novia
+path. This is Sprint 10's AC5 second half, carried.
+
+**Acceptance:** AC5.
 
 ---
 
-## Candidate scope — to be confirmed, not assumed
+## Acceptance Criteria
 
-### Lead candidate — the transcript prefix-cache fix
+| # | Criterion | Track | Threshold |
+|---|---|---|---|
+| **AC1** | `/help` names every registered workflow for a domain, and names no command that routes nowhere | A | Binary, verified live on `inventory`, `budgets_expenses` and `flashcards` |
+| **AC2** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | B | Binary, from Slack, no raw SQL |
+| **AC3** | Both thresholds calibrated against live rows and applied via `propose_workflow_fix`; the three known wrong merges no longer auto-resolve | C | Binary, evidenced by probe output before and after |
+| **AC4** | A table taller than the reveal viewport is fully reachable by the user | D | Binary, verified live |
+| **AC5** | `edit_budget` runs end-to-end from Slack | E | Binary |
+| **AC6** | Release-readiness: **decided, not defaulted** — either scoped into this sprint or deferred with a written reason | — | A decision exists on the record |
 
-A cache-invalidation defect in our own code, not a gateway limitation. Two things in
-`minds-eye.mjs` break the prefix every turn: `buildUserMessage` orders `input` as volatile
-context → transcript when the transcript is the append-only part, and `assembleContext` runs
-`ORDER BY priority DESC LIMIT 5` on `PGC_Memory` with no tiebreaker while 35 of 100 rows tie at
-priority 8. Three-part fix, all system code, none dependent on Perplexity. Expected ~12× cut on
-the creation component. **Needs a live Slack round to validate — the user runs it.**
-
-### Sequenced behind it, validating in the same round
-
-- **A5** — `run_sql` physical table names (`list_physical_tables` first; double-quote CamelCase
-  identifiers). Context/prompt content, no code.
-- **AC8 / Track D** — hand Novia `edit_budget` with the symptom only. D1 (`{{selected_period.N}}`
-  on a string) is now caught by L1, so the specimen may need reconstructing; D2 and D3 stand.
-- **AC6** — round budget and session compression, once turns are cheap enough to reach the gate.
-
-**One round can validate the fix, A5 and AC8 together** — the signals read from different places
-and do not confound: the cache effect from `cache_read`/`cache_creation` in the usage logs, A5
-from whether any `run_sql` call fails on an identifier, AC8 from whether she reaches the defect.
-
-### Independent of the above
-
-- **`create_domain` derived-field maintenance** — `card_count`, `learned_count`, `due_count` and
-  every denormalized column it will ever generate. Contract fault at the `create_domain`
-  boundary. Sequence *do not denormalize* first.
-- **Release-readiness** — test environment, README bootstrap, log hygiene. **Preempted in
-  Sprints 7, 8 and 9.** If it is deferred a fourth time, that should be a decision rather than an
-  outcome.
-- **C4** — the literal `**` in a gate message (run 735); still needs a repro to pin the block path.
+**AC6 exists because release-readiness has now been deferred five sprints running (7, 8, 9, 10, and
+by this scope, 11).** The GO removed its stated justification — *"handoff infrastructure is not
+worth building for a project that may be cancelled"*. This AC does not require the work; it requires
+that the fifth deferral be a decision rather than an outcome.
 
 ---
 
-## Open decisions for scoping
+## Standing observations — not tasks
 
-1. **Does the `create_workflow` dissolution decision get taken this sprint?** §12.7 OQ1 is
-   answered but unfavourable, and explicitly says the decision should not be taken on that number
-   as it stands. Re-measuring needs the transcript fix first.
-2. **Release-readiness — in or out?** Three deferrals is the argument for scoping it deliberately
-   this time, including the part where a test environment would have made the Sprint 9 deferrals
-   unnecessary.
-3. **Archetypes** — parked in Sprint 9 behind the framing rule, to be revisited "with evidence
-   from real builds". One build now exists. Whether it constitutes evidence is a scoping call.
+These resolve on events outside the sprint's control. **Record them when they happen; do not
+schedule them.**
+
+| # | Observation | Resolves when |
+|---|---|---|
+| **AC9 (Sprint 10)** | Per-receipt cost falls with use — third < first, same merchant | An ordinary shop produces a MASYMAS receipt whose items overlap the alias table. **Protocol pre-registered** in `sprint-10.md`: per-item step-10 input tokens against the **831** baseline, per-item cost against **$0.0073**, auto-matched count as support. Raw per-receipt cost is explicitly *not* the criterion |
+| **AC13 (Sprint 10)** | Novia's home-intelligence proposal convinces the friend | The user shows it to him. Built and dry-run (session 1151); the deciding half is his judgement |
+
+---
+
+## Out of Scope
+
+| Item | Why |
+|---|---|
+| **Output-token cost reduction** | Now ~48% of a receipt run and the largest remaining cost term, but **unmeasured and undiagnosed**. Backlog entry raised as a pointer, not a diagnosis. Measure before optimising; a sprint that opens with an optimisation target and no measurement repeats Sprint 9's AC9 |
+| **The prefix forfeit on the prose-reply path and gate resume** | Real and worth 58% of one session, but it is Novia-loop cost, not usability. Backlog, High Priority |
+| **`create_domain`'s unconsumed derived-field rules** | Unchanged. Sequence *do not denormalize* first |
+| **`create_workflow` repairs of any kind** | Retired by the Sprint 10 direction. `design_workflow_dialogs` v19 is spliced. Do not run it |
+| **`/chat` dead code removal** | Independent, still undecided |
+
+---
+
+## Sprint Close Checklist
+
+- [ ] `node --test tests/unit/*.test.mjs` passes
+- [ ] L0/L1/L2 pass on every workflow built or modified this sprint
+- [ ] `CLAUDE.md` "Current State" updated
+- [ ] `docs/architecture.md` updated if any `.mjs` added/removed/renamed or any decision made
+- [ ] `docs/arch-data.md` updated if any schema changes
+- [ ] `docs/arch-workflow-patterns.md` / `docs/arch-step-types.md` updated if the reveal contract changes
+- [ ] `README.md` updated if environment setup or bootstrap changed
+- [ ] `docs/backlog.md` updated — items completed, new items added
+- [ ] `docs/sprints/CURRENT.md` → `docs/sprints/sprint-11.md` with outcome notes and a retro
+- [ ] **AC6 — the release-readiness decision is written down**
+
+---
+
+## Session Notes
+
+### Session 1 — 2026-08-22 — Sprint 10 closed, Sprint 11 scoped
+
+Sprint 10 closed **GO**: 9 PASS, 2 MARGINAL, 2 NOT MEASURED. Both Execution defects blocking AC9
+were fixed, deployed and re-probed the same day, and a third surfaced from the re-probe. AC9 itself
+could not be measured — run 782's receipt had zero vocabulary overlap with the alias table — and is
+carried here as a standing observation rather than a task.
+
+Sprint 11's items came from the user's own use of the system, in this order: `/help`, the inventory
+correction workflow, further administrative workflows to be identified, and a retest of
+`edit_budget`. Two dialog defects were reported alongside them: vertical scrolling in a reveal
+window, and the absence of any route to recategorise or aggregate an inventory category.

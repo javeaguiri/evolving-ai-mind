@@ -285,6 +285,31 @@ async function executeHumanGate({ step, localState, run, traceId }) {
  * @param {object} localState
  * @returns {Array}            Fully resolved options, iterator entries expanded
  */
+/**
+ * resolveDisplayText — every author-written string that ends up in front of the user may
+ * carry {{tokens}}. Gate option labels and message_template always resolved; five other
+ * display strings never did, so `View items ({{parsed_receipt.items.length}})` reached
+ * Slack verbatim (run 776). Applied to all of them: reveal button labels, a list row's
+ * item_action label, the text_input label and placeholder, and special_buttons.
+ *
+ * Resolution belongs here and not in the renderer: the experience layer never sees
+ * local_state, and giving it access would put procedure-tier state behind a rendering
+ * decision.
+ *
+ * An absent value is passed through untouched rather than defaulted to '': callers supply
+ * their own defaults, and an empty plain_text is rejected outright by Slack — the same
+ * class of failure as an empty container (run 774).
+ *
+ * @param {string|undefined} text
+ * @param {object} localState
+ * @returns {string|undefined}
+ */
+export function resolveDisplayText(text, localState) {
+  return (typeof text === 'string' && text !== '')
+    ? resolveTemplate(text, localState)
+    : text;
+}
+
 export function resolveGateOptions(step, localState) {
   const resolvedOptions = typeof step.options === 'string'
     ? (resolvePath(localState, step.options.replace(/^\{\{|\}\}$/g, '')) ?? [])
@@ -410,7 +435,9 @@ export function buildDialog(step, localState) {
           if (show) {
             secondaryAction = {
               action: step.item_action.action,
-              label:  step.item_action.label ?? 'Select',
+              // Resolved against the per-item state, like confirm_template below — the
+              // label is what makes a row's button say what it acts on.
+              label:  resolveDisplayText(step.item_action.label, { ...localState, item }) ?? 'Select',
               style:  step.item_action.style,
               ...(step.item_action.confirm_template ? {
                 confirm: resolveTemplate(step.item_action.confirm_template, { ...localState, item }),
@@ -501,9 +528,9 @@ export function buildDialog(step, localState) {
       fields.push({
         type:      'textbox',
         name:      'user_input',
-        label:       step.input_label   ?? 'Your input',
+        label:       resolveDisplayText(step.input_label, localState) ?? 'Your input',
         multiline:   step.multiline     ?? false,
-        ...(step.placeholder ? { placeholder: step.placeholder } : {}),
+        ...(step.placeholder ? { placeholder: resolveDisplayText(step.placeholder, localState) } : {}),
       });
       break;
     }
@@ -561,8 +588,13 @@ export function buildDialog(step, localState) {
         const primaryKey    = step.item_primary_key    ?? 'tableName';
         const secondaryKey  = step.item_secondary_key  ?? 'columns';
         items = ctx.map(item => {
+          // The shared resolver, not a private regex. The regex here accepted only
+          // single-word keys, so {{a.b}} and {{xs.length}} silently rendered as
+          // themselves — the same class of defect as an unresolved button_label, hidden
+          // inside one gate type. Item properties shadow local_state, preserving the
+          // single-key behaviour every live template relies on.
           const label = labelTemplate
-            ? labelTemplate.replace(/\{\{(\w+)\}\}/g, (_, k) => item[k] ?? '')
+            ? resolveTemplate(labelTemplate, { ...localState, ...item, item })
             : (item[primaryKey] ?? String(item));
           const raw   = item[secondaryKey];
           let value;
@@ -635,7 +667,7 @@ export function buildDialog(step, localState) {
   if (step.reveal) {
     fields.push({
       type:         'reveal',
-      button_label: step.reveal.button_label,
+      button_label: resolveDisplayText(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -652,7 +684,7 @@ export function buildDialog(step, localState) {
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     fields.push({
       type:         'reveal',
-      button_label: r.button_label,
+      button_label: resolveDisplayText(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }
@@ -660,7 +692,14 @@ export function buildDialog(step, localState) {
   // choice gate uses value as the identifier (HTML radio semantics); all other
   // gate types use action. Button style: primary for confirm/yes actions, default otherwise.
   const isChoice = step.gate_type === 'choice';
-  const resolvedSpecialButtons = step.special_buttons ?? [];
+  // Resolved here rather than in the map below, which also carries expandedOptions —
+  // those came back from resolveGateOptions already resolved, and running them through
+  // a second pass would re-resolve user data that legitimately contains braces.
+  const resolvedSpecialButtons = (step.special_buttons ?? []).map(b => ({
+    ...b,
+    ...(b.label       !== undefined ? { label:       resolveDisplayText(String(b.label), localState) }       : {}),
+    ...(b.description !== undefined ? { description: resolveDisplayText(String(b.description), localState) } : {}),
+  }));
   fields.push({
     type:    'actions',
     // o.modal forwarded so callback.mjs encodes it into button value for interactive.mjs.
@@ -792,29 +831,40 @@ async function executeServInsert({ step, localState, traceId }) {
 
 // Step input shape:
 //   {
-//     "tableName": "PGD_Recipes",
-//     "filters":   [ { "column": "name", "op": "like", "value": "{{state.search}}" } ],
-//     "orderBy":   { "column": "created_at", "direction": "desc" },
-//     "limit":     20
+//     "tableName":    "PGD_Recipes",
+//     "filters":      [ { "column": "name", "op": "like", "value": "{{state.search}}" } ],
+//     "orderBy":      { "column": "created_at", "direction": "desc" },
+//     "limit":        20,
+//     "vectorSearch": { "column": "name_embedding", "queryText": "{{state.search}}", "threshold": 0.6 }
 //   }
 //
-// filters, orderBy, and limit are all optional.
+// filters, orderBy, limit and vectorSearch are all optional.
 // Template variables in filter values are resolved via resolveInput before the SERV call.
 // Rows array is written to local_state[output_key].
+//
+// vectorSearch ranks by pgvector cosine similarity against a vector column, and combines
+// with filters rather than replacing them. SERV embeds queryText, validates that the column
+// exists and is a vector type, and applies the threshold. It was implemented at the SERV
+// boundary (table.mjs) and reachable through getRows, but this executor never passed it on —
+// so a step that asked for it got unranked rows back and no error. Silently wrong beats
+// loudly broken only if nobody is relying on the ranking, and lazy name matching is entirely
+// the ranking.
 
 async function executeServQuery({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input ?? {}, localState);
-  const { tableName, filters, orderBy, limit } = resolvedInput;
+  const { tableName, filters, orderBy, limit, vectorSearch, columns } = resolvedInput;
 
   if (!tableName) throw new Error('serv_query step missing input.tableName');
 
   console.info('step-executor: serv_query', {
     tableName,
-    filterCount: filters?.length ?? 0,
+    filterCount:  filters?.length ?? 0,
+    vectorColumn: vectorSearch?.column,
+    columnCount:  columns?.length ?? 0,
     traceId,
   });
 
-  const resp = await getRows(tableName, filters ?? [], orderBy, limit);
+  const resp = await getRows(tableName, filters ?? [], orderBy, limit, vectorSearch, columns);
 
   if (!resp.success) {
     throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
@@ -1709,7 +1759,7 @@ async function executeNotify({ step, localState, traceId }) {
   const reveals = [];
   if (step.reveal) {
     reveals.push({
-      button_label: step.reveal.button_label,
+      button_label: resolveDisplayText(step.reveal.button_label, localState),
       content:      resolveInput(step.reveal.content ?? '', localState),
     });
   }
@@ -1722,7 +1772,7 @@ async function executeNotify({ step, localState, traceId }) {
   }
   for (const r of revealsArray.filter(r => typeof r !== 'string')) {
     reveals.push({
-      button_label: r.button_label,
+      button_label: resolveDisplayText(r.button_label, localState),
       content:      resolveInput(r.content ?? '', localState),
     });
   }

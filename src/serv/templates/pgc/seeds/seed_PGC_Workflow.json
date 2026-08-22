@@ -11,31 +11,77 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": "anthropic/claude-sonnet-4-5",
-    "version": 20,
+    "version": 21,
     "steps": [
       {
         "step": "1",
         "type": "js_transform",
-        "description": "Derive candidate domain slug from user input for duplicate pre-check.",
+        "description": "Normalise the domain request. Accepts userInput or description — a caller supplying either is supplying the same thing.",
         "input_key": "input",
-        "output_key": "candidate_domain",
-        "expression": "(function() { return (items.userInput || '').toLowerCase().trim().replace(/\\s+/g, '_').replace(/[^a-z0-9_]/g, ''); })()",
+        "output_key": "domain_request",
+        "expression": "(function() { return (items.userInput || items.description || '').trim(); })()",
         "on_success": "next",
         "on_else": "cancel"
       },
       {
+        "step": "1a",
+        "type": "condition",
+        "expression": "{{domain_request}}",
+        "on_success": "2",
+        "on_else": "1b",
+        "description": "Was a domain request supplied? Empty means every design step downstream has nothing to work from."
+      },
+      {
+        "step": "1b",
+        "type": "human_gate",
+        "gate_type": "form",
+        "message_template": "I need to know what this domain is for before I can design it.\n\nDescribe what you want it to hold — the kinds of things you want to track, and what you would use it for. Everyday words are fine: the schema is designed from the description, not from a name.",
+        "fields": [
+          {
+            "name": "domain_request",
+            "type": "textarea",
+            "label": "What should this domain contain?"
+          }
+        ],
+        "output_key": "domain_answer",
+        "options": [
+          {
+            "label": "Submit",
+            "action": "confirm",
+            "on_select": "1c"
+          },
+          {
+            "label": "Cancel",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
+        ],
+        "on_success": "1c",
+        "on_else": "cancel",
+        "on_cancel": "cancel",
+        "description": "Collect the domain request when the run started without one. Asks for a description, not a name — the name is derived downstream from the description."
+      },
+      {
+        "step": "1c",
+        "type": "js_transform",
+        "input_key": "domain_answer",
+        "expression": "(function() { return (items && items.domain_request || '').trim(); })()",
+        "output_key": "domain_request",
+        "on_success": "2",
+        "on_else": "cancel",
+        "description": "Normalise the answered gate, so both entry paths reach step 2 with the same key."
+      },
+      {
         "step": "2",
         "type": "serv_query",
-        "description": "Check whether this domain already exists in PGC_DomainHelp.",
+        "description": "Does a domain covering this request already exist? Matched semantically against PGC_DomainHelp, because the request is a description and an existing domain is only found by what it is for, not by the words used to ask for it. Threshold 0.40 is the calibrated pplx-embed-v1-4b value for this table — exact matches score ~0.55-0.60, unrelated domains ~0.08-0.11.",
         "input": {
           "tableName": "PGC_DomainHelp",
-          "filters": [
-            {
-              "column": "domain",
-              "op": "eq",
-              "value": "{{candidate_domain}}"
-            }
-          ],
+          "vectorSearch": {
+            "column": "embedding",
+            "queryText": "{{domain_request}}",
+            "threshold": 0.4
+          },
           "limit": 1
         },
         "output_key": "existing_domain_check",
@@ -55,7 +101,7 @@
         "type": "human_gate",
         "gate_type": "confirm",
         "description": "Domain already exists. Offer recreate (overwrite registration) or cancel.",
-        "message_template": "Domain *{{candidate_domain}}* already exists. Recreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
+        "message_template": "Domain *{{existing_domain_check.0.domain}}* already covers this — _{{existing_domain_check.0.description}}_\n\nRecreating will overwrite its help text and aliases. The existing tables are NOT dropped — only the domain registration is regenerated.",
         "options": [
           {
             "label": "Recreate",
@@ -77,7 +123,7 @@
         "type": "human_gate",
         "gate_type": "choice",
         "description": "Ask how the domain will be used — shapes research depth and schema complexity.",
-        "message_template": "How will the *{{candidate_domain}}* domain be used?",
+        "message_template": "How will this domain be used?\n\n_You asked for: {{domain_request}}_",
         "options": [
           {
             "value": "professional",
@@ -136,7 +182,7 @@
         "description": "RIGHT BRAIN: Research domain data-modelling best practices and surface structural preference questions before schema design.",
         "input": {
           "prompt": "research_domain_schema",
-          "user_input": "{{input.userInput}}",
+          "user_input": "{{domain_request}}",
           "use_case_context": "{{use_case_context}}"
         },
         "output_key": "domain_research",
@@ -227,7 +273,7 @@
         "description": "LEFT BRAIN: Design domain schema using research findings and confirmed user preferences.",
         "input": {
           "prompt": "create_domain",
-          "user_input": "{{input.userInput}}",
+          "user_input": "{{domain_request}}",
           "research_findings": "{{domain_research.findings}}",
           "user_preferences": "{{user_preferences}}"
         },
@@ -341,7 +387,7 @@
         "description": "LEFT BRAIN: Revise domain schema based on user feedback.",
         "input": {
           "prompt": "revise_domain_schema",
-          "user_input": "{{input.userInput}}",
+          "user_input": "{{domain_request}}",
           "proposed_scaffold": "{{proposed_scaffold}}",
           "user_preferences": "{{user_preferences}}",
           "research_findings": "{{domain_research.findings}}",
@@ -462,7 +508,11 @@
         "input": {
           "tableName": "PGC_SystemContext",
           "filters": [
-            { "column": "key", "op": "eq", "value": "minds_eye_preferences" }
+            {
+              "column": "key",
+              "op": "eq",
+              "value": "minds_eye_preferences"
+            }
           ]
         },
         "output_key": "minds_eye_context_rows",
@@ -579,7 +629,7 @@
         "input": {
           "prompt": "generate_domain_aliases",
           "domain_name": "{{proposed_scaffold.domain}}",
-          "user_input": "{{input.userInput}}"
+          "user_input": "{{domain_request}}"
         },
         "output_key": "domain_aliases",
         "save_to_memory": {
@@ -2717,7 +2767,13 @@
               {
                 "column": "foreign_keys",
                 "op": "jsonb_contains",
-                "value": [ { "references": { "table": "{{item}}" } } ]
+                "value": [
+                  {
+                    "references": {
+                      "table": "{{item}}"
+                    }
+                  }
+                ]
               }
             ],
             "limit": 20
@@ -2754,7 +2810,12 @@
         "description": "Show one row per record at the current level. Opening a row either drills into its children (another pass through this same loop) or shows its full detail, decided by the router at step 40 based on the hasChildren flag computed above — never fetched eagerly per row.",
         "message_template": "{{list_view.message}}",
         "context_key": "list_view.row_items",
-        "item_action": { "action": "select_row", "label": "Open", "style": "default", "on_select": "step:40" },
+        "item_action": {
+          "action": "select_row",
+          "label": "Open",
+          "style": "default",
+          "on_select": "step:40"
+        },
         "output_key": "selected_row",
         "options": "{{list_view.gate_options}}",
         "on_success": "next",
@@ -2788,7 +2849,13 @@
             {
               "column": "foreign_keys",
               "op": "jsonb_contains",
-              "value": [ { "references": { "table": "{{selected_row.table}}" } } ]
+              "value": [
+                {
+                  "references": {
+                    "table": "{{selected_row.table}}"
+                  }
+                }
+              ]
             }
           ],
           "limit": 20
@@ -2892,8 +2959,16 @@
         "message_template": "{{formatted_display.formatted_markdown}}",
         "reveals": "{{formatted_display.reveals}}",
         "options": [
-          { "label": "⬅ Back", "action": "go_back", "on_select": "step:42" },
-          { "label": "Done", "action": "cancel", "on_select": "cancel" }
+          {
+            "label": "⬅ Back",
+            "action": "go_back",
+            "on_select": "step:42"
+          },
+          {
+            "label": "Done",
+            "action": "cancel",
+            "on_select": "cancel"
+          }
         ],
         "on_success": "next",
         "on_else": "cancel",

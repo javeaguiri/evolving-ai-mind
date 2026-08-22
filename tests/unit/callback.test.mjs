@@ -1179,6 +1179,45 @@ describe('dialogToBlocks — reveal', () => {
     assert.equal(block.child_blocks[0].type, 'section');
     assert.equal(block.child_blocks[0].text.text, '_No child decks_');
   });
+
+  // Regression (run 774): a reveal over a collection that turned out empty produced
+  // a container with zero child_blocks, which Slack rejects outright ("must provide
+  // at least 1 items [json-pointer:/blocks/1/child_blocks]"). The rejection failed
+  // the whole gate message and left the run suspended at a gate nobody ever saw.
+  // An empty tier is legitimate data, so the panel renders and says it is empty.
+  it('an empty array renders a placeholder child block rather than an empty container', () => {
+    const field = { type: 'reveal', button_label: 'Auto-matched', content: [] };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.type, 'container');
+    assert.equal(block.child_blocks.length, 1);
+    assert.equal(block.child_blocks[0].type, 'section');
+    assert.equal(block.child_blocks[0].text.text, '_(none)_');
+  });
+
+  it('empty-string content renders a placeholder child block', () => {
+    const field = { type: 'reveal', button_label: 'Notes', content: '' };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.child_blocks.length, 1);
+    assert.equal(block.child_blocks[0].text.text, '_(none)_');
+  });
+
+  it('null content renders a placeholder child block', () => {
+    const field = { type: 'reveal', button_label: 'Notes', content: null };
+    const [block] = dialogToBlocks({ fields: [field] }, 1);
+    assert.equal(block.child_blocks.length, 1);
+    assert.equal(block.child_blocks[0].text.text, '_(none)_');
+  });
+
+  it('every container in a multi-reveal gate carries at least one child block when some tiers are empty', () => {
+    const blocks = dialogToBlocks({ fields: [
+      { type: 'reveal', button_label: 'Auto-matched', content: [] },
+      { type: 'reveal', button_label: 'LLM-resolved', content: [] },
+      { type: 'reveal', button_label: 'New items',    content: [{ name: 'Freezer Bags', quantity: 1 }] },
+    ] }, 1);
+    const containers = blocks.filter(b => b.type === 'container');
+    assert.equal(containers.length, 3);
+    for (const c of containers) assert.ok(c.child_blocks.length >= 1);
+  });
 });
 
 describe('dialogToBlocks — textbox', () => {
