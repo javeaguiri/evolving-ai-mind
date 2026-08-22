@@ -1003,7 +1003,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit |
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended |
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
@@ -1229,6 +1229,16 @@ Adds a FK to an **existing** table and records it in `PGC_Schema.foreign_keys` i
 #### SERV-Schema — addUniqueConstraint
 
 ```bash
+> **The inventory domain, as built (Sprint 10).** Four tables: `PGD_Inventory` (items, with
+> `name_embedding`), `PGD_InventoryAlias` (raw receipt strings, with `alias_name_embedding`,
+> FK to inventory), `PGD_InventoryCategory` (a **shared lookup**, not a per-item child — one row
+> per category name, uniquely constrained), and `PGD_Expenses`/`PGD_SpendingCategories` reached
+> cross-domain at the workflow layer rather than by FK. The alias table is what makes receipt
+> matching cheapen with use: each confirmed match writes the merchant's raw string, so the next
+> receipt resolves it by similarity rather than by an LLM call. Aliases are keyed on the **raw
+> receipt string**, never on its English rendering — a mistranslation stored in English would
+> attach the wrong product permanently.
+
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addUniqueConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_InventoryCategory", "constraintName": "uq_inventorycategory_name", "columns": ["name"] }'
 ```
 Adds a UNIQUE constraint over one or more columns and registers it as `type: "unique"`. Deduplicate the existing rows first — the DDL fails on a table that already violates it.

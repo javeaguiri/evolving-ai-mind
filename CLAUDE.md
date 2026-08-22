@@ -241,23 +241,33 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 **What did not come free is the finding.** AC5's runtime half needed repairs made outside the Novia path. AC9 measured **$2.73** to build against the **$1.42** `create_workflow` baseline, plus **$3.40** for a repair session that did not complete — so the cost evidence the dissolution decision is gated on **does not yet favour the Novia path**, and should be re-measured after the transcript fix. AC6 was moved from partial to **not met** on discovering the binding budget was never `turn_limit`: the round runs inside one 240s Lambda. The single largest defect found: **Novia could not see her own work** — `buildUserMessage` dropped a tool entry's `params`, so every step array she submitted was persisted and invisible to her, and she rebuilt all 23 steps from reasoning each turn.
 
-**Sprint 10 not yet scoped.** Lead: the **transcript prefix-cache fix** — diagnosed, three-part, all in `minds-eye.mjs`, and blocking rather than merely expensive. Read `docs/sprints/sprint-09.md` (retro) before scoping.
+**Sprint 10 closed 2026-08-22 (branch `sprint/10-viability-checkpoints`).** Viability checkpoints — a make-or-break sprint whose deliverable was a written go/no-go, with every threshold fixed in the sprint doc **before** any number was observed. **Outcome: GO** — 9 PASS, 2 MARGINAL, 2 NOT MEASURED across 13 ACs. Novia replaces `create_workflow` as the way workflows are built: **$1.376** to build `process_receipt` registered-to-registered against the $1.42 `create_workflow` baseline, and **$0.672** to diagnose and repair a defect unaided from a symptom alone. Checkpoint 1 (~$21/mo AWS) and Checkpoint 2 pass; **Checkpoint 3 passes on its binary threshold** — a raw-Spanish grocery receipt and a restaurant receipt both route correctly from Slack with no hand-repair. Shipped: **native function calling** for Novia's loop (`callLlmWithTools`, 29 tool schemas, `ACTION_SCHEMA` deleted) with `cacheRead` = the previous turn's entire `inputTokens`; `serv_query` `vectorSearch` + `columns` pass-through; **capability and scheduling tools on EventBridge Scheduler**, built for real; `addForeignKey`/`addUniqueConstraint`. 823 → 997 unit tests.
 
-### Open Work (carry-forward to Sprint 10)
+**The load-bearing finding: never append a user message mid-round** — one trailing user item forfeits the whole prefix credit for that turn, measured twice with everything else held constant. Fixed on the `respond`-tool path; still open on the prose-reply path and on gate resume, together **58%** of one session's spend.
 
-1. **Novia's transcript is re-cached at creation price every turn** (Sprint 10 lead) — a prefix-cache invalidation in our own code, not a gateway limitation. `buildUserMessage` puts volatile context blocks ahead of the append-only transcript, and `assembleContext` orders `PGC_Memory` by `priority DESC LIMIT 5` with no tiebreaker (35 of 100 rows tie at priority 8), so byte zero of `input` moves every turn. Three-part fix, all in `minds-eye.mjs`; expected ~12× cut on the creation component. Needs a live Slack round to validate. See backlog.
-2. **AC8 / Track D — Novia diagnoses and repairs `edit_budget` unaided** (D1–D3). Deferred *for measurement validity*: a round that dies from a 54k-token transcript or the 240s Lambda ceiling measures the harness, not Novia. Run it after item 1, as that fix's live validation.
-3. **A5 — `run_sql` gives Novia no route to physical table names.** Seven of ~12 calls in session 1122 failed on identifiers (~$1.50 of $3.40). Two statements close it: use `list_physical_tables` first, and double-quote CamelCase identifiers. Context/prompt content, no code. Lands with item 1 — one deploy, one round.
-4. **AC6 — the round budget, and session compression.** The loop runs its turns inside ONE 240s Lambda, so `turn_limit` is unreachable and compression at the turn-limit gate has never been exercised. Behind item 1, which is what makes turns cheap enough to reach the gate.
-5. **`create_domain` emits derived-field maintenance rules with no consumer** — `card_count`, `learned_count`, `due_count` and every denormalized column it will ever generate. Fault domain is Contract at the `create_domain` boundary. Sequence *do not denormalize* first: at household scale the column can be a `COUNT(*)` or a view. See backlog High Priority.
-6. **AC5 second half** — `edit_budget` end-to-end through the Novia path, once items 1–2 land. The build is registered (id 357, now v6).
-7. `register_workflow` should refuse a domain workflow with no `intent_keywords` — the consequence is misrouting to generic `update_entity`, not silence. See backlog.
-8. Bold `**` renders literally in a gate message (run 735) — `callback.mjs`; still needs a repro to pin the block path (Sprint 9 C4, unclosed).
-9. Validate every `llm_call` step supplies every `{{token}}` its prompt declares — shared prompts silently hand the LLM its own literal token text. See backlog.
-10. A render failure in the Experience tier should fail the run, not just report it — the run still wedges at `awaiting_human_gate`. See backlog.
-11. Evidence for a cancelled run is thin — a cancel clears the stack and never writes `state`, so runs 739/741 have no recoverable `local_state`. See backlog.
-12. `/chat` dead code removal (deletion undecided). See backlog High Priority.
-13. **Release-readiness** — test environment, README bootstrap, log hygiene. **Preempted three sprints running** (7, 8, 9).
+**What the GO does not claim, and this is the sprint's largest evidence gap: that cost per receipt falls with use.** Every part of the alias-learning machine is built and proven live — per-item `vectorSearch` on both tables, same-language alias matching, 84 aliases persisted as raw receipt strings — and **AC9 is unmeasured**. Run 782's four items were entirely new vocabulary (`auto_matched: 0`), so the 2.4× per-item drop it showed is attributable to two engine fixes, not to learning. The measurement protocol was pre-registered in git before that run precisely so the distinction could be drawn afterwards rather than argued about. It closes on one ordinary shopping trip whose items overlap the alias table.
+
+**Every significant defect this sprint was found by running the system, not by reading it** — seven engine defects on 2026-08-16, two on 2026-08-19, and a third on 2026-08-22 that surfaced only because the backlog entry said *re-probe rather than trust the response shape*.
+
+**Sprint 11 scoped 2026-08-22 (branch `sprint/11-usability-and-admin`).** Read `docs/sprints/sprint-10.md` (retro) and `docs/sprints/CURRENT.md`.
+
+### Open Work (carry-forward to Sprint 11)
+
+1. **`/help` shows a domain's CRUD commands and never its workflows** — everything Novia builds is undiscoverable. The panel is composed from `PGC_DomainHelp.commands` alone and never reads `PGC_Workflow`, so it drifts in **both** directions: `inventory` never mentions `process_receipt`, `budgets_expenses` never mentions `edit_budget`, and `flashcards` advertises two commands that route nowhere. **Sprint 11's opening item.** See backlog High Priority.
+2. **The inventory correction workflow** — rename an item, merge a duplicate, recategorise, and fix an alias. This is not a nicety: matching at an uncalibrated 0.4 has persisted **wrong** aliases (`PAN MOLD INT ALTEZ` → *Rustic Sliced Bread*), and `PGD_Inventory` 25 is a red wine recorded as "Ink Cartridge". Errors compound on every shop. Aliases must be keyed on the **raw receipt string**, never on the wrong English.
+3. **AC7 — the vector thresholds, assigned to Novia.** Two to calibrate, not one: step 8 is English→English on `name_embedding`, step 8c is raw-string→raw-string on `alias_name_embedding`. Memory 298's bands were measured against neither pairing. Three wrong merges across runs 780/782 are the specimens.
+4. **AC9 — a standing observation, not a task.** Resolves on the next same-merchant receipt with vocabulary overlap. Protocol pre-registered: per-item step-10 input tokens against the **831** baseline, per-item cost against **$0.0073**, auto-matched count as support.
+5. **Human-dialog usability, surfaced by the administrative workflows** — a table in a reveal window scrolls left/right but **not up/down**; and there is no route to recategorise or aggregate an inventory item's category.
+6. **Retest `edit_budget`** (357 v6) end-to-end through the Novia path.
+7. **AC13 / Checkpoint 4** — waits on the friend's availability. Nothing on this side unblocks it.
+8. **Output tokens are now ~48% of a receipt run's spend.** Input-side optimisation has largely done its work; the next material cost reduction is not on the input side.
+9. **The prefix forfeit on the prose-reply path and on gate resume.** See backlog High Priority.
+10. **`create_domain` emits derived-field maintenance rules with no consumer.** Sequence *do not denormalize* first. See backlog High Priority.
+11. **Release-readiness** — test environment, README bootstrap, log hygiene. **Deferred five sprints running (7, 8, 9, 10, 11).** The GO removed the stated reason for deferring it; the fifth deferral is a decision, not an outcome.
+12. `register_workflow` should refuse a domain workflow with no `intent_keywords`. See backlog.
+13. Validate every `llm_call` step supplies every `{{token}}` its prompt declares. See backlog.
+14. A render failure in the Experience tier should fail the run, not just report it. See backlog.
+15. `/chat` dead code removal (deletion undecided). See backlog High Priority.
 
 ### Deferred
 
