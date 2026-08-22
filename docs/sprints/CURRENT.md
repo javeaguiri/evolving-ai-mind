@@ -1957,6 +1957,40 @@ inventory 6, **Blueberries 300g** — fresh, the exact conflation the pre-run pr
 Neither is an engine fault: the LLM arbitrated on candidates a loose threshold admitted. Both
 strengthen the case for recalibrating off 0.4 now that matching is same-language.
 
+### AC9 — measurement protocol, PRE-REGISTERED 2026-08-22 before any number was observed
+
+**Committed to git before the run, deliberately.** The sprint's rule is that thresholds are fixed
+before measurement; this is the same rule applied one level down, to *how* the threshold is read.
+
+**Two user decisions taken here.** AC9 is read on the **second** same-merchant receipt, not the
+third — MASYMAS has had exactly one run (780), runs 775/776 are a different merchant *and* predate
+the `vectorSearch` design, so a literal third-against-first needs two more shopping trips. AC9 will
+therefore be marked on second-against-first with **"third was not reached" stated plainly in the
+mark**, never elided. And the second receipt **is a short one**, which is precisely why the metric
+has to be settled first: a 4-item receipt costs less than a 15-item receipt whether or not a single
+alias hits, so raw per-receipt cost would pass the threshold for a reason unrelated to learning.
+
+| | Metric | Run 780 baseline | Direction that supports the claim |
+|---|---|---|---|
+| **Primary** | Step 10 input tokens **per receipt item** | 12,460 / 15 = **831** | Lower |
+| **Primary** | Run cost **per item** | $0.1095 / 15 = **$0.0073** | Lower |
+| **Supporting** | Items auto-matched, as a count and a share | **2 of 15 (13%)** | Higher |
+| **Reported, not the criterion** | Raw per-receipt cost | **$0.1095** | Confounded by item count |
+
+**Two caveats recorded in advance, not after:**
+
+1. **Small n is noisy.** On a handful of items the auto-matched share swings on one or two products.
+   Report the count alongside the percentage; do not lead with a percentage of four.
+2. **The reading depends on vocabulary overlap.** Run 780 wrote 13 raw-string aliases. If the second
+   receipt's items are among them, those aliases should fire. If the items are all new products,
+   little learning will show — and that is **an absence of opportunity, not a failure of the
+   mechanism**. State which case it was; a bare number without this is not evidence either way.
+
+**Also true of this run:** the duplication fix touches every `llm_call`, so this is simultaneously
+the regression test for all 15 seed workflows. A step-10 token figure that falls for the engine fix
+rather than for aliases is expected and is a *different* claim from AC9 — separate the two in the
+write-up by comparing per-item tokens against 831 *and* naming the fixes as a contributing cause.
+
 ### Session 17 — 2026-08-22 — Both Execution defects fixed and deployed. AC9's blocker is gone.
 
 **User decisions taken at the top of the session, and they reshape what is left:**
