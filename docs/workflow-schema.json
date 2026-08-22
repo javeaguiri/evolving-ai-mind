@@ -102,6 +102,28 @@
       }
     },
 
+    "orderBy": {
+      "description": "One sort term or several. A term is { column, direction } or the SQL string form \"column DESC\"; a list is an array of either, or one comma-separated SQL string. Sort on a unique column last whenever the leading term can tie and a limit can cut the tie — otherwise which rows come back from within a tied group is not stable between identical queries.",
+      "oneOf": [
+        { "$ref": "#/definitions/orderByTerm" },
+        { "type": "string" },
+        { "type": "array", "minItems": 1, "items": { "oneOf": [
+          { "$ref": "#/definitions/orderByTerm" },
+          { "type": "string" }
+        ] } }
+      ]
+    },
+
+    "orderByTerm": {
+      "type": "object",
+      "required": ["column"],
+      "additionalProperties": false,
+      "properties": {
+        "column":    { "type": "string" },
+        "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+      }
+    },
+
     "confirmOption": {
       "type": "object",
       "description": "Option shape for confirm, list_selection, review_object, and text_input gate types. Uses 'action' (not 'value') as the machine identifier.",
@@ -438,14 +460,17 @@
             "tableName": { "type": "string", "description": "Mixed-case table name without SQL quotes — SERV adds them." },
             "filters":   { "type": "array", "items": { "$ref": "#/definitions/filterItem" } },
             "limit":     { "type": "integer" },
-            "orderBy": {
+            "orderBy":   { "$ref": "#/definitions/orderBy" },
+            "vectorSearch": {
               "type": "object",
-              "description": "Optional ORDER BY clause.",
-              "required": ["column"],
+              "description": "Rank rows by pgvector cosine similarity instead of comparing text. Combines with filters rather than replacing them: filters narrow the candidate set, vectorSearch ranks what remains, most-similar first. Each row comes back with a `similarity` score.",
+              "required": ["column", "queryText"],
               "additionalProperties": false,
               "properties": {
-                "column":    { "type": "string" },
-                "direction": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+                "column":    { "type": "string", "description": "A vector column on the table. One exists for any column named <name>_embedding." },
+                "queryText": { "type": "string", "description": "Text to match. Supports {{template}} substitution." },
+                "threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.75, "description": "Minimum cosine similarity a row must reach. Calibrated per use case — a value tuned for one kind of text does not transfer to another." },
+                "limit":     { "type": "integer" }
               }
             }
           }

@@ -29,6 +29,7 @@ import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
+import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -133,16 +134,23 @@ async function getRows(req) {
     if (filterError) return err(400, filterError, req.correlationId);
 
     // --- Normalize and validate orderBy ---
-    // Accept both object { column, direction } and string "col ASC" / "col DESC".
-    const normalizedOrderBy = normalizeOrderBy(orderBy);
-    if (normalizedOrderBy && !validColumns.has(normalizedOrderBy.column)) {
-      return err(400, `orderBy column "${normalizedOrderBy.column}" not found in schema`, req.correlationId);
+    // Object, string, or array — one term or several. Every column is validated,
+    // because each one is interpolated into the ORDER BY clause.
+    const orderTerms = normalizeOrderBy(orderBy);
+    const badTerm    = orderTerms.find(t => !validColumns.has(t.column));
+    if (badTerm) {
+      return err(400, `orderBy column "${badTerm.column}" not found in schema`, req.correlationId);
     }
 
     // --- Validate vectorSearch if present ---
     if (vectorSearch) {
       if (!vectorSearch.column || !vectorSearch.queryText) {
         return err(400, 'vectorSearch requires column and queryText', req.correlationId);
+      }
+      // queryText is embedded as plain text. A non-string reaches embedText as
+      // `text.trim is not a function`, which names neither the field nor the caller.
+      if (typeof vectorSearch.queryText !== 'string') {
+        return err(400, `vectorSearch.queryText must be a string, got ${typeof vectorSearch.queryText}`, req.correlationId);
       }
       const vsCol = schemaColumns.find(c => c.name === vectorSearch.column);
       if (!vsCol) {
@@ -154,6 +162,16 @@ async function getRows(req) {
     }
 
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 100), 1000);
+
+    // --- Column projection ---
+    // Built once, above the branch: both the vector and the standard path
+    // project through it, and both validate against the same schema.
+    let selectList = '*';
+    if (columns?.length) {
+      const invalid = columns.find(c => !validColumns.has(c));
+      if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
+      selectList = columns.map(c => `"${c}"`).join(', ');
+    }
 
     const dbClient = target === 'pgd'
       ? getClient(process.env.PGD_DATABASE_URL)
@@ -182,7 +200,7 @@ async function getRows(req) {
         : `WHERE ${vectorCondition}`;
 
       const sql = `
-        SELECT *, 1 - (${vsCol} <=> $${vecIdx}::vector) AS similarity
+        SELECT ${selectList}, 1 - (${vsCol} <=> $${vecIdx}::vector) AS similarity
         FROM "${tableName}"
         ${combinedWhere}
         ORDER BY ${vsCol} <=> $${vecIdx}::vector
@@ -199,16 +217,7 @@ async function getRows(req) {
       // --- Standard parameterised SELECT ---
       const { whereClause, values } = buildWhereClause(filters);
 
-      const orderClause = normalizedOrderBy
-        ? `ORDER BY "${normalizedOrderBy.column}" ${normalizedOrderBy.direction === 'desc' ? 'DESC' : 'ASC'}`
-        : '';
-
-      let selectList = '*';
-      if (columns?.length) {
-        const invalid = columns.find(c => !validColumns.has(c));
-        if (invalid) return err(400, `Column "${invalid}" not found in schema for "${tableName}"`, req.correlationId);
-        selectList = columns.map(c => `"${c}"`).join(', ');
-      }
+      const orderClause = buildOrderClause(orderTerms);
 
       const sql = `
         SELECT ${selectList} FROM "${tableName}"
@@ -230,6 +239,10 @@ async function getRows(req) {
       : result.rows.map(row => {
           const clean = { ...row };
           for (const col of vectorCols) {
+            // Only truncate what the projection actually returned. Assigning
+            // unconditionally puts a column the caller excluded back into the row
+            // as null, which undoes part of the projection it just asked for.
+            if (!(col in clean)) continue;
             const v = clean[col];
             clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
           }
@@ -336,6 +349,28 @@ function getEmbedColumns(schemaColumns) {
   );
 }
 
+/**
+ * Index of the first row whose column set differs from row 0's, or -1 when they all match.
+ *
+ * A batch insert builds one VALUES tuple per row from the FIRST row's column list, and
+ * validates only that row's names against the schema. So a row carrying a different key set
+ * is not something Postgres can reject: a column row 0 lacks is silently dropped, and one
+ * row 0 has that this row does not is written as null. The insert succeeds and the data is
+ * wrong — which is why this is a rejection rather than a repair.
+ *
+ * Pure — exported for test.
+ *
+ * @param {object[]} rows  non-empty array of row objects
+ * @returns {number} index of the first mismatched row, or -1
+ */
+export function findColumnSetMismatch(rows) {
+  const first = Object.keys(rows[0]).sort().join(',');
+  for (let i = 1; i < rows.length; i++) {
+    if (Object.keys(rows[i]).sort().join(',') !== first) return i;
+  }
+  return -1;
+}
+
 // ---------------------------------------------------------------------------
 // POST /serv/table/insertRow
 // ---------------------------------------------------------------------------
@@ -361,6 +396,14 @@ async function insertRow(req) {
     }
     if (Object.keys(rows[0]).length === 0) {
       return err(400, 'rows must have at least one field', req.correlationId);
+    }
+    const mismatch = findColumnSetMismatch(rows);
+    if (mismatch !== -1) {
+      return err(
+        400,
+        `rows[${mismatch}] has a different column set than rows[0] — every row in a batch insert must carry the same columns`,
+        req.correlationId
+      );
     }
   } else {
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
@@ -838,20 +881,6 @@ async function upsertRows(req) {
 // ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Normalise orderBy to { column, direction } regardless of input form.
- * Accepts object { column, direction } or string "col_name ASC" / "col_name".
- */
-function normalizeOrderBy(orderBy) {
-  if (!orderBy) return null;
-  if (typeof orderBy === 'object') return orderBy;
-  const parts = String(orderBy).trim().split(/\s+/);
-  return {
-    column:    parts[0],
-    direction: (parts[1] ?? 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
-  };
-}
 
 /**
  * Validate filter array — operators and column names.

@@ -49,18 +49,22 @@ For authoritative detail follow the section references in each row.
 | `src/proc/replay-corpus.mjs` | PROC | Replay corpus read — looks up a recorded response by `fingerprint_hash` (source-run-first, then global) and classifies drift (hit/soft/hard/miss); `decideReplayAction` maps break policy × lookup status → call/serve/break. SERV reads only. Imported by `llm-harness` (the serve/break decision) and `replay.mjs` (break report). See `docs/arch-replay.md` §3-§8 | Changes affect which recordings a replay serves and when it breaks |
 | `src/proc/replay.mjs` | PROC | Replay harness endpoints — `POST /proc/replay` (start/record, a fourth run-entry point), `GET /proc/replay/{runId}` (status + break report), `POST /proc/replay/{runId}/resume` (write resolution → `resume_llm`). Also the `REPLAY` (start/list) and `REPLAY_RESUME` (payload-free break resolution, A11) SQS handlers. HTTP-dispatched by proxy segments. See `docs/arch-replay.md` §9 | Changes affect how replays are started and resumed |
 | `src/ui/slackbot/replay.mjs` | EXP | `/replay` Slack command → `REPLAY` SQS enqueue (list, replay, or record). Posts the thread the break notifications reply under | Changes affect the Slack entry to the replay harness |
-| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. `register_workflow` (gated) writes `PGC_Workflow` + `PGC_IntentMap`, refusing any step array that fails simulation. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
+| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. `register_workflow` (gated) writes `PGC_Workflow` + `PGC_IntentMap`, refusing any step array that fails simulation. Drives the round with **native function calling**: constant parts (system prompt, both context layers, standing instruction) in `instructions`, tool schemas from `PGC_SystemContext.minds_eye_tool_schemas`, and an append-only `input` item array rebuilt once per round by `toInputItems`. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
 | `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. L0 shape (composed from `PGC_StepType.input_contract`, never hand-authored) / L1 static / L2 routing + data-flow, selected by `level`. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
 | `src/proc/step-type-registry.mjs` | PROC | `loadStepTypeContracts` — the single read of `PGC_StepType` on behalf of validation, for L0's four consumers. Deliberately not shared with `llm-harness.mjs`'s own read of the same table, which is column-scoped and ordered because the assembled request is fingerprinted for the replay corpus | Changes affect what L0 enforces everywhere at once; returns null (never `[]`) on a failed read so L0 reports not-run rather than rejecting every step type |
+| `src/proc/state-utils.mjs` | PROC | `resolveOutputWrites` — pure interpretation of a step's `output_key` against the value the step produced. A comma list destructures an object return into one key each, skipping a key the object omits; a single `output_key` writes the whole value. A comma list over a value that cannot carry named keys (scalar, null, array) **throws** — there is no correct write, and the alternative is a `local_state` key literally named `"a,b"` with every downstream `{{a}}` rendering as its own literal token. Shared by `run-workflow.mjs` (which writes local_state, resolving inside the step's failure envelope) and `simulation-engine.mjs` (which models it and reports the throw as `output_key_destructure_mismatch`), so the simulator cannot disagree with the engine about what a step leaves behind | Changes affect what every step writes to `local_state` and what the data-flow trace believes it wrote |
 | `src/proc/template-resolver.mjs` | PROC | `{{key.path}}` token resolution against `local_state`; expression/condition eval via `vm.runInNewContext` (200ms timeout) | Changes affect template substitution in ALL steps, messages, and conditions |
 | `src/shared/serv-client.mjs` | Shared | All PROC→SERV HTTP calls — `getRows` (optional `columns` whitelist), `insertRow`, `updateRows`, `deleteRows`, `servPost` | Changes affect ALL data reads and writes from PROC |
-| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | Only AWS SDK import in PROC — changes affect all async dispatch and result delivery |
-| `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm`, `callLlmWithCorrection` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
+| `src/shared/sqs-callback.mjs` | Shared | SQS enqueue — `enqueueCallback` (results → EXP), `enqueueWorkflow` (WorkflowQueue), `deleteReceivedBatch` (pre-delete on receipt) | One of two AWS SDK imports reachable from PROC — changes affect all async dispatch and result delivery |
+| `src/shared/scheduler-client.mjs` | Shared | Amazon EventBridge Scheduler — `upsertSchedule`, `deleteSchedule`, `listSchedules`, plus the pure `validateScheduleName` / `validateScheduleExpression` / `buildScheduledRunMessage`. Isolated for the same reason `sqs-callback.mjs` is: PROC is cloud-agnostic and must not import an AWS SDK. A schedule's target is the **WorkflowQueue**, not a Lambda, because a schedule can only deliver a static payload while a run needs a `PGC_WorkflowRun` row that does not exist until it fires | Changes affect every unattended run; the `SCHEDULED_RUN` message it writes is read by `scheduled-run.mjs` months later |
+| `src/proc/scheduled-run.mjs` | PROC | `SCHEDULED_RUN` handler — resolves the workflow by name, creates the run with `triggered_by: 'schedule'` and `callback: null`, enqueues `execute_top`. **No callback is the defining property**: an unattended run has no thread to reply into, so a `human_gate` in a scheduled workflow suspends with nobody to answer it. Reporting is a `notify` step's job | Changes affect all scheduled runs; nothing downstream distinguishes them from Slack-triggered ones |
+| `src/shared/llm-client.mjs` | Shared | Perplexity gateway HTTP client — `callLlm` (parsed JSON), `callLlmWithTools` (native tool calling; returns the raw item array so callers can echo it forward for prompt-cache credit), `callLlmWithMessages`, `callLlmWithCorrection`; all POST through one `postToGateway` | Changes affect all LLM calls; `isSonar` guard is the only model-specific branch |
 | `src/shared/schema-utils.mjs` | Shared | Pure interpretation of a `PGC_Schema.columns` array — `pickLabelColumn` (which column stands in for a row as its readable value; returns null when none does) | Used by `classify-intent.mjs` (display label for `/m list <table>`) and `step-executor.mjs` (natural key for reference-table FK resolution) — the two differ only in preference order |
 | `src/serv/table.mjs` | SERV | SERV-Table DML — SELECT, INSERT, UPDATE, DELETE; gated by PGC_TableMap. See Section 5.2 | Changes affect all row-level DB operations |
 | `src/serv/entity.mjs` | SERV | SERV-Entity — assembled entity reads/writes via PGC_EntitySchema joins. See Section 5.3 | Changes affect all domain entity operations |
-| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; auto-infers `embed_source` for `X_embedding` vector columns. **The registry must never assert what the database does not**: `dropColumn` uses RESTRICT (never CASCADE — CASCADE silently *deletes dependent views*) and `pruneColumnRefs` clears every constraint and FK referencing the dropped column; `modifyConstraint` **upserts** into `PGC_Schema.constraints` (a CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so the design prompts never see the enum). `target` is read from `PGC_Schema`, never from the caller. See Section 5.1 | Changes affect table creation and schema registration |
+| `src/serv/query-utils.mjs` | SERV | Pure interpretation of the SERV read wire format — `normalizeOrderBy` (object, SQL string, or array of either → a list of `{ column, direction }` terms) and `buildOrderClause`. Shared by `table.mjs` `getRows` and `entity.mjs` `listEntities` so the two cannot disagree about what a caller may send | Changes affect how every SERV read is sorted; callers must still validate each term's column against the registered schema before rendering |
+| `src/serv/schema.mjs` | SERV | SERV-Schema — DDL execution + PGC_Schema + PGC_TableMap registration; `listPhysicalTables`; auto-infers `embed_source` for `X_embedding` vector columns. **The registry must never assert what the database does not**: `dropColumn` uses RESTRICT (never CASCADE — CASCADE silently *deletes dependent views*) and `pruneColumnRefs` clears every constraint and FK referencing the dropped column; `modifyConstraint` **upserts** into `PGC_Schema.constraints` (a CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so the design prompts never see the enum). `target` is read from `PGC_Schema`, never from the caller. `addForeignKey` and `addUniqueConstraint` close the same gap one constraint type apart: `createTable` was the only place either could be created, so a relationship or uniqueness rule discovered after a domain was built had no route at all — and the alternative, registering it via `updateTable`, is the invariant inverted. See Section 5.1 | Changes affect table creation and schema registration |
 
 ### Data — PGC Table Groups
 
@@ -193,6 +197,14 @@ same reason: neither can block the Experience tier.
 **Two message categories:**
 
 **Category 1 — Fire-and-forget entry messages**
+
+> `SCHEDULED_RUN` is a Category 1 message with one difference worth noting: it is enqueued by
+> **Amazon EventBridge Scheduler**, not by any part of this system. A schedule can only deliver a
+> static payload, so it cannot create the run itself — `scheduled-run.mjs` does that on receipt.
+> This is why scheduling needed no new execution path: the Step Processor never learns that a
+> schedule started the run. Schedules live in the `${AWS::StackName}-schedules` group and fire via
+> `SchedulerInvokeRole`, whose only permission is `sqs:SendMessage` on WorkflowQueue.
+
 Enqueued by `SlackbotFunction` on receipt of a slash command. No `workflowRunId` —
 the workflow run does not exist yet when these are sent. PROC receives the message,
 performs its work (classification, domain creation, help lookup), and routes results
@@ -365,6 +377,7 @@ src/
     schema.mjs         DDL + PGC_Schema/TableMap registration
     table.mjs          Row-level DML gated by PGC_TableMap
     entity.mjs         Assembled entity reads/writes via PGC_EntitySchema
+    query-utils.mjs    normalizeOrderBy + buildOrderClause — pure, shared by table.mjs and entity.mjs
     templates/pgc/     PGC_*.json table definitions — static ES module imports (NOT fs.readFile)
     templates/pgc/seeds/  seed_PGC_*.json — consumed by dev_scripts/upsert-*.mjs
   shared/             Pure utilities — no business logic, no tier-specific imports
@@ -703,7 +716,7 @@ from PGC at runtime.
 | `PGC_TableMap` | Table routing — maps table names to their database target | SERV (insertRow gate) | `create_domain` workflow (DDL iterator) |
 | `PGC_SystemContext` | System-wide config — thresholds, defaults, feature flags | Step Processor, Preprocessor | `init-brain.mjs` / admin |
 | `PGC_StepType` | Step type registry — canonical list of valid step types | Right-brain (Backlog) | `init-brain.mjs` |
-| `PGC_Capability` | Capability registry — available tools the brain can invoke | Right-brain (Backlog) | `init-brain.mjs` |
+| `PGC_Capability` | Service registry — external capabilities the brain can reach (e.g. a stock-price service, a thermostat API), not the agent's own tool catalog. Empty today. Carries `endpoint`/`method`/`auth_ref`/`input_schema`/`output_schema` for `category: 'external'`, one row per operation; `auth_ref` is an SSM parameter name, never a credential. **Novia registers capabilities through the gated `register_capability` tool** — the earlier position, that this stays a developer action, was settled the other way in Sprint 10. The external columns are live in both the database and the registry, applied via `addColumn`/`modifyConstraint` — **never via bootstrap, which cannot add a column to an existing table yet upserts the registry anyway** | Sprint 10 (stubbed) | `init-brain.mjs`, `minds-eye.mjs` |
 | `PGC_WorkflowStats` | Aggregate view — run counts, failure rates per workflow | Right-brain, monitoring | DB view (auto-maintained) |
 
 #### How these tables are used together in a workflow run
@@ -931,9 +944,21 @@ When `vectorSearch` is present:
 3. Each result row gains a `similarity` float field (0–1)
 4. Standard `filters` can combine with `vectorSearch` to pre-qualify rows before ranking
 
-**Vector columns are stripped from getRows responses.** The `embedding` field is
-never returned to callers. Direct SQL via the bastion is the appropriate path for
-inspection or debugging.
+**`columns` projects on both paths.** The optional `columns` whitelist is validated
+against the schema and applied whether or not `vectorSearch` is present; `similarity`
+is appended to the projection on the vector path, since it is that path's computed
+output. This is not cosmetic. A candidate row read whole and then handed to an
+`llm_call` costs its full width on every run, and the width grows with the table — the
+projection is what keeps that bounded. Both the validation and the select list are
+built once, above the branch, because a projection built inside one branch is a
+projection the other branch silently ignores. That was a live defect: the same call
+returned 16 columns with `vectorSearch` and 3 without.
+
+**Vector columns are truncated, not stripped.** A vector column that the projection
+returned comes back as its first five characters plus `...` — enough to tell populated
+from null without paying for 2,560 numbers. A vector column the projection *excluded*
+is absent entirely, not re-added as null. Direct SQL via the bastion is the appropriate
+path for inspecting a vector's actual contents.
 
 ---
 

@@ -143,11 +143,21 @@ An `llm_call` step translates cryptic grocery store item names (e.g. "EVOO
 mapping in a confirmation gate. Each matched pantry item is updated (quantity
 incremented); unmatched items are created as new pantry rows. Unresolvable
 items are flagged for manual review.
-**Requires:** `create_workflow` working end-to-end to generate the receipt
-parsing workflow. The translation step is an `llm_call` that receives the raw
-receipt text and the current pantry item list (from `serv_entity_query`) and
-returns a structured mapping.
-**Status:** ⬜ Requires `create_workflow` test and delivery
+**Built, and built differently from the sketch above.** The design here — an `llm_call`
+receiving the raw receipt plus the *whole* pantry list — works and costs money on every receipt
+forever, scaling with inventory size, which contradicts `architecture.md` §1 (the LLM is not
+called twice for the same problem). What was built instead vector-matches each receipt line
+against `name_embedding` and `alias_name_embedding`, sends only the sub-threshold residue to an
+`llm_call`, confirms at a human gate, and **writes an alias row per confirmation** so the same
+cryptic string resolves without an LLM call next time.
+**Status:** ✅ Working — `process_receipt` (id 358, v4), built by **Novia**, not by
+`create_workflow`. Routes grocery receipts to inventory and restaurant/travel receipts to the
+correct expense category, deciding which itself. Validated on runs 775/776 (grocery), 778
+(restaurant) and 780/782 (raw Spanish, MASYMAS).
+**Open:** the similarity threshold is uncalibrated (0.4, inherited from a cross-lingual
+comparison that no longer applies) and has admitted three wrong merges — see Sprint 11. The
+claim that cost *falls* with use is built and unproven: no receipt has yet arrived whose items
+overlap the stored aliases.
 
 ### UC-P5 Subtract ingredients from pantry when making a recipe
 **Input:** `/m made recipes id=3`
@@ -418,16 +428,22 @@ Used as the primary `create_workflow` test vehicle throughout Sprint 6. Domain s
 
 ### UC-FL2 Quiz flashcards (SM-2 spaced repetition)
 **Input:** `/m quiz me on Spanish vocabulary`
-**Behaviour:** `quiz_flashcards` workflow — presents due cards one at a time via Slack choice gates
-(0=complete blackout → 5=perfect recall). SM-2 algorithm runs as `js_transform` to compute new
-`easiness_factor` and `interval`. ReviewLog row inserted per card. Session ends with score summary.
-**Status:** ✅ Working (quiz_flashcards workflow, SM-2 validated)
+**Behaviour:** `flashcard_quiz_session` workflow (id 341) — presents due cards one at a time via
+Slack choice gates (0=complete blackout → 5=perfect recall). SM-2 algorithm runs as `js_transform`
+to compute new `easiness_factor` and `interval`. ReviewLog row inserted per card. Session ends with
+score summary.
+**Status:** ✅ Working (`flashcard_quiz_session` v3, SM-2 validated)
 
 ### UC-FL3 Study (browse) flashcards
 **Input:** `/m study Spanish vocabulary`
-**Behaviour:** `study_flashcards` workflow — presents cards one at a time for review without
-grading. Useful for initial learning before spaced repetition begins.
-**Status:** ✅ Working (study_flashcards workflow)
+**Behaviour:** Presents cards one at a time for review without grading. Useful for initial learning
+before spaced repetition begins.
+**Status:** ⬜ **Not built.** Corrected 2026-08-22 against the live workflow list — this entry and
+UC-FL2 both claimed dedicated `quiz_flashcards` / `study_flashcards` workflows; the flashcards
+domain holds exactly one workflow, `flashcard_quiz_session`. `PGC_DomainHelp` still advertises
+`/m review flashcards` and `/m study flashcards`, both of which route nowhere. See the `/help`
+backlog item — the panel is composed from `PGC_DomainHelp.commands` alone and never reads
+`PGC_Workflow`, so it drifts in both directions
 
 ### Flashcard Domain — Table Schemas
 

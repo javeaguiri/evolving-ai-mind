@@ -817,3 +817,313 @@ describe('L1 numeric indexing on a non-array (run 735 reproduction)', () => {
       'a key any writer of which may produce an array must not be flagged');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Run 763 — create_domain v58. Step 1 declared one output_key over an expression
+// returning an object keyed by that same name, so {{domain_request}} carried an
+// object into a serv_query's vectorSearch.queryText. SERV embeds queryText as
+// plain text, so it reached embed-client as "text.trim is not a function".
+//
+// Two gaps let it through: serv_query declared no contract for vectorSearch, and
+// the trace modelled js_transform output by its own rule rather than the engine's.
+// ---------------------------------------------------------------------------
+
+describe('L2b data-flow trace — serv_query.vectorSearch shape (run 763 reproduction)', () => {
+  const shapeIssues = (result, step) => result.smoke_test.issues.filter(
+    i => i.failure_class === 'serv_input_shape_mismatch' && i.step === step
+  );
+
+  // Step 1's shape is exactly create_domain v58's: one output_key, object return.
+  const brokenSteps = [
+    {
+      step: '1', type: 'js_transform', input_key: 'input',
+      expression: `(function() { return { domain_request: (items.userInput || '').trim() }; })()`,
+      on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
+    },
+    {
+      step: '2', type: 'serv_query',
+      input: {
+        tableName: 'PGC_DomainHelp',
+        vectorSearch: { column: 'embedding', queryText: '{{domain_request}}', threshold: 0.4 },
+        limit: 1,
+      },
+      on_success: 'next', on_else: 'cancel', output_key: 'existing_domain_check',
+    },
+    { step: '3', type: 'end' },
+  ];
+
+  it('flags an object resolved into vectorSearch.queryText', () => {
+    const result = runSimulation({ steps: brokenSteps, traceId: 't' });
+
+    assert.equal(result.passed, false, 'overall simulation must fail');
+    const issue = shapeIssues(result, '2')[0];
+    assert.ok(issue, `expected a shape mismatch on step 2; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.match(issue.detail, /queryText must be a string/);
+  });
+
+  it('does not flag the repaired form, where the expression returns the string itself', () => {
+    const steps = JSON.parse(JSON.stringify(brokenSteps));
+    steps[0].expression = `(function() { return (items.userInput || '').trim(); })()`;
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.deepEqual(shapeIssues(result, '2'), [],
+      'an empty string is a runtime data condition, not a design defect — mock input is always empty');
+    assert.equal(result.passed, true);
+  });
+
+  it('flags a non-numeric threshold', () => {
+    const steps = JSON.parse(JSON.stringify(brokenSteps));
+    steps[0].expression = `(function() { return (items.userInput || '').trim(); })()`;
+    steps[1].input.vectorSearch.threshold = '0.4';
+
+    const issue = shapeIssues(runSimulation({ steps, traceId: 't' }), '2')[0];
+    assert.ok(issue, 'expected a shape mismatch for a stringly-typed threshold');
+    assert.match(issue.detail, /threshold must be a number/);
+  });
+
+  it('skips the check when queryText is inherited from an inconclusive step', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return local_state.never_written.deep.value; })()`,
+        on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
+      },
+      brokenSteps[1],
+      { step: '3', type: 'end' },
+    ];
+
+    assert.deepEqual(shapeIssues(runSimulation({ steps, traceId: 't' }), '2'), [],
+      'a nested token reading a placeholder key cannot be confidently shape-checked');
+  });
+});
+
+describe('L2b data-flow trace — output_key propagation matches the engine', () => {
+  it('models a comma-separated output_key as destructured, not as the whole object', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return { rows: [{ column: 'a', op: 'eq', value: 1 }], label: 'x' }; })()`,
+        on_success: 'next', output_key: 'rows,label',
+      },
+      {
+        step: '2', type: 'serv_query',
+        input: { tableName: 'PGD_Records', filters: '{{rows}}' },
+        on_success: 'next', on_else: 'cancel', output_key: 'found',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.deepEqual(
+      result.smoke_test.issues.filter(i => i.failure_class === 'serv_input_shape_mismatch'),
+      [],
+      'destructured "rows" is a valid filter array; modelling it as the whole return would flag it',
+    );
+  });
+});
+
+describe('L2b data-flow trace — comma-list output_key over a non-destructurable return', () => {
+  it('fails the workflow rather than modelling a key named "a,b"', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return 'inventory'; })()`,
+        on_success: 'next', output_key: 'domain_request,candidate_domain',
+      },
+      { step: '2', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue = result.smoke_test.issues.find(
+      i => i.failure_class === 'output_key_destructure_mismatch' && i.step === '1'
+    );
+    assert.ok(issue, `expected an output_key_destructure_mismatch; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.match(issue.detail, /names 2 keys/);
+    assert.equal(result.passed, false, 'a destructure mismatch is a hard failure');
+  });
+
+  it('reports it once and keeps tracing the remaining steps', () => {
+    const steps = [
+      {
+        step: '1', type: 'js_transform',
+        expression: `(function() { return ['a']; })()`,
+        on_success: 'next', output_key: 'a,b',
+      },
+      {
+        step: '2', type: 'js_transform',
+        expression: `(function() { return { ok: true }; })()`,
+        on_success: 'next', output_key: 'later',
+      },
+      { step: '3', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.equal(
+      result.smoke_test.issues.filter(i => i.failure_class === 'output_key_destructure_mismatch').length,
+      1,
+    );
+    assert.equal(result.smoke_test.steps_tested, 2, 'the trace must not stop at the bad step');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Frozen date literals. Twice from the same author: import_budget_spreadsheet
+// (Sprint 9 D3) and process_receipt step 3, which carried
+// current_date: "Monday, August 10, 2026" into the prompt supplying the fallback
+// purchase date for every future receipt.
+// ---------------------------------------------------------------------------
+
+describe('L1 — frozen date literal in a step input', () => {
+  const dateIssues = (steps) =>
+    (runSimulation({ steps, traceId: 't' }).static_analysis?.issues ?? [])
+      .filter(i => i.failure_class === 'frozen_date_literal');
+
+  const withInput = (input) => ([
+    { step: '1', type: 'llm_call', input, on_success: 'next', on_else: 'cancel', output_key: 'out' },
+    { step: '2', type: 'end' },
+  ]);
+
+  it('flags the process_receipt specimen', () => {
+    const issues = dateIssues(withInput({ prompt: 'parse_receipt', current_date: 'Monday, August 10, 2026' }));
+    assert.equal(issues.length, 1);
+    assert.match(issues[0].detail, /August 10, 2026/);
+    assert.equal(issues[0].severity, 'warning');
+  });
+
+  it('flags ISO and slash forms', () => {
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '2026-08-10' })).length, 1);
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '08/10/2026' })).length, 1);
+    assert.equal(dateIssues(withInput({ prompt: 'p', as_of: '10 August 2026' })).length, 1);
+  });
+
+  it('finds a date nested inside an input object or array', () => {
+    const issues = dateIssues(withInput({
+      prompt: 'p',
+      filters: [{ column: 'day', op: 'eq', value: '2026-08-10' }],
+    }));
+    assert.equal(issues.length, 1);
+  });
+
+  it('does not flag a value resolved at run time', () => {
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', current_date: '{{today.iso}}' })), []);
+  });
+
+  it('does not flag text without a four-digit year', () => {
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', note: 'due on the 10th of August' })), []);
+    assert.deepEqual(dateIssues(withInput({ prompt: 'p', version: '1.2.3' })), []);
+  });
+
+  it('is advisory — it must not fail the workflow or suppress Level 2', () => {
+    const steps = withInput({ prompt: 'p', current_date: '2026-08-10' });
+    const result = runSimulation({ steps, traceId: 't' });
+    assert.equal(result.passed, true, 'a warning must not block registration');
+    assert.ok(result.smoke_test, 'Level 2 must still have run');
+    assert.equal(result.static_analysis.issues.length, 1, 'the warning must still be reported');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dynamic option sets — options as a {{template}} reference, not an array
+//
+// buildDialog accepts both forms; the simulator handled the string form in two places
+// (optionsAreStatic, the iterator body) and ignored it in eight others. `.find` on a
+// string throws, so L2 returned a 500 for `list_entity` step 27 — a live list_selection
+// gate whose options are "{{list_view.gate_options}}". Since register_workflow refuses
+// any array failing L0+L1+L2, no workflow with a runtime-built option set could be
+// registered at all.
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — a gate whose options are built at runtime', () => {
+  const steps = [
+    { step: '1', type: 'js_transform', expression: '(function(){ return { gate_options: [] }; })()',
+      output_key: 'view', on_success: 'next', on_else: 'cancel' },
+    { step: '2', type: 'human_gate', gate_type: 'list_selection',
+      message_template: 'Pick one',
+      context_key: 'view.rows',
+      options: '{{view.gate_options}}',
+      on_cancel: 'cancel', on_success: 'next', on_else: 'cancel' },
+    { step: '3', type: 'end' },
+  ];
+
+  it('does not throw — the string form reaches every options reader', () => {
+    // The regression itself: this used to raise TypeError inside executeSimPath and
+    // surface as a 500 rather than as a validation result.
+    assert.doesNotThrow(() => runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'happy', decisions: [
+        { step: '2', outcome: 'gate', user_response: 'confirm', on_select: 'next' },
+      ], expected_terminal: 'end' }],
+    }));
+  });
+
+  it('an explicit gate decision routes a dynamic gate normally', () => {
+    const r = runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'happy', decisions: [
+        { step: '2', outcome: 'gate', user_response: 'confirm', on_select: 'next' },
+      ], expected_terminal: 'end' }],
+    });
+    assert.equal(r.path_results[0].terminal, 'end');
+  });
+
+  it('without a decision it says the options are dynamic, not that none exist', () => {
+    // The old message ("no non-cancel default option exists") was false for this gate:
+    // options exist, they are just not knowable without local_state.
+    const r = runSimulation({
+      steps, mockOutputs: {}, level: 2, traceId: 't',
+      simulationPaths: [{ path_name: 'nodecision', decisions: [], expected_terminal: 'end' }],
+    });
+    assert.match(r.path_results[0].failure_reason, /built at runtime/);
+    assert.match(r.path_results[0].failure_reason, /explicit gate decision/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L0 one_of — the engine accepts several names for one thing
+//
+// executeNotify reads `message_template ?? message`. The contract declared only the
+// first, required, so L0 reported a missing required field on flashcard_quiz_session
+// step 20 — a live, working notify. Because register_workflow refuses anything failing
+// L0, that workflow could not be re-registered as written. The requirement is that the
+// group is satisfied, not that a particular name is used.
+// ---------------------------------------------------------------------------
+
+describe('runLevel0ShapeCheck — one_of satisfies a requirement by group', () => {
+  const contracts = [{
+    step_type: 'notify',
+    input_contract: [
+      { field: 'message_template', required: true, one_of: ['message_template', 'message'],
+        description: 'Message text' },
+      { field: 'message', required: false, description: 'Accepted alias' },
+    ],
+  }];
+  const run = step => runLevel0ShapeCheck([step], { stepTypeContracts: contracts });
+
+  it('accepts the canonical name', () => {
+    const r = run({ step: '1', type: 'notify', message_template: 'Done' });
+    assert.equal(r.issues.length, 0);
+  });
+
+  it('accepts the alias — the flashcard_quiz_session step 20 case', () => {
+    const r = run({ step: '20', type: 'notify', message: 'Quiz complete! {{all_cards.length}} cards.' });
+    assert.equal(r.issues.length, 0, 'a step the engine runs must not fail shape validation');
+  });
+
+  it('still fails when neither is present, and names both', () => {
+    const r = run({ step: '1', type: 'notify' });
+    assert.equal(r.issues.length, 1);
+    assert.equal(r.issues[0].failure_class, 'missing_required_field');
+    assert.match(r.issues[0].detail, /one of "message_template" or "message"/);
+  });
+
+  it('an empty string does not satisfy the group', () => {
+    const r = run({ step: '1', type: 'notify', message_template: '', message: '' });
+    assert.equal(r.issues.length, 1);
+  });
+
+  it('a required field without one_of is unchanged — single-name message preserved', () => {
+    const single = [{ step_type: 'end', input_contract: [{ field: 'output_key', required: true, description: 'Key' }] }];
+    const r = runLevel0ShapeCheck([{ step: '1', type: 'end' }], { stepTypeContracts: single });
+    assert.match(r.issues[0].detail, /missing required field "output_key"/);
+  });
+});

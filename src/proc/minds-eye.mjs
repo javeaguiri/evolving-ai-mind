@@ -9,12 +9,20 @@
 //   2. Load or create PGC_Session (session_type = 'minds_eye')
 //   3. Assemble Layer 1 context (PGC_Workflow summaries)
 //   4. Assemble Layer 2 context (relevant PGC_Memory entries)
-//   5. Reason loop: callLlm → { action, params, reasoning } | { action: "respond", message }
+//   5. Reason loop: callLlmWithTools → a native function_call, dispatched by name
 //      - Read tool          → execute → append result → continue loop
 //      - Inline write tool  → execute directly → append result → continue loop (no gate)
 //      - Gated write tool   → store __pending__ entry → post HUMAN_GATE → end turn
 //      - "respond"          → post to Slack → end turn
 //      - turn_count >= turn_limit → post turn-limit notification → end
+//
+// The round's request is built once and then only ever appended to: the constant parts
+// (system prompt, both context layers, the standing instruction) go in `instructions`, and
+// each turn pushes the gateway's own returned items plus the tool's output onto `input`.
+// That shape is what earns incremental prompt-cache credit — measured at read/prev 1.00 per
+// turn, against a flat read of the instructions block when the transcript was rendered into
+// one string instead. Appending a user turn mid-round forfeits that credit for the turn, so
+// only the truncation notice does it, and only when a call never completed.
 //
 // Write tool gate policy:
 //   update_data, insert_data — inline, no confirmation gate
@@ -28,22 +36,21 @@
 
 import { ok, err }                                         from '../shared/lambda-utils.mjs';
 import { getRows, insertRow, insertRows, updateRows, deleteRows, upsertRows } from '../shared/serv-client.mjs';
-import { callLlm }                                         from '../shared/llm-client.mjs';
+import { callLlmWithTools }                                from '../shared/llm-client.mjs';
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
-import { runSimulation }                                  from './simulation-engine.mjs';
+import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
 
-const ACTION_SCHEMA = {
-  type: 'object',
-  required: ['action', 'reasoning'],
-  properties: {
-    action:   { type: 'string' },
-    params:   { type: 'object' },
-    reasoning:{ type: 'string' },
-    message:  { type: 'string' },
-    advisory: { type: 'string' },
-  },
-};
+// Closes the round's instructions. Constant, so it rides in the cached prefix rather than
+// being re-sent with every turn.
+//
+// It replaces ACTION_SCHEMA, which described a {action, params, reasoning} envelope that was
+// never actually enforced: it was passed to callLlm, but response_format is gated to sonar
+// models and Novia runs anthropic/claude-sonnet-4-6, so the schema was dropped at the seam
+// every single time. Tool schemas are enforced by the gateway, so the contract is now real.
+const STANDING_INSTRUCTION =
+  'Decide your next action and call exactly one tool. Call respond when you are holding ' +
+  'something the user could accept or reject, or when the task is done.';
 
 const DEFAULT_PREFERENCES = {
   name:                   'Agent',
@@ -67,6 +74,7 @@ const READ_TOOLS = new Set([
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
   'run_sql',
+  'list_capabilities', 'list_schedules',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
@@ -75,10 +83,16 @@ const INLINE_WRITE_TOOLS = new Set([
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
+//
+// The four capability/schedule tools are gated even while stubbed. Each one, once wired up,
+// acts on the physical world or commits the system to acting on it unattended — turning
+// something on, or arranging for it to be turned on at 3am. Shipping them ungated now and
+// tightening later means the tightening is a thing someone has to remember.
 const GATED_WRITE_TOOLS = new Set([
   'register_workflow',
   'propose_workflow_fix', 'propose_schema_fix', 'delete_data', 'drop_table',
   'create_view', 'drop_view',
+  'register_capability', 'call_capability', 'schedule_workflow', 'cancel_schedule',
 ]);
 
 // Trigger tools — dispatch a registered workflow to the step-executor engine.
@@ -90,6 +104,95 @@ const TRIGGER_TOOLS = new Set([
 const HOUSEKEEPING_TOOLS = new Set([
   'write_memory',
 ]);
+
+/**
+ * The result of a tool that is declared but not yet wired up.
+ *
+ * Never reports success. A stub returning {ok:true} would have Novia tell the user the lights
+ * are on, and the whole value of a stubbed catalog is that she can describe a mechanism
+ * truthfully — including that it is not built. `would_have` carries the request that a real
+ * implementation would issue, which is what makes the description concrete rather than vague.
+ *
+ * @param {string} capability  Tool name, echoed so the model can see which call this answers
+ * @param {object} wouldHave   The request a real implementation would have made
+ * @param {string} note        What is missing, in terms the model can relay to a person
+ */
+function notImplemented(capability, wouldHave, note) {
+  return { status: 'not_implemented', capability, would_have: wouldHave, note };
+}
+
+// Every name the loop can actually dispatch. The Sets above stay the authority on that —
+// a schema is only sent to the gateway if there is code behind it, because a tool the model
+// can call and the loop cannot run is worse than a tool it never sees.
+export const DISPATCHABLE_TOOLS = new Set([
+  ...READ_TOOLS, ...INLINE_WRITE_TOOLS, ...GATED_WRITE_TOOLS,
+  ...TRIGGER_TOOLS, ...HOUSEKEEPING_TOOLS, 'respond',
+]);
+
+/**
+ * Reconcile the stored tool schemas against what the loop can dispatch.
+ *
+ * The schemas live in PGC_SystemContext (minds_eye_tool_schemas) so a description can be
+ * retuned without a deploy — triggering quality is mostly description quality. The cost of
+ * that is drift: a row can describe a tool the code does not have, or miss one it does.
+ * Both directions are reported rather than silently tolerated.
+ *
+ * `type: 'function'` is added here rather than stored 23 times in the row.
+ *
+ * @param {object|null} content       The row's content — expects { tools: [{name, description, parameters}] }
+ * @param {Set<string>} dispatchable  Names the loop can execute
+ * @returns {{tools: Array, undispatchable: string[], undescribed: string[]}}
+ */
+export function selectToolDefinitions(content, dispatchable = DISPATCHABLE_TOOLS) {
+  const declared = Array.isArray(content?.tools) ? content.tools : [];
+
+  const named          = declared.filter(t => typeof t?.name === 'string' && t.name);
+  const undispatchable = named.filter(t => !dispatchable.has(t.name)).map(t => t.name);
+
+  const tools = named
+    .filter(t => dispatchable.has(t.name))
+    .map(({ name, description, parameters }) => ({ type: 'function', name, description, parameters }));
+
+  const describedNames = new Set(tools.map(t => t.name));
+  const undescribed    = [...dispatchable].filter(n => !describedNames.has(n));
+
+  return { tools, undispatchable, undescribed };
+}
+
+/**
+ * Load the tool catalog for a round.
+ *
+ * Returns null — never [] — when the row cannot be read. An empty array is a valid state
+ * meaning "no tools", and sending it would leave Novia mute with no error to explain why;
+ * null lets the caller end the round with a real message instead.
+ *
+ * @returns {Promise<Array|null>} Tool definitions ready for callLlmWithTools, or null
+ */
+async function loadToolDefinitions(traceId) {
+  const resp = await getRows('PGC_SystemContext', [
+    { column: 'key', op: 'eq', value: 'minds_eye_tool_schemas' },
+  ]);
+
+  if (!resp.success || !resp.rows?.length) {
+    console.error('proc/minds-eye: minds_eye_tool_schemas row not readable', { traceId });
+    return null;
+  }
+
+  const { tools, undispatchable, undescribed } = selectToolDefinitions(resp.rows[0].content);
+
+  if (undispatchable.length > 0) {
+    console.warn('proc/minds-eye: tool schemas describe undispatchable tools — dropped', { undispatchable, traceId });
+  }
+  if (undescribed.length > 0) {
+    console.warn('proc/minds-eye: dispatchable tools have no schema — invisible to the model', { undescribed, traceId });
+  }
+  if (tools.length === 0) {
+    console.error('proc/minds-eye: tool schema row yielded no usable tools', { traceId });
+    return null;
+  }
+
+  return tools;
+}
 
 export async function handle(req) {
   const body     = req.body ?? {};
@@ -476,6 +579,33 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     return;
   }
 
+  const toolDefs = await loadToolDefinitions(traceId);
+  if (!toolDefs) {
+    // Ending the round with a real message beats running tool-less: a Novia with no tools
+    // can only talk, and the user would have no way to tell that from a bad answer.
+    if (callback) {
+      await enqueueCallback(callback, {
+        type:      'HUMAN_NOTIFICATION',
+        traceId,
+        message:   `Could not load the tool catalog, so this round was not started. Check the minds_eye_tool_schemas system context row.\n\n_Session ${session.id}_`,
+        sessionId: session.id,
+      });
+    }
+    return;
+  }
+
+  // Everything constant for the round goes in `instructions`, which is cached and read back
+  // at a tenth of write price on every later turn. What must NOT go here is anything that
+  // changes per turn: `instructions` sits ahead of the whole transcript, so a change to it
+  // invalidates the round's entire prefix.
+  const roundInstructions = [systemPrompt, layer1Context, layer2Context, STANDING_INSTRUCTION]
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+
+  // Rebuilt once, from what is persisted. From here the array only ever grows, and it grows
+  // by appending the gateway's own returned items — that is what earns the prefix credit.
+  let input = toInputItems(workingHistory);
+
   let turnCount      = currentTurnCount;  // cumulative lifetime tally — never reset, persisted
   let turnsThisRound  = 0;                // per-invocation budget — always starts fresh
   let actionCount     = currentActionCount;
@@ -487,6 +617,17 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
   const roundStart   = Date.now();
   let longestTurnMs  = 0;
   let budgetExhausted = false;
+
+  // The turn's open call, so each dispatch branch can close it with the tool's result.
+  let activeCall = null;
+  const recordToolOutput = (result) => {
+    if (!activeCall) return;
+    input.push({
+      type:    'function_call_output',
+      call_id: activeCall.call_id,
+      output:  capOutput(JSON.stringify(result ?? null)),
+    });
+  };
 
   while (turnsThisRound < prefs.turn_limit) {
     // Stop before starting a turn there is no room to finish. Ending here is a clean exit
@@ -505,18 +646,25 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       break;
     }
 
-    const turnStart   = Date.now();
-    const userMessage = buildUserMessage(layer1Context, layer2Context, workingHistory, prefs, truncationNotice);
-    truncationNotice  = null;
+    const turnStart = Date.now();
 
-    let decision;
+    // A notice is the one thing that has to arrive as a user turn: it follows a call that
+    // never completed, so there is no call_id to attach it to. That costs this turn's prefix
+    // credit and only this turn's — an accepted trade, since re-asks are rare.
+    if (truncationNotice) {
+      input.push({ role: 'user', content: truncationNotice });
+      truncationNotice = null;
+    }
+
+    let turn;
     try {
-      decision = await callLlm(prefs.model, systemPrompt, userMessage, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
+      turn = await callLlmWithTools(prefs.model, roundInstructions, input, toolDefs, traceId, prefs.max_output_tokens);
       lastTurnTruncated = false;
     } catch (llmError) {
-      const failureAction = classifyLlmFailure(llmError, lastTurnTruncated);
-
-      if (failureAction === 'reask') {
+      // The old 'correct' branch is gone with the JSON contract it served: callLlmWithTools
+      // parses nothing, so it cannot raise a parse error. Malformed arguments now come back
+      // as a successful call and are answered below, on the chain, for free.
+      if (classifyLlmFailure(llmError, lastTurnTruncated) === 'reask') {
         console.warn('proc/minds-eye: response truncated at output ceiling — re-asking', {
           traceId,
           maxOutputTokens: prefs.max_output_tokens,
@@ -529,50 +677,34 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         continue;
       }
 
-      if (failureAction === 'correct') {
-        // Generation fault: LLM produced valid content but invalid JSON escaping.
-        // The correction call is a real extra LLM call — counts as its own turn.
-        try {
-          const correctionMsg = `Your previous response was not valid JSON. Here is what you returned:\n\n${llmError.rawOutput}\n\nReturn the same content as a valid JSON object. Escape all special characters in string values: \\n for newlines, \\" for double quotes, \\\\ for backslashes. Return the JSON only — no prose, no fences.`;
-          decision = await callLlm(prefs.model, systemPrompt, correctionMsg, ACTION_SCHEMA, traceId, prefs.max_output_tokens);
-          turnCount += 1;
-          turnsThisRound += 1;
-          console.info('proc/minds-eye: JSON parse corrected', { traceId });
-        } catch (corrErr) {
-          // The correction's OWN failure was previously terminal — no classification, no
-          // retry — so a transport blip while repairing a recoverable parse error ended the
-          // session (`fetch failed`, session 1122 11:06:53, after two corrections in the
-          // same round had succeeded). Classify it the same way as any other failed call:
-          // a truncated correction gets re-asked, and anything else still ends the round.
-          if (classifyLlmFailure(corrErr, lastTurnTruncated) === 'reask') {
-            console.warn('proc/minds-eye: correction truncated — re-asking', { traceId });
-            truncationNotice  = TRUNCATION_NOTICE;
-            lastTurnTruncated = true;
-            longestTurnMs     = Math.max(longestTurnMs, Date.now() - turnStart);
-            turnCount      += 1;
-            turnsThisRound += 1;
-            continue;
-          }
-          console.error('proc/minds-eye: JSON correction failed', { traceId, error: corrErr.message });
-          if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
-          earlyExit = true;
-          break;
-        }
-      } else {
-        console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
-        if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
-        earlyExit = true;
-        break;
-      }
+      console.error('proc/minds-eye: LLM call failed', { traceId, error: llmError.message });
+      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, llmError));
+      earlyExit = true;
+      break;
     }
 
-    // Measured across the whole turn, correction call included — the budget check cares
-    // what a turn costs in wall clock, not how many API calls it took to get there.
+    // The model's own items go on the chain before anything it asked for is executed —
+    // they are what the next turn reads back from cache.
+    const turnItems = turn.output.map(item => ({ ...item }));
+    input.push(...turnItems);
+
+    // A turn may carry SEVERAL tool calls. The model is free to ask for two independent
+    // reads at once, and when it does that is cheaper than two turns, not a mistake to
+    // suppress. But every call it makes has to come back with a result: an unpaired call
+    // is a 400 from the gateway, which is exactly how this loop first failed in prod
+    // (session 1130 — two parallel search_domain_help calls, one result returned).
+    const calls = turn.output.filter(o => o.type === 'function_call');
+
+    // Items that are not calls — reasoning, a message block — ride with the first call's
+    // entry, so a rebuilt transcript keeps them ahead of it in the order the gateway sent.
+    const leadingItems = turn.output.filter(o => o.type !== 'function_call').map(i => ({ ...i }));
+
+    // Measured across the whole turn — the budget check cares what a turn costs in wall
+    // clock, not how many tool calls it asked for.
     longestTurnMs = Math.max(longestTurnMs, Date.now() - turnStart);
 
-    // Every turn costs exactly 1, regardless of which tool ran or whether it
-    // errored — a tool call and a direct respond are the same cost; only the
-    // JSON-correction retry above adds an extra turn, since it's an extra LLM call.
+    // A turn costs exactly 1 regardless of how many calls it carries: the cost is the LLM
+    // round trip, and parallel calls are one round trip.
     turnCount += 1;
     turnsThisRound += 1;
 
@@ -587,177 +719,244 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       break;
     }
 
-    const { action, params = {}, reasoning, message, advisory } = decision;
-
-    if (action === 'respond') {
-      const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory });
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'assistant',
-        content:         assistantContent,
-      });
-
-      await updateRows('PGC_Session',
-        [{ column: 'id', op: 'eq', value: session.id }],
-        { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
-      );
-
-      if (callback) {
-        let replyText = message ?? '(no message)';
-        // Slack requires ``` to be on its own line; normalize before sending.
-        replyText = replyText.replace(/([^\n])(`{3})/g, '$1\n$2').replace(/(`{3})([^\n])/g, '$1\n$2');
-        if (advisory && prefs.advisory_level !== 'off') {
-          replyText += `\n\n---\n_Advisory: ${advisory}_`;
-        }
-        replyText += `\n\n_Session ${session.id}_`;
-        await enqueueCallback(callback, {
-          type:      'HUMAN_NOTIFICATION',
-          format:    'markdown',
-          traceId,
-          message:   replyText,
-          queryId:   session.query_id,
-          sessionId: session.id,
-        });
-      }
-
-      responded = true;
-      console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
+    if (calls.length === 0 && !turn.text) {
+      console.error('proc/minds-eye: turn produced neither a tool call nor text', { traceId });
+      if (callback) await enqueueCallback(callback, buildFailureNotification(session.id, traceId, new Error('empty turn')));
+      earlyExit = true;
       break;
+    }
 
-    } else if (READ_TOOLS.has(action)) {
-      const toolResult = await executeReadTool(action, params, traceId);
-      const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult });
+    // Answered in prose without calling respond. Treat it as the reply it plainly is,
+    // rather than failing the round on a technicality the user would never see.
+    const decisions = calls.length > 0
+      ? calls.map(call => ({ call, args: call.arguments }))
+      : [{ call: null, args: null, textReply: turn.text }];
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         toolEntry,
-      });
+    if (calls.length === 0) {
+      console.info('proc/minds-eye: text reply with no tool call — treating as respond', { traceId });
+    }
 
-      workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
-      seq += 1;
+    // 'next' — carry on to the next call; 'break' — the round ends here.
+    let control = 'next';
 
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
-      console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
+    for (const [callIndex, entry] of decisions.entries()) {
+      activeCall = entry.call;
 
-    } else if (HOUSEKEEPING_TOOLS.has(action)) {
-      const enrichedParams = action === 'write_memory'
-        ? { ...params, scope: deriveScope(workingHistory) }
-        : params;
-      const hkResult = await executeWriteTool(action, enrichedParams, traceId);
-      const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult });
+      // Only the first call of a turn carries the turn's non-call items.
+      const entryItems = entry.call
+        ? (callIndex === 0 ? [...leadingItems, { ...entry.call }] : [{ ...entry.call }])
+        : [];
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         hkEntry,
-      });
-
-      workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
-      seq += 1;
-
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
-      console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
-
-    } else if (INLINE_WRITE_TOOLS.has(action)) {
-      if (actionCount >= prefs.max_actions_per_session) {
-        await postTurnLimitGate(session.id, callback, traceId, true);
-        earlyExit = true;
-        break;
+      let decision;
+      if (entry.call) {
+        let args;
+        try {
+          args = JSON.parse(entry.args);
+        } catch {
+          // Answer the malformed call as its own tool result. This keeps the chain intact
+          // and costs nothing, where a correction prompt used to cost a whole extra LLM
+          // call. The other calls in this turn still run — one bad argument string is not
+          // a reason to drop work the model correctly asked for.
+          console.warn('proc/minds-eye: tool arguments would not parse — returning the error', {
+            action: entry.call.name, traceId,
+          });
+          recordToolOutput({ error: 'arguments were not valid JSON — resend this call with valid JSON arguments' });
+          activeCall = null;
+          continue;
+        }
+        const { reasoning, message, advisory, ...params } = args;
+        decision = { action: entry.call.name, params, reasoning, message, advisory };
+      } else {
+        decision = { action: 'respond', params: {}, message: entry.textReply };
       }
 
-      const writeResult = await executeWriteTool(action, params, traceId);
-      const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult });
+      const { action, params = {}, reasoning, message, advisory } = decision;
 
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         writeEntry,
-      });
+      if (action === 'respond') {
+        // `items` carries the gateway's own function_call for this respond, exactly as every
+        // tool entry does. A typed follow-up becomes that call's output on rebuild, so the
+        // resumed round appends rather than ending on a user item — see toInputItems.
+        const assistantContent = JSON.stringify({ action: 'respond', message, reasoning, advisory, items: entryItems });
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'assistant',
+          content:         assistantContent,
+        });
 
-      actionCount += 1;
-      await updateRows('PGC_Session',
-        [{ column: 'id', op: 'eq', value: session.id }],
-        { minds_eye_action_count: actionCount }
-      );
+        await updateRows('PGC_Session',
+          [{ column: 'id', op: 'eq', value: session.id }],
+          { minds_eye_turn_count: turnCount, slack_thread_ts: threadTs ?? session.slack_thread_ts }
+        );
 
-      workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
-      seq += 1;
+        if (callback) {
+          let replyText = message ?? '(no message)';
+          // Slack requires ``` to be on its own line; normalize before sending.
+          replyText = replyText.replace(/([^\n])(`{3})/g, '$1\n$2').replace(/(`{3})([^\n])/g, '$1\n$2');
+          if (advisory && prefs.advisory_level !== 'off') {
+            replyText += `\n\n---\n_Advisory: ${advisory}_`;
+          }
+          replyText += `\n\n_Session ${session.id}_`;
+          await enqueueCallback(callback, {
+            type:      'HUMAN_NOTIFICATION',
+            format:    'markdown',
+            traceId,
+            message:   replyText,
+            queryId:   session.query_id,
+            sessionId: session.id,
+          });
+        }
 
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
-      console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
+        responded = true;
+        console.info('proc/minds-eye: responded', { sessionId: session.id, traceId, turns: turnCount });
+        control = 'break';
+        break;
 
-    } else if (GATED_WRITE_TOOLS.has(action)) {
-      // Refused before the gate, not at it — the loop continues so the next turn can
-      // correct, instead of ending the round on a decision nobody gets to make.
-      const refusal = await preGateRefusal(action, params, traceId);
-      if (refusal) {
-        const refusalEntry = JSON.stringify({ tool: action, params, result: refusal });
+      } else if (READ_TOOLS.has(action)) {
+        const toolResult = await executeReadTool(action, params, traceId);
+        const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: entryItems, turn: turnCount });
 
         await insertRow('PGC_SessionEntry', {
           session_id:      session.id,
           sequence_number: seq,
           role:            'tool',
-          content:         refusalEntry,
+          content:         toolEntry,
         });
 
-        workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+        recordToolOutput(toolResult);
+        workingHistory.push({ role: 'tool', content: toolEntry, sequence_number: seq });
         seq += 1;
 
-        // No progress line: this is a failed attempt about to be corrected, which is the
-        // case notifyTurnProgress deliberately stays quiet about.
-        console.info('proc/minds-eye: gated write refused before gate', {
-          action,
-          sessionId: session.id,
-          issueCount: refusal.issues?.length ?? 0,
-          traceId,
-        });
-        continue;
-      }
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: toolResult });
+        console.info('proc/minds-eye: read tool executed', { action, sessionId: session.id, traceId });
 
-      if (actionCount >= prefs.max_actions_per_session) {
-        await postTurnLimitGate(session.id, callback, traceId, true);
+      } else if (HOUSEKEEPING_TOOLS.has(action)) {
+        const enrichedParams = action === 'write_memory'
+          ? { ...params, scope: deriveScope(workingHistory) }
+          : params;
+        const hkResult = await executeWriteTool(action, enrichedParams, traceId);
+        const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         hkEntry,
+        });
+
+        recordToolOutput(hkResult);
+        workingHistory.push({ role: 'tool', content: hkEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: hkResult });
+        console.info('proc/minds-eye: housekeeping tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (INLINE_WRITE_TOOLS.has(action)) {
+        if (actionCount >= prefs.max_actions_per_session) {
+          await postTurnLimitGate(session.id, callback, traceId, true);
+          earlyExit = true;
+          control = 'break';
+          break;
+        }
+
+        const writeResult = await executeWriteTool(action, params, traceId);
+        const writeEntry  = JSON.stringify({ tool: action, params, result: writeResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         writeEntry,
+        });
+
+        actionCount += 1;
+        await updateRows('PGC_Session',
+          [{ column: 'id', op: 'eq', value: session.id }],
+          { minds_eye_action_count: actionCount }
+        );
+
+        recordToolOutput(writeResult);
+        workingHistory.push({ role: 'tool', content: writeEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: writeResult });
+        console.info('proc/minds-eye: write tool executed', { action, sessionId: session.id, traceId });
+
+      } else if (GATED_WRITE_TOOLS.has(action)) {
+        // Refused before the gate, not at it — the loop continues so the next turn can
+        // correct, instead of ending the round on a decision nobody gets to make.
+        const refusal = await preGateRefusal(action, params, traceId);
+        if (refusal) {
+          const refusalEntry = JSON.stringify({ tool: action, params, result: refusal, items: entryItems, turn: turnCount });
+
+          await insertRow('PGC_SessionEntry', {
+            session_id:      session.id,
+            sequence_number: seq,
+            role:            'tool',
+            content:         refusalEntry,
+          });
+
+          recordToolOutput(refusal);
+          workingHistory.push({ role: 'tool', content: refusalEntry, sequence_number: seq });
+          seq += 1;
+
+          // No progress line: this is a failed attempt about to be corrected, which is the
+          // case notifyTurnProgress deliberately stays quiet about.
+          console.info('proc/minds-eye: gated write refused before gate', {
+            action,
+            sessionId: session.id,
+            issueCount: refusal.issues?.length ?? 0,
+            traceId,
+          });
+          continue;
+        }
+
+        if (actionCount >= prefs.max_actions_per_session) {
+          await postTurnLimitGate(session.id, callback, traceId, true);
+          earlyExit = true;
+          control = 'break';
+          break;
+        }
+
+        await postActionGate({ session, action, params, items: entryItems, turn: turnCount, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
         earlyExit = true;
+        control = 'break';
+        break;
+
+      } else if (TRIGGER_TOOLS.has(action)) {
+        const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
+        const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult, items: entryItems, turn: turnCount });
+
+        await insertRow('PGC_SessionEntry', {
+          session_id:      session.id,
+          sequence_number: seq,
+          role:            'tool',
+          content:         triggerEntry,
+        });
+
+        recordToolOutput(triggerResult);
+        workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
+        seq += 1;
+
+        await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
+        console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
+
+      } else {
+        console.warn('proc/minds-eye: unknown action', { action, traceId });
+        if (callback) {
+          await enqueueCallback(callback, {
+            type:    'HUMAN_NOTIFICATION',
+            traceId,
+            message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
+          });
+        }
+        earlyExit = true;
+        control = 'break';
         break;
       }
-
-      await postActionGate({ session, action, params, callback, traceId, currentTurnCount: turnCount, currentSeq: seq });
-      earlyExit = true;
-      break;
-
-    } else if (TRIGGER_TOOLS.has(action)) {
-      const triggerResult = await executeTriggerTool(action, params, callback, traceId, threadTs);
-      const triggerEntry  = JSON.stringify({ tool: action, params, result: triggerResult });
-
-      await insertRow('PGC_SessionEntry', {
-        session_id:      session.id,
-        sequence_number: seq,
-        role:            'tool',
-        content:         triggerEntry,
-      });
-
-      workingHistory.push({ role: 'tool', content: triggerEntry, sequence_number: seq });
-      seq += 1;
-
-      await notifyTurnProgress({ callback, traceId, turn: turnCount, action, reasoning, result: triggerResult });
-      console.info('proc/minds-eye: trigger tool executed', { action, sessionId: session.id, traceId });
-
-    } else {
-      console.warn('proc/minds-eye: unknown action', { action, traceId });
-      if (callback) {
-        await enqueueCallback(callback, {
-          type:    'HUMAN_NOTIFICATION',
-          traceId,
-          message: `Agent returned unknown action: ${action}. Reasoning: ${reasoning ?? '(none)'}`,
-        });
       }
-      earlyExit = true;
-      break;
-    }
+
+    if (control === 'break') break;
   }
 
   if ((!responded && !earlyExit) || (responded && postContinueGateAfterRespond)) {
@@ -844,7 +1043,7 @@ function gateButtonConfig(action, params = {}) {
   return                                        { confirmLabel: 'Approve', confirmStyle: null };
 }
 
-async function postActionGate({ session, action, params, callback, traceId, currentTurnCount, currentSeq }) {
+async function postActionGate({ session, action, params, items, turn, callback, traceId, currentTurnCount, currentSeq }) {
   const gateText = await buildGateText(action, params, traceId);
   const { confirmLabel, confirmStyle } = gateButtonConfig(action, params);
 
@@ -852,7 +1051,7 @@ async function postActionGate({ session, action, params, callback, traceId, curr
     session_id:      session.id,
     sequence_number: currentSeq,
     role:            'tool',
-    content:         JSON.stringify({ tool: '__pending__', action, params }),
+    content:         JSON.stringify({ tool: '__pending__', action, params, items, turn }),
   });
 
   await updateRows('PGC_Session',
@@ -1125,6 +1324,32 @@ async function buildGateText(action, params, traceId) {
         return `**Drop view: \`${tableName}\`**\n\nThis is irreversible.`;
       }
 
+      // The gate says NOT BUILT on its face. Approving one of these approves a description,
+      // and a card that reads like every other confirmation would imply otherwise.
+      case 'register_capability': {
+        const { capabilityKey, description, endpoint, method } = params;
+        const target = endpoint ? `\n\n\`${method ?? 'POST'} ${endpoint}\`` : '';
+        return `**Register capability: \`${capabilityKey}\`** — _not built yet, nothing will be written_\n\n${description ?? ''}${target}`;
+      }
+
+      case 'call_capability': {
+        const { capabilityKey, input } = params;
+        return `**Call capability: \`${capabilityKey}\`** — _not built yet, nothing will be called_\n\n\`\`\`json\n${JSON.stringify(input ?? {}, null, 2)}\n\`\`\``;
+      }
+
+      case 'schedule_workflow': {
+        const { scheduleName, workflowName, schedule, timezone = 'UTC', enabled = true } = params;
+        const state = enabled ? '' : '\n\nCreated **disabled** — it will not fire until enabled.';
+        return `**Schedule \`${workflowName}\` to run unattended**\n\n`
+             + `\`${schedule}\` (${timezone}), as \`${scheduleName}\`.\n\n`
+             + `This runs with no one present. Approving it means it fires until cancelled.${state}`;
+      }
+
+      case 'cancel_schedule': {
+        const { scheduleName } = params;
+        return `**Cancel schedule: \`${scheduleName}\`**\n\nIt stops firing. The workflow it runs is not affected.`;
+      }
+
       default:
         return `**Proposed action:** \`${action}\`\n\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``;
     }
@@ -1330,6 +1555,62 @@ async function executeWriteTool(action, params, traceId) {
         return await servPost('/api/v1/serv/schema/deleteTable', { tableName });
       }
 
+      // --- Capability and scheduling tools — declared, not yet wired up ------------------
+      //
+      // Each returns the request a real implementation would issue. PGC_Capability's external
+      // columns exist in the template and the registry seed but not in the running database,
+      // so nothing here writes a row: registering for real is the same task as invoking for
+      // real, and both wait on the same schema step.
+
+      case 'register_capability': {
+        const { capabilityKey, category = 'external', description, endpoint, method, authRef,
+                inputSchema, outputSchema, status = 'planned' } = params;
+        if (!capabilityKey || !description) {
+          return { error: 'capabilityKey and description are required' };
+        }
+        return notImplemented('register_capability', {
+          table: 'PGC_Capability',
+          row:   { capability_key: capabilityKey, category, description, status,
+                   endpoint: endpoint ?? null, method: method ?? null, auth_ref: authRef ?? null,
+                   input_schema: inputSchema ?? null, output_schema: outputSchema ?? null },
+        },
+        'The capability registry accepts no rows yet. The row above is what would be written. ' +
+        'auth_ref names an SSM parameter holding the credential — never the credential itself.');
+      }
+
+      case 'call_capability': {
+        const { capabilityKey, input = {} } = params;
+        if (!capabilityKey) return { error: 'capabilityKey is required' };
+        return notImplemented('call_capability', {
+          capability_key: capabilityKey,
+          request:        input,
+        },
+        `No invocation path exists, so "${capabilityKey}" was NOT called and nothing changed. ` +
+        'Describe what calling it would do — do not report an outcome.');
+      }
+
+      case 'schedule_workflow': {
+        const { scheduleName, workflowName, schedule, input = {},
+                enabled = true, timezone, description } = params;
+
+        // Refuse a schedule for a workflow that does not exist, before creating it. An
+        // orphaned schedule fires forever into a log line nobody reads, and unlike a
+        // Slack-triggered run there is no human present to notice the failure.
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], null, 1);
+        if (!wfResp.rows?.length) {
+          return { error: `Workflow "${workflowName}" is not registered — register it before scheduling it.` };
+        }
+
+        const { upsertSchedule } = await import('../shared/scheduler-client.mjs');
+        return await upsertSchedule({ scheduleName, workflowName, schedule, input, enabled, timezone, description });
+      }
+
+      case 'cancel_schedule': {
+        const { scheduleName } = params;
+        const { deleteSchedule } = await import('../shared/scheduler-client.mjs');
+        return await deleteSchedule(scheduleName);
+      }
+
       default:
         return { error: `Unknown write tool: ${action}` };
     }
@@ -1354,6 +1635,27 @@ async function executeTriggerTool(action, params, callback, traceId, threadTs) {
         const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
         const wf = wfResp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
+
+        // Refuse before dispatching, not after — the same shape as preGateRefusal, and for
+        // the same reason: a refusal returned as a tool result costs one turn to correct,
+        // where a wrong dispatch costs a whole run and arrives looking like a healthy one.
+        // Run 762 is why this exists: create_domain was dispatched with { domain,
+        // description }, step 1 read input.userInput, and the run reached a human gate
+        // asking approval for a domain nobody had asked for.
+        const expected = expectedRunInput(wf.steps);
+        const missing  = expected.filter(k => !(k in input));
+        if (missing.length > 0) {
+          const ignored = Object.keys(input).filter(k => !expected.includes(k));
+          console.warn('proc/minds-eye: run_workflow refused — input does not cover what the workflow reads', {
+            workflowName, missing, ignored, traceId,
+          });
+          return {
+            error: `"${workflowName}" reads input keys you did not supply. Supply every key it reads — pass null for any that do not apply — and call again.`,
+            expected_input:        expected,
+            missing,
+            ignored_keys_supplied: ignored,
+          };
+        }
 
         // Ensure the workflow runs in the Novia session thread. The raw SQS
         // callback may have threadId null (e.g. first-message invocation), but
@@ -1513,9 +1815,15 @@ async function loadPrefsAndPrompt() {
 // ---------------------------------------------------------------------------
 
 async function assembleContext() {
+  // Both sorts carry a unique trailing term. priority ties across most of PGC_Memory, and
+  // LIMIT 5 cuts the tied group at a point Postgres does not promise to keep stable — so
+  // without the tiebreaker two identical queries can return different memories. This block
+  // goes into `instructions`, ahead of the whole transcript, so a reshuffle between rounds
+  // invalidates the round's entire cached prefix. PGC_Workflow.name is already unique; the
+  // term is there so the guarantee rests on the sort rather than on that fact staying true.
   const [workflowsResp, memResp] = await Promise.all([
-    getRows('PGC_Workflow', [], { column: 'name', direction: 'asc' }, 50),
-    getRows('PGC_Memory',   [], { column: 'priority', direction: 'desc' }, 5),
+    getRows('PGC_Workflow', [], [{ column: 'name', direction: 'asc' }], 50),
+    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'desc' }, { column: 'id', direction: 'asc' }], 5),
   ]);
 
   const workflowSummary = (workflowsResp.rows ?? [])
@@ -1532,99 +1840,189 @@ async function assembleContext() {
 }
 
 // ---------------------------------------------------------------------------
-// Build the user-facing LLM input: context blocks + conversation transcript
+// Rebuild the round's LLM input from persisted session entries
 // ---------------------------------------------------------------------------
 
-/**
- * Which history entry holds the step array currently being worked on.
- *
- * Tool entries are recorded with their `params`, so every array Novia has submitted is
- * already persisted — but the transcript renders only `result`, so she has been reading
- * verdicts about arrays she cannot see, naming step keys absent from her context. With no
- * copy of her own work in front of her she rebuilds all of it from reasoning each turn,
- * which is why session 1121 drifted 19 → 21 → 23 steps and why `step_label` returned two
- * turns after she had corrected it.
- *
- * One array is rendered, never all of them: the latest is the draft, and the earlier ones
- * are the same workflow in a worse state. `sequence_number` already orders them, so the
- * newest submission IS the current version — no version column, no separate draft store.
- *
- * `__pending__` and `__cancelled__` are skipped. A pending entry carries a copy of the
- * array too, but it is awaiting a human decision rather than a correction, and treating it
- * as the draft would mark the last correctable array superseded.
- */
-export function latestDraftIndex(history) {
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const entry = history[i];
-    if (entry?.role !== 'tool') continue;
-    try {
-      const parsed = JSON.parse(entry.content);
-      if (parsed?.tool === '__pending__' || parsed?.tool === '__cancelled__') continue;
-      if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) return i;
-    } catch { /* not a readable tool entry */ }
-  }
-  return -1;
+// Matches the render cap this replaces: a single tool result cannot dominate the
+// rebuilt transcript. Applied to outputs only — never to a call's arguments, which
+// carry Novia's own submitted work. Sprint 9's largest defect was her losing sight of
+// step arrays she had submitted, and truncating them here would reintroduce it.
+const MAX_TOOL_OUTPUT_CHARS = 15000;
+
+const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
+
+// A respond whose round ended without the user typing anything back. The call is real and the
+// gateway rejects a call with no output, so it closes here rather than being left open.
+const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' });
+
+function capOutput(text) {
+  return text.length > MAX_TOOL_OUTPUT_CHARS
+    ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated]`
+    : text;
 }
 
-export function buildUserMessage(layer1Context, layer2Context, history, prefs, notice) {
-  const parts = [];
+/**
+ * Convert persisted PGC_SessionEntry rows into the canonical item array the gateway takes.
+ *
+ * Runs once per round, at the start. Within a round the loop appends the gateway's own
+ * output items instead, because those carry server-assigned call_ids and are what earn
+ * incremental cache credit.
+ *
+ * A round that resumes has to reproduce the previous round's items BYTE FOR BYTE or the
+ * credit is lost at the first divergence, so each tool entry persists the raw `items` the
+ * gateway returned and they are replayed verbatim here. Reconstructing them from {tool,
+ * params} cannot work: `params` has already had reasoning/message/advisory stripped out of
+ * the model's own `arguments` string, so the rebuilt call differs from the one sent.
+ *
+ * This matters on every resume path, because all three now re-enter with the transcript
+ * ending on a tool result — the shape that earns full credit. The continue gate and an
+ * approved action gate always did. The followup path did NOT: it appended the typed reply as
+ * a trailing user item, and one trailing user item forfeits the round's whole prefix credit
+ * (measured twice with everything else held constant — $0.219 on a 56k transcript, growing
+ * linearly). A typed reply is delivered as the respond call's output instead, which is also
+ * what it plainly is.
+ *
+ * `items` is additive — /explain, chat.mjs and deriveScope go on reading tool/params/result
+ * unchanged — and absent on every entry written before it existed, which is why the
+ * synthesised form below stays as the fallback rather than being replaced.
+ *
+ * Entry shapes in, items out:
+ *   role 'user'                              -> the open respond's output, else { role: 'user' }
+ *   role 'assistant' {action:'respond',...}  -> function_call, output supplied by what follows
+ *   role 'tool' {tool, params, result}       -> function_call + function_call_output
+ *   role 'tool' {tool:'__pending__', ...}    -> function_call, output supplied by what follows
+ *   role 'tool' {tool:'__cancelled__', ...}  -> the pending call's output
+ *
+ * A gated action spans two entries — the __pending__ that posted the gate and whatever
+ * resolved it — and must come back as ONE call with one output, or the model sees the same
+ * destructive action requested twice.
+ *
+ * A respond is stored as an assistant entry carrying the gateway's own items, and comes back
+ * as the function_call it was. It closes with the user's typed reply when one follows, and
+ * with RESPONSE_DELIVERED_OUTPUT otherwise — the gateway rejects a call with no output, and
+ * a respond that nobody replied to genuinely has none. Entries predating `items`, and prose
+ * replies that never called respond, keep the older assistant rendering.
+ *
+ * Synthesised call_ids (the fallback path) only have to be unique and consistent inside this
+ * array. They cannot collide with replayed gateway ids, which carry a provider prefix.
+ *
+ * @param {Array} workingHistory  PGC_SessionEntry rows in sequence order
+ * @returns {Array} canonical items for callLlmWithTools
+ */
+export function toInputItems(workingHistory = []) {
+  const items   = [];
+  let   pending = null;   // { callId, name, kind } — a function_call still waiting for its output
 
-  parts.push(layer1Context);
-  if (layer2Context) parts.push(layer2Context);
+  // With no output supplied, what closes the call depends on what opened it: a gated write is
+  // still awaiting approval, a respond was already delivered to the user.
+  const closePending = (output) => {
+    const resolved = output
+      ?? (pending.kind === 'respond' ? RESPONSE_DELIVERED_OUTPUT : AWAITING_APPROVAL_OUTPUT);
+    items.push({ type: 'function_call_output', call_id: pending.callId, output: resolved });
+    pending = null;
+  };
 
-  if (history.length > 0) {
-    const draftIndex = latestDraftIndex(history);
+  // Replay the gateway's own items for this turn, and report which call the output attaches
+  // to. Returns null when the entry predates `items` or carries none the loop can pair an
+  // output with, so the caller falls back to synthesising the call.
+  const replayItems = (parsed) => {
+    if (!Array.isArray(parsed?.items) || parsed.items.length === 0) return null;
+    const call = parsed.items.find(it => it?.type === 'function_call');
+    if (!call?.call_id) return null;
+    items.push(...parsed.items);
+    return call.call_id;
+  };
 
-    const transcript = history.map((e, i) => {
-      if (e.role === 'user')      return `User: ${e.content}`;
-      if (e.role === 'assistant') {
-        try {
-          const parsed = JSON.parse(e.content);
-          return parsed.message ? `Assistant: ${parsed.message}` : `Assistant: ${e.content}`;
-        } catch { return `Assistant: ${e.content}`; }
+  workingHistory.forEach((entry, i) => {
+    const callId = `call_${entry?.sequence_number ?? i}`;
+
+    if (entry?.role === 'user') {
+      const text = String(entry.content ?? '');
+      // A typed follow-up IS the respond call's output, and delivering it there is what keeps
+      // a resumed round append-only. The alternative — a trailing user item — forfeits the
+      // round's entire prefix credit, measured at $0.219 on a 56k transcript.
+      if (pending?.kind === 'respond') {
+        closePending(capOutput(JSON.stringify({ user_reply: text })));
+        return;
       }
-      if (e.role === 'tool') {
-        try {
-          const parsed = JSON.parse(e.content);
-          if (parsed.tool === '__pending__')   return `[Awaiting approval for: ${parsed.action}]`;
-          if (parsed.tool === '__cancelled__') return `[Action cancelled: ${parsed.action}]`;
+      // Otherwise the user ignored a gate and sent a new message instead of answering it.
+      // The call still has to be closed — an unpaired call followed by a user turn is not
+      // a shape the gateway accepts.
+      if (pending) closePending();
+      items.push({ role: 'user', content: text });
+      return;
+    }
 
-          const result = JSON.stringify(parsed.result).slice(0, 15000);
+    let parsed = null;
+    try { parsed = JSON.parse(entry?.content); } catch { /* not a JSON entry */ }
 
-          // A submitted step array is shown once, on the newest submission, because that
-          // is the draft; the same array in an older state is not worth its tokens and is
-          // reduced to the verdict it earned. Not truncated when it is shown — half a step
-          // array is not a thing anyone can correct.
-          if (Array.isArray(parsed?.params?.steps) && parsed.params.steps.length > 0) {
-            return i === draftIndex
-              ? `Tool (${parsed.tool}) — CURRENT DRAFT, ${parsed.params.steps.length} steps. This is the array you last submitted; correct THIS array rather than composing a new one from scratch.\nSubmitted steps: ${JSON.stringify(parsed.params.steps)}\nResult: ${result}`
-              : `Tool (${parsed.tool}): submitted ${parsed.params.steps.length} steps, since superseded. Result: ${result}`;
-          }
-
-          return `Tool (${parsed.tool}): ${result}`;
-        } catch { return `Tool: ${e.content.slice(0, 15000)}`; }
+    if (entry?.role === 'assistant') {
+      if (pending) closePending();
+      // A respond persisted with the gateway's own items comes back as the function_call it
+      // actually was, left open for whatever resolves it.
+      const respondId = replayItems(parsed);
+      if (respondId) {
+        pending = { callId: respondId, name: 'respond', kind: 'respond' };
+        return;
       }
-      return '';
-    }).filter(Boolean).join('\n\n');
+      // Entries written before `items` existed, and prose replies that never called respond,
+      // keep the assistant rendering. reasoning and advisory are deliberately dropped:
+      // reasoning is per-turn scratch, and the advisory was already delivered to the user
+      // when the round ended.
+      items.push({ role: 'assistant', content: parsed?.message ?? String(entry?.content ?? '') });
+      return;
+    }
 
-    parts.push(`CONVERSATION:\n${transcript}`);
-  }
+    if (!parsed?.tool) return;   // an unreadable tool entry contributes nothing
 
-  // Tool names, params, and gating are documented once in minds_eye_system_prompt
-  // (the instructions/system message) — not re-enumerated here. A second,
-  // hand-maintained copy in this per-turn message previously drifted stale
-  // (missing run_sql, upsert_data, create_view, drop_view) while still telling
-  // the model to use ONLY the tools listed here; removed rather than patched,
-  // since two copies of the same catalog will drift again.
-  parts.push(
-    'Based on the context and conversation above, decide your next action. ' +
-    'Respond with exactly one JSON object per the tool catalog and output format in your instructions.'
-  );
+    if (parsed.tool === '__pending__') {
+      if (pending) closePending();
+      const replayedId = replayItems(parsed);
+      if (!replayedId) {
+        items.push({
+          type:      'function_call',
+          call_id:   callId,
+          name:      parsed.action,
+          arguments: JSON.stringify(parsed.params ?? {}),
+        });
+      }
+      pending = { callId: replayedId ?? callId, name: parsed.action, kind: 'tool' };
+      return;
+    }
 
-  // Last, so it is the nearest instruction to the response it constrains.
-  if (notice) parts.push(notice);
+    if (parsed.tool === '__cancelled__') {
+      if (pending) closePending(JSON.stringify({ cancelled: true }));
+      return;   // a cancellation with no open call has nothing to attach to
+    }
 
-  return parts.join('\n\n---\n\n');
+    // The entry a gate resolves into carries the same action as the pending call, so it
+    // becomes that call's output rather than a second call.
+    if (pending && pending.name === parsed.tool) {
+      closePending(capOutput(JSON.stringify(parsed.result ?? null)));
+      return;
+    }
+
+    if (pending) closePending();
+
+    const replayedId = replayItems(parsed);
+    if (!replayedId) {
+      items.push({
+        type:      'function_call',
+        call_id:   callId,
+        name:      parsed.tool,
+        arguments: JSON.stringify(parsed.params ?? {}),
+      });
+    }
+    items.push({
+      type:    'function_call_output',
+      call_id: replayedId ?? callId,
+      output:  capOutput(JSON.stringify(parsed.result ?? null)),
+    });
+  });
+
+  if (pending) closePending();
+
+  return items;
 }
 
 // ---------------------------------------------------------------------------
@@ -1636,9 +2034,9 @@ async function executeReadTool(action, params, traceId) {
     switch (action) {
 
       case 'query_table': {
-        const { tableName, filters = [], orderBy, limit } = params;
+        const { tableName, filters = [], orderBy, limit, vectorSearch } = params;
         if (!tableName) return { error: 'tableName is required' };
-        const resp = await getRows(tableName, filters, orderBy, limit ?? 20);
+        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch);
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 
@@ -1648,6 +2046,20 @@ async function executeReadTool(action, params, traceId) {
         const { servPost } = await import('../shared/serv-client.mjs');
         const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
+      }
+
+      case 'list_capabilities': {
+        const { category, status } = params;
+        const filters = [];
+        if (category) filters.push({ column: 'category', op: 'eq', value: category });
+        if (status)   filters.push({ column: 'status',   op: 'eq', value: status });
+        const resp = await getRows('PGC_Capability', filters, { column: 'capability_key', direction: 'asc' }, 100);
+        return { count: resp.count, capabilities: resp.rows ?? [] };
+      }
+
+      case 'list_schedules': {
+        const { listSchedules } = await import('../shared/scheduler-client.mjs');
+        return await listSchedules(params.workflowName);
       }
 
       case 'query_entity': {
@@ -1679,7 +2091,17 @@ async function executeReadTool(action, params, traceId) {
         );
         const wf = resp.rows?.[0];
         if (!wf) return { error: `Workflow "${workflowName}" not found` };
-        return { name: wf.name, version: wf.version, domain: wf.domain, description: wf.description ?? null, steps: wf.steps };
+        return {
+          name:        wf.name,
+          version:     wf.version,
+          domain:      wf.domain,
+          description: wf.description ?? null,
+          // Derived from the steps, because PGC_Workflow declares no input schema. These
+          // are the keys the workflow READS — supplying a key it does not read is silently
+          // discarded, and omitting one it does read resolves to undefined with no error.
+          expected_input: expectedRunInput(wf.steps),
+          steps:       wf.steps,
+        };
       }
 
       case 'read_prompt': {

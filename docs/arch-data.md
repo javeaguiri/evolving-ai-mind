@@ -456,21 +456,41 @@ LLM produces valid step definitions.
 | updated_at | timestamptz | |
 
 ##### PGC_Capability
-Registry of what this system can currently do. Injected into heavy-lift prompts so the
-LLM proposes only feasible workflows and gives honest answers when asked for something
-not yet supported.
+Registry of what this system can do, including capabilities reached over the network.
+Internal categories are injected into heavy-lift prompts so the LLM proposes only feasible
+workflows and gives honest answers when asked for something not yet supported. Category
+`external` describes a third-party service the system can invoke — **one row per operation**,
+so a device or provider offering several operations is several rows.
 
 | Column | Type | Notes |
 |---|---|---|
 | id | serial PK | |
 | capability_key | text UNIQUE | e.g. `serv_table_insert`, `slack_notify`, `llm_agent_call`, `human_gate`, `js_transform` |
-| category | text | `serv`, `notify`, `llm`, `ui`, `execution` |
+| category | text | `serv`, `notify`, `llm`, `ui`, `execution`, `external` |
 | description | text | What this capability does — LLM readable |
 | status | text | `live`, `planned`, `not_supported` |
 | available_in | jsonb | Which Lambda functions expose this — e.g. `["proc", "serv"]` |
 | notes | text | Constraints, limits, or caveats — e.g. `"js_transform requires security gate approval"` |
+| endpoint | text | `external` only — absolute URL the operation is reached at |
+| method | text | `external` only — `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
+| auth_ref | text | `external` only — **the SSM parameter NAME holding the credential, never the credential.** This table is readable by anything that can read PGC |
+| input_schema | jsonb | `external` only — JSON Schema for the request body |
+| output_schema | jsonb | `external` only — JSON Schema for the response |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
+
+> **Live in the database and the registry as of 2026-08-11**, applied through
+> `POST /serv/schema/addColumn` (×5) and `POST /serv/schema/modifyConstraint` (×2), which alter
+> the table and sync `PGC_Schema` in the same call. The table holds no rows: the columns exist so
+> that anything reading the registry sees the real contract, while `register_capability` and
+> `call_capability` remain stubs.
+>
+> **Bootstrap is the wrong tool for a column addition and must not be used for one.**
+> `createTableFromTemplate` issues `CREATE TABLE IF NOT EXISTS`, which cannot add a column to an
+> existing table, while `seedPGCSchema` upserts unconditionally — so on any table that already
+> exists, bootstrap updates the registry and not the database, producing exactly the
+> registry-asserts-what-the-database-lacks defect. Use `addColumn` / `modifyConstraint` /
+> `updateTable`, which move both together.
 
 ---
 
@@ -967,6 +987,8 @@ DDL executor and PGC metadata registry.
 | `/api/v1/serv/schema/deleteTable` | POST | DROP TABLE + remove from PGC_Schema + PGC_TableMap |
 | `/api/v1/serv/schema/dropColumn` | POST | ALTER TABLE ... DROP COLUMN (**RESTRICT, never CASCADE**) + `pruneColumnRefs` clears every `constraints` / `foreign_keys` entry referencing the column. **Refuses with 409 when a view depends on the column** — CASCADE would delete the view silently and leave `PGC_Schema` advertising it (this happened: Sprint 7 session 18). Rewrite dependent views first. |
 | `/api/v1/serv/schema/modifyConstraint` | POST | Add a named CHECK, or replace its expression if one of that name exists. **Upserts** `PGC_Schema.constraints` — appends when new. A CHECK the DB enforces but the registry omits is invisible to `domain_schema`, so `design_workflow_process`/`design_workflow_prompts` never see the enum and generated workflows keep emitting values the DB rejects. |
+| `/api/v1/serv/schema/addForeignKey` | POST | ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY + `PGC_Schema.foreign_keys` sync. **`createTable` was previously the only place a foreign key could be created**, so a relationship introduced after a domain was built had no route — `modifyConstraint` emits CHECK only, and `updateTable` writes the registry without touching DDL, which would leave the registry asserting a constraint the database does not enforce. Idempotent. Both tables must be registered and share the same `target` (PGC and PGD are separate databases, so a cross-target FK cannot exist physically); the referencing column must already exist. `onDelete` limited to CASCADE / SET NULL / RESTRICT / NO ACTION. |
+| `/api/v1/serv/schema/addUniqueConstraint` | POST | ALTER TABLE ... ADD CONSTRAINT ... UNIQUE + `PGC_Schema.constraints` sync (`type: "unique"`). Same gap as above one type over: `modifyConstraint` covers CHECK only, so a uniqueness rule discovered after a table was built — a lookup table that must not accumulate duplicate names — had no route. Idempotent; every column must already be registered. |
 | `/api/v1/serv/schema/dropConstraint` | POST | Drop a named constraint from a PGD table (DDL + PGC_Schema sync). Accepts any constraint type. Wired into Novia `propose_schema_fix` tool. |
 
 > **`target` is never supplied by the caller** on `dropColumn` / `modifyColumn` / `modifyConstraint` / `dropConstraint` — it is read from `PGC_Schema`. A correctness requirement only a technical caller would know is a bug, not a contract.
@@ -981,7 +1003,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — filters, orderBy, limit |
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended |
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |
@@ -1063,7 +1085,20 @@ All `filters` arrays are ANDed. Omit `filters` to return all rows.
 | `jsonb_contains` | JSONB `@>` containment — row's column contains value | `{ "column": "scope", "op": "jsonb_contains", "value": { "domain": "flashcards" } }` |
 | `jsonb_contained_by` | JSONB `<@` containment — row's column is contained by value (inverse of `jsonb_contains`) | `{ "column": "scope", "op": "jsonb_contained_by", "value": { "domain": "flashcards", "workflow": "add_entity" } }` |
 
-Optional fields on any `getRows` call: `"orderBy": "column ASC|DESC"`, `"limit": N`, `"columns": ["col1", "col2"]` (projects the SELECT list instead of `*` — see the `PGC_WorkflowRun`/`PGC_WorkflowRunStep` caution above for when this is required, not just an optimization).
+Optional fields on any `getRows` call: `"orderBy"`, `"limit": N`, `"columns": ["col1", "col2"]` (projects the SELECT list instead of `*` — see the `PGC_WorkflowRun`/`PGC_WorkflowRunStep` caution above for when this is required, not just an optimization).
+
+**`orderBy` — one sort term or several.** `listEntities` accepts the same forms.
+
+| Form | Example |
+|---|---|
+| SQL string | `"orderBy": "priority DESC"` |
+| Object | `"orderBy": { "column": "priority", "direction": "desc" }` |
+| Composite, SQL string | `"orderBy": "priority DESC, id ASC"` |
+| Composite, array | `"orderBy": [{ "column": "priority", "direction": "desc" }, { "column": "id", "direction": "asc" }]` |
+
+Every column is validated against the table's registered schema, whichever form is used. `direction` defaults to `asc`.
+
+**Add a trailing term on a unique column whenever the leading column can tie and `limit` is set.** Postgres guarantees no order within a tied group, so the `limit` cuts it at an arbitrary point and identical queries can return different rows. `PGC_Memory` ordered by `priority` is the live case — a large share of its rows carry the same priority, so a small `limit` draws an arbitrary subset of them.
 
 #### Common PGC admin queries
 
@@ -1183,6 +1218,30 @@ Returns all physical tables in `information_schema.tables` (PGD schema) with `re
 curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/dropConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Budgets", "constraintName": "chk_budgets_amount" }'
 ```
 Drops a named constraint (any type: CHECK, UNIQUE, FK) via `ALTER TABLE … DROP CONSTRAINT` and removes it from `PGC_Schema.constraints`. Wired into Novia `propose_schema_fix`.
+
+#### SERV-Schema — addForeignKey
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addForeignKey" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_Inventory", "foreignKey": { "name": "fk_inventory_category", "column": "category_id", "references": { "table": "PGD_InventoryCategory", "column": "id" }, "onDelete": "SET NULL" } }'
+```
+Adds a FK to an **existing** table and records it in `PGC_Schema.foreign_keys` in the same call. Add the column with `addColumn` first — the route refuses a FK on a column the registry does not carry. Idempotent, so re-issuing converges rather than duplicating.
+
+#### SERV-Schema — addUniqueConstraint
+
+```bash
+> **The inventory domain, as built (Sprint 10).** Four tables: `PGD_Inventory` (items, with
+> `name_embedding`), `PGD_InventoryAlias` (raw receipt strings, with `alias_name_embedding`,
+> FK to inventory), `PGD_InventoryCategory` (a **shared lookup**, not a per-item child — one row
+> per category name, uniquely constrained), and `PGD_Expenses`/`PGD_SpendingCategories` reached
+> cross-domain at the workflow layer rather than by FK. The alias table is what makes receipt
+> matching cheapen with use: each confirmed match writes the merchant's raw string, so the next
+> receipt resolves it by similarity rather than by an LLM call. Aliases are keyed on the **raw
+> receipt string**, never on its English rendering — a mistranslation stored in English would
+> attach the wrong product permanently.
+
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/addUniqueConstraint" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGD_InventoryCategory", "constraintName": "uq_inventorycategory_name", "columns": ["name"] }'
+```
+Adds a UNIQUE constraint over one or more columns and registers it as `type: "unique"`. Deduplicate the existing rows first — the DDL fails on a table that already violates it.
 
 ---
 

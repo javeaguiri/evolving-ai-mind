@@ -43,6 +43,7 @@ import seedPrompt        from './templates/pgc/seeds/seed_PGC_Prompt.json'      
 import seedSystemContext from './templates/pgc/seeds/seed_PGC_SystemContext.json'  with { type: 'json' };
 import seedStepType      from './templates/pgc/seeds/seed_PGC_StepType.json'      with { type: 'json' };
 import seedArchetype     from './templates/pgc/seeds/seed_PGC_Archetype.json'     with { type: 'json' };
+import seedCapability    from './templates/pgc/seeds/seed_PGC_Capability.json'   with { type: 'json' };
 
 const { Client } = pg;
 
@@ -190,6 +191,9 @@ export async function bootstrap(req) {
 
     // Step 12 — seed PGC_Archetype rows (workflow design archetypes)
     await seedPGCArchetype(client);
+
+    // Step 13 — seed PGC_Capability rows (external service registry)
+    await seedPGCCapability(client);
 
     const freshEnvironment = tableResults.some(r => r.status === 'created');
     const report = {
@@ -664,6 +668,45 @@ async function seedPGCStepType(client) {
     );
   }
   console.info('init-brain: PGC_StepType seeded');
+}
+
+async function seedPGCCapability(client) {
+  const rows = Array.isArray(seedCapability) ? seedCapability : [seedCapability];
+  for (const row of rows) {
+    // ON CONFLICT (capability_key) DO UPDATE — a capability's endpoint, contract or status
+    // changes as the provider's API does, and the seed is authoritative for the ones shipped
+    // with the system. Capabilities registered at runtime carry keys no seed row claims, so
+    // this never overwrites them.
+    //
+    // auth_ref is an SSM parameter NAME. A credential must never reach this table.
+    await client.query(
+      `INSERT INTO "PGC_Capability"
+         (capability_key, category, description, status, available_in, notes,
+          endpoint, method, auth_ref, input_schema, output_schema)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (capability_key) DO UPDATE SET
+         category      = EXCLUDED.category,
+         description   = EXCLUDED.description,
+         status        = EXCLUDED.status,
+         available_in  = EXCLUDED.available_in,
+         notes         = EXCLUDED.notes,
+         endpoint      = EXCLUDED.endpoint,
+         method        = EXCLUDED.method,
+         auth_ref      = EXCLUDED.auth_ref,
+         input_schema  = EXCLUDED.input_schema,
+         output_schema = EXCLUDED.output_schema,
+         updated_at    = now()`,
+      [
+        row.capability_key, row.category, row.description, row.status,
+        row.available_in ? JSON.stringify(row.available_in) : null,
+        row.notes ?? null,
+        row.endpoint ?? null, row.method ?? null, row.auth_ref ?? null,
+        row.input_schema  ? JSON.stringify(row.input_schema)  : null,
+        row.output_schema ? JSON.stringify(row.output_schema) : null,
+      ]
+    );
+  }
+  console.info('init-brain: PGC_Capability seeded');
 }
 
 async function seedPGCArchetype(client) {
