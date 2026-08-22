@@ -167,6 +167,17 @@ describe('getRows — columns projects on the vector path as well as the standar
     );
   });
 
+  it('does not re-add an excluded vector column as null after projecting', () => {
+    // The truncation pass walks every vector column in the schema. Assigning
+    // unconditionally writes the key back into a row that deliberately excluded it,
+    // so `columns: ["id","name"]` still returned name_embedding: null.
+    assert.match(
+      tableSrc,
+      /if \(!\(col in clean\)\) continue;/,
+      'truncation must skip columns the projection left out'
+    );
+  });
+
   it('rejects an unknown column before either path runs', () => {
     assert.match(
       tableSrc,
