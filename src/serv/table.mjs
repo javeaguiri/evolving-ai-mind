@@ -239,6 +239,10 @@ async function getRows(req) {
       : result.rows.map(row => {
           const clean = { ...row };
           for (const col of vectorCols) {
+            // Only truncate what the projection actually returned. Assigning
+            // unconditionally puts a column the caller excluded back into the row
+            // as null, which undoes part of the projection it just asked for.
+            if (!(col in clean)) continue;
             const v = clean[col];
             clean[col] = v == null ? null : String(v).slice(0, 5) + '...';
           }
