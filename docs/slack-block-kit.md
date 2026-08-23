@@ -1090,14 +1090,18 @@ message cannot exceed 10,000 characters"*. A gate carrying several reveals share
 than resetting it per table. Columns beyond 20 are silently dropped; rows beyond the row,
 character or child-block ceiling truncate with a trailing `_...and N more row(s)_` `section`.
 
-**Vertical clipping inside a container — measured, not documented.** A `table` inside a reveal
-clips: rows past a certain point cannot be reached at all, because the container has no vertical
-scroll. Run 779 (35 receipt items) rendered **8 rows** — a header plus 7 — and hid the other 28.
-Slack documents no height, scroll, or overflow behaviour for either the `table` or the
-`container` block, so this is an observation about one render, not a published limit. **Whether
-the clip is a fixed 8 or varies with what follows the block is not yet established**;
-`TABLE_ROWS_PER_CHUNK` is currently set to 10, deliberately above the observation, so the next
-receipt settles it: 8 visible out of 10 means the clip is fixed, 10 visible means it is not.
+**Vertical clipping inside a container — measured, not documented.** A `table` inside a reveal is
+clipped at **8 rows** with no vertical scroll: row 9 onward cannot be reached at all. First seen
+on run 779 (35 receipt items, 7 visible beneath the header), then confirmed by probe — a chunk
+built with 10 rows still showed 8, so the clip is **fixed**, not varying with what follows the
+block. Slack documents no height, scroll, or overflow behaviour for either the `table` or the
+`container` block, and the published limits (100 rows, 20 columns, 10,000 characters) are all far
+above what actually renders.
+
+**The two limits compound.** One of the 8 rows goes to the forced header, leaving 7 of data per
+block; the container takes at most 10 child blocks. A single reveal therefore tops out near 70
+rows however it is chunked. Past that the remainder is reported rather than silently dropped, and
+pagination — a contract change between `/proc` and `/ui/slack` — is the only way further.
 
 **Slack renders the first row of every `table` block as a header** — bold, whatever the cells
 themselves declare. This is not configurable and is not in the reference. It is the reason every

@@ -846,14 +846,16 @@ const TABLE_MAX_COLUMNS         = 20;    // Slack `table` block hard limit
 const TABLE_MAX_CHARS           = 10000;
 // Rows per `table` block inside a reveal, header included.
 //
-// Run 779 rendered 8 rows and clipped the rest with no vertical scroll — row 9 onward could not
-// be reached at all. Slack documents no height, scroll, or overflow behaviour for either the
-// `table` or the `container` block, so 8 is an observation about one render, not a published
-// limit, and it is not yet known whether the clip is fixed or varies with what follows it.
-// This is deliberately set ABOVE that observation: if a chunk of 10 shows only 8, the clip is
-// fixed and this drops to 8; if all 10 show, the clip is dynamic and there is more room than
-// one render suggested.
-const TABLE_ROWS_PER_CHUNK      = 10;
+// A table inside a reveal container is clipped at 8 rows with no vertical scroll — row 9 onward
+// cannot be reached at all. Confirmed by probe: a chunk built with 10 rows still showed 8, so
+// the clip is fixed rather than varying with what follows the block. Slack documents no height,
+// scroll, or overflow behaviour for either the `table` or the `container` block, so this is
+// measured, not published — re-verify it if reveal rendering ever looks wrong again.
+//
+// One of the 8 goes to the header, which Slack forces on every table block, leaving 7 rows of
+// data per chunk. With the container's 10-child-block ceiling that bounds a single reveal at
+// roughly 70 rows however it is chunked; past that the remainder is reported, not shown.
+const TABLE_ROWS_PER_CHUNK      = 8;
 
 // buildRevealTables — native Slack `table` blocks (rows of { type: 'rich_text' }
 // cells, not markdown syntax) shared by buildRevealTable (array-of-records
