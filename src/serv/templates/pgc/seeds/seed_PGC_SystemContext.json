@@ -1190,7 +1190,7 @@
     "section": "minds_eye",
     "inject_always": false,
     "inject_for": [],
-    "version": 1,
+    "version": 2,
     "content": {
       "on_start": [
         {
@@ -1225,19 +1225,27 @@
       "on_correction_task": [
         {
           "table": "PGC_WorkflowRun",
-          "purpose": "recent run history for the target workflow",
+          "purpose": "The run itself. state.local_state carries the COMPLETE final local_state — every step output as the run left it. This is the source for what a step actually produced.",
+          "caveat": "state is written once, at completion. For a run still executing, or one that failed part-way, the live values are on the execution stack (stack[top].local_state), not in state.",
           "limit": 5
         },
         {
           "table": "PGC_WorkflowRunStep",
-          "purpose": "step audit log for the failed run"
+          "purpose": "Step audit trail: which steps ran, in what order, with what status, duration and error. Use it to find WHICH step, never WHAT a step produced.",
+          "caveat": "input_snapshot and output_snapshot are breadcrumbs, not data — { summary } truncated to 200 characters for a top-level step and 100 for an iterator item or gate. Widening the query does not widen the stored value. Re-slicing this column is wasted turns; read PGC_WorkflowRun.state.local_state instead."
+        },
+        {
+          "table": "PGC_SessionEntry",
+          "purpose": "The exact text of every llm_call. role system is the assembled prompt, including every resolved token and injected row; role assistant is the raw response. This is the only place that shows WHAT THE MODEL SAW — the question to ask whenever a model decided something that looks wrong given the data that exists.",
+          "caveat": "A model reasoning correctly over a wrong input looks identical to a model reasoning badly, until the prompt is read. Reach for this before concluding a prompt rule is at fault."
         }
       ],
       "join_paths": {
-        "run_to_session_entries": "getRows PGC_WorkflowRun by id → extract session_id → getRows PGC_SessionEntry WHERE session_id = ?",
+        "run_to_session_entries": "getRows PGC_Session WHERE run_id = <runId> AND session_type = 'llm_call_diagnostic' — one session per llm_call, each carrying step_id and intent_category so the right call is picked without guessing → getRows PGC_SessionEntry WHERE session_id = <id> ORDER BY sequence_number. PGC_WorkflowRun.session_id is NOT the link and is null on workflow runs; the link lives on PGC_Session.run_id.",
         "run_to_steps": "getRows PGC_WorkflowRunStep WHERE run_id = ? ORDER BY id ASC",
         "run_to_workflow": "getRows PGC_Workflow WHERE id = PGC_WorkflowRun.workflow_id",
-        "workflow_stats": "getRows PGC_WorkflowStats — registered view, filter by workflow_id or unfiltered for full report"
+        "workflow_stats": "getRows PGC_WorkflowStats — registered view, filter by workflow_id or unfiltered for full report",
+        "step_output_to_value": "PGC_WorkflowRunStep names the step; PGC_WorkflowRun.state.local_state holds its value. The two are read together — the audit row alone cannot answer what a step produced."
       }
     }
   },
