@@ -80,6 +80,7 @@ const READ_TOOLS = new Set([
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
   'update_data', 'insert_data', 'upsert_data',
+  'manage_workflow_aliases',
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
@@ -1133,6 +1134,37 @@ export function deriveIntentKeywords(intentPhrases = [], intentKeywords = null) 
   return derived.length > 0 ? derived : null;
 }
 
+/**
+ * Apply an add/remove delta to an alias list.
+ *
+ * Case-insensitive throughout: a user who types a phrase differently the second time means
+ * the same phrase. `protect` is never removed — for a workflow that is its own name, the
+ * row buildIntentMapRows seeds and /help falls back to when nothing friendlier exists.
+ * Order is preserved, additions land at the end, and the result carries no duplicates.
+ */
+export function applyAliasDelta(current = [], { add = [], remove = [] } = {}, protect = null) {
+  const clean      = v => (typeof v === 'string' ? v.trim() : '');
+  const key        = v => clean(v).toLowerCase();
+  const removeSet  = new Set((Array.isArray(remove) ? remove : []).map(key).filter(Boolean));
+  const protectKey = key(protect);
+
+  const seen = new Set();
+  const out  = [];
+  const push = (v) => {
+    const t = clean(v);
+    if (!t || seen.has(key(t))) return;
+    seen.add(key(t));
+    out.push(t);
+  };
+
+  for (const v of Array.isArray(current) ? current : []) {
+    if (removeSet.has(key(v)) && key(v) !== protectKey) continue;
+    push(v);
+  }
+  for (const v of Array.isArray(add) ? add : []) push(v);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Validation shared by the register_workflow gate and its write
 //
@@ -1230,7 +1262,9 @@ async function buildGateText(action, params, traceId) {
             : '_No invocation phrases supplied — the workflow will only be reachable by its exact name._',
           effectiveKeywords?.length
             ? `Routing keywords: ${effectiveKeywords.map(k => `\`${k}\``).join(', ')}${intentKeywords?.length ? '' : ' _(derived from the invocation phrases)_'}`
-            : '_No invocation phrases and no intent_keywords — Pass 2 keyword routing will not match this workflow._',
+            : domain
+              ? '_No invocation phrases and no intent_keywords — **registration will be refused**: a domain workflow must declare at least one phrase._'
+              : '_No invocation phrases and no intent_keywords — reachable only by its exact name._',
         ].filter(l => l !== '');
 
         return lines.join('\n');
@@ -1315,6 +1349,120 @@ async function buildGateText(action, params, traceId) {
             lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
         }
         return lines.join('\n');
+      }
+
+      case 'manage_workflow_aliases': {
+        const { workflowName = null, domain = null, add = [], remove = [] } = params;
+        const additions = (Array.isArray(add)    ? add    : []).map(s => String(s).trim()).filter(Boolean);
+        const removals  = (Array.isArray(remove) ? remove : []).map(s => String(s).trim()).filter(Boolean);
+
+        if (!workflowName && !domain) {
+          return { error: 'Name either workflowName or domain. workflowName edits the phrases that start a workflow; domain edits the words that resolve to a domain.' };
+        }
+        if (workflowName && domain) {
+          return { error: 'Name one of workflowName or domain, not both — they are different surfaces.' };
+        }
+        if (additions.length === 0 && removals.length === 0) {
+          return { error: 'Nothing to do — supply add, remove, or both.' };
+        }
+
+        if (domain) {
+          const helpResp = await getRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }], null, 1, null, ['id', 'domain', 'aliases']);
+          const helpRow  = helpResp.rows?.[0];
+          if (!helpRow) return { error: `No PGC_DomainHelp row for domain "${domain}".` };
+
+          // An alias bound to another domain would misroute domain resolution, and the caller
+          // cannot see that from here — it is a row on a table they did not read.
+          const allResp   = await getRows('PGC_DomainHelp', [], null, null, null, ['domain', 'aliases']);
+          const conflicts = [];
+          for (const other of allResp.rows ?? []) {
+            if (other.domain === domain) continue;
+            for (const alias of additions) {
+              if ((other.aliases ?? []).some(a => String(a).toLowerCase() === alias.toLowerCase())) {
+                conflicts.push({ alias, resolves_to: other.domain });
+              }
+            }
+          }
+          if (conflicts.length > 0) {
+            return { error: 'One or more aliases already resolve to a different domain.', conflicts };
+          }
+
+          const before = Array.isArray(helpRow.aliases) ? helpRow.aliases : [];
+          const after  = applyAliasDelta(before, { add: additions, remove: removals }, domain);
+          const resp   = await updateRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }], { aliases: after });
+          if (!resp.success) return { error: `PGC_DomainHelp update failed: ${resp.error}` };
+
+          const lower = list => list.map(v => String(v).toLowerCase());
+          return {
+            success:  true,
+            target:   'domain',
+            domain,
+            aliases:  after,
+            added:    after.filter(a => !lower(before).includes(a.toLowerCase())),
+            removed:  before.filter(b => !lower(after).includes(String(b).toLowerCase())),
+            // aliases is part of this row's embed_source, so SERV recomputes the domain
+            // embedding on the update — the change reaches classify-intent, not just /help.
+            note:     'Domain embedding recomputed from the new alias list.',
+          };
+        }
+
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], null, 1, null, ['id', 'name', 'domain', 'intent_keywords']);
+        const wf     = wfResp.rows?.[0];
+        if (!wf) return { error: `Workflow "${workflowName}" not found.` };
+
+        const imResp = await getRows('PGC_IntentMap', [{ column: 'action_type', op: 'eq', value: 'workflow' }], { column: 'id', direction: 'asc' }, null, null, ['id', 'pattern', 'intent_category', 'workflow_id']);
+        const imRows = imResp.rows ?? [];
+
+        // Pass 1 matches an exact pattern and would take one of them. Resolving the collision
+        // before it is written beats discovering it when the wrong workflow runs.
+        const clashes = [];
+        for (const phrase of additions) {
+          const clash = imRows.find(r => String(r.pattern).toLowerCase() === phrase.toLowerCase() && r.intent_category !== workflowName);
+          if (clash) clashes.push({ phrase, starts: clash.intent_category });
+        }
+        if (clashes.length > 0) {
+          return { error: 'One or more phrases already start a different workflow. Remove it there first, or choose another phrase.', conflicts: clashes };
+        }
+
+        // The workflow's own name is the route of last resort — buildIntentMapRows seeds it
+        // and /help falls back to it. It is never removed.
+        const removable = removals.filter(r => r.toLowerCase() !== String(workflowName).toLowerCase());
+        const refused   = removals.length !== removable.length ? workflowName : null;
+
+        const mine     = imRows.filter(r => r.intent_category === workflowName);
+        const existing = new Set(mine.map(r => String(r.pattern).toLowerCase()));
+        const toInsert = additions.filter(a => !existing.has(a.toLowerCase()));
+        if (toInsert.length > 0) {
+          const resp = await insertRows('PGC_IntentMap', toInsert.map(pattern => ({
+            pattern, intent_category: workflowName, action_type: 'workflow', workflow_id: wf.id, source: 'user',
+          })));
+          if (!resp.success) return { error: `PGC_IntentMap insert failed: ${resp.error}` };
+        }
+
+        let deleted = 0;
+        for (const phrase of removable) {
+          const row = mine.find(r => String(r.pattern).toLowerCase() === phrase.toLowerCase());
+          if (!row) continue;
+          const resp = await deleteRows('PGC_IntentMap', [{ column: 'id', op: 'eq', value: String(row.id) }]);
+          if (resp.success) deleted += 1;
+        }
+
+        // Pass 1 and Pass 2 are two surfaces for one idea — how the user starts this workflow.
+        // A phrase added to the map joins the keyword scan; one removed leaves both.
+        const keywords = applyAliasDelta(wf.intent_keywords, { add: additions, remove: removable });
+        const kwResp   = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: String(wf.id) }], { intent_keywords: keywords });
+        if (!kwResp.success) return { error: `PGC_Workflow intent_keywords update failed: ${kwResp.error}` };
+
+        return {
+          success:         true,
+          target:          'workflow',
+          workflow:        workflowName,
+          workflow_id:     wf.id,
+          phrases_added:   toInsert.length,
+          phrases_removed: deleted,
+          intent_keywords: keywords,
+          ...(refused ? { refused_removal: `"${refused}" is the workflow's own name and stays — it is the route of last resort.` } : {}),
+        };
       }
 
       case 'delete_data': {
@@ -1469,6 +1617,19 @@ async function executeWriteTool(action, params, traceId) {
           return {
             error: `A workflow named "${name}" already exists (id ${existing.rows[0].id}, v${existing.rows[0].version}). ` +
                    'Use propose_workflow_fix to change it, or register under a different name.',
+          };
+        }
+
+        // A domain workflow with no phrase at all is reachable only by its exact name, and
+        // that is not a workflow anybody finds twice. The generic CRUD workflows compete
+        // inside every domain — update_entity claims "update", "edit", "modify", "change" —
+        // so one with no keywords cannot win a scan it is nominally part of. A domain-less
+        // system workflow legitimately has none, which is why this is not a universal rule.
+        if (domain && !effectiveKeywords) {
+          return {
+            error: `A workflow in domain "${domain}" needs at least one invocation phrase. ` +
+                   'Pass intentPhrases — intent_keywords derive from them when omitted. ' +
+                   'Ask the user what they want to type to start it; the phrases are theirs to choose.',
           };
         }
 
