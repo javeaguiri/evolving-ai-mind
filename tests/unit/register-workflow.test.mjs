@@ -153,7 +153,7 @@ describe("register_workflow — intent_keywords derivation", () => {
   });
 });
 
-describe("manage_workflow_aliases — applyAliasDelta", () => {
+describe("manage_routing_aliases — applyAliasDelta", () => {
 
   it("appends additions at the end and drops removals", () => {
     assert.deepEqual(
@@ -180,7 +180,7 @@ describe("manage_workflow_aliases — applyAliasDelta", () => {
   });
 
   it("refuses a phrase already bound to another workflow instead of shadowing it", () => {
-    const block = procSrc.match(/case 'manage_workflow_aliases': \{[\s\S]*?\n      \}/)?.[0] ?? "";
+    const block = procSrc.match(/case 'manage_routing_aliases': \{[\s\S]*?\n      \}/)?.[0] ?? "";
     assert.match(block, /already start a different workflow/);
     assert.match(block, /already resolve to a different domain/);
   });

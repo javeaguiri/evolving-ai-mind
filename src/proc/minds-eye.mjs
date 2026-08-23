@@ -80,7 +80,7 @@ const READ_TOOLS = new Set([
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
   'update_data', 'insert_data', 'upsert_data',
-  'manage_workflow_aliases',
+  'manage_routing_aliases',
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
@@ -1351,7 +1351,7 @@ async function buildGateText(action, params, traceId) {
         return lines.join('\n');
       }
 
-      case 'manage_workflow_aliases': {
+      case 'manage_routing_aliases': {
         const { workflowName = null, domain = null, add = [], remove = [] } = params;
         const additions = (Array.isArray(add)    ? add    : []).map(s => String(s).trim()).filter(Boolean);
         const removals  = (Array.isArray(remove) ? remove : []).map(s => String(s).trim()).filter(Boolean);
