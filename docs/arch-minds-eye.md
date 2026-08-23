@@ -188,7 +188,7 @@ count against `max_actions_per_session`.
 
 | Set | Tools | Gate |
 |---|---|---|
-| Inline write | `update_data`, `insert_data`, `upsert_data` | None — executes immediately |
+| Inline write | `update_data`, `insert_data`, `upsert_data`, `manage_workflow_aliases` | None — executes immediately |
 | Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
@@ -212,6 +212,31 @@ Two boundaries hold it in place:
 
 A failed `PGC_IntentMap` write is reported rather than swallowed: the workflow exists but no
 phrase reaches it, and that is a state the next turn has to know about.
+
+**A domain workflow must declare at least one invocation phrase.** `intent_keywords` is derived
+from `intentPhrases` when the field is omitted, and a `domain`-carrying registration that supplies
+neither is refused. The consequence of allowing it is misrouting rather than silence: the generic
+CRUD workflows are `domain: null`, so they compete inside every domain, and `update_entity` claims
+`update`, `edit`, `modify` and `change`. A workflow with no keywords cannot win a scan it is
+nominally part of. A `domain: null` system workflow legitimately has none — `ping_core` carries
+`[]` — so the rule is a domain-workflow rule, not a universal one.
+
+**`manage_workflow_aliases`** — `{ workflowName? | domain?, add?, remove? }`. Edits the words a
+user types to reach something, after registration. One concept at the tool boundary, two surfaces
+underneath: with `workflowName` it writes `PGC_IntentMap` rows (Pass 1, exact phrase) and keeps
+`PGC_Workflow.intent_keywords` in step (Pass 2, word-boundary scan), applied as a delta so a
+deliberately divergent keyword survives an edit; with `domain` it edits `PGC_DomainHelp.aliases`,
+which is part of that row's `embed_source`, so the domain embedding is recomputed and the change
+reaches `classify-intent` as well as `/help`.
+
+Two refusals hold it in place. **A phrase already bound elsewhere is refused, not shadowed** —
+Pass 1 matches an exact pattern and would otherwise take one of two claimants arbitrarily, which
+is how `modify budget` came to start two different workflows. **A workflow's own name is never
+removed** — `buildIntentMapRows` seeds it and `/help` falls back to it, so it is the route of
+last resort.
+
+It is an inline write rather than a gated one: the change is narrow, reversible by the inverse
+call, and `update_data` already permits far more damage without a gate.
 
 ### 4.3 Out-of-Scope Actions (Novia must never perform)
 
