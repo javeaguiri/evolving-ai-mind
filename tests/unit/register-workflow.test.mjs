@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildIntentMapRows, deriveScope } from '../../src/proc/minds-eye.mjs';
+import { buildIntentMapRows, deriveIntentKeywords, deriveScope } from '../../src/proc/minds-eye.mjs';
 
 const procSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
 
@@ -119,5 +119,36 @@ describe('register_workflow — harness registration', () => {
     const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? '';
     assert.match(block, /already exists/);
     assert.match(block, /propose_workflow_fix/);
+  });
+});
+
+describe("register_workflow — intent_keywords derivation", () => {
+
+  it("derives keywords from the invocation phrases when the field is omitted", () => {
+    assert.deepEqual(
+      deriveIntentKeywords(["log a book", "add reading"], null),
+      ["log a book", "add reading"]
+    );
+  });
+
+  it("keeps supplied keywords — derivation fills a gap, it does not overrule a decision", () => {
+    assert.deepEqual(deriveIntentKeywords(["log a book"], ["reading"]), ["reading"]);
+  });
+
+  it("dedupes case-insensitively and drops blanks", () => {
+    assert.deepEqual(
+      deriveIntentKeywords(["log a book", "Log A Book", "  ", "add reading"], null),
+      ["log a book", "add reading"]
+    );
+  });
+
+  it("returns null when there is nothing to derive from, so the gate can still warn", () => {
+    assert.equal(deriveIntentKeywords([], null), null);
+    assert.equal(deriveIntentKeywords([], []), null);
+  });
+
+  it("the write persists the derived value, not the raw parameter", () => {
+    const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? "";
+    assert.match(block, /intent_keywords: effectiveKeywords/);
   });
 });
