@@ -13,7 +13,8 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks } from '../../src/ui/slackbot/callback.mjs';
+import { oversizedGateMessage, isPermanentRenderFailure, toSlackMrkdwn, dialogToBlocks,
+         buildRevealBlock, makeTableBudget } from '../../src/ui/slackbot/callback.mjs';
 
 // toSlackMrkdwn — the REAL exported function (not a copy). Normalizes standard
 // **bold** / __bold__ to Slack mrkdwn *bold* and GFM ~~strike~~ to ~strike~ for
@@ -249,163 +250,9 @@ function groupBlocksForSlack(blocks, maxBlocksPerGroup) {
   return groups;
 }
 
-// ── Faithful copy of buildRevealBlock from callback.mjs ─────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildRevealBlock
-const REVEAL_SECTION_CHAR_LIMIT = 2800;
-const REVEAL_MAX_CHILD_BLOCKS   = 10;
-const TABLE_MAX_ROWS            = 100;
-const TABLE_MAX_COLUMNS         = 20;
-const TABLE_MAX_CHARS           = 10000;
-
-// ── Faithful copy of buildTableBlock from callback.mjs ──────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildTableBlock
-function buildTableBlock(headerLabels, dataRows) {
-  const cols = headerLabels.slice(0, TABLE_MAX_COLUMNS);
-  const cell = (v, bold) => {
-    const text = String(v ?? '').replace(/\r?\n/g, ' ');
-    return {
-      type:     'rich_text',
-      elements: [{
-        type:     'rich_text_section',
-        elements: [{ type: 'text', text, ...(bold ? { style: { bold: true } } : {}) }],
-      }],
-    };
-  };
-  const cellText = c => c.elements[0].elements[0].text;
-
-  const rows = [cols.map(h => cell(h, true))];
-  let charCount = cols.reduce((sum, h) => sum + String(h ?? '').length, 0);
-  let truncated = 0;
-  for (const rowValues of dataRows) {
-    const rowCells = rowValues.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
-    const rowChars = rowCells.reduce((sum, c) => sum + cellText(c).length, 0);
-    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
-      truncated++;
-      continue;
-    }
-    rows.push(rowCells);
-    charCount += rowChars;
-  }
-
-  return { table: { type: 'table', rows }, truncated };
-}
-
-// ── Faithful copy of buildRevealTable from callback.mjs ─────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:buildRevealTable
-function buildRevealTable(items) {
-  const columns = [];
-  const seen = new Set();
-  for (const item of items) {
-    for (const key of Object.keys(item)) {
-      if (!seen.has(key)) { seen.add(key); columns.push(key); }
-    }
-  }
-  const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
-  const dataRows = items.map(item => columns.map(col => item[col]));
-  return buildTableBlock(headerLabels, dataRows);
-}
-
-// ── Faithful copy of splitMarkdownTableSegments from callback.mjs ───────────
-// Keep in sync with src/ui/slackbot/callback.mjs:splitMarkdownTableSegments
-function splitMarkdownTableSegments(text) {
-  const lines = text.split('\n');
-  const isRow       = l => /^\s*\|.*\|\s*$/.test(l);
-  const isSeparator = l => /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(l);
-  const splitRow    = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
-
-  const segments = [];
-  let textLines = [];
-  const flushText = () => {
-    if (textLines.length) segments.push({ type: 'text', text: textLines.join('\n') });
-    textLines = [];
-  };
-
-  let i = 0;
-  while (i < lines.length) {
-    if (isRow(lines[i]) && isSeparator(lines[i + 1] ?? '')) {
-      flushText();
-      const header = splitRow(lines[i]);
-      i += 2;
-      const rows = [];
-      while (i < lines.length && isRow(lines[i])) {
-        rows.push(splitRow(lines[i]));
-        i++;
-      }
-      segments.push({ type: 'table', header, rows });
-    } else {
-      textLines.push(lines[i]);
-      i++;
-    }
-  }
-  flushText();
-  return segments;
-}
-
-// ── Faithful copy of chunkTextBlocks from callback.mjs ──────────────────────
-// Keep in sync with src/ui/slackbot/callback.mjs:chunkTextBlocks
-function chunkTextBlocks(text) {
-  const lines = text ? text.split('\n') : [];
-  const chunks = [];
-  let chunk = '';
-  for (const line of lines) {
-    const candidate = chunk ? `${chunk}\n${line}` : line;
-    if (candidate.length > REVEAL_SECTION_CHAR_LIMIT && chunk) {
-      chunks.push(chunk);
-      chunk = line;
-    } else {
-      chunk = candidate;
-    }
-  }
-  if (chunk) chunks.push(chunk);
-
-  const truncatedCount = Math.max(0, chunks.length - REVEAL_MAX_CHILD_BLOCKS);
-  const kept = chunks.slice(0, REVEAL_MAX_CHILD_BLOCKS);
-  if (truncatedCount > 0 && kept.length > 0) {
-    kept[kept.length - 1] = `${kept[kept.length - 1]}\n_...and ${truncatedCount} more chunk(s)_`;
-  }
-  return kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } }));
-}
-
-function buildRevealBlock(field) {
-  const isRecordArray = Array.isArray(field.content) && field.content.length > 0
-    && field.content.every(v => v !== null && typeof v === 'object')
-    && !field.content.every(v => v.syntax || v.verb || v.command);
-
-  const childBlocks = [];
-
-  if (isRecordArray) {
-    const { table, truncated } = buildRevealTable(field.content);
-    childBlocks.push(table);
-    if (truncated > 0) {
-      childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
-    }
-  } else if (Array.isArray(field.content)) {
-    const text = field.content.map(item => `• ${(item !== null && typeof item === 'object') ? (item.syntax ?? item.verb ?? item.command) : String(item)}`).join('\n');
-    childBlocks.push(...chunkTextBlocks(text));
-  } else {
-    const segments = splitMarkdownTableSegments(String(field.content ?? ''));
-    for (const seg of segments) {
-      if (seg.type === 'table') {
-        const { table, truncated } = buildTableBlock(seg.header, seg.rows);
-        childBlocks.push(table);
-        if (truncated > 0) {
-          childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
-        }
-      } else if (seg.text.trim()) {
-        childBlocks.push(...chunkTextBlocks(seg.text));
-      }
-    }
-  }
-
-  return {
-    type:               'container',
-    block_id:           `reveal_test-id`,
-    title:              { type: 'plain_text', text: field.button_label ?? 'Details' },
-    is_collapsible:     true,
-    default_collapsed:  true,
-    child_blocks:       childBlocks,
-  };
-}
+// buildRevealBlock, buildRevealTables, splitMarkdownTableSegments and the reveal
+// constants used to be hand-copied here. They are imported from callback.mjs now:
+// the copies drifted, which is the whole failure mode a copy invites.
 
 // ── Faithful copy of escapeCell from callback.mjs ────────────────────────────
 // Keep in sync with src/ui/slackbot/callback.mjs:escapeCell
@@ -513,7 +360,7 @@ function textInputGateBlocks(dialog, workflowRunId, stepKey) {
     : [];
   const revealBlocks = (dialog?.fields ?? [])
     .filter(f => f.type === 'reveal')
-    .map(buildRevealBlock);
+    .map(f => buildRevealBlock(f));
   return [
     ...markdownToBlocks(fallbackText),
     ...revealBlocks,
@@ -1123,14 +970,52 @@ describe('dialogToBlocks — reveal', () => {
     assert.equal(block.child_blocks[0].text.text, '• /m list recipes\n• /m add recipes');
   });
 
-  it('table row count beyond TABLE_MAX_ROWS is truncated with a trailing note', () => {
-    const content = Array.from({ length: 105 }, (_, i) => ({ id: i }));
-    const field = { type: 'reveal', button_label: 'Big', content };
-    const [block] = dialogToBlocks({ fields: [field] }, 1);
-    const table = block.child_blocks[0];
-    assert.equal(table.type, 'table');
-    assert.equal(table.rows.length, 100); // header + 99 data rows
-    assert.equal(block.child_blocks[1].text.text, '_...and 6 more row(s)_');
+  it('a table too long for the container is chunked so every row is reachable', () => {
+    // A table inside a reveal shows 8 rows and clips the rest with no vertical scroll
+    // (run 779: 35 receipt items, 7 visible under the header). Chunking is what makes
+    // rows 9+ reachable at all, so no chunk may exceed the clip.
+    const content = Array.from({ length: 35 }, (_, i) => ({ id: i, name: `item ${i}` }));
+    const [block] = dialogToBlocks({ fields: [{ type: 'reveal', button_label: 'Items', content }] }, 1);
+    const tables  = block.child_blocks.filter(b => b.type === 'table');
+
+    assert.ok(tables.length > 1, 'must be chunked, not one tall table');
+    assert.ok(tables.every(t => t.rows.length <= 8), 'no chunk may exceed the visible-row clip');
+
+    const isHeader = t => t.rows[0][0].elements[0].elements[0].style?.bold === true;
+    assert.ok(isHeader(tables[0]), 'the first chunk carries the header');
+    assert.ok(tables.slice(1).every(t => !isHeader(t)), 'continuation chunks spend the row on data');
+
+    const rendered = tables.reduce((n, t) => n + t.rows.length - (isHeader(t) ? 1 : 0), 0);
+    assert.equal(rendered, 35, 'every row is rendered somewhere');
+  });
+
+  it('a table that fits stays one block', () => {
+    const content = Array.from({ length: 3 }, (_, i) => ({ id: i }));
+    const [block] = dialogToBlocks({ fields: [{ type: 'reveal', button_label: 'Few', content }] }, 1);
+    assert.equal(block.child_blocks.length, 1);
+    assert.equal(block.child_blocks[0].rows.length, 4); // header + 3
+  });
+
+  it('never exceeds the container child-block ceiling, and says what it dropped', () => {
+    const content = Array.from({ length: 400 }, (_, i) => ({ id: i }));
+    const [block] = dialogToBlocks({ fields: [{ type: 'reveal', button_label: 'Huge', content }] }, 1);
+    assert.ok(block.child_blocks.length <= 10, 'Slack rejects a container past 10 child blocks');
+    assert.ok(block.child_blocks.every(b => b.type !== 'table' || b.rows.length <= 8));
+    assert.match(block.child_blocks.at(-1).text.text, /more row\(s\)/);
+  });
+
+  it('shares one character budget across every reveal in a message', () => {
+    // Slack's 10,000-character table limit is aggregate across the whole message,
+    // not per table — a gate can carry several reveals (process_receipt step 11 posts three).
+    const wide   = Array.from({ length: 60 }, (_, i) => ({ id: i, blurb: 'x'.repeat(120) }));
+    const budget = makeTableBudget();
+    const before = budget.remaining;
+    buildRevealBlock({ type: 'reveal', button_label: 'One', content: wide }, budget);
+    const afterFirst = budget.remaining;
+    assert.ok(afterFirst < before, 'the first reveal spends from the budget');
+    buildRevealBlock({ type: 'reveal', button_label: 'Two', content: wide }, budget);
+    assert.ok(budget.remaining < afterFirst, 'the second spends from what the first left');
+    assert.ok(budget.remaining >= 0, 'and never goes negative');
   });
 
   it('plain string content renders directly as the container section text', () => {
