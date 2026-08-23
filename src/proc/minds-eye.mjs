@@ -2136,13 +2136,42 @@ async function executeReadTool(action, params, traceId) {
           5,
           { column: 'embedding', queryText: query, threshold: 0.4 }
         );
+        const rows = resp.rows ?? [];
+
+        // What a domain can do is read from PGC_Workflow, never cached in
+        // PGC_DomainHelp.commands — the same rule /help follows. Without this the tool
+        // that resolves which domain a request is about cannot see any workflow
+        // registered after the domain was created, including the ones this tool's own
+        // caller built.
+        const domains  = rows.map(r => r.domain).filter(Boolean);
+        const wfResp   = domains.length > 0
+          ? await getRows(
+              'PGC_Workflow',
+              [{ column: 'domain', op: 'in', value: domains }],
+              { column: 'id', direction: 'asc' },
+              null,
+              null,
+              ['id', 'name', 'domain', 'description', 'intent_keywords']
+            )
+          : { rows: [] };
+        const byDomain = {};
+        for (const wf of wfResp.rows ?? []) {
+          (byDomain[wf.domain] = byDomain[wf.domain] ?? []).push({
+            id:              wf.id,
+            name:            wf.name,
+            description:     wf.description,
+            intent_keywords: wf.intent_keywords,
+          });
+        }
+
         return {
           count: resp.count,
-          results: (resp.rows ?? []).map(r => ({
+          results: rows.map(r => ({
             domain:      r.domain,
             description: r.description,
             aliases:     r.aliases,
             commands:    r.commands,
+            workflows:   byDomain[r.domain] ?? [],
             similarity:  r.similarity,
           })),
         };

@@ -1355,7 +1355,7 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 3,
+    "version": 4,
     "content": {
       "tools": [
         {
@@ -1505,7 +1505,7 @@
         },
         {
           "name": "search_domain_help",
-          "description": "Semantic search over PGC_DomainHelp to resolve which domain a request is about. Start here when the domain is not already known.",
+          "description": "Semantic search over PGC_DomainHelp to resolve which domain a request is about. Start here when the domain is not already known. Each result carries the domain's live PGC_Workflow rows as `workflows`; read those for what the domain can actually do. `commands` is the generic CRUD surface written when the domain was created and does not list workflows registered since.",
           "parameters": {
             "type": "object",
             "properties": {
