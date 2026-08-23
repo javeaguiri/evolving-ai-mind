@@ -188,7 +188,7 @@ count against `max_actions_per_session`.
 
 | Set | Tools | Gate |
 |---|---|---|
-| Inline write | `update_data`, `insert_data`, `upsert_data`, `manage_workflow_aliases` | None — executes immediately |
+| Inline write | `update_data`, `insert_data`, `upsert_data`, `manage_routing_aliases` | None — executes immediately |
 | Gated write | `register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `delete_data`, `drop_table`, `create_view`, `drop_view` | HUMAN_GATE before execution |
 | Trigger | `run_workflow` | Dispatches a registered workflow to the step-executor engine |
 | Housekeeping | `write_memory` | None — silent episodic write |
@@ -221,7 +221,7 @@ CRUD workflows are `domain: null`, so they compete inside every domain, and `upd
 nominally part of. A `domain: null` system workflow legitimately has none — `ping_core` carries
 `[]` — so the rule is a domain-workflow rule, not a universal one.
 
-**`manage_workflow_aliases`** — `{ workflowName? | domain?, add?, remove? }`. Edits the words a
+**`manage_routing_aliases`** — `{ workflowName? | domain?, add?, remove? }`. Edits the words a
 user types to reach something, after registration. One concept at the tool boundary, two surfaces
 underneath: with `workflowName` it writes `PGC_IntentMap` rows (Pass 1, exact phrase) and keeps
 `PGC_Workflow.intent_keywords` in step (Pass 2, word-boundary scan), applied as a delta so a

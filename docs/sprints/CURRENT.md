@@ -228,7 +228,7 @@ Track A's read-time design turned out to have a second half nobody had named: if
 invocation phrases live, then **the phrases themselves are a user-facing surface**, and there was
 no way for the user to set one. Three changes, deployed together.
 
-**`manage_workflow_aliases`** — a new inline-write Novia tool. One concept at the boundary, two
+**`manage_routing_aliases`** — a new inline-write Novia tool. One concept at the boundary, two
 surfaces underneath: `workflowName` writes `PGC_IntentMap` rows (Pass 1) and keeps
 `intent_keywords` in step (Pass 2), as a delta so a divergent keyword survives an edit; `domain`
 edits `PGC_DomainHelp.aliases`, which is in that row's `embed_source`, so the domain embedding is
