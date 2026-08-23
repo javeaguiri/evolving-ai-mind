@@ -215,3 +215,9 @@ against live rows renders correctly for all four domains; the Slack run is the e
 and `/chat` (removal undecided), and omits `/minds-eye` and `/replay`. Deleting `create_workflow`
 and its related code is now a backlog item; whether the panel is corrected now or with that
 deletion is undecided.
+
+**Live confirmation, 2026-08-23:** the user ran `/help` → `flashcards` and sees `échame tarjetas`
+listed under `flashcard_quiz_session`. The alias was added to `intent_keywords` *after* the workflow
+was registered and no help entry was written for it — which is the read-time design doing the thing
+a stored caption cannot. **AC1 remains open** until `inventory` and `budgets_expenses` are checked
+too; its threshold names all three domains.
