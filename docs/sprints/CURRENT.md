@@ -250,3 +250,77 @@ to resolve a domain can finally see the workflows she built. `docs/workflow-sche
 `serv_query`'s `columns`, missing since Sprint 10 — the validator was flagging a valid step.
 
 Deployed: `sam deploy` + `upsert-system-context` (3 rows). 997 → **1012** unit tests.
+
+### Session 4 — 2026-08-23 — D1 fixed; run 787 diagnosed; Novia measured against the same question
+
+**Track D / AC4 — the reveal clip.** A `table` inside a reveal container is clipped at **8 rows**
+with no vertical scroll, and Slack renders the first row of every table block as a header whatever
+the cells declare. Both were measured, not published: the 8 came from run 779, and the probe that
+settled it was a chunk built with 10 rows that still showed 8. `buildRevealTables()` now chunks a
+long table into blocks of 8, each repeating the real header — run 779's 35 items render as five
+blocks, all rows reachable. Two latent defects went with it, both able to fail a whole gate message
+and leave a run suspended at a gate nobody saw: the 10,000-character table limit is per **message**,
+not per table, and the container's 10-child-block ceiling was enforced on the prose path only. The
+hand-copied duplicates of these functions in `callback.test.mjs` were deleted and the real ones
+imported. **The two limits compound to roughly 70 rows per reveal** — backlog, not work; nothing
+observed comes close. A Slack bug report on both behaviours was filed by the user.
+
+**Run 787 — the reprocessed receipt, and the strongest AC9 evidence so far.** Same receipt as run
+779, date changed. **33 of 35 auto-matched, against 779's 2.** The alias machine works.
+
+Two items did not, and they are different stories:
+
+- `PALOMITAS SAL PACK 3` — run 779 **auto-matched** it and wrote no alias. Step 12's
+  `new_aliases_resolved` maps `plan.llm_resolved` only, so `auto_matched` items never persist their
+  raw receipt string. **The learning loop only learns from the slow paths.**
+- `BARRA DE PAN` — alias 44 existed from run 779 and a direct probe returns it at **similarity
+  1.0**, but the row that reached the model carried **0.428**. That number belongs to
+  `PAN M. 100%INT FAM`, three items earlier: step 8d's `if (!seen[row.id])` keeps the first-seen
+  copy and discarded the 1.0 from the item's own query. The model declined correctly on corrupted
+  input. **Similarity is a per-query score and the flatten destroys the query it belongs to** —
+  step 8b has the identical flaw. Result: inventory 69 *Bread Loaf* duplicates 39 *Baguette*, and
+  alias 86 now points at the duplicate, so it is self-reinforcing.
+
+**The same question was put to Novia, twice, and the index change is the only variable.**
+
+| | Session 1172 (before) | Session 1173 (after) |
+|---|---|---|
+| Tool calls | 69 | **31** |
+| Elapsed | 254.9s, killed by wall clock | 209.0s, finished |
+| Answer | none | complete |
+
+1172 spent ~45 calls re-slicing `PGC_WorkflowRunStep.output_snapshot->>'summary'` — a 200-character
+breadcrumb (100 for an iterator item), so widening the query never widened the value. The context
+index named that table as a correction-task source and said nothing about the truncation, and its
+documented join to `PGC_SessionEntry` was **wrong**: it said to read `PGC_WorkflowRun.session_id`,
+which is null on workflow runs. The link is `PGC_Session.run_id`. Fixed as an **Instruction** change
+(`minds_eye_context_index` v2): each source now states what it holds, what it cannot answer, and why
+`PGC_SessionEntry` is where a model's actual input lives.
+
+1173 pivoted to `state->'local_state'` at turn 12 and **found the 0.43** — the contradiction that is
+the whole diagnosis, and which 1172 never saw. She then attributed it to a stale
+`alias_name_embedding` rather than to the dedupe, having already checked twice that the embedding
+exists; one `vectorSearch` probe would have falsified it. Her diagnosis moved from **wrong layer**
+(1172: "an LLM reasoning failure") to **right layer, wrong component**. She found the step 12
+alias-write gap independently and correctly — better than this session managed unaided.
+
+**Two things in her answer not to trust.** She cites a *"0.82 auto threshold"* that exists nowhere
+in workflow 358 or the `match_inventory_items` prompt. And she claims extending the alias write to
+`auto_matched` "closes both issues" — it closes PALOMITAS only; `BARRA DE PAN` already had its
+alias, and the 8b/8d dedupe is untouched by it.
+
+**User's decision: go with Novia's fix and retest later.** The dedupe defect stays open.
+
+### Open for next session
+
+1. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
+2. **AC4** — verify the chunked reveal live on the next receipt.
+3. **The 8b/8d dedupe defect is unaddressed** by the fix being applied. It will keep mis-scoring any
+   candidate returned for more than one item. Fix via `propose_workflow_fix`; the shape argued for
+   here is keeping the per-item association rather than deduping by best score, so a similarity is
+   always attached to the query that earned it.
+4. **Data cleanup** — inventory 69 duplicates 39; alias 86 points at the duplicate. Track B material.
+5. Novia's two memories from session 1173 were left in place (1172's were deleted before the re-run).
+6. Still open from earlier today: the system panel in `/help` (names `/create-workflow` and `/chat`,
+   omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for phrases
+   the SOP now says to ask the user for.
