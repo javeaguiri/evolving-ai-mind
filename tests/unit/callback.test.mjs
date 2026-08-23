@@ -979,13 +979,19 @@ describe('dialogToBlocks — reveal', () => {
     const tables  = block.child_blocks.filter(b => b.type === 'table');
 
     assert.ok(tables.length > 1, 'must be chunked, not one tall table');
-    assert.ok(tables.every(t => t.rows.length <= 8), 'no chunk may exceed the visible-row clip');
 
+    // Slack renders the first row of every table block as a header whatever the cells declare,
+    // so a chunk that opened on data would show a data row as a column heading. Every chunk
+    // carries the real header instead. Asserted as a property rather than a row count: the
+    // chunk size is still being probed against the container's clip.
     const isHeader = t => t.rows[0][0].elements[0].elements[0].style?.bold === true;
-    assert.ok(isHeader(tables[0]), 'the first chunk carries the header');
-    assert.ok(tables.slice(1).every(t => !isHeader(t)), 'continuation chunks spend the row on data');
+    assert.ok(tables.every(isHeader), 'every chunk repeats the real header');
 
-    const rendered = tables.reduce((n, t) => n + t.rows.length - (isHeader(t) ? 1 : 0), 0);
+    const sizes = tables.map(t => t.rows.length);
+    assert.ok(sizes.slice(0, -1).every(n => n === sizes[0]), 'full chunks are uniform');
+    assert.ok(sizes.at(-1) <= sizes[0], 'the last chunk is the remainder');
+
+    const rendered = tables.reduce((n, t) => n + t.rows.length - 1, 0);
     assert.equal(rendered, 35, 'every row is rendered somewhere');
   });
 
@@ -993,14 +999,16 @@ describe('dialogToBlocks — reveal', () => {
     const content = Array.from({ length: 3 }, (_, i) => ({ id: i }));
     const [block] = dialogToBlocks({ fields: [{ type: 'reveal', button_label: 'Few', content }] }, 1);
     assert.equal(block.child_blocks.length, 1);
-    assert.equal(block.child_blocks[0].rows.length, 4); // header + 3
+    assert.equal(block.child_blocks[0].rows.length, 4); // header + 3, one chunk
   });
 
   it('never exceeds the container child-block ceiling, and says what it dropped', () => {
     const content = Array.from({ length: 400 }, (_, i) => ({ id: i }));
     const [block] = dialogToBlocks({ fields: [{ type: 'reveal', button_label: 'Huge', content }] }, 1);
     assert.ok(block.child_blocks.length <= 10, 'Slack rejects a container past 10 child blocks');
-    assert.ok(block.child_blocks.every(b => b.type !== 'table' || b.rows.length <= 8));
+    const tables = block.child_blocks.filter(b => b.type === 'table');
+    assert.ok(tables.every(t => t.rows[0][0].elements[0].elements[0].style?.bold === true),
+      'even under truncation every chunk keeps its header');
     assert.match(block.child_blocks.at(-1).text.text, /more row\(s\)/);
   });
 

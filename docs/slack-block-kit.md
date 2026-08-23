@@ -1091,19 +1091,23 @@ than resetting it per table. Columns beyond 20 are silently dropped; rows beyond
 character or child-block ceiling truncate with a trailing `_...and N more row(s)_` `section`.
 
 **Vertical clipping inside a container — measured, not documented.** A `table` inside a reveal
-renders **8 rows** and clips the rest, with no vertical scroll: rows past the eighth cannot be
-reached at all. Observed on run 779 (35 receipt items, 7 visible beneath the header). Slack
-documents no height, scroll, or overflow behaviour for either the `table` or the `container`
-block, so this is an observation about the client, not a published limit — treat it as liable to
-change and re-verify if reveal rendering ever looks wrong again.
+clips: rows past a certain point cannot be reached at all, because the container has no vertical
+scroll. Run 779 (35 receipt items) rendered **8 rows** — a header plus 7 — and hid the other 28.
+Slack documents no height, scroll, or overflow behaviour for either the `table` or the
+`container` block, so this is an observation about one render, not a published limit. **Whether
+the clip is a fixed 8 or varies with what follows the block is not yet established**;
+`TABLE_ROWS_PER_CHUNK` is currently set to 10, deliberately above the observation, so the next
+receipt settles it: 8 visible out of 10 means the clip is fixed, 10 visible means it is not.
+
+**Slack renders the first row of every `table` block as a header** — bold, whatever the cells
+themselves declare. This is not configurable and is not in the reference. It is the reason every
+chunk repeats the real header rather than spending the row on data: a continuation chunk that
+opened on data would show a data row styled as a column heading.
 
 `buildRevealTables()` chunks one logical table into as many `table` blocks as it takes for every
-row to be reachable: at most 8 rows per block, the header carried by the first chunk only (a
-repeated header would cost one data row per chunk, and the chunks render adjacently inside one
-panel). A `table` block ascribes no meaning to its first row — a header reads as one because its
-cells are bold — so a continuation chunk carrying only data is valid. Chunking is bounded by the
-container's 10-child-block ceiling, so it does not rescue an arbitrarily long table; past that,
-the remainder is reported rather than silently dropped.
+row to be reachable, each carrying the header. Chunking is bounded by the container's
+10-child-block ceiling, so it does not rescue an arbitrarily long table; past that the remainder
+is reported rather than silently dropped.
 
 #### Example — reveal panel rendered as a table (evolving-mind-ai usage)
 

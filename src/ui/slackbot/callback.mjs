@@ -844,11 +844,16 @@ const TABLE_MAX_COLUMNS         = 20;    // Slack `table` block hard limit
 // table cells for a single message cannot exceed 10,000 characters". A gate carrying three
 // reveals shares one budget between them, so it is threaded rather than reset per table.
 const TABLE_MAX_CHARS           = 10000;
-// A `table` inside a reveal container renders this many rows and clips the rest — there is no
-// vertical scroll, so row 9 onward cannot be reached at all. Measured on run 779 (35 receipt
-// items, 7 shown beneath the header); Slack documents no height or scroll behaviour for either
-// the `table` or the `container` block, so this is an observation, not a published limit.
-const TABLE_VISIBLE_ROWS        = 8;
+// Rows per `table` block inside a reveal, header included.
+//
+// Run 779 rendered 8 rows and clipped the rest with no vertical scroll — row 9 onward could not
+// be reached at all. Slack documents no height, scroll, or overflow behaviour for either the
+// `table` or the `container` block, so 8 is an observation about one render, not a published
+// limit, and it is not yet known whether the clip is fixed or varies with what follows it.
+// This is deliberately set ABOVE that observation: if a chunk of 10 shows only 8, the clip is
+// fixed and this drops to 8; if all 10 show, the clip is dynamic and there is more room than
+// one render suggested.
+const TABLE_ROWS_PER_CHUNK      = 10;
 
 // buildRevealTables — native Slack `table` blocks (rows of { type: 'rich_text' }
 // cells, not markdown syntax) shared by buildRevealTable (array-of-records
@@ -894,23 +899,26 @@ function buildRevealTables(headerLabels, dataRows, budget, blockAllowance) {
   const cellText = c => c.elements[0].elements[0].text;
   const rowChars = cells => cells.reduce((sum, c) => sum + cellText(c).length, 0);
 
+  // Slack renders the first row of every `table` block as a header — bold, whatever the cells
+  // themselves declare. A continuation chunk that opened on data would present a data row as a
+  // column heading, which reads as a mistake. So every chunk repeats the real header: it costs
+  // one row of the chunk, and it is the only arrangement in which the bold row is telling the
+  // truth.
   const headerCells = cols.map(h => cell(h, true));
   const headerChars = rowChars(headerCells);
-  if (budget.remaining < headerChars || blockAllowance < 1) {
-    return { blocks: [], truncated: dataRows.length };
-  }
-  budget.remaining -= headerChars;
+
+  // Slack's documented row cap is per block; the container clips well before it, so the
+  // effective limit is the smaller of the two.
+  const rowsPerChunk = Math.min(TABLE_ROWS_PER_CHUNK, TABLE_MAX_ROWS);
 
   const blocks    = [];
-  let   current   = [headerCells];
-  let   capacity  = TABLE_VISIBLE_ROWS;       // chunk one spends one of these on the header
-  let   totalRows = 1;
+  let   current   = null;
   let   truncated = 0;
 
   const flush = () => {
-    if (current.length > 0) blocks.push({ type: 'table', rows: current });
-    current  = [];
-    capacity = TABLE_VISIBLE_ROWS;            // continuation chunks carry no header
+    // A chunk holding nothing but its header is not worth a block.
+    if (current && current.length > 1) blocks.push({ type: 'table', rows: current });
+    current = null;
   };
 
   for (const values of dataRows) {
@@ -919,15 +927,21 @@ function buildRevealTables(headerLabels, dataRows, budget, blockAllowance) {
     const cells = values.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
     const chars = rowChars(cells);
 
-    if (current.length >= capacity) {
-      if (blocks.length + 1 >= blockAllowance) { truncated++; continue; }
+    if (current === null || current.length >= rowsPerChunk) {
       flush();
+      // Opening a chunk costs a header row against both budgets, so both are checked here
+      // rather than after the row has already been committed to.
+      if (blocks.length >= blockAllowance || budget.remaining < headerChars + chars) {
+        truncated++;
+        continue;
+      }
+      current = [headerCells];
+      budget.remaining -= headerChars;
     }
-    if (totalRows >= TABLE_MAX_ROWS || budget.remaining < chars) { truncated++; continue; }
 
+    if (budget.remaining < chars) { truncated++; continue; }
     current.push(cells);
     budget.remaining -= chars;
-    totalRows++;
   }
   flush();
 
