@@ -189,3 +189,29 @@ Sprint 11's items came from the user's own use of the system, in this order: `/h
 correction workflow, further administrative workflows to be identified, and a retest of
 `edit_budget`. Two dialog defects were reported alongside them: vertical scrolling in a reveal
 window, and the absence of any route to recategorise or aggregate an inventory category.
+
+### Session 2 — 2026-08-23 — Track A implemented; awaiting live verification
+
+`/help` now reads live workflows rather than a stored snapshot. The design question the track
+opened with — write-time maintenance vs read-time derivation — was settled on **read-time**, on
+the grounds that a bilingual or personalised invocation phrase added *after* registration is
+exactly what a stored caption cannot learn. `PGC_IntentMap` is read live for that reason.
+
+**The mechanism behind the under-report, found in this session:** `register_workflow` writes
+`PGC_Workflow` and `PGC_IntentMap` and never `PGC_DomainHelp`, while `delete-workflow.mjs` step 7
+still prunes `PGC_DomainHelp.commands` by a `workflow_id` tag only `create_workflow` step 36c ever
+wrote. The system deletes from a list nothing populates. `PGC_DomainHelp.commands` also reaches
+Novia — `search_domain_help` returns it verbatim — so the stale array misled its own author.
+
+Shipped: `help` v9 → v10 (seed + upsert). `_embed_test` deleted from `PGC_DomainHelp`.
+`docs/workflow-schema.json` gained serv_query's `columns`, missing since Sprint 10.
+`échame tarjetas` added to workflow 341's `intent_keywords` as the live alias test.
+1000/1000 unit tests pass.
+
+**AC1 is not yet met** — the threshold is binary and verified live on three domains. Dry run
+against live rows renders correctly for all four domains; the Slack run is the evidence.
+
+**Still open on this track:** the system panel. It hardcodes `/create-workflow` (retired Sprint 10)
+and `/chat` (removal undecided), and omits `/minds-eye` and `/replay`. Deleting `create_workflow`
+and its related code is now a backlog item; whether the panel is corrected now or with that
+deletion is undecided.
