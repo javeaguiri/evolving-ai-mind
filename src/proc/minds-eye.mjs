@@ -1102,6 +1102,37 @@ export function buildIntentMapRows(name, intentPhrases = [], workflowId = null) 
   }));
 }
 
+/**
+ * Fill in intent_keywords from the invocation phrases when the caller omitted them.
+ *
+ * Pass 1 matches an exact PGC_IntentMap pattern; Pass 2 scans intent_keywords for a
+ * word-boundary hit anywhere in the input. A workflow registered with no keywords cannot
+ * win a scan it is nominally part of — matchWorkflowByKeywords builds its candidate set
+ * as `r.domain === domain || r.domain === null`, so the generic CRUD workflows compete
+ * inside every domain, and update_entity claims "update", "edit", "modify", "change".
+ * Any phrasing Pass 1 does not cover exactly then lands on the generic row editor rather
+ * than the purpose-built workflow. Workflow 357 is the specimen.
+ *
+ * The phrases are already in the same call and a phrase reads as a keyword unchanged, so
+ * an omitted field is derived rather than left null. Supplied keywords always win: this
+ * fills a gap, it does not overrule a decision.
+ */
+export function deriveIntentKeywords(intentPhrases = [], intentKeywords = null) {
+  if (Array.isArray(intentKeywords) && intentKeywords.length > 0) return intentKeywords;
+
+  const seen    = new Set();
+  const derived = [];
+  for (const raw of Array.isArray(intentPhrases) ? intentPhrases : []) {
+    if (typeof raw !== 'string') continue;
+    const phrase = raw.trim();
+    const key    = phrase.toLowerCase();
+    if (!phrase || seen.has(key)) continue;
+    seen.add(key);
+    derived.push(phrase);
+  }
+  return derived.length > 0 ? derived : null;
+}
+
 // ---------------------------------------------------------------------------
 // Validation shared by the register_workflow gate and its write
 //
@@ -1177,6 +1208,7 @@ async function buildGateText(action, params, traceId) {
 
       case 'register_workflow': {
         const { name, domain = null, description = '', steps = [], intentPhrases = [], intentKeywords = null } = params;
+        const effectiveKeywords = deriveIntentKeywords(intentPhrases, intentKeywords);
 
         // The gate is where a human decides whether this workflow should exist. What
         // makes that decision possible is not the step JSON — it is whether the array
@@ -1196,9 +1228,9 @@ async function buildGateText(action, params, traceId) {
           intentPhrases.length
             ? `Invoked by: ${intentPhrases.map(p => `\`${p}\``).join(', ')}`
             : '_No invocation phrases supplied — the workflow will only be reachable by its exact name._',
-          intentKeywords?.length
-            ? `Routing keywords: ${intentKeywords.map(k => `\`${k}\``).join(', ')}`
-            : '_No intent_keywords — Pass 2 keyword routing will not match this workflow._',
+          effectiveKeywords?.length
+            ? `Routing keywords: ${effectiveKeywords.map(k => `\`${k}\``).join(', ')}${intentKeywords?.length ? '' : ' _(derived from the invocation phrases)_'}`
+            : '_No invocation phrases and no intent_keywords — Pass 2 keyword routing will not match this workflow._',
         ].filter(l => l !== '');
 
         return lines.join('\n');
@@ -1424,6 +1456,7 @@ async function executeWriteTool(action, params, traceId) {
 
       case 'register_workflow': {
         const { name, domain = null, description = '', steps, intentPhrases = [], intentKeywords = null } = params;
+        const effectiveKeywords = deriveIntentKeywords(intentPhrases, intentKeywords);
         if (!name || !Array.isArray(steps) || steps.length === 0) {
           return { error: 'name and a non-empty steps array are required' };
         }
@@ -1459,7 +1492,7 @@ async function executeWriteTool(action, params, traceId) {
           steps,
           version: 1,
           state_strategy: 'sequential_with_confirmation',
-          intent_keywords: intentKeywords,
+          intent_keywords: effectiveKeywords,
         });
         if (!wfResp.success) return { error: `PGC_Workflow insert failed: ${wfResp.error}` };
 
@@ -1475,6 +1508,7 @@ async function executeWriteTool(action, params, traceId) {
           domain,
           version:            1,
           step_count:         steps.length,
+          intent_keywords:    effectiveKeywords,
           intent_rows_written: imResp.success ? intentRows.length : 0,
           // A failed intent map write leaves a registered workflow that routing cannot
           // reach by phrase. Reported rather than swallowed, so the next turn can fix it.
