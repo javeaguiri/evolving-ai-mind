@@ -1001,7 +1001,9 @@ blocks, so reveal content finally supports real markdown formatting.
 | `block_id` | string | No | Auto-generated if omitted |
 | `subtitle` | text object (`plain_text` or `mrkdwn`) | No | Max 150 characters |
 | `icon` | image element | No | Max 3000 characters |
-| `width` | `"narrow"` \| `"standard"` \| `"wide"` | No | Default `"standard"` |
+| `width` | `"narrow"` \| `"standard"` \| `"wide"` \| `"full"` | No | Default `"standard"` |
+| `rich_text_title` | rich text object | One of `title`/`rich_text_title` | Takes precedence when both are given |
+| `has_header_divider` | boolean | No | Default `false`; non-collapsible containers only |
 | `is_collapsible` | boolean | No | Default `false` |
 | `default_collapsed` | boolean | No | Only takes effect when `is_collapsible: true` |
 
@@ -1033,8 +1035,9 @@ array of strings, or an array of objects uniformly shaped with `syntax`/`verb`/`
 `• ` bullet per line in a single `mrkdwn` string, chunked into additional `section` blocks past
 ~2800 characters (Slack's per-`section` text limit is 3000), capped at the 10-`child_blocks`
 ceiling, with any remainder summarized as `_...and N more chunk(s)_` on the last kept block; an
-array of plain record objects (any other shape) → a native `table` block instead — see `table`
-below, since neither `mrkdwn` nor `container.child_blocks` can render markdown table syntax.
+array of plain record objects (any other shape) → one or more native `table` blocks instead — see
+`table` below, since neither `mrkdwn` nor `container.child_blocks` can render markdown table
+syntax, and a table taller than the container's visible-row clip is chunked across several blocks.
 
 **Not yet independently live-verified in evolving-mind-ai** — implemented from the official
 reference; same "verify live before fully trusting" caveat this doc applies to `carousel`.
@@ -1080,10 +1083,27 @@ rich-text formatting — bold, emoji, mentions, links). **`raw_text` cells do no
 `buildRevealTable()` uses `rich_text` cells (one `rich_text_section` wrapping one `text` element),
 with `style: { bold: true }` on header-row cells.
 
-**Limits:** 100 rows, 20 columns, and an aggregate **10,000 characters** across all cell text in
-one table. `buildRevealTable()` enforces the row and character limits (whichever is hit first),
-truncating with a trailing `_...and N more row(s)_` `section` block; columns beyond 20 are
-silently dropped.
+**Limits:** 100 rows, 20 columns, and an aggregate **10,000 characters** across all cell text —
+per **message**, not per table: *"the aggregate character count across all table cells for a single
+message cannot exceed 10,000 characters"*. A gate carrying several reveals shares one budget, so
+`buildRevealBlock()` threads a budget object created once per message (`makeTableBudget()`) rather
+than resetting it per table. Columns beyond 20 are silently dropped; rows beyond the row,
+character or child-block ceiling truncate with a trailing `_...and N more row(s)_` `section`.
+
+**Vertical clipping inside a container — measured, not documented.** A `table` inside a reveal
+renders **8 rows** and clips the rest, with no vertical scroll: rows past the eighth cannot be
+reached at all. Observed on run 779 (35 receipt items, 7 visible beneath the header). Slack
+documents no height, scroll, or overflow behaviour for either the `table` or the `container`
+block, so this is an observation about the client, not a published limit — treat it as liable to
+change and re-verify if reveal rendering ever looks wrong again.
+
+`buildRevealTables()` chunks one logical table into as many `table` blocks as it takes for every
+row to be reachable: at most 8 rows per block, the header carried by the first chunk only (a
+repeated header would cost one data row per chunk, and the chunks render adjacently inside one
+panel). A `table` block ascribes no meaning to its first row — a header reads as one because its
+cells are bold — so a continuation chunk carrying only data is valid. Chunking is bounded by the
+container's 10-child-block ceiling, so it does not rescue an arbitrarily long table; past that,
+the remainder is reported rather than silently dropped.
 
 #### Example — reveal panel rendered as a table (evolving-mind-ai usage)
 

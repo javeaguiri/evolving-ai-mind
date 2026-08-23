@@ -424,7 +424,10 @@ async function postHumanNotification(message) {
   // Build content blocks without suffix so chunking can manage them independently.
   // reveals (optional, notify steps only — Sprint 7 Track D2) render the same
   // way human_gate's reveal/reveals fields do, via the shared buildRevealBlock.
-  const revealBlocks = Array.isArray(reveals) ? reveals.map(buildRevealBlock) : [];
+  // One budget for the whole message: Slack's 10,000-character table limit is aggregate
+  // across every table in it, not per table.
+  const tableBudget  = makeTableBudget();
+  const revealBlocks = Array.isArray(reveals) ? reveals.map(r => buildRevealBlock(r, tableBudget)) : [];
   const contentBlocks = [
     ...(format === 'markdown' ? markdownToBlocks(text) : textToBlocks(text)),
     ...revealBlocks,
@@ -663,9 +666,10 @@ async function postHumanGate(message) {
         ];
     // reveal fields (e.g. per-table column reference) — text_input builds its own
     // blocks independently of dialogToBlocks, so they must be rendered here too.
+    const tableBudget  = makeTableBudget();
     const revealBlocks = (dialog?.fields ?? [])
       .filter(f => f.type === 'reveal')
-      .map(buildRevealBlock);
+      .map(f => buildRevealBlock(f, tableBudget));
     const blocks = [
       ...markdownToBlocks(fallbackText),
       ...revealBlocks,
@@ -836,9 +840,17 @@ const REVEAL_SECTION_CHAR_LIMIT = 2800;
 const REVEAL_MAX_CHILD_BLOCKS   = 10;
 const TABLE_MAX_ROWS            = 100;   // Slack `table` block hard limit, including the header row
 const TABLE_MAX_COLUMNS         = 20;    // Slack `table` block hard limit
-const TABLE_MAX_CHARS           = 10000; // Slack `table` block hard limit — aggregate cell text
+// Slack's wording is per MESSAGE, not per table: "the aggregate character count across all
+// table cells for a single message cannot exceed 10,000 characters". A gate carrying three
+// reveals shares one budget between them, so it is threaded rather than reset per table.
+const TABLE_MAX_CHARS           = 10000;
+// A `table` inside a reveal container renders this many rows and clips the rest — there is no
+// vertical scroll, so row 9 onward cannot be reached at all. Measured on run 779 (35 receipt
+// items, 7 shown beneath the header); Slack documents no height or scroll behaviour for either
+// the `table` or the `container` block, so this is an observation, not a published limit.
+const TABLE_VISIBLE_ROWS        = 8;
 
-// buildTableBlock — native Slack `table` block (rows of { type: 'rich_text' }
+// buildRevealTables — native Slack `table` blocks (rows of { type: 'rich_text' }
 // cells, not markdown syntax) shared by buildRevealTable (array-of-records
 // content) and the markdown-pipe-table segments found by
 // splitMarkdownTableSegments (string content). container.child_blocks
@@ -848,7 +860,26 @@ const TABLE_MAX_CHARS           = 10000; // Slack `table` block hard limit — a
 // available there. `raw_text` cells were tried first and render as a
 // flattened pipe-joined fallback instead of a grid (confirmed live
 // 2026-07-09) — `rich_text` cells are required.
-function buildTableBlock(headerLabels, dataRows) {
+export function makeTableBudget() {
+  return { remaining: TABLE_MAX_CHARS };
+}
+
+// buildRevealTables — one logical table, chunked into as many `table` blocks as it takes for
+// every row to be reachable.
+//
+// A single tall table is not an option inside a reveal: the container shows TABLE_VISIBLE_ROWS
+// rows and clips the rest with no way to scroll to them. Several short tables render in full,
+// one after another, inside the same panel.
+//
+// The header row is carried by the first chunk only. Repeating it would cost one data row in
+// every chunk, and the chunks are adjacent inside one container where the first header is still
+// on screen. A `table` block ascribes no meaning to its first row — the header reads as a header
+// because its cells are bold — so a continuation chunk carrying only data is a valid block.
+//
+// blockAllowance bounds how many blocks may be produced, since a container takes at most
+// REVEAL_MAX_CHILD_BLOCKS of them. budget is the per-message character budget, shared across
+// every table in the message and mutated as rows are consumed.
+function buildRevealTables(headerLabels, dataRows, budget, blockAllowance) {
   const cols = headerLabels.slice(0, TABLE_MAX_COLUMNS);
   const cell = (v, bold) => {
     const text = String(v ?? '').replace(/\r?\n/g, ' ');
@@ -861,30 +892,55 @@ function buildTableBlock(headerLabels, dataRows) {
     };
   };
   const cellText = c => c.elements[0].elements[0].text;
+  const rowChars = cells => cells.reduce((sum, c) => sum + cellText(c).length, 0);
 
-  const rows = [cols.map(h => cell(h, true))];
-  let charCount = cols.reduce((sum, h) => sum + String(h ?? '').length, 0);
-  let truncated = 0;
-  for (const rowValues of dataRows) {
-    const rowCells = rowValues.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
-    const rowChars = rowCells.reduce((sum, c) => sum + cellText(c).length, 0);
-    if (rows.length >= TABLE_MAX_ROWS || charCount + rowChars > TABLE_MAX_CHARS) {
-      truncated++;
-      continue;
-    }
-    rows.push(rowCells);
-    charCount += rowChars;
+  const headerCells = cols.map(h => cell(h, true));
+  const headerChars = rowChars(headerCells);
+  if (budget.remaining < headerChars || blockAllowance < 1) {
+    return { blocks: [], truncated: dataRows.length };
   }
+  budget.remaining -= headerChars;
 
-  return { table: { type: 'table', rows }, truncated };
+  const blocks    = [];
+  let   current   = [headerCells];
+  let   capacity  = TABLE_VISIBLE_ROWS;       // chunk one spends one of these on the header
+  let   totalRows = 1;
+  let   truncated = 0;
+
+  const flush = () => {
+    if (current.length > 0) blocks.push({ type: 'table', rows: current });
+    current  = [];
+    capacity = TABLE_VISIBLE_ROWS;            // continuation chunks carry no header
+  };
+
+  for (const values of dataRows) {
+    if (truncated > 0) { truncated++; continue; }
+
+    const cells = values.slice(0, TABLE_MAX_COLUMNS).map(v => cell(v, false));
+    const chars = rowChars(cells);
+
+    if (current.length >= capacity) {
+      if (blocks.length + 1 >= blockAllowance) { truncated++; continue; }
+      flush();
+    }
+    if (totalRows >= TABLE_MAX_ROWS || budget.remaining < chars) { truncated++; continue; }
+
+    current.push(cells);
+    budget.remaining -= chars;
+    totalRows++;
+  }
+  flush();
+
+  return { blocks, truncated };
 }
 
-// buildRevealTable — builds a buildTableBlock() from an array of plain record
+
+// buildRevealTable — builds chunked `table` blocks from an array of plain record
 // objects. Columns are the union of every item's own keys, first-seen order,
 // labeled via the same formatColumnHeader() used elsewhere — same
 // data-driven, no-domain-knowledge approach as buildListTable/
 // buildObjectArrayTable.
-function buildRevealTable(items) {
+function buildRevealTable(items, budget, blockAllowance) {
   const columns = [];
   const seen = new Set();
   for (const item of items) {
@@ -894,13 +950,13 @@ function buildRevealTable(items) {
   }
   const headerLabels = columns.map(col => formatColumnHeader(col, items.map(it => it[col])));
   const dataRows = items.map(item => columns.map(col => item[col]));
-  return buildTableBlock(headerLabels, dataRows);
+  return buildRevealTables(headerLabels, dataRows, budget, blockAllowance);
 }
 
 // splitMarkdownTableSegments — parses a reveal string into alternating text
 // and table segments, so a pipe-table embedded in otherwise-prose markdown
 // (e.g. a js_transform building "intro text\n\n| Deck | Cards |\n|---|---|\n| ... |")
-// renders the table natively (via buildTableBlock) while surrounding text
+// renders the table natively (via buildRevealTables) while surrounding text
 // keeps rendering as plain markdown — instead of the whole string collapsing
 // into one mrkdwn block where the pipe syntax shows up literally. Standard
 // GFM table detection: a `| ... |` row immediately followed by a
@@ -968,7 +1024,7 @@ function chunkTextBlocks(text) {
   return kept.map(c => ({ type: 'section', text: { type: 'mrkdwn', text: c } }));
 }
 
-function buildRevealBlock(field) {
+export function buildRevealBlock(field, budget = makeTableBudget()) {
   // An array of plain records with no recognized single-field shape renders as
   // a real table (see buildRevealTable) — everything else (a string, an array
   // of strings, or an array uniformly shaped with syntax/verb/command) keeps
@@ -980,8 +1036,9 @@ function buildRevealBlock(field) {
   const childBlocks = [];
 
   if (isRecordArray) {
-    const { table, truncated } = buildRevealTable(field.content);
-    childBlocks.push(table);
+    // One block held back so a truncation note always has somewhere to go.
+    const { blocks, truncated } = buildRevealTable(field.content, budget, REVEAL_MAX_CHILD_BLOCKS - 1);
+    childBlocks.push(...blocks);
     if (truncated > 0) {
       childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
     }
@@ -994,8 +1051,9 @@ function buildRevealBlock(field) {
     const segments = splitMarkdownTableSegments(String(field.content ?? ''));
     for (const seg of segments) {
       if (seg.type === 'table') {
-        const { table, truncated } = buildTableBlock(seg.header, seg.rows);
-        childBlocks.push(table);
+        const allowance = Math.max(1, REVEAL_MAX_CHILD_BLOCKS - 1 - childBlocks.length);
+        const { blocks, truncated } = buildRevealTables(seg.header, seg.rows, budget, allowance);
+        childBlocks.push(...blocks);
         if (truncated > 0) {
           childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: `_...and ${truncated} more row(s)_` } });
         }
@@ -1013,6 +1071,20 @@ function buildRevealBlock(field) {
   // were empty). Say the panel is empty rather than emit an invalid block.
   if (childBlocks.length === 0) {
     childBlocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_(none)_' } });
+  }
+
+  // Slack rejects a container carrying more than REVEAL_MAX_CHILD_BLOCKS, and that rejection
+  // fails the whole gate message — the user sees nothing and the run stays suspended at a gate
+  // that was never posted. The prose path caps itself per call, but it is called once per text
+  // segment and tables accumulate alongside it, so the ceiling is enforced here where every
+  // path meets.
+  const overflow = childBlocks.length - REVEAL_MAX_CHILD_BLOCKS;
+  if (overflow > 0) {
+    childBlocks.length = REVEAL_MAX_CHILD_BLOCKS - 1;
+    childBlocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `_...and ${overflow + 1} more block(s) not shown_` },
+    });
   }
 
   return {
@@ -1329,6 +1401,11 @@ function buildObjectArrayTable(items) {
 export function dialogToBlocks(dialog, workflowRunId, gateType) {
   const blocks = [];
 
+  // Every reveal on this gate shares one table-character budget — Slack applies the 10,000
+  // limit across the whole message, and a gate can carry several reveals (process_receipt
+  // step 11 posts three).
+  const tableBudget = makeTableBudget();
+
   // Decided once, up front, because two cases below depend on it: a choice gate with
   // more options than buttons can carry renders them as a dropdown, and its per-option
   // descriptions then belong ON the options rather than in a separate list beneath the
@@ -1534,7 +1611,7 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
 
       case 'reveal': {
         // Inline collapsible container shown above the gate buttons — no click required.
-        blocks.push(buildRevealBlock(field));
+        blocks.push(buildRevealBlock(field, tableBudget));
         break;
       }
 
