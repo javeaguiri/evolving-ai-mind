@@ -778,7 +778,7 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 2,
+    "version": 3,
     "steps": [
       {
         "step": "1",
@@ -786,6 +786,12 @@
         "description": "Load all registered domain help entries.",
         "input": {
           "tableName": "PGC_DomainHelp",
+          "columns": [
+            "domain",
+            "description",
+            "aliases",
+            "commands"
+          ],
           "orderBy": {
             "column": "domain",
             "direction": "asc"
@@ -796,14 +802,63 @@
         "on_else": "next"
       },
       {
+        "step": "1b",
+        "type": "serv_query",
+        "description": "Load every registered workflow. PGC_Workflow is the live record of what a domain can do — it is read here, never cached in PGC_DomainHelp.",
+        "input": {
+          "tableName": "PGC_Workflow",
+          "columns": [
+            "id",
+            "name",
+            "domain",
+            "description",
+            "intent_keywords"
+          ],
+          "orderBy": {
+            "column": "id",
+            "direction": "asc"
+          }
+        },
+        "output_key": "all_workflows",
+        "on_success": "next",
+        "on_else": "next"
+      },
+      {
+        "step": "1c",
+        "type": "serv_query",
+        "description": "Load workflow invocation phrases. Read live so a phrase added after registration — a translation, a personal shorthand — is discoverable the day it is added.",
+        "input": {
+          "tableName": "PGC_IntentMap",
+          "filters": [
+            {
+              "column": "action_type",
+              "op": "eq",
+              "value": "workflow"
+            }
+          ],
+          "columns": [
+            "pattern",
+            "intent_category",
+            "workflow_id"
+          ],
+          "orderBy": {
+            "column": "id",
+            "direction": "asc"
+          }
+        },
+        "output_key": "intent_phrases",
+        "on_success": "next",
+        "on_else": "next"
+      },
+      {
         "step": "2",
         "type": "js_transform",
-        "description": "Build per-domain button list and domain lookup map.",
+        "description": "Build the domain button list, and index live workflows and their invocation phrases by domain.",
         "input_key": "registered_domains",
         "output_key": "help_options",
         "on_success": "next",
         "on_else": "next",
-        "expression": "(function() { var domainButtons = items.map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; items.forEach(function(d) { domainMap[d.domain] = d; }); return { domainButtons: domainButtons, domainMap: domainMap };})()"
+        "expression": "(function() { var PHRASE_CAP = 5; var help = items || []; var workflows = local_state.all_workflows || []; var phrases = local_state.intent_phrases || []; var domainButtons = help.filter(function(d) { return d.domain !== 'system'; }).map(function(d) {  var label = d.domain + (d.description ? ' — ' + d.description : '');  return { action: d.domain, label: label.length > 75 ? label.slice(0,72) + '…' : label }; }); var domainMap = {}; help.forEach(function(d) { domainMap[d.domain] = d; }); var phrasesByName = {}; phrases.forEach(function(p) {  var key = p.intent_category;  var pattern = String(p.pattern || '').trim();  if (!key || !pattern) return;  if (/[|^$*+?()\\[\\]\\\\]/.test(pattern)) return;  if (!phrasesByName[key]) phrasesByName[key] = [];  phrasesByName[key].push(pattern); }); var workflowsByDomain = {}; var genericVerbs = {}; workflows.forEach(function(w) {  var keywords = Array.isArray(w.intent_keywords) ? w.intent_keywords : [];  if (!w.domain) {   keywords.forEach(function(k) { var first = String(k).trim().toLowerCase().split(/\\s+/)[0]; if (first) genericVerbs[first] = true; });   return;  }  var seen = {}; var ordered = [];  (phrasesByName[w.name] || []).concat(keywords).forEach(function(c) {   var t = String(c).trim(); var lc = t.toLowerCase();   if (!t || lc === String(w.name).toLowerCase() || seen[lc]) return;   seen[lc] = true; ordered.push(t);  });  if (ordered.length === 0) ordered.push(w.name);  if (!workflowsByDomain[w.domain]) workflowsByDomain[w.domain] = [];  workflowsByDomain[w.domain].push({   name: w.name,   description: w.description || '',   primary: ordered[0],   also: ordered.slice(1, 1 + PHRASE_CAP),   more: Math.max(0, ordered.length - 1 - PHRASE_CAP)  }); }); return { domainButtons: domainButtons, domainMap: domainMap, workflowsByDomain: workflowsByDomain, genericVerbs: Object.keys(genericVerbs) };})()"
       },
       {
         "step": "3",
@@ -832,13 +887,12 @@
       {
         "step": "4",
         "type": "js_transform",
-        "description": "Resolve selected help topic into formatted mrkdwn content.",
-        "system_key": "system",
+        "description": "Compose the panel: workflows from the live PGC_Workflow rows, commands from the stored list filtered to verbs that actually route.",
         "output_key": "resolved_help",
         "on_success": "next",
         "on_else": "next",
         "input_key": "help_options",
-        "expression": "(function() { var selection = local_state.help_selection; var domainMap = (local_state.help_options || {}).domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (selection === 'system') {  content = [   '*System Commands*',   '',   '• `/create-domain <name>` — Create a new memory domain',   '• `/create-workflow <description>` — Generate a reusable workflow',   '• `/delete-domain <name>` — Remove a domain and its data',   '• `/delete-workflow <name>` — Remove a workflow',   '• `/m <intent>` — Natural language: classify and route',   '• `/chat <message>` — Multi-turn conversation',   '• `/explain <query>` — Explain a query or result',   '• `/help` — Show this help',   '• `/ping <type>` — Health check (api sqs llm e2e db core)'  ].join('\\n'); } else if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var lines = ['*' + (domain.description || domain.domain) + '*', '', '*Commands:*']   .concat((domain.commands || []).map(function(c) { return '• `' + c.syntax + '` — ' + c.description; }));  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
+        "expression": "(function() { var selection = local_state.help_selection; var opts = local_state.help_options || {}; var domainMap = opts.domainMap || {}; var domain = selection ? domainMap[selection] : null; var content; if (selection === 'system') {  content = [   '*System Commands*',   '',   '• `/create-domain <name>` — Create a new memory domain',   '• `/create-workflow <description>` — Generate a reusable workflow',   '• `/delete-domain <name>` — Remove a domain and its data',   '• `/delete-workflow <name>` — Remove a workflow',   '• `/m <intent>` — Natural language: classify and route',   '• `/chat <message>` — Multi-turn conversation',   '• `/explain <query>` — Explain a query or result',   '• `/help` — Show this help',   '• `/ping <type>` — Health check (api sqs llm e2e db core)'  ].join('\\n'); } else if (!domain) {  content = selection ? 'No help found for \"' + selection + '\".' : 'No topic selected.'; } else {  var verbs = {}; (opts.genericVerbs || []).forEach(function(v) { verbs[v] = true; });  var lines = ['*' + (domain.description || domain.domain) + '*'];  var aliases = (Array.isArray(domain.aliases) ? domain.aliases : []).filter(function(a) { return a && a !== domain.domain; });  if (aliases.length > 0) lines.push('_also answers to: ' + aliases.join(', ') + '_');  var wfs = (opts.workflowsByDomain || {})[domain.domain] || [];  if (wfs.length > 0) {   lines.push('', '*Workflows:*');   wfs.forEach(function(w) {    lines.push('• `/m ' + w.primary + '` — ' + w.description);    if (w.also.length > 0) lines.push('   _also: ' + w.also.join(', ') + (w.more > 0 ? ', +' + w.more + ' more' : '') + '_');   });  }  var cmds = (domain.commands || []).filter(function(c) {   var m = String(c.syntax || '').match(/^\\/m\\s+(\\S+)/);   return m ? verbs[m[1].toLowerCase()] === true : false;  });  if (cmds.length > 0) {   lines.push('', '*Commands:*');   cmds.forEach(function(c) { lines.push('• `' + c.syntax + '` — ' + c.description); });  }  if (wfs.length === 0 && cmds.length === 0) lines.push('', '_Nothing registered for this domain yet._');  content = lines.join('\\n'); } return { selection: selection, content: content };})()"
       },
       {
         "step": "5",

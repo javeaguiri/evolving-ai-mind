@@ -461,6 +461,7 @@
             "filters":   { "type": "array", "items": { "$ref": "#/definitions/filterItem" } },
             "limit":     { "type": "integer" },
             "orderBy":   { "$ref": "#/definitions/orderBy" },
+            "columns":   { "type": "array", "items": { "type": "string" }, "description": "Column names to return, as a SELECT list. Omit to return every column. Name the columns the step actually uses whenever the table carries a vector column — an embedding is thousands of numbers per row." },
             "vectorSearch": {
               "type": "object",
               "description": "Rank rows by pgvector cosine similarity instead of comparing text. Combines with filters rather than replacing them: filters narrow the candidate set, vectorSearch ranks what remains, most-similar first. Each row comes back with a `similarity` score.",
