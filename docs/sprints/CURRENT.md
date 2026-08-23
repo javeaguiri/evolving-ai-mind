@@ -221,3 +221,32 @@ listed under `flashcard_quiz_session`. The alias was added to `intent_keywords` 
 was registered and no help entry was written for it — which is the read-time design doing the thing
 a stored caption cannot. **AC1 remains open** until `inventory` and `budgets_expenses` are checked
 too; its threshold names all three domains.
+
+### Session 3 — 2026-08-23 — Aliases become a thing the user owns
+
+Track A's read-time design turned out to have a second half nobody had named: if `/help` renders
+invocation phrases live, then **the phrases themselves are a user-facing surface**, and there was
+no way for the user to set one. Three changes, deployed together.
+
+**`manage_workflow_aliases`** — a new inline-write Novia tool. One concept at the boundary, two
+surfaces underneath: `workflowName` writes `PGC_IntentMap` rows (Pass 1) and keeps
+`intent_keywords` in step (Pass 2), as a delta so a divergent keyword survives an edit; `domain`
+edits `PGC_DomainHelp.aliases`, which is in that row's `embed_source`, so the domain embedding is
+recomputed and the change reaches `classify-intent` and not only `/help`. A phrase already bound
+elsewhere is **refused, not shadowed** — that is the `modify budget` collision caught before it is
+written rather than after it misroutes. A workflow's own name is never removed.
+
+**`register_workflow` now refuses a domain workflow that names no phrase**, and the gate says so
+before approval. `intent_keywords` derives from `intentPhrases` when omitted. A `domain: null`
+system workflow legitimately has none, so the rule is not universal.
+
+**The convention bridge explained how steps route and never how a user arrives.** It now states
+both surfaces and, more to the point, that the phrases belong to the user — ask, in whatever
+language they want to type. `sop_intent_routing` stopped teaching the raw `insert_data` path, which
+left Pass 1 and Pass 2 disagreeing every time it was followed.
+
+Also live: `search_domain_help` returns a domain's live `PGC_Workflow` rows, so the tool Novia uses
+to resolve a domain can finally see the workflows she built. `docs/workflow-schema.json` gained
+`serv_query`'s `columns`, missing since Sprint 10 — the validator was flagging a valid step.
+
+Deployed: `sam deploy` + `upsert-system-context` (3 rows). 997 → **1012** unit tests.
