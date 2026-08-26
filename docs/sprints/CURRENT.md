@@ -311,16 +311,94 @@ alias, and the 8b/8d dedupe is untouched by it.
 
 **User's decision: go with Novia's fix and retest later.** The dedupe defect stays open.
 
+### Session 5 — 2026-08-26 — Run 788 checked; Novia's repair loop is open at both ends
+
+**Run 788 wrote nothing.** The step 11 gate was answered *Skip inventory*: the run went
+11 → 13 → end. `write_plan`, `alias_write_plan` and `inserted_aliases` are all absent from
+`local_state`; only the expense (id 205) was written, at step 6. **Workflow 358 v5 — Novia's
+fix — has never executed.**
+
+**The two one-offs are two different defects.**
+
+`BARRA DE PAN` → new item is the 8b/8d dedupe, unchanged and now measured. Alias 44 appears in
+three of run 788's `alias_candidate_sets`: **1.0** on its own query (item 20), 0.4283 on item
+17's (`PAN M. 100%INT FAM`), 0.4203 on item 21's. Item 17 runs first, `if (!seen[row.id])` keeps
+it, and session 1175's assembled system message carries `similarity: 0.42826780146698473`.
+**Across 35 items, 10 lost their exact 1.0 this way** — 6 more on the inventory side, where the
+flattened score for `Rustic Sliced Bread` (0.5175) belongs to neither of the two bread queries
+that surfaced it. Only one failed visibly, because the English-name path rescued the other nine:
+the ~3% you see is 29% latent × the name path also failing. It is order-dependent, so it does
+not converge with use — a different receipt order loses a different ten. `BARRA DE PAN` sits in
+item 17's **fifth and last** top-5 slot by 0.04, so today's bread could displace it and look like
+a fix while breaking something else.
+
+`COPO INTE 0% AZUCAR` → llm_resolved was **Instruction**, and is already closed. Step 4 rendered
+the same string as *"0% Sugar Integral Flakes"* in run 787 and *"0% Sugar Whole Yogurt"* in 788.
+Alias 27 reached the model at 1.0, but the prompt it actually received (session 1175) carried no
+similarity bands at all. `match_inventory_items` v3 now states the 1.0 rule.
+
+**A new defect in the v5 fix.** Step 12 maps `plan.auto_matched` unconditionally, but an item is
+auto-matched *because* an alias already matched it. `PGD_InventoryAlias` has
+`uq_inventoryalias_inventory_alias` unique on `(inventory_id, alias_name)`; step 12k is a plain
+`serv_insert`, one multi-row statement, `on_else: cancel`, no ON CONFLICT. The next Apply inserts
+34 duplicates and aborts the statement — **after** quantity updates and item inserts have
+committed, so re-running that receipt would double-increment every quantity.
+
+**Three replacement expressions are drafted and tested** against run 788's real `local_state`:
+8b/8d keep the highest score per row instead of the first seen (exact-1.0 alias rows 25 → 35;
+`BARRA DE PAN` reaches the model at 1.0), and step 12 emits an alias only when one is not already
+stored (0 rows instead of 34, while a synthetic name-matched item still writes exactly one).
+Paste-ready brief and full rationale: **`docs/receipt-matching-analysis.md`**.
+
+**Checking Novia's work turned into the sprint's finding.** Her stale-embedding attribution was
+falsified by her own probe: entry 4315, run before she changed anything, returned
+`similarity_to_44 = 1` for alias 44 against itself, and `PAN M. 100%INT FAM` at
+`0.42826780146698473` — the exact number that reached the model, i.e. her own output printed the
+provenance of the 0.428. She read the table for what the embedding *represented* and moved on.
+Her memory 333 cites the "fresh" embedding on alias 87 at 0.49/0.48 to `Bread` and
+`PAN MOLDE RUSTICO`; her pre-fix probe returned 0.4888/0.4815. **She verified two fixes by
+reproducing the pre-fix measurement.**
+
+**Why, and this is the part that does not need a better model.** Across ~40 SQL calls she read
+`state->'local_state'->'alias_candidates'` twice and `alias_candidate_sets` never — the key
+produced one step earlier, in the same JSON object. Two structural reasons:
+
+1. **`PGC_WorkflowRunStep.output_snapshot` is a 200-character stub** (`run-workflow.mjs:443`; 100
+   for iterator items at `:1426`, `:1549`). The per-step record can say a step ran and never what
+   it produced, which forces every real diagnosis into `local_state` — a flat bag with no step
+   attribution, where a derived key is indistinguishable from a recorded one.
+2. **She cannot test a fix against the failing case.** `simulate_workflow` is L0/L1/L2 and
+   executes nothing; `run_workflow` needs a new receipt through a gate. The replay harness does
+   exactly this, costs nothing, and **is not in her tool list**. Every verification available to
+   her is a proxy, and both of hers confirmed.
+
+Then memory closed the loop with an assertion: 328 is titled `CONFIRMED ROOT CAUSES`, and **334
+is `procedural`** — a general rule stating `update_data` skips embedding recompute on an
+unchanged value. `table.mjs:597` recomputes on **key presence**, not value change, so the rule is
+false and was never tested. Being wrong and being finished are currently indistinguishable to
+her. Both system items raised to backlog High Priority.
+
 ### Open for next session
 
-1. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
-2. **AC4** — verify the chunked reveal live on the next receipt.
-3. **The 8b/8d dedupe defect is unaddressed** by the fix being applied. It will keep mis-scoring any
-   candidate returned for more than one item. Fix via `propose_workflow_fix`; the shape argued for
-   here is keeping the per-item association rather than deduping by best score, so a similarity is
-   always attached to the query that earned it.
-4. **Data cleanup** — inventory 69 duplicates 39; alias 86 points at the duplicate. Track B material.
-5. Novia's two memories from session 1173 were left in place (1172's were deleted before the re-run).
-6. Still open from earlier today: the system panel in `/help` (names `/create-workflow` and `/chat`,
-   omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for phrases
-   the SOP now says to ask the user for.
+1. **Paste the brief** (`docs/receipt-matching-analysis.md`) into a **new** `/novia` session —
+   not 1173, which spent ~50 turns reinforcing the embedding theory. Expect v5 → v6.
+2. **Then process today's Mercadona receipt and Apply.** It is the live test of both fixes and
+   the AC9 measurement in one run. Checked: the fix leaves the flat lists at 55 alias / 45
+   inventory rows and changes only the similarity *values*, so step 10's input tokens are
+   essentially unchanged and the pre-registered 831-token comparison still holds.
+3. **Then Track B**, with `CAPERUCITA TINTA` as the specimen. Neither fix touches it — alias 30 →
+   inventory 25 is *correct*; what is wrong is inventory 25's **name** ("Ink Cartridge" for a red
+   wine, *tinta* read as ink). A rename keyed on a raw alias that must not change: exactly the
+   Track B verb. It auto-matched HIGH again in run 788 and every receipt reinforces it.
+4. **Scope the replay tool for Novia** — read `docs/arch-replay.md`, establish the tool surface,
+   propose before writing. Argued in-session that this belongs in Sprint 11 rather than the
+   backlog: Track B is the second data point on whether she handles maintenance work, and
+   running it without a test loop measures the same gap twice. **Not yet decided.**
+5. **Novia's false memories** — 327, 330, 331, 333 and **334** (procedural, false system rule).
+   Ask her to test both claims herself first; delete directly if she cannot falsify her own
+   conclusion with the query in hand. 328 and 329 are accurate — keep.
+6. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
+7. **AC4** — verify the chunked reveal live on the next receipt.
+8. Still open from earlier: the system panel in `/help` (names `/create-workflow` and `/chat`,
+   omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for
+   phrases the SOP now says to ask the user for.
