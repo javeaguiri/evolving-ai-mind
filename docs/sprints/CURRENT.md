@@ -378,27 +378,155 @@ unchanged value. `table.mjs:597` recomputes on **key presence**, not value chang
 false and was never tested. Being wrong and being finished are currently indistinguishable to
 her. Both system items raised to backlog High Priority.
 
+### Session 6 — 2026-08-27 — Novia's repair loop is blind at both ends, and it is measured
+
+**The session started as a review of her diagnosis and ended as a system finding.** Session 1176
+was run deliberately without spoon-feeding: the two defects were stated with their evidence, the
+fix expressions were withheld. She produced both fixes herself. Then checking her work found why
+she had missed the defects in the first place — and it is not her.
+
+**Contract fix shipped (`8c4caa1`, upserted).** `serv_query.output_contract` and
+`iterator.output_contract` both described their inputs in detail and their outputs in one
+sentence. `serv_query` spends ~350 words on `vectorSearch`'s inputs and never says the returned
+rows carry a `similarity` field at all; `iterator` says it "collects results" and never says an
+array-returning item_step yields an array of arrays. Cross the two and you get 8b/8d exactly: a
+per-query score, collected per item, flattened by row id with first-seen-wins. **Fault domain:
+Contract.** Both additions are generic — any workflow that vector-searches inside an iterator
+meets this seam, and no simulation level can see it. The exception is stated alongside the rule:
+dedup by row identity is *correct* when the flatten exists to cut tokens and nothing downstream
+reads the scores. That is what memory 318 records 8b/8d being built to do; the defect is that the
+scores were read. Novia reviewed both additions and accepted the substance; her framing fix on the
+last `serv_query` sentence and her concrete provenance remedy on `iterator` were taken, her
+proposal to delete the exception was not.
+
+**Why she missed it: nothing told her a similarity is query-relative.** She wrote 8b/8d herself
+(memory 318, the v2→v3 vector pre-filter), and her own record gives the frame — token reduction,
+counted in rows: *"at most 20×8 = 160 inventory rows before dedup… typically 10–30 unique
+candidates."* In that frame "which copy survives" is not a question that exists. Her only source
+on the score is `minds_eye_tool_schemas`, which says *"every returned row carries a similarity
+score"* — a row property, phrased as a row property, on a single-call tool where the
+query-relativity never has to be stated. Given the concept in one sentence she derived max-wins
+unaided, including the ranking rationale, which was not in the prompt. **Availability gap, not
+capability gap.**
+
+**`read_memory` returned none of it.** `minds-eye.mjs:2274` defaults to `limit 10` ordered by
+`priority desc`. Nine auto-written *"Completed workflow 'process_receipt' for domain 'inventory'."*
+stubs carry **priority 8**; every considered diagnosis — 327, 328, 329, 330, 331, 333, 334 — carries
+**priority 5**. The stubs take nine of ten slots. Not one diagnosis memory reached her, and she then
+wrote 335 re-deriving ground 328 and 333 already covered. The inversion worth keeping: **the
+memories she was denied were mostly wrong** — 327 blames translation, 330/331/333 build the
+stale-embedding theory, and 334 is a *procedural* memory asserting `update_data` skips embedding
+recompute on an unchanged value, which `table.mjs:597` falsifies (it recomputes on key presence).
+1176 may be clean *because* retrieval failed. Raising the limit without deleting 327/330/331/333/334
+hands her four false memories including one false system rule.
+
+**v6 carried four changes beyond the two agreed, none of them reported.** 12c's `output_key`
+renamed `quantity_update_results` → `updated_rows`; 12h and 12k lost their explicit `on_success`
+tokens (behaviourally identical today, but step *order* is now load-bearing); and step 13's notify
+template was rewritten, dropping the alias count, category, payment method and grocery flag. v5's
+`💾 Aliases written: {{inserted_aliases.length}}` was live and working — run 787's
+`local_state.inserted_aliases` holds 2 rows.
+
+**Then the two system defects, both measured, both raised to backlog High Priority.**
+
+1. **The transcript truncates the artifact she is editing.** `MAX_TOOL_OUTPUT_CHARS = 15000`.
+   `read_workflow('process_receipt')` is **19,125 characters**; step 13 begins at **18,395** and its
+   alias line at **19,049**. The last **4,125 characters are dropped**, and step 13 is the
+   second-to-last step. All four of her full-array reads this session were cut identically. Her
+   account — *"I composed step 13's message_template from memory rather than copying it verbatim
+   from read_workflow"* — is literally true: **the transcript never showed it to her.** The comment
+   above the constant is the tell — the cap is never applied to a call's *arguments* because Sprint
+   9's largest defect was her losing sight of work she had submitted, but the artifact under edit
+   arrives as an *output*. The protection covers what she wrote and not what she is changing.
+
+2. **The approval gate cannot show the fields that carry the change.** `DIFF_FIELDS` is a fixed
+   allow-list omitting `message_template`, `output_key`, `input`, `items_key`, `item_step`,
+   `fields`, `options`. Step 13 *was* detected as changed, so the gate printed its heading and
+   listed nothing beneath it — which is why her observation ("no diff for step 13") was correct
+   even though her explanation of it was not. Four unagreed changes were approved without being
+   rendered.
+
+**And nothing archives what was replaced.** `PGC_Workflow` holds one row per workflow; `version` is
+a counter overwritten in place. There is no version table, and `PGC_WorkflowRun` stores
+`workflow_id` with no steps snapshot. v5 survives only in `PGC_SessionEntry` 4370 and in
+`docs/receipt-matching-analysis.md`. **She cannot see the whole artifact, the gate cannot show what
+she changed, and nothing keeps what was overwritten.** The three compound.
+
+**v7 restored step 13 and its number is wrong.** She used
+`{{alias_write_plan.alias_rows.length}}` — what was *submitted*, which after the upsert includes
+every already-known alias. The next receipt will read *"35 aliases written"* when one is new,
+inverting the AC9 signal precisely when it matters. Her stated reason for rejecting
+`alias_write_result` (unset when step 12k is skipped) applies equally to `alias_write_plan`: step 6
+routes a non-grocery receipt straight to 13, so 12i never runs either. `match_plan` is unset on
+that path too — the notify has been broken there since v5, pre-existing.
+
+### Priority call — 2026-08-27
+
+**The two system defects above come before Track B, before the Mercadona run, and before the v8
+message.** Every remaining sprint item routes through Novia editing a workflow, and that loop is
+currently blind at both ends. Fixing the receipt while the repair loop cannot show her the artifact
+or show the user the diff means the next repair reintroduces the next silent regression.
+
 ### Open for next session
 
-1. **Paste the brief** (`docs/receipt-matching-analysis.md`) into a **new** `/novia` session —
-   not 1173, which spent ~50 turns reinforcing the embedding theory. Expect v5 → v6.
-2. **Then process today's Mercadona receipt and Apply.** It is the live test of both fixes and
-   the AC9 measurement in one run. Checked: the fix leaves the flat lists at 55 alias / 45
-   inventory rows and changes only the similarity *values*, so step 10's input tokens are
-   essentially unchanged and the pre-registered 831-token comparison still holds.
-3. **Then Track B**, with `CAPERUCITA TINTA` as the specimen. Neither fix touches it — alias 30 →
-   inventory 25 is *correct*; what is wrong is inventory 25's **name** ("Ink Cartridge" for a red
-   wine, *tinta* read as ink). A rename keyed on a raw alias that must not change: exactly the
-   Track B verb. It auto-matched HIGH again in run 788 and every receipt reinforces it.
-4. **Scope the replay tool for Novia** — read `docs/arch-replay.md`, establish the tool surface,
-   propose before writing. Argued in-session that this belongs in Sprint 11 rather than the
-   backlog: Track B is the second data point on whether she handles maintenance work, and
-   running it without a test loop measures the same gap twice. **Not yet decided.**
-5. **Novia's false memories** — 327, 330, 331, 333 and **334** (procedural, false system rule).
-   Ask her to test both claims herself first; delete directly if she cannot falsify her own
-   conclusion with the query in hand. 328 and 329 are accurate — keep.
-6. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
-7. **AC4** — verify the chunked reveal live on the next receipt.
-8. Still open from earlier: the system panel in `/help` (names `/create-workflow` and `/chat`,
-   omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for
-   phrases the SOP now says to ask the user for.
+1. **Fix the two repair-loop defects first** — backlog High Priority, both dated 2026-08-27.
+   `MAX_TOOL_OUTPUT_CHARS` and `DIFF_FIELDS`. **Fault domain: Execution** — both are engine
+   defects in system code, so they are fixed in code, not by prompt or artifact.
+2. **Then send the v8 message below.** Do not send it before (1): v8 is a workflow edit, and it is
+   the first honest test of whether the fixed gate renders what she actually changed.
+3. **Then process the Mercadona receipt and Apply.** Still the live test of both v6 fixes and the
+   AC9 measurement in one run. Pre-registered protocol unchanged: per-item step-10 input tokens
+   against **831**, per-item cost against **$0.0073**, auto-matched count as support.
+4. **Then Track B**, with `CAPERUCITA TINTA` as the specimen — inventory 25 is a red wine named
+   "Ink Cartridge"; alias 30 is correct and must not change. A rename keyed on a raw alias: exactly
+   the Track B verb.
+5. **Novia's false memories** — 327, 330, 331, 333 and **334** (procedural, false system rule). Ask
+   her to falsify each with the query in hand; delete what she cannot defend. 328 and 329 are
+   accurate — keep. Do this *before* any `read_memory` limit change, or the limit change hands her
+   the false ones.
+6. **The `read_memory` limit-10-by-priority default**, and the workflow-completion hook writing
+   priority-8 one-line stubs. Nine of them currently outrank every diagnosis in the system.
+7. **The cold read** — a *fresh* session, the two revised contracts plus run 788's `local_state`,
+   no diagnosis, and see whether she reaches 8b/8d unaided. 1176 is contaminated for this test.
+   It is the only thing that measures whether the contract edit closed the gap.
+8. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
+9. **AC4** — verify the chunked reveal live on the next receipt.
+10. Still open from earlier: the system panel in `/help` (names `/create-workflow` and `/chat`,
+    omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for phrases
+    the SOP now says to ask the user for.
+11. Consider preserving v5 in `docs/` and raising workflow version history as a backlog item —
+    a workflow edit is currently irreversible by design.
+
+### The v8 message — paste into `/novia` after the two engine fixes are deployed
+
+```text
+Step 13's alias count in v7 reports the wrong number. Check it against the data before
+changing anything.
+
+  SELECT r."state"->'local_state'->'alias_write_plan' FROM "PGC_WorkflowRun" r WHERE r."id"=788;
+  SELECT s->>'step', s->>'message_template' FROM "PGC_Workflow" w,
+    jsonb_array_elements(w.steps) s WHERE w.name='process_receipt' AND s->>'step'='13';
+
+alias_write_plan.alias_rows is what step 12i SUBMITS to 12k. Since step 12 still maps
+plan.auto_matched unconditionally, that list contains every alias that already existed —
+run 788's plan carried 34 of them and 1 genuinely new. So v7 will report "35 aliases
+written" on a receipt where one alias was learned. That is the opposite of the signal I
+need: this number is how I tell whether the matching loop is still learning new vocabulary
+or has settled onto known items, and an inflated count hides the settling.
+
+serv_upsert returns what distinguishes them. Read its output_contract.
+
+Two other things to resolve while you are in step 13:
+
+1. You rejected alias_write_result because it is unset when 12k is skipped. That is true,
+   and it is equally true of alias_write_plan: step 6 routes a non-grocery receipt straight
+   to 13, so 12i never runs either. match_plan is unset on that path as well, and has been
+   since v5. Decide what step 13 should say on a non-grocery receipt and make every token
+   in it resolve on both paths.
+
+2. Tell me what "aliases written" should count when the same raw receipt string appears
+   twice on one receipt.
+
+Submit as one propose_workflow_fix. Read the current array with read_workflow and change
+only step 13 — the gate now shows me every field you touch, including message_template.
+```
