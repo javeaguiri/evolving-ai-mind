@@ -423,7 +423,7 @@
       {
         "type": "array",
         "field": "output_key",
-        "description": "Array of row objects written directly to local_state[output_key]. NOT wrapped in a {rows:[...]} envelope. Use {{output_key.length}} to count results, never {{output_key.rows.length}}."
+        "description": "Array of row objects written directly to local_state[output_key]. NOT wrapped in a {rows:[...]} envelope. Use {{output_key.length}} to count results, never {{output_key.rows.length}}. With vectorSearch, every returned row additionally carries a `similarity` number. That score belongs to the pair (this call's queryText, this row): it is not a property of the row, and the same row returned for a different queryText comes back with a different score. This is what breaks when the result sets of several calls are combined into one list — deduplicating by row identity keeps whichever copy was encountered first and discards the score every other query gave that row, so a row's exact match can be replaced by its weakest near-miss and nothing reports an error. Combine on (queryText, row): keep the highest score per row, or carry the queryText alongside each row. Deduplicating on row identity alone is safe only when nothing downstream reads the scores — and in that case drop `similarity` while flattening, rather than leaving one query's number attached to a row a different query surfaced."
       }
     ],
     "on_success_options": [
@@ -1019,7 +1019,7 @@
       {
         "type": "array",
         "field": "output_key",
-        "description": "Array of outputValue from each item_step execution, written to the parent frame after all items complete"
+        "description": "Array of outputValue from each item_step execution, written to the parent frame after all items complete. One entry per item, aligned by position with items_key \u2014 index i holds the result of items_key[i], and that alignment is the only record of which item produced which result. When the item_step itself returns an array, the collected value is therefore an array OF arrays \u2014 one result set per item \u2014 not a single flat list. Flatten it only when nothing downstream depends on knowing which item a result came back for. If anything does, either merge deliberately rather than by first-seen, or attach the item's identity \u2014 its index, or a key field \u2014 onto each result before flattening, so provenance survives the flatten."
       }
     ],
     "on_success_options": [
