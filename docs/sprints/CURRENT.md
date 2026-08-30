@@ -255,3 +255,15 @@ the first thing next session should do, and for Track A it is not cosmetic: the 
 `minds_eye_system_prompt` both describe behaviour that is about to change. `minds_eye_system_prompt`
 is at **v32** and `minds_eye_context_index` at **v3** as of Sprint 11's close; the repair block in
 v32 currently instructs reading the whole array in ranges, which a patch makes unnecessary.
+
+**Track A was refined during scoping, in response to the question of whether simulation invalidates
+patching.** It does not — the server already fetches the stored array to build the diff, so the
+simulator always receives a complete workflow. The check found the opposite problem: the repair
+path has **no validation gate at all**, at either the pre-gate or the write. That, plus
+`simulate_workflow` needing the patch form so a fix can be checked before it is submitted, is now
+written into Track A with `simulateForRegistration` named as the piece to reuse. AC1 was tightened
+to require a failing merged array be refused, proven with a deliberately failing patch.
+
+**Open question carried into Prep:** whether the base-version check refuses or merely warns. It is
+the one part of the patch design with no precedent in the codebase — the full-array form has always
+clobbered silently.
