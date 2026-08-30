@@ -61,13 +61,46 @@ step-level keeps every submitted step a valid, simulatable unit, keeps L0/L1/L2 
 merged array, and makes the gate diff exact rather than inferred — what she submits *is* what
 changed.
 
+**Simulation does not constrain this, and the reason matters.** The server already holds the full
+array: `propose_workflow_fix` reads the stored workflow (`minds-eye.mjs:1772`) purely to build the
+diff. Merging a patch into that read and validating the merged array is the same fetch plus a
+merge. **The simulator never sees a patch — it always sees a complete workflow.** A patch changes
+what crosses the model/engine boundary, not what the validator receives.
+
+**What the check found instead: `propose_workflow_fix` does not simulate at all.** Its body reads
+the workflow, builds the diff, and calls `updateRows`. No `runSimulation`, no L0/L1/L2 refusal —
+that is `register_workflow`'s behaviour, not this one. Novia simulated twice in session 1177
+voluntarily and nothing required it. **The repair path has no validation gate, and closing that is
+part of Track A, not a precondition for it.**
+
+**The consequence that does bite is on the other tool.** `simulate_workflow` takes `steps` only
+(`minds-eye.mjs:2521`), so an agent holding a patch cannot pre-validate without reconstructing the
+full array — which defeats the patch. **Track A is two tools:** the write tool and the simulate
+tool both take `{ workflowName, patch }` and merge server-side.
+
+**Done this way the repair path gets safer than it is today, not riskier:**
+
+| | Today (full array) | With a patch |
+|---|---|---|
+| Base of the submitted array | Partly read, partly remembered | The database, authoritative |
+| Surface she can corrupt | The whole workflow | Only the steps she names |
+| Validation before write | **None** | L0/L1/L2 on the merged array |
+| Concurrent change to the workflow | Silently clobbered | Caught by a base-version check |
+
+The last row is a property the full-array form cannot have: she reads at T0 and submits at T1, and
+today whatever landed in between is overwritten without trace. A patch merges against the version
+she read and can be refused if it moved.
+
 **To settle during design, not now:**
-- Whether a patch may add or remove steps, or only replace. Session 1177 added step `13g`, so
-  add-by-patch has a live precedent and a routing implication: adding a step means editing the
-  routing of steps not in the patch.
-- Whether `register_workflow` shares the merge path.
+- Whether a patch may add or remove steps, or only replace. **Leaning yes on add:** session 1177
+  added step `13g`, and L1 already rejects unreachable steps and dead routing targets, so a
+  typo'd step identifier that becomes an orphan is caught by the merged-array simulation. The
+  safety comes from validating the merge, not from restricting the patch. Adding a step still
+  means editing the routing of steps not in the patch, so those steps join the patch.
+- Whether `register_workflow` shares the merge and validation path.
 - Whether the full-array form stays accepted alongside the patch form, and for how long.
 - What the gate renders for a patch — the diff is against the merged array either way.
+- Whether the base-version check is advisory or refusing.
 
 **Acceptance:** AC1.
 
@@ -140,7 +173,7 @@ twice.
 
 | # | Criterion | Track | Threshold |
 |---|---|---|---|
-| **AC1** | A single-step repair is submitted, gated and applied without resubmitting the whole array; the merged array passes L0/L1/L2 before the write | A | Binary, verified live from `/novia` |
+| **AC1** | A single-step repair is submitted, gated and applied without resubmitting the whole array; the merged array passes L0/L1/L2 **before** the write, and a merged array that fails is refused | A | Binary, verified live from `/novia`, including one deliberately failing patch |
 | **AC2** | A change is validated on a test environment before reaching prod, and the README stands the system up from scratch | B | Binary, demonstrated on one real change |
 | **AC3** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | C | Binary, from Slack, no raw SQL |
 | **AC4** | Both thresholds calibrated against live rows and applied; the three known wrong merges no longer auto-resolve | D | Binary, evidenced by probe output before and after |
