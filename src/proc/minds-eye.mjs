@@ -40,6 +40,7 @@ import { callLlmWithTools }                                from '../shared/llm-c
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
+import { resolvePath }                                    from './template-resolver.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
@@ -73,13 +74,14 @@ const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
-  'run_sql',
+  'run_sql', 'read_session_entry',
   'list_capabilities', 'list_schedules',
 ]);
 
 // Inline write tools — execute immediately, no confirmation gate required.
 const INLINE_WRITE_TOOLS = new Set([
   'update_data', 'insert_data', 'upsert_data',
+  'manage_routing_aliases',
 ]);
 
 // Gated write tools — post a HUMAN_GATE before executing.
@@ -194,6 +196,38 @@ async function loadToolDefinitions(traceId) {
   return tools;
 }
 
+// SERV's getRows defaults a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
+// session loads passed no limit, so a session past 100 entries loaded only its OLDEST 100 —
+// and `nextSeq`, derived from that page, then collided with an entry that already existed,
+// failing uq_pgc_sessionentry_session_seq and killing that resume and every one after it.
+// Masked until now only because sessions die on the 240s wall first: the largest is 83 entries.
+const MAX_SESSION_ENTRIES = 1000;
+
+/**
+ * Load a session's transcript, or refuse to load it at all.
+ *
+ * A partially loaded transcript is not a degraded transcript — it is a corrupt one, because
+ * the write cursor is computed from it. Returning a short page here would resume the session
+ * from its own middle and then overwrite its own history. There is no useful partial answer,
+ * so the incompleteness is raised rather than returned.
+ */
+async function loadSessionEntries(sessionId) {
+  const resp = await getRows(
+    'PGC_SessionEntry',
+    [{ column: 'session_id', op: 'eq', value: sessionId }],
+    { column: 'sequence_number', direction: 'asc' },
+    MAX_SESSION_ENTRIES
+  );
+  const rows = resp.rows ?? [];
+  if (rows.length >= MAX_SESSION_ENTRIES) {
+    throw new Error(
+      `Session ${sessionId} has at least ${MAX_SESSION_ENTRIES} entries — its transcript does not fit one SERV page, ` +
+      'and resuming from a partial load would write a colliding sequence_number.'
+    );
+  }
+  return rows;
+}
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
@@ -230,12 +264,7 @@ export async function handle(req) {
       if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'Session not found. Start a new conversation.' });
       return;
     }
-    const entriesResp = await getRows(
-      'PGC_SessionEntry',
-      [{ column: 'session_id', op: 'eq', value: session.id }],
-      { column: 'sequence_number', direction: 'asc' }
-    );
-    existingEntries = entriesResp.rows ?? [];
+    existingEntries = await loadSessionEntries(session.id);
   } else {
     const sessResp = await insertRow('PGC_Session', {
       session_type:           'minds_eye',
@@ -302,12 +331,7 @@ async function handleGateResume(body, callback, traceId, req) {
     return;
   }
 
-  const entriesResp = await getRows(
-    'PGC_SessionEntry',
-    [{ column: 'session_id', op: 'eq', value: session.id }],
-    { column: 'sequence_number', direction: 'asc' }
-  );
-  const entries = entriesResp.rows ?? [];
+  const entries = await loadSessionEntries(session.id);
 
   // Follow-up question — add user message, reset turns and actions (a human just
   // engaged with the session), run loop, re-post continue gate after response.
@@ -625,7 +649,9 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     input.push({
       type:    'function_call_output',
       call_id: activeCall.call_id,
-      output:  capOutput(JSON.stringify(result ?? null)),
+      // `seq` is the entry this result was just persisted under — the same number the rebuild
+      // reads back off the row, so both renderings of a capped result are byte-identical.
+      output:  capOutput(JSON.stringify(result ?? null), seq),
     });
   };
 
@@ -813,7 +839,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         break;
 
       } else if (READ_TOOLS.has(action)) {
-        const toolResult = await executeReadTool(action, params, traceId);
+        const toolResult = await executeReadTool(action, params, traceId, session);
         const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: entryItems, turn: turnCount });
 
         await insertRow('PGC_SessionEntry', {
@@ -1102,6 +1128,68 @@ export function buildIntentMapRows(name, intentPhrases = [], workflowId = null) 
   }));
 }
 
+/**
+ * Fill in intent_keywords from the invocation phrases when the caller omitted them.
+ *
+ * Pass 1 matches an exact PGC_IntentMap pattern; Pass 2 scans intent_keywords for a
+ * word-boundary hit anywhere in the input. A workflow registered with no keywords cannot
+ * win a scan it is nominally part of — matchWorkflowByKeywords builds its candidate set
+ * as `r.domain === domain || r.domain === null`, so the generic CRUD workflows compete
+ * inside every domain, and update_entity claims "update", "edit", "modify", "change".
+ * Any phrasing Pass 1 does not cover exactly then lands on the generic row editor rather
+ * than the purpose-built workflow. Workflow 357 is the specimen.
+ *
+ * The phrases are already in the same call and a phrase reads as a keyword unchanged, so
+ * an omitted field is derived rather than left null. Supplied keywords always win: this
+ * fills a gap, it does not overrule a decision.
+ */
+export function deriveIntentKeywords(intentPhrases = [], intentKeywords = null) {
+  if (Array.isArray(intentKeywords) && intentKeywords.length > 0) return intentKeywords;
+
+  const seen    = new Set();
+  const derived = [];
+  for (const raw of Array.isArray(intentPhrases) ? intentPhrases : []) {
+    if (typeof raw !== 'string') continue;
+    const phrase = raw.trim();
+    const key    = phrase.toLowerCase();
+    if (!phrase || seen.has(key)) continue;
+    seen.add(key);
+    derived.push(phrase);
+  }
+  return derived.length > 0 ? derived : null;
+}
+
+/**
+ * Apply an add/remove delta to an alias list.
+ *
+ * Case-insensitive throughout: a user who types a phrase differently the second time means
+ * the same phrase. `protect` is never removed — for a workflow that is its own name, the
+ * row buildIntentMapRows seeds and /help falls back to when nothing friendlier exists.
+ * Order is preserved, additions land at the end, and the result carries no duplicates.
+ */
+export function applyAliasDelta(current = [], { add = [], remove = [] } = {}, protect = null) {
+  const clean      = v => (typeof v === 'string' ? v.trim() : '');
+  const key        = v => clean(v).toLowerCase();
+  const removeSet  = new Set((Array.isArray(remove) ? remove : []).map(key).filter(Boolean));
+  const protectKey = key(protect);
+
+  const seen = new Set();
+  const out  = [];
+  const push = (v) => {
+    const t = clean(v);
+    if (!t || seen.has(key(t))) return;
+    seen.add(key(t));
+    out.push(t);
+  };
+
+  for (const v of Array.isArray(current) ? current : []) {
+    if (removeSet.has(key(v)) && key(v) !== protectKey) continue;
+    push(v);
+  }
+  for (const v of Array.isArray(add) ? add : []) push(v);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Validation shared by the register_workflow gate and its write
 //
@@ -1171,12 +1259,56 @@ async function preGateRefusal(action, params, traceId) {
 // Build human-readable gate text for gated write tools
 // ---------------------------------------------------------------------------
 
+/**
+ * Every field that differs between two versions of a step.
+ *
+ * Replaces a fixed allow-list that existed in two copies and named six fields:
+ * type, expression, on_success, on_else, message, description. It omitted the fields that
+ * actually carry a workflow change — message_template, output_key, input, items_key,
+ * item_step, fields, options, execution_mode, on_complete — so the v5→v6 gate printed a
+ * heading for step 13 and listed nothing beneath it, and four unagreed changes were approved
+ * without ever being rendered. This is the human control point on every workflow write Novia
+ * makes: it must not decide in advance which fields are worth showing.
+ *
+ * @param {object} current   The step as stored
+ * @param {object} proposed  The step as submitted
+ * @returns {object}         { field: { from, to } } for every field that differs
+ */
+export function diffStepFields(current = {}, proposed = {}) {
+  const fields = [...new Set([...Object.keys(current ?? {}), ...Object.keys(proposed ?? {})])].sort();
+  const changes = {};
+  for (const field of fields) {
+    if (JSON.stringify(current?.[field]) !== JSON.stringify(proposed?.[field])) {
+      changes[field] = { from: current?.[field], to: proposed?.[field] };
+    }
+  }
+  return changes;
+}
+
+// A gate that renders a 4,000-character step array in full is as unreadable as one that hides
+// it. Values are bounded for display and say so — the same rule the transcript cap follows.
+const GATE_VALUE_CHARS = 300;
+
+// And a budget for the diff as a whole. Slack caps a message at 50 blocks, so a gate that
+// renders every value of every changed field on a large fix is a message Slack rejects — and a
+// gate nobody sees leaves the run suspended, which is the failure this whole change is about.
+const GATE_DIFF_CHARS = 6000;
+
+export function renderGateValue(value) {
+  const text = JSON.stringify(value);
+  if (text === undefined) return '_(absent)_';
+  return text.length > GATE_VALUE_CHARS
+    ? `${text.slice(0, GATE_VALUE_CHARS)} …[${text.length} chars total]`
+    : text;
+}
+
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
 
       case 'register_workflow': {
         const { name, domain = null, description = '', steps = [], intentPhrases = [], intentKeywords = null } = params;
+        const effectiveKeywords = deriveIntentKeywords(intentPhrases, intentKeywords);
 
         // The gate is where a human decides whether this workflow should exist. What
         // makes that decision possible is not the step JSON — it is whether the array
@@ -1196,9 +1328,11 @@ async function buildGateText(action, params, traceId) {
           intentPhrases.length
             ? `Invoked by: ${intentPhrases.map(p => `\`${p}\``).join(', ')}`
             : '_No invocation phrases supplied — the workflow will only be reachable by its exact name._',
-          intentKeywords?.length
-            ? `Routing keywords: ${intentKeywords.map(k => `\`${k}\``).join(', ')}`
-            : '_No intent_keywords — Pass 2 keyword routing will not match this workflow._',
+          effectiveKeywords?.length
+            ? `Routing keywords: ${effectiveKeywords.map(k => `\`${k}\``).join(', ')}${intentKeywords?.length ? '' : ' _(derived from the invocation phrases)_'}`
+            : domain
+              ? '_No invocation phrases and no intent_keywords — **registration will be refused**: a domain workflow must declare at least one phrase._'
+              : '_No invocation phrases and no intent_keywords — reachable only by its exact name._',
         ].filter(l => l !== '');
 
         return lines.join('\n');
@@ -1227,15 +1361,23 @@ async function buildGateText(action, params, traceId) {
         if (added.length)   lines.push(`Added steps: ${added.join(', ')}`);
         if (removed.length) lines.push(`Removed steps: ${removed.join(', ')}`);
 
-        const DIFF_FIELDS = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
+        // Every changed field is named, always. Values are rendered until the gate reaches a
+        // size Slack will still post, and past that the names stand alone — a field is never
+        // dropped without the user seeing it was touched.
+        let spent = 0;
         for (const key of changed) {
-          const cur  = currentMap[key];
-          const prop = proposedMap[key];
+          const cur     = currentMap[key];
+          const prop    = proposedMap[key];
+          const changes = Object.entries(diffStepFields(cur, prop));
           lines.push(`\n**Step ${key}** — ${cur.description ?? cur.type}:`);
-          for (const field of DIFF_FIELDS) {
-            if (JSON.stringify(cur[field]) !== JSON.stringify(prop[field])) {
-              lines.push(`  \`${field}\`: \`${JSON.stringify(cur[field])}\` → \`${JSON.stringify(prop[field])}\``);
-            }
+          if (spent > GATE_DIFF_CHARS) {
+            lines.push(`  changed: ${changes.map(([f]) => `\`${f}\``).join(', ')} _(values withheld — gate size)_`);
+            continue;
+          }
+          for (const [field, { from, to }] of changes) {
+            const line = `  \`${field}\`: \`${renderGateValue(from)}\` → \`${renderGateValue(to)}\``;
+            lines.push(line);
+            spent += line.length;
           }
         }
 
@@ -1283,6 +1425,120 @@ async function buildGateText(action, params, traceId) {
             lines.push(`\`\`\`json\n${JSON.stringify(params, null, 2)}\n\`\`\``);
         }
         return lines.join('\n');
+      }
+
+      case 'manage_routing_aliases': {
+        const { workflowName = null, domain = null, add = [], remove = [] } = params;
+        const additions = (Array.isArray(add)    ? add    : []).map(s => String(s).trim()).filter(Boolean);
+        const removals  = (Array.isArray(remove) ? remove : []).map(s => String(s).trim()).filter(Boolean);
+
+        if (!workflowName && !domain) {
+          return { error: 'Name either workflowName or domain. workflowName edits the phrases that start a workflow; domain edits the words that resolve to a domain.' };
+        }
+        if (workflowName && domain) {
+          return { error: 'Name one of workflowName or domain, not both — they are different surfaces.' };
+        }
+        if (additions.length === 0 && removals.length === 0) {
+          return { error: 'Nothing to do — supply add, remove, or both.' };
+        }
+
+        if (domain) {
+          const helpResp = await getRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }], null, 1, null, ['id', 'domain', 'aliases']);
+          const helpRow  = helpResp.rows?.[0];
+          if (!helpRow) return { error: `No PGC_DomainHelp row for domain "${domain}".` };
+
+          // An alias bound to another domain would misroute domain resolution, and the caller
+          // cannot see that from here — it is a row on a table they did not read.
+          const allResp   = await getRows('PGC_DomainHelp', [], null, null, null, ['domain', 'aliases']);
+          const conflicts = [];
+          for (const other of allResp.rows ?? []) {
+            if (other.domain === domain) continue;
+            for (const alias of additions) {
+              if ((other.aliases ?? []).some(a => String(a).toLowerCase() === alias.toLowerCase())) {
+                conflicts.push({ alias, resolves_to: other.domain });
+              }
+            }
+          }
+          if (conflicts.length > 0) {
+            return { error: 'One or more aliases already resolve to a different domain.', conflicts };
+          }
+
+          const before = Array.isArray(helpRow.aliases) ? helpRow.aliases : [];
+          const after  = applyAliasDelta(before, { add: additions, remove: removals }, domain);
+          const resp   = await updateRows('PGC_DomainHelp', [{ column: 'domain', op: 'eq', value: domain }], { aliases: after });
+          if (!resp.success) return { error: `PGC_DomainHelp update failed: ${resp.error}` };
+
+          const lower = list => list.map(v => String(v).toLowerCase());
+          return {
+            success:  true,
+            target:   'domain',
+            domain,
+            aliases:  after,
+            added:    after.filter(a => !lower(before).includes(a.toLowerCase())),
+            removed:  before.filter(b => !lower(after).includes(String(b).toLowerCase())),
+            // aliases is part of this row's embed_source, so SERV recomputes the domain
+            // embedding on the update — the change reaches classify-intent, not just /help.
+            note:     'Domain embedding recomputed from the new alias list.',
+          };
+        }
+
+        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], null, 1, null, ['id', 'name', 'domain', 'intent_keywords']);
+        const wf     = wfResp.rows?.[0];
+        if (!wf) return { error: `Workflow "${workflowName}" not found.` };
+
+        const imResp = await getRows('PGC_IntentMap', [{ column: 'action_type', op: 'eq', value: 'workflow' }], { column: 'id', direction: 'asc' }, null, null, ['id', 'pattern', 'intent_category', 'workflow_id']);
+        const imRows = imResp.rows ?? [];
+
+        // Pass 1 matches an exact pattern and would take one of them. Resolving the collision
+        // before it is written beats discovering it when the wrong workflow runs.
+        const clashes = [];
+        for (const phrase of additions) {
+          const clash = imRows.find(r => String(r.pattern).toLowerCase() === phrase.toLowerCase() && r.intent_category !== workflowName);
+          if (clash) clashes.push({ phrase, starts: clash.intent_category });
+        }
+        if (clashes.length > 0) {
+          return { error: 'One or more phrases already start a different workflow. Remove it there first, or choose another phrase.', conflicts: clashes };
+        }
+
+        // The workflow's own name is the route of last resort — buildIntentMapRows seeds it
+        // and /help falls back to it. It is never removed.
+        const removable = removals.filter(r => r.toLowerCase() !== String(workflowName).toLowerCase());
+        const refused   = removals.length !== removable.length ? workflowName : null;
+
+        const mine     = imRows.filter(r => r.intent_category === workflowName);
+        const existing = new Set(mine.map(r => String(r.pattern).toLowerCase()));
+        const toInsert = additions.filter(a => !existing.has(a.toLowerCase()));
+        if (toInsert.length > 0) {
+          const resp = await insertRows('PGC_IntentMap', toInsert.map(pattern => ({
+            pattern, intent_category: workflowName, action_type: 'workflow', workflow_id: wf.id, source: 'user',
+          })));
+          if (!resp.success) return { error: `PGC_IntentMap insert failed: ${resp.error}` };
+        }
+
+        let deleted = 0;
+        for (const phrase of removable) {
+          const row = mine.find(r => String(r.pattern).toLowerCase() === phrase.toLowerCase());
+          if (!row) continue;
+          const resp = await deleteRows('PGC_IntentMap', [{ column: 'id', op: 'eq', value: String(row.id) }]);
+          if (resp.success) deleted += 1;
+        }
+
+        // Pass 1 and Pass 2 are two surfaces for one idea — how the user starts this workflow.
+        // A phrase added to the map joins the keyword scan; one removed leaves both.
+        const keywords = applyAliasDelta(wf.intent_keywords, { add: additions, remove: removable });
+        const kwResp   = await updateRows('PGC_Workflow', [{ column: 'id', op: 'eq', value: String(wf.id) }], { intent_keywords: keywords });
+        if (!kwResp.success) return { error: `PGC_Workflow intent_keywords update failed: ${kwResp.error}` };
+
+        return {
+          success:         true,
+          target:          'workflow',
+          workflow:        workflowName,
+          workflow_id:     wf.id,
+          phrases_added:   toInsert.length,
+          phrases_removed: deleted,
+          intent_keywords: keywords,
+          ...(refused ? { refused_removal: `"${refused}" is the workflow's own name and stays — it is the route of last resort.` } : {}),
+        };
       }
 
       case 'delete_data': {
@@ -1424,6 +1680,7 @@ async function executeWriteTool(action, params, traceId) {
 
       case 'register_workflow': {
         const { name, domain = null, description = '', steps, intentPhrases = [], intentKeywords = null } = params;
+        const effectiveKeywords = deriveIntentKeywords(intentPhrases, intentKeywords);
         if (!name || !Array.isArray(steps) || steps.length === 0) {
           return { error: 'name and a non-empty steps array are required' };
         }
@@ -1436,6 +1693,19 @@ async function executeWriteTool(action, params, traceId) {
           return {
             error: `A workflow named "${name}" already exists (id ${existing.rows[0].id}, v${existing.rows[0].version}). ` +
                    'Use propose_workflow_fix to change it, or register under a different name.',
+          };
+        }
+
+        // A domain workflow with no phrase at all is reachable only by its exact name, and
+        // that is not a workflow anybody finds twice. The generic CRUD workflows compete
+        // inside every domain — update_entity claims "update", "edit", "modify", "change" —
+        // so one with no keywords cannot win a scan it is nominally part of. A domain-less
+        // system workflow legitimately has none, which is why this is not a universal rule.
+        if (domain && !effectiveKeywords) {
+          return {
+            error: `A workflow in domain "${domain}" needs at least one invocation phrase. ` +
+                   'Pass intentPhrases — intent_keywords derive from them when omitted. ' +
+                   'Ask the user what they want to type to start it; the phrases are theirs to choose.',
           };
         }
 
@@ -1459,7 +1729,7 @@ async function executeWriteTool(action, params, traceId) {
           steps,
           version: 1,
           state_strategy: 'sequential_with_confirmation',
-          intent_keywords: intentKeywords,
+          intent_keywords: effectiveKeywords,
         });
         if (!wfResp.success) return { error: `PGC_Workflow insert failed: ${wfResp.error}` };
 
@@ -1475,6 +1745,7 @@ async function executeWriteTool(action, params, traceId) {
           domain,
           version:            1,
           step_count:         steps.length,
+          intent_keywords:    effectiveKeywords,
           intent_rows_written: imResp.success ? intentRows.length : 0,
           // A failed intent map write leaves a registered workflow that routing cannot
           // reach by phrase. Reported rather than swallowed, so the next turn can fix it.
@@ -1494,7 +1765,6 @@ async function executeWriteTool(action, params, traceId) {
         const currentMap   = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
         const proposedMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
         const allKeys      = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
-        const DIFF_FIELDS  = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
 
         const diff = {};
         for (const key of allKeys) {
@@ -1503,12 +1773,7 @@ async function executeWriteTool(action, params, traceId) {
           } else if (!proposedMap[key]) {
             diff[key] = { change: 'removed' };
           } else {
-            const fieldChanges = {};
-            for (const field of DIFF_FIELDS) {
-              if (JSON.stringify(currentMap[key][field]) !== JSON.stringify(proposedMap[key][field])) {
-                fieldChanges[field] = { from: currentMap[key][field], to: proposedMap[key][field] };
-              }
-            }
+            const fieldChanges = diffStepFields(currentMap[key], proposedMap[key]);
             if (Object.keys(fieldChanges).length > 0) diff[key] = fieldChanges;
           }
         }
@@ -1849,16 +2114,42 @@ async function assembleContext() {
 // step arrays she had submitted, and truncating them here would reintroduce it.
 const MAX_TOOL_OUTPUT_CHARS = 15000;
 
+// What one read_session_entry page may return. Deliberately below the cap above, with room for
+// the envelope: a recall window that could itself be capped would truncate the very tail it was
+// called to recover, and the model would have no way to tell the two truncations apart.
+const MAX_RECALL_CHARS = 12000;
+
 const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
 
 // A respond whose round ended without the user typing anything back. The call is real and the
 // gateway rejects a call with no output, so it closes here rather than being left open.
 const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' });
 
-function capOutput(text) {
-  return text.length > MAX_TOOL_OUTPUT_CHARS
-    ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated]`
-    : text;
+/**
+ * Bound a tool result for the transcript, and say so where it is bounded.
+ *
+ * A bounded view must carry its own provenance — how much was withheld, and how to get the
+ * rest. Truncating silently is what left Novia rewriting step 13 of `process_receipt` from
+ * memory: `read_workflow` returned 19,125 characters, the last 4,125 were dropped, and nothing
+ * in the transcript said so. The full result is always in PGC_SessionEntry — the cap applies
+ * to the copy handed to the gateway, never to the persisted row — so what was missing was the
+ * handle, not the store.
+ *
+ * The handle is the entry's `sequence_number`, never its `id`. In-round the history carries
+ * only { role, content, sequence_number }; on rebuild it carries the whole row. A marker built
+ * from `id` would render one way in-round and another on resume, diverging the prefix and
+ * forfeiting the round's cache credit. Both paths know the sequence number, so the function
+ * stays pure and both renderings stay byte-identical.
+ *
+ * @param {string} text   The serialised tool result
+ * @param {number} [seq]  Sequence number of the entry holding the full result
+ */
+function capOutput(text, seq) {
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const recall = seq === undefined || seq === null
+    ? ''
+    : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
+  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${recall}]`;
 }
 
 /**
@@ -1942,7 +2233,7 @@ export function toInputItems(workingHistory = []) {
       // a resumed round append-only. The alternative — a trailing user item — forfeits the
       // round's entire prefix credit, measured at $0.219 on a 56k transcript.
       if (pending?.kind === 'respond') {
-        closePending(capOutput(JSON.stringify({ user_reply: text })));
+        closePending(capOutput(JSON.stringify({ user_reply: text }), entry?.sequence_number));
         return;
       }
       // Otherwise the user ignored a gate and sent a new message instead of answering it.
@@ -1998,7 +2289,7 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null)));
+      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number));
       return;
     }
 
@@ -2016,7 +2307,7 @@ export function toInputItems(workingHistory = []) {
     items.push({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null)),
+      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number),
     });
   });
 
@@ -2025,18 +2316,74 @@ export function toInputItems(workingHistory = []) {
   return items;
 }
 
+/**
+ * Project a workflow's step array down to what was actually asked for.
+ *
+ * `read_workflow` returning all 28 steps of `process_receipt` is 19,125 characters, past the
+ * transcript cap, so the last two steps never arrived — which is how a step 13 rewrite lost
+ * the alias count. The remedy is not a bigger cap: it is not fetching what was not wanted.
+ *
+ * `outline` gives shape before content — step, type, what it writes, where it routes, how big
+ * it is — so a specific step can be named and then read whole. Neither view is silent about
+ * being partial: both report the full step count, and a selector reports what it could not find.
+ *
+ * @param {Array}  steps            The workflow's full step array
+ * @param {object} [opts]
+ * @param {Array}  [opts.selected]  Step identifiers to return whole
+ * @param {boolean}[opts.outline]   Return one summary line per step instead of the steps
+ */
+export function projectWorkflowSteps(steps, { selected, outline } = {}) {
+  const all = Array.isArray(steps) ? steps : [];
+
+  if (outline) {
+    return {
+      step_count: all.length,
+      outline: all.map(s => ({
+        step:        s?.step ?? null,
+        type:        s?.type ?? null,
+        output_key:  s?.output_key ?? null,
+        on_success:  s?.on_success ?? null,
+        on_else:     s?.on_else ?? null,
+        description: s?.description ?? null,
+        chars:       JSON.stringify(s ?? null).length,
+      })),
+      note: 'Outline only. Call read_workflow again with steps: ["<step>"] to read any of these whole.',
+    };
+  }
+
+  if (Array.isArray(selected) && selected.length > 0) {
+    const wanted = selected.map(String);
+    const picked = all.filter(s => wanted.includes(String(s?.step)));
+    const missing = wanted.filter(w => !all.some(s => String(s?.step) === w));
+    return {
+      step_count: all.length,
+      steps:      picked,
+      returned:   picked.map(s => s?.step),
+      omitted:    all.length - picked.length,
+      ...(missing.length && { not_found: missing }),
+    };
+  }
+
+  return { step_count: all.length, steps: all };
+}
+
 // ---------------------------------------------------------------------------
 // Execute a read tool and return the result object
 // ---------------------------------------------------------------------------
 
-async function executeReadTool(action, params, traceId) {
+async function executeReadTool(action, params, traceId, session) {
   try {
     switch (action) {
 
       case 'query_table': {
-        const { tableName, filters = [], orderBy, limit, vectorSearch } = params;
+        const { tableName, filters = [], orderBy, limit, vectorSearch, columns } = params;
         if (!tableName) return { error: 'tableName is required' };
-        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch);
+        // `columns` projects at SERV rather than returning whole rows for one field. This is
+        // the largest single source of capped results — 28 of the 50 tool results that have
+        // ever exceeded the transcript cap were query_table, the worst at 120,821 characters,
+        // because a JSONB column comes back whole. getRows has taken the whitelist since
+        // Sprint 10; it simply was never passed through here.
+        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch, columns);
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 
@@ -2046,6 +2393,55 @@ async function executeReadTool(action, params, traceId) {
         const { servPost } = await import('../shared/serv-client.mjs');
         const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
+      }
+
+      // The other half of the cap: every tool result is persisted to PGC_SessionEntry in full,
+      // and only the copy handed to the gateway is bounded. This reads the stored row back, so
+      // a truncated tail is recoverable rather than lost. Bounded itself, and it says how much
+      // is left — paging is the caller's decision, not a silent one.
+      case 'read_session_entry': {
+        const { sequence, offset = 0, limit, path } = params;
+        if (sequence === undefined || sequence === null) return { error: 'sequence is required' };
+        if (!session?.id) return { error: 'read_session_entry is only available inside a session' };
+
+        const resp = await getRows(
+          'PGC_SessionEntry',
+          [
+            { column: 'session_id',      op: 'eq', value: session.id },
+            { column: 'sequence_number', op: 'eq', value: sequence },
+          ],
+          null,
+          1
+        );
+        const row = resp.rows?.[0];
+        if (!row) return { error: `No entry at sequence ${sequence} in session ${session.id}` };
+
+        let stored = null;
+        try { stored = JSON.parse(row.content); } catch { /* a plain user message, not a JSON entry */ }
+        // The stored envelope is { tool, params, result, items }. `result` is what the model
+        // saw; `items` is the gateway's own echo of the call and is noise on the way back.
+        const payload  = stored && 'result' in stored ? stored.result : (stored ?? row.content);
+        const selected = path ? resolvePath(payload, path) : payload;
+        const text     = typeof selected === 'string' ? selected : JSON.stringify(selected ?? null);
+
+        const start     = Math.max(0, Number(offset) || 0);
+        const window    = Math.min(Number(limit) || MAX_RECALL_CHARS, MAX_RECALL_CHARS);
+        const slice     = text.slice(start, start + window);
+        const remaining = Math.max(0, text.length - (start + slice.length));
+
+        return {
+          sequence,
+          tool:           stored?.tool ?? null,
+          ...(path && { path }),
+          total_chars:    text.length,
+          offset:         start,
+          returned_chars: slice.length,
+          remaining,
+          content:        slice,
+          ...(remaining > 0 && {
+            note: `Call again with offset: ${start + slice.length} for the next ${Math.min(remaining, MAX_RECALL_CHARS)} characters.`,
+          }),
+        };
       }
 
       case 'list_capabilities': {
@@ -2081,7 +2477,7 @@ async function executeReadTool(action, params, traceId) {
       }
 
       case 'read_workflow': {
-        const { workflowName } = params;
+        const { workflowName, steps: selected, outline } = params;
         if (!workflowName) return { error: 'workflowName is required' };
         const resp = await getRows(
           'PGC_Workflow',
@@ -2100,7 +2496,7 @@ async function executeReadTool(action, params, traceId) {
           // are the keys the workflow READS — supplying a key it does not read is silently
           // discarded, and omitting one it does read resolves to undefined with no error.
           expected_input: expectedRunInput(wf.steps),
-          steps:       wf.steps,
+          ...projectWorkflowSteps(wf.steps, { selected, outline }),
         };
       }
 
@@ -2136,13 +2532,42 @@ async function executeReadTool(action, params, traceId) {
           5,
           { column: 'embedding', queryText: query, threshold: 0.4 }
         );
+        const rows = resp.rows ?? [];
+
+        // What a domain can do is read from PGC_Workflow, never cached in
+        // PGC_DomainHelp.commands — the same rule /help follows. Without this the tool
+        // that resolves which domain a request is about cannot see any workflow
+        // registered after the domain was created, including the ones this tool's own
+        // caller built.
+        const domains  = rows.map(r => r.domain).filter(Boolean);
+        const wfResp   = domains.length > 0
+          ? await getRows(
+              'PGC_Workflow',
+              [{ column: 'domain', op: 'in', value: domains }],
+              { column: 'id', direction: 'asc' },
+              null,
+              null,
+              ['id', 'name', 'domain', 'description', 'intent_keywords']
+            )
+          : { rows: [] };
+        const byDomain = {};
+        for (const wf of wfResp.rows ?? []) {
+          (byDomain[wf.domain] = byDomain[wf.domain] ?? []).push({
+            id:              wf.id,
+            name:            wf.name,
+            description:     wf.description,
+            intent_keywords: wf.intent_keywords,
+          });
+        }
+
         return {
           count: resp.count,
-          results: (resp.rows ?? []).map(r => ({
+          results: rows.map(r => ({
             domain:      r.domain,
             description: r.description,
             aliases:     r.aliases,
             commands:    r.commands,
+            workflows:   byDomain[r.domain] ?? [],
             similarity:  r.similarity,
           })),
         };

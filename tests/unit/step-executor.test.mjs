@@ -491,15 +491,32 @@ describe('help step 2 — buildHelpOptions expression', () => {
 });
 
 describe('help step 4 — resolveHelpContent expression', () => {
+  // Step 2 now indexes live PGC_Workflow rows and their PGC_IntentMap phrases by
+  // domain, and derives the verb set the command filter tests against — so the
+  // fixture carries what step 2 actually produces, not just the domain map.
   const HELP_OPTIONS = {
-    domainButtons: [],
+    domainButtons:  [],
+    genericVerbs:   ['list', 'get', 'add', 'update', 'delete'],
+    workflowsByDomain: {
+      recipes: [
+        {
+          name:        'plan_week',
+          description: 'Plan a week of meals',
+          primary:     'plan my week',
+          also:        ['weekly plan'],
+          more:        0,
+        },
+      ],
+    },
     domainMap: {
       recipes: {
         domain:      'recipes',
         description: 'Manage your recipe collection',
+        aliases:     ['recipes', 'cookbook'],
         commands: [
           { syntax: '/m list recipes',   description: 'List all recipes' },
           { syntax: '/m add recipe ...',  description: 'Add a new recipe' },
+          { syntax: '/m braise recipes', description: 'Residue of a workflow that no longer exists' },
         ],
       },
     },
@@ -516,6 +533,42 @@ describe('help step 4 — resolveHelpContent expression', () => {
     assert.equal(result.selection, 'recipes');
     assert.ok(result.content.includes('Manage your recipe collection'));
     assert.ok(result.content.includes('/m list recipes'));
+  });
+
+  it('renders live workflows with the phrases that reach them', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: 'recipes', help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.ok(result.content.includes('*Workflows:*'));
+    assert.ok(result.content.includes('/m plan my week'));
+    assert.ok(result.content.includes('weekly plan'));   // alternate phrases stay discoverable
+  });
+
+  it('drops a stored command whose verb no generic workflow routes', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: 'recipes', help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.ok(!result.content.includes('/m braise recipes'));
+    assert.ok(result.content.includes('/m list recipes'));
+  });
+
+  it('surfaces domain aliases, excluding the domain name itself', () => {
+    const step = getStep('help', '4');
+    const result = runSandboxedExpression(
+      step.expression,
+      HELP_OPTIONS,
+      { help_selection: 'recipes', help_options: HELP_OPTIONS },
+      'test'
+    );
+    assert.ok(result.content.includes('also answers to: cookbook'));
   });
 
   it('returns fallback message for unknown selection', () => {

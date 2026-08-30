@@ -216,7 +216,8 @@ describe('toInputItems — truncation', () => {
     const items = toInputItems([tool(1, 'run_sql', {}, { rows: huge })]);
     const out   = items.find(i => i.type === 'function_call_output').output;
     assert.ok(out.length < 20000, 'output must be capped');
-    assert.ok(out.endsWith('...[truncated]'), 'and say so, rather than ending mid-value');
+    assert.ok(out.endsWith(']'), 'and say so, rather than ending mid-value');
+    assert.match(out, /\.\.\.\[truncated: /, 'the notice names the cut');
   });
 
   it('NEVER caps a call arguments — that is Novia\'s own submitted work', () => {
@@ -330,7 +331,34 @@ describe('toInputItems — replayed gateway items', () => {
     const raw   = gwCall('toolu_B', 'run_sql', JSON.stringify({ sql: big }));
     const items = toInputItems([toolWithItems(1, 'run_sql', { sql: big }, { rows: big }, [raw])]);
     assert.equal(items[0].arguments.length, raw.arguments.length, 'arguments untouched');
-    assert.ok(items[1].output.endsWith('...[truncated]'), 'output capped');
+    assert.match(items[1].output, /\.\.\.\[truncated: /, 'output capped');
+  });
+
+  // A bounded view that does not say it is bounded is why step 13 of process_receipt was
+  // rewritten from memory: read_workflow returned 19,125 characters, the last 4,125 were
+  // dropped, and the transcript said only "...[truncated]".
+  it('says how much a capped output withheld', () => {
+    const big   = 'x'.repeat(40000);
+    const items = toInputItems([tool(7, 'run_sql', {}, { rows: big })]);
+    const total = JSON.stringify({ rows: big }).length;
+    assert.match(items[1].output, new RegExp(`truncated: 15000 of ${total} characters shown`));
+  });
+
+  // The handle must be the sequence number, never the row id: in-round the history carries
+  // only { role, content, sequence_number }, so an id-based marker would render one way live
+  // and another on resume, diverging the prefix and forfeiting the round's cache credit.
+  it('names the session entry holding the rest, by sequence number', () => {
+    const items = toInputItems([tool(42, 'query_table', {}, { rows: 'y'.repeat(40000) })]);
+    assert.match(items[1].output, /session entry sequence 42/);
+    assert.match(items[1].output, /read_session_entry\(\{ sequence: 42, offset: 15000 \}\)/);
+  });
+
+  it('renders the same history to the same bytes every time', () => {
+    const history = [
+      tool(1, 'read_workflow', { workflowName: 'w' }, { steps: 'z'.repeat(40000) }),
+      tool(2, 'list_tables', {}, { tables: [] }),
+    ];
+    assert.deepEqual(toInputItems(history), toInputItems(history));
   });
 
   it('falls back to synthesis for entries written before items existed', () => {

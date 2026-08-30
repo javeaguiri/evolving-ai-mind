@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildIntentMapRows, deriveScope } from '../../src/proc/minds-eye.mjs';
+import { applyAliasDelta, buildIntentMapRows, deriveIntentKeywords, deriveScope } from '../../src/proc/minds-eye.mjs';
 
 const procSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
 
@@ -119,5 +119,83 @@ describe('register_workflow — harness registration', () => {
     const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? '';
     assert.match(block, /already exists/);
     assert.match(block, /propose_workflow_fix/);
+  });
+});
+
+describe("register_workflow — intent_keywords derivation", () => {
+
+  it("derives keywords from the invocation phrases when the field is omitted", () => {
+    assert.deepEqual(
+      deriveIntentKeywords(["log a book", "add reading"], null),
+      ["log a book", "add reading"]
+    );
+  });
+
+  it("keeps supplied keywords — derivation fills a gap, it does not overrule a decision", () => {
+    assert.deepEqual(deriveIntentKeywords(["log a book"], ["reading"]), ["reading"]);
+  });
+
+  it("dedupes case-insensitively and drops blanks", () => {
+    assert.deepEqual(
+      deriveIntentKeywords(["log a book", "Log A Book", "  ", "add reading"], null),
+      ["log a book", "add reading"]
+    );
+  });
+
+  it("returns null when there is nothing to derive from, so the gate can still warn", () => {
+    assert.equal(deriveIntentKeywords([], null), null);
+    assert.equal(deriveIntentKeywords([], []), null);
+  });
+
+  it("the write persists the derived value, not the raw parameter", () => {
+    const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? "";
+    assert.match(block, /intent_keywords: effectiveKeywords/);
+  });
+});
+
+describe("manage_routing_aliases — applyAliasDelta", () => {
+
+  it("appends additions at the end and drops removals", () => {
+    assert.deepEqual(
+      applyAliasDelta(["test me", "quiz cards"], { add: ["echame tarjetas"], remove: ["test me"] }),
+      ["quiz cards", "echame tarjetas"]
+    );
+  });
+
+  it("is case-insensitive on both sides — a phrase retyped differently is the same phrase", () => {
+    assert.deepEqual(applyAliasDelta(["Test Me"], { remove: ["test me"] }), []);
+    assert.deepEqual(applyAliasDelta(["test me"], { add: ["TEST ME"] }), ["test me"]);
+  });
+
+  it("never removes the protected value — it is the route of last resort", () => {
+    assert.deepEqual(
+      applyAliasDelta(["flashcard_quiz", "test me"], { remove: ["FLASHCARD_QUIZ", "test me"] }, "flashcard_quiz"),
+      ["flashcard_quiz"]
+    );
+  });
+
+  it("tolerates a null list and blank entries rather than throwing", () => {
+    assert.deepEqual(applyAliasDelta(null, { add: ["  a  ", "", "  "] }), ["a"]);
+    assert.deepEqual(applyAliasDelta(undefined, {}), []);
+  });
+
+  it("refuses a phrase already bound to another workflow instead of shadowing it", () => {
+    const block = procSrc.match(/case 'manage_routing_aliases': \{[\s\S]*?\n      \}/)?.[0] ?? "";
+    assert.match(block, /already start a different workflow/);
+    assert.match(block, /already resolve to a different domain/);
+  });
+});
+
+describe("register_workflow — a domain workflow must declare a phrase", () => {
+
+  it("refuses when neither intentPhrases nor intentKeywords is supplied", () => {
+    const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? "";
+    assert.match(block, /needs at least one invocation phrase/);
+    assert.match(block, /if \(domain && !effectiveKeywords\)/);
+  });
+
+  it("leaves a domain-less system workflow alone — ping_core legitimately has none", () => {
+    const block = procSrc.match(/case 'register_workflow': \{[\s\S]*?\n      \}/g)?.pop() ?? "";
+    assert.doesNotMatch(block, /if \(!effectiveKeywords\)/);
   });
 });
