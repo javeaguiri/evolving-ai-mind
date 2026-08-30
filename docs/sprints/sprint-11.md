@@ -1,6 +1,11 @@
 # Sprint 11 — Usability and Administration
 
-**Status: SCOPED 2026-08-22. Branch `sprint/11-usability-and-admin`.**
+**Status: CLOSED EARLY 2026-08-30. Branch `sprint/11-usability-and-admin`.**
+
+> **Outcome: 2 of 6 ACs met, plus one unplanned deliverable that became the sprint's real work.**
+> Closed early by decision: AC2 and AC3 both route through Novia editing or building a workflow,
+> and that loop was found to be blind at both ends. Running them before fixing it would have
+> measured the same gap twice. See §Outcome.
 
 > **Read before implementing:** `docs/sprints/sprint-10.md` §RETRO (especially items 1, 2 and 3),
 > `docs/backlog.md` §High Priority, and `docs/arch-minds-eye.md` §12.
@@ -163,16 +168,16 @@ schedule them.**
 
 ## Sprint Close Checklist
 
-- [ ] `node --test tests/unit/*.test.mjs` passes
-- [ ] L0/L1/L2 pass on every workflow built or modified this sprint
-- [ ] `CLAUDE.md` "Current State" updated
-- [ ] `docs/architecture.md` updated if any `.mjs` added/removed/renamed or any decision made
-- [ ] `docs/arch-data.md` updated if any schema changes
-- [ ] `docs/arch-workflow-patterns.md` / `docs/arch-step-types.md` updated if the reveal contract changes
-- [ ] `README.md` updated if environment setup or bootstrap changed
-- [ ] `docs/backlog.md` updated — items completed, new items added
-- [ ] `docs/sprints/CURRENT.md` → `docs/sprints/sprint-11.md` with outcome notes and a retro
-- [ ] **AC6 — the release-readiness decision is written down**
+- [x] `node --test tests/unit/*.test.mjs` passes — **1044 pass, 0 fail** (997 at sprint open)
+- [x] L0/L1/L2 — no workflow was modified by this sprint's code. `process_receipt` v8 was changed by Novia through `propose_workflow_fix`, simulated twice in session 1177 before submission
+- [x] `CLAUDE.md` "Current State" updated
+- [x] `docs/architecture.md` → 3.9. No `.mjs` added or removed; the bounded-views rule recorded in §1.5, and the `minds-eye.mjs` / `run-workflow.mjs` rows updated
+- [x] `docs/arch-data.md` — `PGC_WorkflowRunStep.output_snapshot` shape documented, both forms and how to tell them apart
+- [x] Reveal contract unchanged this session — the chunking shipped in session 4 and is documented there
+- [x] `README.md` — no environment, bootstrap or infrastructure change
+- [x] `docs/backlog.md` — 3 entries resolved, 4 added. Domain readout items went to `docs/receipt-matching-analysis.md`, not here
+- [x] `docs/sprints/CURRENT.md` → `docs/sprints/sprint-11.md` with outcome, validation and retro
+- [x] **AC6 — decided: scoped into Sprint 12.** See §Outcome
 
 ---
 
@@ -551,3 +556,196 @@ Two other things to resolve while you are in step 13:
 Submit as one propose_workflow_fix. Read the current array with read_workflow and change
 only step 13 — the gate now shows me every field you touch, including message_template.
 ```
+
+### Session 8 — 2026-08-30 — the repair loop, fixed at both ends, and the instruction that caused it
+
+**The two engine defects from the 2026-08-27 priority call are fixed, deployed and instructed.**
+The session started there and found two more, one of them larger than either.
+
+**The diagnosis was that three backlog entries were one mistake made three times:** truncating by
+bytes where the correct operation is summarising by structure, and doing it silently. The rule
+that falls out — **a bounded view must carry its own provenance, how much was withheld and how to
+get the rest** — is now recorded in `architecture.md` §1.5.
+
+**Measured before designing, and it inverted the plan.** Across 898 Novia tool entries, 50 (5.6%)
+exceed the 15,000-character cap; the worst discards 87.6% of 120,821 characters. By tool:
+`query_table` **28**, `propose_workflow_fix` 7, `run_sql` 6, `read_workflow` **5**. The specimen the
+backlog was written from is 10% of the problem, and a step selector on `read_workflow` would have
+fixed five of fifty. The dominant class is a large JSONB column returned whole.
+
+**The spool already existed.** `capOutput` is applied only when building the item array for the
+gateway; the write to `PGC_SessionEntry` is uncapped. Every one of those 120,821 characters was
+already in the database, and `run_sql` could already read it. What was missing was the handle.
+
+**Shipped (`2483b17`):**
+- `capOutput` states what it withheld and names the session entry sequence holding the rest. The
+  handle is `sequence_number`, **never `id`** — in-round history carries only
+  `{ role, content, sequence_number }`, so an id-based marker would render differently on resume,
+  diverge the prefix and forfeit the round's cache credit. A test now asserts the two renderings
+  are byte-identical.
+- `query_table` passes `columns` to `getRows`, which has accepted the whitelist since Sprint 10 and
+  was never given it. The dominant class, prevented at source.
+- `read_session_entry` — a bounded pager over the stored result, with offset and an optional
+  JSONPath, capped below the transcript cap so a recall can never itself truncate.
+- `read_workflow` takes `outline` and `steps`.
+- `diffStepFields` replaces **both** copies of `DIFF_FIELDS`. Every changed field is named always;
+  values render until a whole-diff budget, past which the names still stand — Slack caps a message
+  at 50 blocks and a gate nobody sees leaves the run suspended.
+- Both `PGC_SessionEntry` loads pass an explicit limit and refuse a partial page.
+- `output_snapshot` is `{ summary, chars, structure }`.
+
+**The fourth defect, found while tracing the rebuild.** Both session loads passed no `limit`, so
+SERV's default of 100 applied. Rows come back ascending and `nextSeq` is derived from that page, so
+a session past 100 entries would load its **oldest** 100, compute `nextSeq = 101`, collide with
+`uq_pgc_sessionentry_session_seq`, and die — identically on every subsequent resume. **Not yet
+fired:** the largest Novia session is 83 entries, and it stopped there because the 240s wall killed
+it, not because it finished. Masked by one budget, waiting on another being raised.
+
+**Then the larger one: the instruction layer had told her to do the impossible thing.**
+`minds_eye_system_prompt` v31's repair block said *"Copy every unaffected step exactly as returned
+by read_workflow"* and *"Never call read_workflow for a workflow already in this session."* Against
+a 19,125-character workflow and a 15,000-character cap, those instruct copying what was never shown
+and then forbid the recovery. Her account — *"I composed step 13's message_template from memory
+rather than copying it verbatim"* — was her following them as literally as the transcript allowed.
+The engine fix alone would have left that standing, and it had begun to contradict the newly
+deployed tool schema outright.
+
+**Shipped (`e3ff7c0`):** `minds_eye_system_prompt` v32 — outline → targeted read, a truncation
+notice means the result is INCOMPLETE and names where the rest is, range-reading for a workflow
+that does not fit one result, and the "do not call twice" guard kept but re-scoped to *projection*.
+`minds_eye_context_index` v3 — the `output_snapshot` caveat was true this morning and false this
+afternoon, so it is **dated rather than flipped**: both shapes are in the table, and `structure`
+answers what shape and how many, never values. Its join path now names the distinction that was
+never drawn across ~40 SQL calls in session 1173 — a key in `local_state` but in no step's
+`output_snapshot` was *derived* by a later step, not recorded by the one being read.
+
+**Deployed to prod:** `sam deploy`, `upsert-system-context` (3 rows across two runs).
+997 → **1044** unit tests.
+
+---
+
+## Outcome
+
+| AC | Track | Result |
+|---|---|---|
+| **AC1** | A — `/help` | ✅ **MET** — verified live on `flashcards` (08-23), `inventory` and `budgets_expenses` (08-30) |
+| **AC2** | B — correction workflow | ❌ **Not met** — not started |
+| **AC3** | C — vector thresholds | ❌ **Not met** — not started; both still at the inherited 0.4 |
+| **AC4** | D — reveal scrolling | ✅ **MET** — chunked at 8 rows, header repeated, verified live |
+| **AC5** | E — `edit_budget` retest | ❌ **Not met** — not started |
+| **AC6** | — release-readiness decision | ✅ **MET** — decided, below |
+
+**Plus the sprint's actual body of work, which was never an AC:** the repair-loop fixes from the
+2026-08-27 priority call — four engine defects and two instruction defects, measured, fixed,
+deployed.
+
+### AC6 — the release-readiness decision
+
+**Decision, 2026-08-30: scoped into Sprint 12.** Not deferred a sixth time.
+
+The reason it is scoped rather than done here: Sprint 12 opens with `propose_workflow_fix` accepting
+a patch, then builds a workflow (Track B) and calibrates thresholds against live data (Track C).
+Every one of those wants a place to be validated that is not production. The interim process —
+*deploy the branch to prod, validate, then merge* — is what this sprint did again today, and it is
+the thing a test environment removes. Pairing release-readiness with the sprint that most needs it
+is the first time in six sprints that it has had a reason to be first rather than a reason to wait.
+
+---
+
+## Validation — session 1177, 2026-08-30
+
+The interim process is *deploy the branch to prod, validate end to end, then merge*. This is the
+validation. A cold `/novia` session was given a symptom-only prompt written as a household owner
+would write it — no SQL, no key names, no step numbers — because a repair loop that only works when
+the user can name the defect is not a repair loop.
+
+**All four checks pass.**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | The gate renders `message_template` | ✅ |
+| 2 | The step carrying the summary reaches her intact | ✅ |
+| 3 | Truncation recalled rather than reconstructed | ✅ — nothing truncated |
+| 4 | Reaches for outline / named steps | ✅ — unprompted, first action |
+
+**Her first action on the workflow was `read_workflow { outline: true }`.** Nothing in the user
+message hinted at it; the capability had existed for two hours. She then read the workflow across
+four targeted calls — `["12","12b","12i","12j","12k","13"]`, `["12a","12c"]`, `["1"…"11"]`,
+`["12d","12e","12f","12g","12h"]` — largest result **13,495 characters against a 15,000 cap**, and
+**zero truncation events**. She pulled ~22,000 characters of step content and lost none of it, where
+the single call this replaced returned 19,125, was cut to 15,000, and silently dropped step 13.
+
+The defect is not mitigated, it is structurally absent: she never asked for the whole array at once.
+Her `simulate_workflow` call carried a 35,820-character step array in its **params**, uncapped —
+Sprint 9's rule holding.
+
+**The gate diff is the sharper result.** Her submission changed:
+
+```
+Added steps: 13g
+Step 11  — on_cancel, options
+Step 12j — on_else
+Step 12k — on_success
+Step 13  — description, message_template
+```
+
+Under the six-field allow-list this replaced, **step 11 would have printed a heading with nothing
+beneath it, and `message_template` — the entire point of the fix — would have been approved
+unseen.** That is the v5→v6 failure exactly, reproduced on the very next repair and caught. Three
+hidden field changes across two steps, surfaced, and the user interrogated them before approving.
+
+**Approved as v8 (29 steps)** after review. Every change in it is readout-only. Two readout defects
+were knowingly left to surface through use rather than chased — the alias count undercounts, and
+skipping inventory still reports counts as applied (pre-existing, not introduced). Both are recorded
+in `docs/receipt-matching-analysis.md`, not the backlog, because they are domain artifacts.
+
+**A correction made during the review, worth keeping:** the wrong alias count was described earlier
+as inverting the AC9 signal. It does not. AC9's pre-registered instrument is per-item step-10 input
+tokens and per-item cost read from run records, not the notify message. Overstating what a defect
+threatens is its own failure mode, and the user caught it — *"are these two things just impacting
+the readout?"* They were.
+
+
+## Retro
+
+**What went right.**
+
+*Measuring before designing changed the design.* The plan opened with a `read_workflow` step
+selector as the primary fix. One query against `PGC_SessionEntry` showed it was 5 of 50 cases and
+`query_table` was 28, and the ranking inverted before any code was written. The `columns`
+pass-through that resulted is one line and covers more than everything else combined.
+
+*Reading the code found the fix was half-built already.* `getRows` had accepted `columns` since
+Sprint 10 and nothing passed it. `PGC_SessionEntry` already held every full tool result and nothing
+read it back. Two of the four fixes were exposure, not construction.
+
+*A test caught a real convention.* The ASCII-only assertion on `minds_eye_tool_schemas` rejected
+em dashes in new tool descriptions. The invariant was written down and enforced, and it held.
+
+**What went wrong, and what it says.**
+
+*Three backlog entries were one defect, and being filed separately hid that.* Each was written from
+the case that surfaced it, so each proposed a local fix — raise the cap, widen the allow-list,
+enlarge the snapshot. None named the shared rule, and a sprint that had worked them in order would
+have shipped three patches and no principle. **The entries were accurate and the pattern was still
+invisible.** Worth asking, when filing: is this the same mistake somewhere else?
+
+*The engine defect had an instruction twin, and only the engine one was filed.* Session 6 measured
+the truncation precisely and never read the prompt that told her to copy what the truncation had
+removed. The fix looked complete and was half. **When an Execution defect changes what a tool
+returns, the instruction that describes that tool is part of the same defect** — that is now the
+second corollary in `architecture.md` §1.5.
+
+*The 100-entry session ceiling was invisible because something else always failed first.* It has
+been latent since Novia shipped, and nothing in five sprints surfaced it, because the round budget
+kills sessions at ~80 entries. It was found by reading the rebuild path for an unrelated reason.
+**A limit masked by a tighter limit is not a limit anyone has tested.**
+
+*Scope grew from two engine defects to six fixes across two tiers, and that was correct.* But it is
+also why AC2, AC3 and AC5 did not start. The sprint scoped five tracks and delivered two plus an
+unplanned one.
+
+**Carried to Sprint 12**, in order: `propose_workflow_fix` patch of complete steps → release-readiness
+(AC6) → Track B correction workflow → Track C thresholds → `edit_budget` retest. AC9 and AC13 remain
+standing observations. The Mercadona receipt run still validates workflow 358 v6/v7, none of whose
+fixes has ever executed.

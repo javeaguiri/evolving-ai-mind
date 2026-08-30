@@ -79,3 +79,37 @@ submit the whole array via propose_workflow_fix - three changed expressions, no 
 
 4,026 characters — marginally over Slack's 4,000 soft limit. If Slack converts it to a snippet,
 send the three expressions in a follow-up message rather than letting it truncate.
+
+---
+
+## Open after v8 (2026-08-30) — readout only, deliberately not chased
+
+Workflow 358 reached **v8, 29 steps**, via `propose_workflow_fix` in session 1177. That change
+split the ending in two: step 13 is now the non-grocery message and carries only tokens that
+resolve on that path, and new step **13g** is the grocery message. Step 6 still routes non-grocery
+to 13; 12j `on_else` and 12k `on_success` now route to 13g. Step 12c's `output_key` was left as
+`updated_rows` — nothing reads it, so renaming it back would have been churn.
+
+**Every change in v8 is readout-only.** Both endings are `notify` steps; nothing in the change
+touches matching, alias writing, quantity updates or the 8b/8d dedupe.
+
+Two things remain wrong in the readout. Both were understood at approval time and left to surface
+through use rather than fixed pre-emptively.
+
+**1. The alias count undercounts.** Step 13g reports
+`{{match_plan.new_items.length}} new aliases learned`. New *items* and new *aliases* are not the
+same set: an item recognised by its English name whose raw receipt wording has never been stored
+learns an alias without creating an item. Those are missed. It is still an improvement on v7, which
+reported `alias_write_plan.alias_rows.length` — everything submitted, about 35 on a known shop,
+against a truth of one or two. The correct source is step 12k's `serv_upsert` result, which
+distinguishes rows inserted from rows already present.
+
+**This number is not the AC9 instrument.** The pre-registered protocol reads per-item step-10 input
+tokens against the 831 baseline and per-item cost against $0.0073, from run records and session
+entries. A wrong count here misinforms at a glance; it does not corrupt the measurement.
+
+**2. Skipping inventory still reports counts as if applied.** Step 11's *Skip inventory* routes to
+13g, which says inventory changes were applied and prints auto-matched and new-item counts.
+`match_plan` is built at step 10, before that gate, so the tokens resolve and report a plan as an
+outcome. **Pre-existing, not introduced by v8** — today's step 13 behaves identically on that path.
+Run 788 is the specimen: skipped, wrote nothing. The fix is a third ending for the skip path.
