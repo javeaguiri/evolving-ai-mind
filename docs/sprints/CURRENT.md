@@ -70,8 +70,14 @@ what crosses the model/engine boundary, not what the validator receives.
 **What the check found instead: `propose_workflow_fix` does not simulate at all.** Its body reads
 the workflow, builds the diff, and calls `updateRows`. No `runSimulation`, no L0/L1/L2 refusal —
 that is `register_workflow`'s behaviour, not this one. Novia simulated twice in session 1177
-voluntarily and nothing required it. **The repair path has no validation gate, and closing that is
-part of Track A, not a precondition for it.**
+voluntarily and nothing required it. Confirmed at the other end too: `preGateRefusal` opens with
+`if (action !== 'register_workflow') return null`, so there is no check before the gate either.
+**The repair path has no validation gate at either point, and closing that is part of Track A, not
+a precondition for it.**
+
+**Reuse, do not rebuild:** `simulateForRegistration(steps, traceId)` already exists and is what
+`register_workflow` is refused by. Track A widens the refusal to `propose_workflow_fix` and runs it
+against the merged array.
 
 **The consequence that does bite is on the other tool.** `simulate_workflow` takes `steps` only
 (`minds-eye.mjs:2521`), so an agent holding a patch cannot pre-validate without reconstructing the
