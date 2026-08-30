@@ -1363,12 +1363,12 @@
     "section": "rules",
     "inject_always": false,
     "inject_for": [],
-    "version": 5,
+    "version": 6,
     "content": {
       "tools": [
         {
           "name": "query_table",
-          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them. Pass vectorSearch to match by meaning instead of by text: each row comes back with a similarity score, which is how a threshold gets calibrated against real data rather than guessed.",
+          "description": "Read rows from any PGC_* or PGD_* table. Confirm column names with list_tables first; never guess them. Pass columns to select only the fields you need: a row with a large JSONB column comes back whole otherwise, and a result past 15000 characters is cut short in your transcript. Pass vectorSearch to match by meaning instead of by text: each row comes back with a similarity score, which is how a threshold gets calibrated against real data rather than guessed.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1393,6 +1393,10 @@
               "reasoning": {
                 "type": "string",
                 "description": "Why this call, in one sentence."
+              },
+              "columns": {
+                "type": "array",
+                "description": "Column names to return, e.g. [\"id\", \"name\"]. Omit for every column. Projecting is the difference between reading one key of a state bag and reading the whole run row."
               }
             },
             "required": [
@@ -1453,7 +1457,7 @@
         },
         {
           "name": "read_workflow",
-          "description": "Read a workflow name, version, domain, description, expected_input and its full steps JSON. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. Never call twice for the same workflow in one session; the result is already in your history.",
+          "description": "Read a workflow's name, version, domain, description, expected_input and steps. expected_input lists the input keys the workflow actually reads, derived from its steps; run_workflow requires all of them. A long workflow does not fit one tool result, so call it with outline true to see every step's number, type, output_key, routing and size, then call it again with steps to read the ones you need in full. Read a step before you change it: composing a replacement from memory is how a message_template loses fields nobody agreed to drop. Do not re-read the same projection twice in one session; it is already in your history.",
           "parameters": {
             "type": "object",
             "properties": {
@@ -1463,6 +1467,14 @@
               "reasoning": {
                 "type": "string",
                 "description": "Why this call, in one sentence."
+              },
+              "steps": {
+                "type": "array",
+                "description": "Step identifiers to return in full, e.g. [\"12\", \"13\"]. Omit to return every step. The reply always reports the workflow's total step count, and names any identifier it could not find."
+              },
+              "outline": {
+                "type": "boolean",
+                "description": "Return one summary line per step (step, type, output_key, on_success, on_else, description, size in characters) instead of the steps themselves."
               }
             },
             "required": [
@@ -1592,6 +1604,39 @@
             },
             "required": [
               "selectSql",
+              "reasoning"
+            ]
+          }
+        },
+        {
+          "name": "read_session_entry",
+          "description": "Read back a tool result from earlier in this session, in full. Every tool result is stored complete; only the copy in your transcript is bounded at 15000 characters, and a bounded one says so and names the sequence number holding the rest. Call this with that sequence number to read what was withheld, or to re-read anything that has scrolled out of your working memory. Returns one page at a time and tells you how many characters remain; pass offset to continue. Prefer preventing the volume where you can, with query_table columns or read_workflow steps, because every page you recall is added to this transcript again.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "sequence": {
+                "type": "integer",
+                "description": "The entry's sequence number in this session, as named in a truncation notice."
+              },
+              "offset": {
+                "type": "integer",
+                "description": "Character offset to start reading from. Default 0."
+              },
+              "limit": {
+                "type": "integer",
+                "description": "Characters to return, capped at 12000."
+              },
+              "path": {
+                "type": "string",
+                "description": "Optional dot or JSONPath expression into the stored result, e.g. \"rows[0].state.local_state\". Reads one field instead of paging the whole value."
+              },
+              "reasoning": {
+                "type": "string",
+                "description": "Why this call, in one sentence."
+              }
+            },
+            "required": [
+              "sequence",
               "reasoning"
             ]
           }
