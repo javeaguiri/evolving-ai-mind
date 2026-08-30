@@ -51,7 +51,7 @@ never names a workflow and never says how to start one. Live, on three domains:
 created and over-reports workflows that were deleted. **The answer is already stored and nothing
 reads it:** `PGC_Workflow` rows carry `domain`, `name`, `description` and `intent_keywords`.
 
-**Acceptance:** AC1.
+**Acceptance:** AC1. ✅ **DONE 2026-08-30.**
 
 ### Track B — The inventory correction workflow
 
@@ -108,7 +108,7 @@ may be pagination at the renderer, which would be a **contract change** between 
 **D2 — Recategorise / aggregate categories.** Covered by Track B, listed here because it was
 reported as a dialog problem: there is no route to it from any surface the user touches.
 
-**Acceptance:** AC4.
+**Acceptance:** AC4. ✅ **DONE 2026-08-30** (D1; D2 remains with Track B).
 
 ### Track E — Retest `edit_budget`
 
@@ -123,10 +123,10 @@ path. This is Sprint 10's AC5 second half, carried.
 
 | # | Criterion | Track | Threshold |
 |---|---|---|---|
-| **AC1** | `/help` names every registered workflow for a domain, and names no command that routes nowhere | A | Binary, verified live on `inventory`, `budgets_expenses` and `flashcards` |
+| **AC1** ✅ **MET** | `/help` names every registered workflow for a domain, and names no command that routes nowhere | A | Binary, verified live on `inventory`, `budgets_expenses` and `flashcards` — **all three confirmed by the user 2026-08-30** |
 | **AC2** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | B | Binary, from Slack, no raw SQL |
 | **AC3** | Both thresholds calibrated against live rows and applied via `propose_workflow_fix`; the three known wrong merges no longer auto-resolve | C | Binary, evidenced by probe output before and after |
-| **AC4** | A table taller than the reveal viewport is fully reachable by the user | D | Binary, verified live |
+| **AC4** ✅ **MET** | A table taller than the reveal viewport is fully reachable by the user | D | Binary, verified live — **confirmed by the user 2026-08-30**|
 | **AC5** | `edit_budget` runs end-to-end from Slack | E | Binary |
 | **AC6** | Release-readiness: **decided, not defaulted** — either scoped into this sprint or deferred with a written reason | — | A decision exists on the record |
 
@@ -220,7 +220,7 @@ deletion is undecided.
 listed under `flashcard_quiz_session`. The alias was added to `intent_keywords` *after* the workflow
 was registered and no help entry was written for it — which is the read-time design doing the thing
 a stored caption cannot. **AC1 remains open** until `inventory` and `budgets_expenses` are checked
-too; its threshold names all three domains.
+too; its threshold names all three domains. **Closed 2026-08-30 — see Session 7.**
 
 ### Session 3 — 2026-08-23 — Aliases become a thing the user owns
 
@@ -467,6 +467,27 @@ message.** Every remaining sprint item routes through Novia editing a workflow, 
 currently blind at both ends. Fixing the receipt while the repair loop cannot show her the artifact
 or show the user the diff means the next repair reintroduces the next silent regression.
 
+### Session 7 — 2026-08-30 — AC1 and AC4 closed
+
+The user verified both live and reports each working as expected.
+
+**AC1 — MET.** `/help` names every registered workflow for a domain and names no command that
+routes nowhere, confirmed on all three domains its threshold names: `flashcards` (2026-08-23),
+`inventory` and `budgets_expenses` (2026-08-30). The read-time derivation holds — the panel is
+composed from live `PGC_Workflow` and `PGC_IntentMap` rows, so a phrase added after registration
+appears without a help entry being written for it.
+
+**AC4 — MET.** A table taller than the reveal viewport is fully reachable. `buildRevealTables()`
+chunks at 8 rows with the real header repeated on every block.
+
+**Track A still carries one open item, and it is not part of AC1:** the `/help` system panel
+hardcodes `/create-workflow` (retired Sprint 10) and `/chat` (removal undecided) and omits
+`/minds-eye` and `/replay`. AC1's threshold is per-domain; the system panel is sequenced with the
+`create_workflow` deletion in the backlog.
+
+**Track D's D2 — no route to recategorise or aggregate a category — is unaffected by AC4** and
+remains with Track B, where it is one of the four verbs.
+
 ### Open for next session
 
 1. **Fix the two repair-loop defects first** — backlog High Priority, both dated 2026-08-27.
@@ -489,8 +510,8 @@ or show the user the diff means the next repair reintroduces the next silent reg
 7. **The cold read** — a *fresh* session, the two revised contracts plus run 788's `local_state`,
    no diagnosis, and see whether she reaches 8b/8d unaided. 1176 is contaminated for this test.
    It is the only thing that measures whether the contract edit closed the gap.
-8. **AC1** — verify `/help` live on `inventory` and `budgets_expenses`; `flashcards` is confirmed.
-9. **AC4** — verify the chunked reveal live on the next receipt.
+8. ~~**AC1** — verify `/help` live on `inventory` and `budgets_expenses`.~~ ✅ **Closed 2026-08-30.**
+9. ~~**AC4** — verify the chunked reveal live.~~ ✅ **Closed 2026-08-30.**
 10. Still open from earlier: the system panel in `/help` (names `/create-workflow` and `/chat`,
     omits `/minds-eye` and `/replay`), and `register_workflow` writing `source: 'auto'` for phrases
     the SOP now says to ask the user for.
