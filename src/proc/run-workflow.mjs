@@ -440,7 +440,7 @@ async function executeTop({ workflowRunId, traceId, source, stepExecutionId }) {
     run.id, frame.frame_id, frame.current_step, step.type,
     'completed',
     { step: frame.current_step, type: step.type },
-    result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 200) } : null,
+    summariseStepOutput(result.outputValue),
     null, durationMs, idempotencyKey
   );
 
@@ -1054,6 +1054,71 @@ async function resumeLlm({ workflowRunId, traceId }) {
   return { action: 'resumed_llm', resolution: frame.resolution };
 }
 
+// What one step's output_snapshot may occupy. Written on every step of every run, so the bound
+// is a storage decision as much as a legibility one.
+const SNAPSHOT_MAX_CHARS = 800;
+
+/**
+ * Describe a value by its shape rather than by its first N characters.
+ */
+function describeShape(value) {
+  if (value === null || value === undefined)  return 'null';
+  if (Array.isArray(value))                   return `array[${value.length}]`;
+  if (typeof value === 'object')              return `object{${Object.keys(value).length}}`;
+  if (typeof value === 'string')              return `string(${value.length})`;
+  return typeof value;
+}
+
+/**
+ * A step's output_snapshot: what it produced, not the first 200 characters of it.
+ *
+ * The prefix this replaces could say a step ran and never what it produced — step 8c of
+ * `process_receipt` emits 35 candidate sets and the snapshot held the first row and a half.
+ * That is what forced every real diagnosis into `PGC_WorkflowRun.state.local_state`, a flat
+ * bag with no step attribution where a derived key is indistinguishable from a recorded one.
+ *
+ * `summary` is kept, and kept a bounded string, because existing readers select
+ * `output_snapshot->>'summary'`. `chars` is what the bound withheld, and `structure` is the
+ * answer the prefix could not give. Bounded views state their own provenance.
+ *
+ * @param {*} value  The step's outputValue
+ * @returns {object|null}
+ */
+export function summariseStepOutput(value) {
+  if (value === undefined || value === null) return null;
+
+  const serialised = JSON.stringify(value);
+  const snapshot = {
+    summary: serialised.length > SNAPSHOT_MAX_CHARS
+      ? `${serialised.slice(0, SNAPSHOT_MAX_CHARS)} ...[truncated]`
+      : serialised,
+    chars:     serialised.length,
+    structure: { type: describeShape(value) },
+  };
+
+  if (Array.isArray(value)) {
+    snapshot.structure.length = value.length;
+    if (value.length > 0) snapshot.structure.item = describeShape(value[0]);
+    if (value.length > 0 && value[0] && typeof value[0] === 'object' && !Array.isArray(value[0])) {
+      snapshot.structure.item_keys = Object.keys(value[0]);
+    }
+  } else if (typeof value === 'object') {
+    snapshot.structure.fields = Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, describeShape(v)])
+    );
+  }
+
+  // The structure of a very wide object is itself unbounded. Drop the per-field detail rather
+  // than store it, and say that is what happened.
+  if (JSON.stringify(snapshot).length > SNAPSHOT_MAX_CHARS * 2) {
+    delete snapshot.structure.fields;
+    delete snapshot.structure.item_keys;
+    snapshot.structure.detail = 'omitted — too wide to record';
+  }
+
+  return snapshot;
+}
+
 // Build the break notification (docs/arch-replay.md §5) — the developer interface, not a
 // status report. Carries a literal, runnable curl for every resolution: base URL from
 // SERV_API_URL (the API Gateway host also serving /proc), $INTERNAL_API_KEY referenced as
@@ -1423,7 +1488,7 @@ async function executeIteratorInline({ run, frame, traceId }) {
       run.id, frame.frame_id, frame.current_index,
       itemStep.type, 'completed',
       { tableName: item.tableName },
-      result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 100) } : null,
+      summariseStepOutput(result.outputValue),
       null, Date.now() - stepStart
     );
 
@@ -1546,7 +1611,7 @@ async function executeIteratorOneItem({ run, frame, traceId }) {
     run.id, frame.frame_id, frame.current_index,
     itemStep.type, 'completed',
     { tableName: item.tableName },
-    result.outputValue ? { summary: JSON.stringify(result.outputValue).slice(0, 100) } : null,
+    summariseStepOutput(result.outputValue),
     null, Date.now() - stepStart
   );
 

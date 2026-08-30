@@ -40,6 +40,7 @@ import { callLlmWithTools }                                from '../shared/llm-c
 import { enqueueCallback, enqueueWorkflow }                from '../shared/sqs-callback.mjs';
 import { runSimulation, expectedRunInput }                from './simulation-engine.mjs';
 import { loadStepTypeContracts }                          from './step-type-registry.mjs';
+import { resolvePath }                                    from './template-resolver.mjs';
 
 // Closes the round's instructions. Constant, so it rides in the cached prefix rather than
 // being re-sent with every turn.
@@ -73,7 +74,7 @@ const READ_TOOLS = new Set([
   'query_table', 'query_entity', 'read_memory',
   'read_workflow', 'read_prompt', 'simulate_workflow',
   'search_domain_help', 'list_tables', 'list_physical_tables',
-  'run_sql',
+  'run_sql', 'read_session_entry',
   'list_capabilities', 'list_schedules',
 ]);
 
@@ -195,6 +196,38 @@ async function loadToolDefinitions(traceId) {
   return tools;
 }
 
+// SERV's getRows defaults a page to 100 rows and hard-caps it at 1000 (`table.mjs`). Both
+// session loads passed no limit, so a session past 100 entries loaded only its OLDEST 100 —
+// and `nextSeq`, derived from that page, then collided with an entry that already existed,
+// failing uq_pgc_sessionentry_session_seq and killing that resume and every one after it.
+// Masked until now only because sessions die on the 240s wall first: the largest is 83 entries.
+const MAX_SESSION_ENTRIES = 1000;
+
+/**
+ * Load a session's transcript, or refuse to load it at all.
+ *
+ * A partially loaded transcript is not a degraded transcript — it is a corrupt one, because
+ * the write cursor is computed from it. Returning a short page here would resume the session
+ * from its own middle and then overwrite its own history. There is no useful partial answer,
+ * so the incompleteness is raised rather than returned.
+ */
+async function loadSessionEntries(sessionId) {
+  const resp = await getRows(
+    'PGC_SessionEntry',
+    [{ column: 'session_id', op: 'eq', value: sessionId }],
+    { column: 'sequence_number', direction: 'asc' },
+    MAX_SESSION_ENTRIES
+  );
+  const rows = resp.rows ?? [];
+  if (rows.length >= MAX_SESSION_ENTRIES) {
+    throw new Error(
+      `Session ${sessionId} has at least ${MAX_SESSION_ENTRIES} entries — its transcript does not fit one SERV page, ` +
+      'and resuming from a partial load would write a colliding sequence_number.'
+    );
+  }
+  return rows;
+}
+
 export async function handle(req) {
   const body     = req.body ?? {};
   const callback = req.callback ?? body.callback ?? null;
@@ -231,12 +264,7 @@ export async function handle(req) {
       if (callback) await enqueueCallback(callback, { type: 'HUMAN_NOTIFICATION', traceId, message: 'Session not found. Start a new conversation.' });
       return;
     }
-    const entriesResp = await getRows(
-      'PGC_SessionEntry',
-      [{ column: 'session_id', op: 'eq', value: session.id }],
-      { column: 'sequence_number', direction: 'asc' }
-    );
-    existingEntries = entriesResp.rows ?? [];
+    existingEntries = await loadSessionEntries(session.id);
   } else {
     const sessResp = await insertRow('PGC_Session', {
       session_type:           'minds_eye',
@@ -303,12 +331,7 @@ async function handleGateResume(body, callback, traceId, req) {
     return;
   }
 
-  const entriesResp = await getRows(
-    'PGC_SessionEntry',
-    [{ column: 'session_id', op: 'eq', value: session.id }],
-    { column: 'sequence_number', direction: 'asc' }
-  );
-  const entries = entriesResp.rows ?? [];
+  const entries = await loadSessionEntries(session.id);
 
   // Follow-up question — add user message, reset turns and actions (a human just
   // engaged with the session), run loop, re-post continue gate after response.
@@ -626,7 +649,9 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
     input.push({
       type:    'function_call_output',
       call_id: activeCall.call_id,
-      output:  capOutput(JSON.stringify(result ?? null)),
+      // `seq` is the entry this result was just persisted under — the same number the rebuild
+      // reads back off the row, so both renderings of a capped result are byte-identical.
+      output:  capOutput(JSON.stringify(result ?? null), seq),
     });
   };
 
@@ -814,7 +839,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
         break;
 
       } else if (READ_TOOLS.has(action)) {
-        const toolResult = await executeReadTool(action, params, traceId);
+        const toolResult = await executeReadTool(action, params, traceId, session);
         const toolEntry  = JSON.stringify({ tool: action, params, result: toolResult, items: entryItems, turn: turnCount });
 
         await insertRow('PGC_SessionEntry', {
@@ -1234,6 +1259,49 @@ async function preGateRefusal(action, params, traceId) {
 // Build human-readable gate text for gated write tools
 // ---------------------------------------------------------------------------
 
+/**
+ * Every field that differs between two versions of a step.
+ *
+ * Replaces a fixed allow-list that existed in two copies and named six fields:
+ * type, expression, on_success, on_else, message, description. It omitted the fields that
+ * actually carry a workflow change — message_template, output_key, input, items_key,
+ * item_step, fields, options, execution_mode, on_complete — so the v5→v6 gate printed a
+ * heading for step 13 and listed nothing beneath it, and four unagreed changes were approved
+ * without ever being rendered. This is the human control point on every workflow write Novia
+ * makes: it must not decide in advance which fields are worth showing.
+ *
+ * @param {object} current   The step as stored
+ * @param {object} proposed  The step as submitted
+ * @returns {object}         { field: { from, to } } for every field that differs
+ */
+export function diffStepFields(current = {}, proposed = {}) {
+  const fields = [...new Set([...Object.keys(current ?? {}), ...Object.keys(proposed ?? {})])].sort();
+  const changes = {};
+  for (const field of fields) {
+    if (JSON.stringify(current?.[field]) !== JSON.stringify(proposed?.[field])) {
+      changes[field] = { from: current?.[field], to: proposed?.[field] };
+    }
+  }
+  return changes;
+}
+
+// A gate that renders a 4,000-character step array in full is as unreadable as one that hides
+// it. Values are bounded for display and say so — the same rule the transcript cap follows.
+const GATE_VALUE_CHARS = 300;
+
+// And a budget for the diff as a whole. Slack caps a message at 50 blocks, so a gate that
+// renders every value of every changed field on a large fix is a message Slack rejects — and a
+// gate nobody sees leaves the run suspended, which is the failure this whole change is about.
+const GATE_DIFF_CHARS = 6000;
+
+export function renderGateValue(value) {
+  const text = JSON.stringify(value);
+  if (text === undefined) return '_(absent)_';
+  return text.length > GATE_VALUE_CHARS
+    ? `${text.slice(0, GATE_VALUE_CHARS)} …[${text.length} chars total]`
+    : text;
+}
+
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
@@ -1293,15 +1361,23 @@ async function buildGateText(action, params, traceId) {
         if (added.length)   lines.push(`Added steps: ${added.join(', ')}`);
         if (removed.length) lines.push(`Removed steps: ${removed.join(', ')}`);
 
-        const DIFF_FIELDS = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
+        // Every changed field is named, always. Values are rendered until the gate reaches a
+        // size Slack will still post, and past that the names stand alone — a field is never
+        // dropped without the user seeing it was touched.
+        let spent = 0;
         for (const key of changed) {
-          const cur  = currentMap[key];
-          const prop = proposedMap[key];
+          const cur     = currentMap[key];
+          const prop    = proposedMap[key];
+          const changes = Object.entries(diffStepFields(cur, prop));
           lines.push(`\n**Step ${key}** — ${cur.description ?? cur.type}:`);
-          for (const field of DIFF_FIELDS) {
-            if (JSON.stringify(cur[field]) !== JSON.stringify(prop[field])) {
-              lines.push(`  \`${field}\`: \`${JSON.stringify(cur[field])}\` → \`${JSON.stringify(prop[field])}\``);
-            }
+          if (spent > GATE_DIFF_CHARS) {
+            lines.push(`  changed: ${changes.map(([f]) => `\`${f}\``).join(', ')} _(values withheld — gate size)_`);
+            continue;
+          }
+          for (const [field, { from, to }] of changes) {
+            const line = `  \`${field}\`: \`${renderGateValue(from)}\` → \`${renderGateValue(to)}\``;
+            lines.push(line);
+            spent += line.length;
           }
         }
 
@@ -1689,7 +1765,6 @@ async function executeWriteTool(action, params, traceId) {
         const currentMap   = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
         const proposedMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
         const allKeys      = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
-        const DIFF_FIELDS  = ['type', 'expression', 'on_success', 'on_else', 'message', 'description'];
 
         const diff = {};
         for (const key of allKeys) {
@@ -1698,12 +1773,7 @@ async function executeWriteTool(action, params, traceId) {
           } else if (!proposedMap[key]) {
             diff[key] = { change: 'removed' };
           } else {
-            const fieldChanges = {};
-            for (const field of DIFF_FIELDS) {
-              if (JSON.stringify(currentMap[key][field]) !== JSON.stringify(proposedMap[key][field])) {
-                fieldChanges[field] = { from: currentMap[key][field], to: proposedMap[key][field] };
-              }
-            }
+            const fieldChanges = diffStepFields(currentMap[key], proposedMap[key]);
             if (Object.keys(fieldChanges).length > 0) diff[key] = fieldChanges;
           }
         }
@@ -2044,16 +2114,42 @@ async function assembleContext() {
 // step arrays she had submitted, and truncating them here would reintroduce it.
 const MAX_TOOL_OUTPUT_CHARS = 15000;
 
+// What one read_session_entry page may return. Deliberately below the cap above, with room for
+// the envelope: a recall window that could itself be capped would truncate the very tail it was
+// called to recover, and the model would have no way to tell the two truncations apart.
+const MAX_RECALL_CHARS = 12000;
+
 const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
 
 // A respond whose round ended without the user typing anything back. The call is real and the
 // gateway rejects a call with no output, so it closes here rather than being left open.
 const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' });
 
-function capOutput(text) {
-  return text.length > MAX_TOOL_OUTPUT_CHARS
-    ? `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated]`
-    : text;
+/**
+ * Bound a tool result for the transcript, and say so where it is bounded.
+ *
+ * A bounded view must carry its own provenance — how much was withheld, and how to get the
+ * rest. Truncating silently is what left Novia rewriting step 13 of `process_receipt` from
+ * memory: `read_workflow` returned 19,125 characters, the last 4,125 were dropped, and nothing
+ * in the transcript said so. The full result is always in PGC_SessionEntry — the cap applies
+ * to the copy handed to the gateway, never to the persisted row — so what was missing was the
+ * handle, not the store.
+ *
+ * The handle is the entry's `sequence_number`, never its `id`. In-round the history carries
+ * only { role, content, sequence_number }; on rebuild it carries the whole row. A marker built
+ * from `id` would render one way in-round and another on resume, diverging the prefix and
+ * forfeiting the round's cache credit. Both paths know the sequence number, so the function
+ * stays pure and both renderings stay byte-identical.
+ *
+ * @param {string} text   The serialised tool result
+ * @param {number} [seq]  Sequence number of the entry holding the full result
+ */
+function capOutput(text, seq) {
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const recall = seq === undefined || seq === null
+    ? ''
+    : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
+  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${recall}]`;
 }
 
 /**
@@ -2137,7 +2233,7 @@ export function toInputItems(workingHistory = []) {
       // a resumed round append-only. The alternative — a trailing user item — forfeits the
       // round's entire prefix credit, measured at $0.219 on a 56k transcript.
       if (pending?.kind === 'respond') {
-        closePending(capOutput(JSON.stringify({ user_reply: text })));
+        closePending(capOutput(JSON.stringify({ user_reply: text }), entry?.sequence_number));
         return;
       }
       // Otherwise the user ignored a gate and sent a new message instead of answering it.
@@ -2193,7 +2289,7 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null)));
+      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number));
       return;
     }
 
@@ -2211,7 +2307,7 @@ export function toInputItems(workingHistory = []) {
     items.push({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null)),
+      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number),
     });
   });
 
@@ -2220,18 +2316,74 @@ export function toInputItems(workingHistory = []) {
   return items;
 }
 
+/**
+ * Project a workflow's step array down to what was actually asked for.
+ *
+ * `read_workflow` returning all 28 steps of `process_receipt` is 19,125 characters, past the
+ * transcript cap, so the last two steps never arrived — which is how a step 13 rewrite lost
+ * the alias count. The remedy is not a bigger cap: it is not fetching what was not wanted.
+ *
+ * `outline` gives shape before content — step, type, what it writes, where it routes, how big
+ * it is — so a specific step can be named and then read whole. Neither view is silent about
+ * being partial: both report the full step count, and a selector reports what it could not find.
+ *
+ * @param {Array}  steps            The workflow's full step array
+ * @param {object} [opts]
+ * @param {Array}  [opts.selected]  Step identifiers to return whole
+ * @param {boolean}[opts.outline]   Return one summary line per step instead of the steps
+ */
+export function projectWorkflowSteps(steps, { selected, outline } = {}) {
+  const all = Array.isArray(steps) ? steps : [];
+
+  if (outline) {
+    return {
+      step_count: all.length,
+      outline: all.map(s => ({
+        step:        s?.step ?? null,
+        type:        s?.type ?? null,
+        output_key:  s?.output_key ?? null,
+        on_success:  s?.on_success ?? null,
+        on_else:     s?.on_else ?? null,
+        description: s?.description ?? null,
+        chars:       JSON.stringify(s ?? null).length,
+      })),
+      note: 'Outline only. Call read_workflow again with steps: ["<step>"] to read any of these whole.',
+    };
+  }
+
+  if (Array.isArray(selected) && selected.length > 0) {
+    const wanted = selected.map(String);
+    const picked = all.filter(s => wanted.includes(String(s?.step)));
+    const missing = wanted.filter(w => !all.some(s => String(s?.step) === w));
+    return {
+      step_count: all.length,
+      steps:      picked,
+      returned:   picked.map(s => s?.step),
+      omitted:    all.length - picked.length,
+      ...(missing.length && { not_found: missing }),
+    };
+  }
+
+  return { step_count: all.length, steps: all };
+}
+
 // ---------------------------------------------------------------------------
 // Execute a read tool and return the result object
 // ---------------------------------------------------------------------------
 
-async function executeReadTool(action, params, traceId) {
+async function executeReadTool(action, params, traceId, session) {
   try {
     switch (action) {
 
       case 'query_table': {
-        const { tableName, filters = [], orderBy, limit, vectorSearch } = params;
+        const { tableName, filters = [], orderBy, limit, vectorSearch, columns } = params;
         if (!tableName) return { error: 'tableName is required' };
-        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch);
+        // `columns` projects at SERV rather than returning whole rows for one field. This is
+        // the largest single source of capped results — 28 of the 50 tool results that have
+        // ever exceeded the transcript cap were query_table, the worst at 120,821 characters,
+        // because a JSONB column comes back whole. getRows has taken the whitelist since
+        // Sprint 10; it simply was never passed through here.
+        const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch, columns);
         return { count: resp.count, rows: resp.rows ?? [] };
       }
 
@@ -2241,6 +2393,55 @@ async function executeReadTool(action, params, traceId) {
         const { servPost } = await import('../shared/serv-client.mjs');
         const resp = await servPost('/api/v1/serv/table/runSql', { selectSql, target });
         return { count: resp.count, rows: resp.rows ?? [] };
+      }
+
+      // The other half of the cap: every tool result is persisted to PGC_SessionEntry in full,
+      // and only the copy handed to the gateway is bounded. This reads the stored row back, so
+      // a truncated tail is recoverable rather than lost. Bounded itself, and it says how much
+      // is left — paging is the caller's decision, not a silent one.
+      case 'read_session_entry': {
+        const { sequence, offset = 0, limit, path } = params;
+        if (sequence === undefined || sequence === null) return { error: 'sequence is required' };
+        if (!session?.id) return { error: 'read_session_entry is only available inside a session' };
+
+        const resp = await getRows(
+          'PGC_SessionEntry',
+          [
+            { column: 'session_id',      op: 'eq', value: session.id },
+            { column: 'sequence_number', op: 'eq', value: sequence },
+          ],
+          null,
+          1
+        );
+        const row = resp.rows?.[0];
+        if (!row) return { error: `No entry at sequence ${sequence} in session ${session.id}` };
+
+        let stored = null;
+        try { stored = JSON.parse(row.content); } catch { /* a plain user message, not a JSON entry */ }
+        // The stored envelope is { tool, params, result, items }. `result` is what the model
+        // saw; `items` is the gateway's own echo of the call and is noise on the way back.
+        const payload  = stored && 'result' in stored ? stored.result : (stored ?? row.content);
+        const selected = path ? resolvePath(payload, path) : payload;
+        const text     = typeof selected === 'string' ? selected : JSON.stringify(selected ?? null);
+
+        const start     = Math.max(0, Number(offset) || 0);
+        const window    = Math.min(Number(limit) || MAX_RECALL_CHARS, MAX_RECALL_CHARS);
+        const slice     = text.slice(start, start + window);
+        const remaining = Math.max(0, text.length - (start + slice.length));
+
+        return {
+          sequence,
+          tool:           stored?.tool ?? null,
+          ...(path && { path }),
+          total_chars:    text.length,
+          offset:         start,
+          returned_chars: slice.length,
+          remaining,
+          content:        slice,
+          ...(remaining > 0 && {
+            note: `Call again with offset: ${start + slice.length} for the next ${Math.min(remaining, MAX_RECALL_CHARS)} characters.`,
+          }),
+        };
       }
 
       case 'list_capabilities': {
@@ -2276,7 +2477,7 @@ async function executeReadTool(action, params, traceId) {
       }
 
       case 'read_workflow': {
-        const { workflowName } = params;
+        const { workflowName, steps: selected, outline } = params;
         if (!workflowName) return { error: 'workflowName is required' };
         const resp = await getRows(
           'PGC_Workflow',
@@ -2295,7 +2496,7 @@ async function executeReadTool(action, params, traceId) {
           // are the keys the workflow READS — supplying a key it does not read is silently
           // discarded, and omitting one it does read resolves to undefined with no error.
           expected_input: expectedRunInput(wf.steps),
-          steps:       wf.steps,
+          ...projectWorkflowSteps(wf.steps, { selected, outline }),
         };
       }
 

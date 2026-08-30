@@ -206,14 +206,23 @@ describe('query_table — vectorSearch reaches SERV', () => {
   it('destructures vectorSearch and passes it as the 5th getRows argument', () => {
     assert.match(
       mindsEyeSrc,
-      /const \{ tableName, filters = \[\], orderBy, limit, vectorSearch \} = params;/,
+      /const \{ tableName, filters = \[\], orderBy, limit, vectorSearch, columns \} = params;/,
       'the query_table dispatch must take vectorSearch'
     );
     assert.match(
       mindsEyeSrc,
-      /getRows\(tableName, filters, orderBy, limit \?\? 20, vectorSearch\)/,
+      /getRows\(tableName, filters, orderBy, limit \?\? 20, vectorSearch, columns\)/,
       'and hand it to getRows in the vectorSearch position'
     );
+  });
+
+  // getRows has taken a columns whitelist since Sprint 10 and query_table never passed it,
+  // so every read came back as whole rows. 28 of the 50 tool results that have ever exceeded
+  // the transcript cap were query_table, the worst at 120,821 characters, because a JSONB
+  // column comes back whole. Same positional-drop failure as vectorSearch, one argument along.
+  it('declares columns in the tool schema, so the projection is reachable', () => {
+    assert.ok(queryTable.parameters.properties.columns, 'query_table must declare columns');
+    assert.equal(queryTable.parameters.properties.columns.type, 'array');
   });
 
   it('declares vectorSearch in the tool schema — an undeclared parameter is unusable', () => {
