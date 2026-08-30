@@ -189,9 +189,9 @@ Lambda response limit or exhaust available memory — always pass an explicit
 Append-only audit log — one row per step execution attempt. Never updated after insert.
 Used for idempotency checks on SQS redelivery and debugging.
 
-**Same caution as `PGC_WorkflowRun`** — `input_snapshot`/`output_snapshot` hold
-that step's resolved input/output and can be large for steps handling bulk
-data. A multi-row scan without a `columns` list carries the same risk. The
+**Same caution as `PGC_WorkflowRun`** — `input_snapshot` holds
+that step's resolved input and can be large for steps handling bulk
+data. `output_snapshot` is bounded by `summariseStepOutput`. A multi-row scan without a `columns` list carries the same risk. The
 idempotency check itself (`run-workflow.mjs:checkIdempotency`) only needs to
 know whether a row exists — it passes `columns: ['id']`.
 
@@ -206,7 +206,7 @@ know whether a row exists — it passes `columns: ['id']`.
 | status | text | `completed`, `failed`, `skipped` |
 | retry_count | integer | Attempts before this final status. Default 0. Supports idempotency debugging |
 | input_snapshot | jsonb | What was passed in |
-| output_snapshot | jsonb | What came out |
+| output_snapshot | jsonb | What came out, by shape rather than by prefix — `{ summary, chars, structure }`. `summary` is a bounded serialisation (kept, because readers select `output_snapshot->>'summary'`), `chars` is the full serialised length, `structure` carries the type, array/row count, and either a sample row's keys or each field's shape. **Two shapes are in the table:** runs before 2026-08-30 hold `{ summary }` alone, truncated to 200 characters (100 for an iterator item or gate) — check `executed_at` before trusting a reading. `structure` answers what shape and how many; values live in `PGC_WorkflowRun.state.local_state` |
 | error | jsonb | Error details if failed |
 | duration_ms | integer | |
 | executed_at | timestamptz | |
