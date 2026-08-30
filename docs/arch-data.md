@@ -189,9 +189,9 @@ Lambda response limit or exhaust available memory — always pass an explicit
 Append-only audit log — one row per step execution attempt. Never updated after insert.
 Used for idempotency checks on SQS redelivery and debugging.
 
-**Same caution as `PGC_WorkflowRun`** — `input_snapshot`/`output_snapshot` hold
-that step's resolved input/output and can be large for steps handling bulk
-data. A multi-row scan without a `columns` list carries the same risk. The
+**Same caution as `PGC_WorkflowRun`** — `input_snapshot` holds
+that step's resolved input and can be large for steps handling bulk
+data. `output_snapshot` is bounded by `summariseStepOutput`. A multi-row scan without a `columns` list carries the same risk. The
 idempotency check itself (`run-workflow.mjs:checkIdempotency`) only needs to
 know whether a row exists — it passes `columns: ['id']`.
 
@@ -206,7 +206,7 @@ know whether a row exists — it passes `columns: ['id']`.
 | status | text | `completed`, `failed`, `skipped` |
 | retry_count | integer | Attempts before this final status. Default 0. Supports idempotency debugging |
 | input_snapshot | jsonb | What was passed in |
-| output_snapshot | jsonb | What came out |
+| output_snapshot | jsonb | What came out, by shape rather than by prefix — `{ summary, chars, structure }`. `summary` is a bounded serialisation (kept, because readers select `output_snapshot->>'summary'`), `chars` is the full serialised length, `structure` carries the type, array/row count, and either a sample row's keys or each field's shape. **Two shapes are in the table:** runs before 2026-08-30 hold `{ summary }` alone, truncated to 200 characters (100 for an iterator item or gate) — check `executed_at` before trusting a reading. `structure` answers what shape and how many; values live in `PGC_WorkflowRun.state.local_state` |
 | error | jsonb | Error details if failed |
 | duration_ms | integer | |
 | executed_at | timestamptz | |
@@ -253,7 +253,7 @@ row and several single-phrase rows behave identically at match time.
 | intent_category | text | |
 | workflow_id | integer FK | → PGC_Workflow.id (nullable — some intents are ad-hoc) |
 | action_type | text | `crud`, `workflow`, `heavy_lift` |
-| source | text | ✦ nullable — `user` (typed at the `create_workflow` invocation-phrases gate), `auto` (from `intent_keywords` or the truncated-userInput alias), `name` (the workflow's own name), or `NULL` (system-seeded / pre-migration rows, provenance not tracked) |
+| source | text | ✦ nullable — `user` (a phrase the user chose — the `create_workflow` invocation-phrases gate, or `manage_routing_aliases`), `auto` (from `intent_keywords` or the truncated-userInput alias), `name` (the workflow's own name), or `NULL` (system-seeded / pre-migration rows, provenance not tracked) |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
@@ -265,7 +265,9 @@ These two tables answer different questions and are consulted in a strict order 
 
 `PGC_DomainHelp` answers: "Does the user's input mention something in their personal data?" — stocks, recipes, meals, budget. It has no FK to `PGC_Workflow` and no awareness of workflows. It only knows that "stocks", "portfolio", and "holdings" all mean `stock_portfolio`. Pass 2 in the pipeline — only consulted when no `PGC_IntentMap` pattern matched. Once a domain is resolved from `PGC_DomainHelp`, the preprocessor runs a workflow keyword scan against `PGC_Workflow.intent_keywords` for that domain, then falls back to CRUD detection or Tier 2.
 
-The handoff is one-way and ordered: `PGC_IntentMap` always runs first. A match short-circuits — `PGC_DomainHelp` is never read.
+`PGC_DomainHelp.commands` is the generic CRUD surface written when the domain is created. It is not a workflow catalogue and nothing routes from it. What a domain can do is read from `PGC_Workflow` at the moment of asking — by `/help`, and by Novia's `search_domain_help`, which returns the domain's live workflow rows alongside the row itself.
+
+The handoff is one-way and ordered: `PGC_IntentMap` always runs first, and a match short-circuits Pass 2. Two exceptions, both deliberate: a `heavy_lift` match whose route needs a domain (`CREATE_WORKFLOW`, `DELETE_DOMAIN`) reads `PGC_DomainHelp` for the alias lookup alone, since Pass 1 does not resolve one; and a `crud` row falls through to Pass 2 so a domain workflow can claim the intent.
 
 **Intent Preprocessor tuning surface:**
 
@@ -274,16 +276,19 @@ When classification misbehaves, most fixes are now data changes — no code depl
 | Symptom | Which pass | Fix |
 |---|---|---|
 | System-level intent misrouted or missed | Pass 1 | Update `PGC_IntentMap.pattern` regex |
-| Domain not recognised from user input | Pass 2 | Update `PGC_DomainHelp.aliases` for that domain |
-| Domain workflow not triggered by natural phrasing | Pass 2 | Add verb to `PGC_Workflow.intent_keywords` for that workflow — no code change |
-| Novel verb not recognised for any domain workflow | Pass 2 | Add verb to `PGC_Workflow.intent_keywords` — no code change |
+| Domain not recognised from user input | Pass 2 | `manage_routing_aliases { domain, add }` |
+| Domain workflow not triggered by natural phrasing | Pass 2 | `manage_routing_aliases { workflowName, add }` — writes the Pass 1 row and the Pass 2 keyword together |
+| Novel verb not recognised for any domain workflow | Pass 2 | `manage_routing_aliases { workflowName, add }` |
 | Structured `field=value` CRUD not detected | Pass 2 CRUD fallback | Update `matchCrudVerb()` in `classify-intent-tiers.mjs` |
-| Domain resolved but correct workflow not matched | Pass 2 | Enrich `intent_keywords` across that domain's workflows |
+| Domain resolved but correct workflow not matched | Pass 2 | `manage_routing_aliases { workflowName, add }` across that domain's workflows |
 | Novel phrasing reaches Tier 2 too often | Pass 2 (Backlog) | Populate `PGC_Workflow.intent_embedding` via pgvector — semantic match supersedes keyword scan |
-| Aliases outdated after domain changes | Pass 2 | Phase 2 item 4c — `/mind edit aliases for <domain>` management workflow |
+| Aliases outdated after domain changes | Pass 2 | `manage_routing_aliases { domain, add, remove }` |
 
-The alias management workflow (`/mind edit aliases for recipes`) is a Phase 2 item.
-Until it exists, aliases can be updated directly in `PGC_DomainHelp` via the SERV table endpoint.
+Routing aliases are edited through Novia's `manage_routing_aliases` tool, which covers both surfaces:
+`workflowName` writes the `PGC_IntentMap` row and the matching `PGC_Workflow.intent_keywords` entry
+together; `domain` edits `PGC_DomainHelp.aliases` and recomputes that row's embedding. A direct SERV
+update to either table bypasses the collision refusal, and on the workflow surface leaves Pass 1 and
+Pass 2 disagreeing.
 
 ##### PGC_WorkflowRunLock
 Reserved for future parallel execution — optimistic locking. NOT used in sequential mode.
