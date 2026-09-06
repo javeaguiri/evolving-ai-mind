@@ -691,8 +691,8 @@ Resources:
                                         # large-JSONB tables (PGC_WorkflowRun.state/stack) can OOM at 256MB
       Environment:
         Variables:
-          PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
-          PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
+          PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url:4}}'
+          PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url:3}}'
           EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
           EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
           INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
