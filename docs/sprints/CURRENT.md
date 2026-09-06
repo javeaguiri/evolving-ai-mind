@@ -378,5 +378,19 @@ README's remaining steps have the same standing: unverified until someone execut
 
 **Commits:** `3b1eda2` (rotation + runbook), `c5580e0` (README).
 
+**Rotation closed the same session.** The old Perplexity key was deleted in the dashboard, and both
+probes were re-run afterwards: `ping-llm` returns `sonar`, the `vectorSearch` probe returns the same
+`0.2433982428895054` for the third time. **With the old key dead this is the definitive proof** —
+the hash comparison in §5.3 establishes which key deployed while both are valid, and deleting the
+old one converts a green probe from weak evidence into conclusive evidence. Four of five secrets
+rotated; Slack's two skipped by decision.
+
+**One live confirmation of the runbook's stale-link hazard, observed rather than predicted.** After
+`.env.test` was updated, the already-running shell still held the **deleted** key in memory —
+hashed `a9d081fc39b3` against the file's `7ceb47e436f9`. `.bashrc` sources `.env.test` at login
+only, so an integration test run in this shell would now fail against a key that no longer exists,
+and it would present as a provider error rather than as a stale environment. §2.4 item 3 and §5.4
+both already say to restart the shell; this is what that instruction is for.
+
 **Sprint 12 remains where Sessions 1 and 2 left it: scoped, not started, Prep not done.** Track A is
 still the opener.
