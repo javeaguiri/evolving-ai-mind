@@ -597,7 +597,7 @@ Resources:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
           PROC_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
-          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching
@@ -645,7 +645,7 @@ Resources:
           LLM_AGENT_URL:        'https://api.perplexity.ai/v1/agent'
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
-          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         ProcProxy:
           Type: Api
@@ -695,7 +695,7 @@ Resources:
           PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
           EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
           EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
-          INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         ServProxy:
           Type: Api
@@ -761,10 +761,13 @@ Resources:
     Type: AWS::ApiGateway::ApiKey
     DependsOn: ServerlessRestApiProdStage
     Properties:
-      Name: evolving-mind-ai-internal-key
+      # No explicit Name. Changing Value forces resource replacement, and CloudFormation
+      # creates the replacement before deleting the original — a fixed Name collides with
+      # itself and fails the update ("ApiKey ... already exists"). Let CloudFormation
+      # generate the name; UsagePlanKey binds by !Ref, so nothing depends on it.
       Description: 'Internal API key for PROC and SERV endpoints'
       Enabled: true
-      Value: '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+      Value: '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
 
   InternalApiUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
