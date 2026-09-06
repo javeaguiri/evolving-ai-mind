@@ -220,51 +220,111 @@ to be retyped.
 
 ## 3. Database password
 
-### 3.1 Change it without writing it to history
+**Both URL parameters hold the identical value** — same user, same host, same database
+(`lambda_user @ …/evo_mind`). PGC and PGD are one database separated by table prefix, not by
+credentials, so this is **one password change and two SSM writes that must not drift**. If they
+diverge, one Lambda authenticates and the other does not, which presents as an intermittent fault
+rather than a clean failure. `lambda_user` is also the RDS master user, so it can change its own
+password with no separate admin credential.
 
-In `psql`, use the meta-command rather than a literal `ALTER USER`:
+**There is no separate password parameter, and none should be created.** Nothing reads a bare
+password — `src/` reads `PGC_DATABASE_URL` and `PGD_DATABASE_URL` as complete connection strings.
+A `/evolving-mind-ai/lambda-user-pw` parameter would be an orphan: a third plaintext copy of the
+secret with no consumer.
+
+The exact URL shape, confirmed 2026-09-06 — note `postgresql://`, not `postgres://`, and no query
+suffix:
+
+```
+postgresql://lambda_user:<PW>@sysrdsevomind.cx8eoo8eaw8h.us-east-2.rds.amazonaws.com:5432/evo_mind
+```
+
+### 3.1 Generate a password that cannot corrupt the URL
+
+The values are connection **URLs**. A password containing `@ : / # ? %` or a space corrupts the URL
+and produces errors that look like authentication failures — the most common way this rotation goes
+wrong.
+
+**Generate hex and the problem cannot occur.** Hex is alphanumeric by construction and URL-safe by
+definition, so no encoding step is needed and none can be forgotten. 24 bytes → 48 characters:
+
+```powershell
+$bytes = [byte[]]::new(24)
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$PW = [System.BitConverter]::ToString($bytes).Replace('-','').ToLower()
+```
+
+### 3.2 Write both parameters
+
+```powershell
+$URL = "postgresql://lambda_user:${PW}@sysrdsevomind.cx8eoo8eaw8h.us-east-2.rds.amazonaws.com:5432/evo_mind"
+
+$URL.Length                                                            # expect 142
+$URL -match '^postgresql://lambda_user:[0-9a-f]{48}@sysrdsevomind\.'   # expect True
+
+aws ssm put-parameter --name /evolving-mind-ai/pgc-database-url --value $URL --type String --overwrite --region us-east-2
+aws ssm put-parameter --name /evolving-mind-ai/pgd-database-url --value $URL --type String --overwrite --region us-east-2
+```
+
+Use `${PW}` with braces. Both parameters take the identical `$URL` from the same variable in the
+same session — that is the guard against drift. Verify both checks pass **before** either write.
+
+Nothing breaks at this point: SSM holds versions that nothing reads yet.
+
+### 3.3 Deploy BEFORE changing the password
+
+**This ordering is the opposite of the obvious one, and it is deliberate.**
+
+- **Password first:** if the deploy then fails and rolls back, the Lambdas revert to the *old* URL
+  while the database has the *new* password. The outage persists until you diagnose and redeploy.
+- **Deploy first:** if it fails, nothing is harmed — the password is untouched and the system keeps
+  running on the old one. Retry costs nothing.
+
+Deploy-first puts the fragile step where its failure is free. The stack rollback observed in §2.3 is
+why this is not hypothetical.
+
+Pin both parameters in `template.yaml` (lines 694, 695). **They will be at different version
+numbers** — easy to transpose. Then:
+
+```bash
+sam build && sam deploy --no-confirm-changeset
+```
+
+Before deploying, open `psql "$PGC_DATABASE_URL"` in a separate pane and leave it at the prompt. It
+authenticates with the current password, so it survives the change and is your escape hatch if the
+new value does not take.
+
+**If the deploy fails and rolls back, do not change the password.** Retry the deploy.
+
+### 3.4 Change the password, immediately
+
+The moment the deploy reports success the outage begins — the Lambdas hold a password the database
+does not have. In the waiting session:
 
 ```
 \password lambda_user
 ```
 
-This prompts twice, echoes nothing, sends a pre-hashed value, and leaves no plaintext in
+Prompts twice, echoes nothing, sends a pre-hashed value, and leaves no plaintext in
 `~/.psql_history`. A literal `ALTER USER lambda_user WITH PASSWORD '…'` writes the secret to that
-file in cleartext.
+file in cleartext — do not use it.
 
-### 3.2 The URL-encoding trap
-
-Both SSM values are `postgres://user:password@host/db` connection **URLs**. A password containing
-`@ : / # ? %` or a space will corrupt the URL and produce connection errors that look like
-authentication failures. Either restrict the generated password to alphanumerics, or percent-encode
-it when assembling the URL. This is the most common way this particular rotation goes wrong.
-
-### 3.3 Store and deploy
-
-```bash
-read -rs NEWURL
-aws ssm put-parameter --name /evolving-mind-ai/pgc-database-url --value "$NEWURL" --type String --overwrite --region us-east-2
-```
-
-Repeat for `pgd-database-url`. Then pin both in `template.yaml` (lines 694, 695) and
-`sam build && sam deploy --no-confirm-changeset`.
-
-### 3.4 The outage window
-
-From the moment `\password` completes until the deploy finishes, Lambdas opening a **new**
-connection fail; pooled connections already open survive until recycled. At household scale this
-is acceptable — a few minutes, with SQS retrying the async paths.
-
-If you want zero downtime, the only route is a second role: create `lambda_user_2` with the new
-password and identical grants, point SSM at it, deploy, verify, then drop the old role. PostgreSQL
-cannot hold two passwords for one role, so there is no simpler zero-downtime form.
+The outage is the gap between deploy completion and this command: seconds, if you are at the
+keyboard. Pooled connections opened before the change survive until recycled.
 
 ### 3.5 Verify
 
-Update `PGC_DATABASE_URL` in `.env.test`, restart the shell, then run a `dev_scripts` read or the
-integration suite. `listPhysicalTables` from §2.5 also exercises the database path end to end.
+Only `ServFunction` holds the database URLs, so one read proves the whole surface. A deploy replaces
+the function configuration and invalidates warm containers, so this is genuinely a new connection
+rather than a surviving pooled one:
 
----
+```bash
+K=$(aws ssm get-parameter --name /evolving-mind-ai/internal-api-key --query Parameter.Value --output text --region us-east-2)
+curl -s -X POST "$SERV_API_URL/api/v1/serv/schema/listPhysicalTables" -H "Content-Type: application/json" -H "x-api-key: $K" -d '{}'
+unset K
+```
+
+Then update `PGC_DATABASE_URL` in `.env.test` and restart the shell.
 
 ## 4. Slack — bot token and signing secret
 
