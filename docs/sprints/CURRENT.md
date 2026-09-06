@@ -318,3 +318,65 @@ by final architectural decision, so the password is the only thing between the o
 real data. Console-only — `BastionEC2Role` is denied `ec2:DescribeSecurityGroups`.
 
 **Sprint 12 is still at the same point as after Session 1: scoped, not started, Prep not done.**
+
+### Session 3 — 2026-09-06 — Perplexity rotation, and a README that could not bootstrap
+
+**No Track advanced.** Administrative, continuing Session 2. Environment verified healthy after a
+restart: both previously-rotated credentials survive, SERV returns `200`, PGC connects.
+
+**`llm-api-key` rotated — SSM v5, pinned at `template.yaml` 644 and 697, deployed.** One parameter,
+two env vars: `LLM_API_KEY` on ProcFunction, `EMBEDDING_API_KEY` on ServFunction. Four of five
+secrets are now rotated; the two Slack secrets were **assessed and skipped by decision**, neither
+having been exposed, and the runbook now records that rather than leaving them looking overlooked.
+**The old Perplexity key must still be deleted in the dashboard** — until it is, this is not a
+completed rotation.
+
+**The finding worth keeping is about verification, not about the key.** This rotation is the only
+zero-downtime one, because Perplexity permits multiple live keys — and that property is exactly what
+makes it the hardest to verify. Every other rotation invalidates the old value, so a working system
+proves the new value deployed. Here both keys are live at once: a green probe after the deploy
+proves only that *some* valid key is in the environment. A silent partial rotation — SSM holding v5
+while the Lambdas still run v4, the §2.1 failure — is indistinguishable from success by any
+functional test.
+
+What distinguishes them is comparing a **hash of the deployed Lambda environment against a hash of
+each SSM version**, old as well as new. Both functions hashed to v5 and differed from v4. This is
+now §5.3, and it is not Perplexity-specific: it is the direct form of what §2.5 tests indirectly
+through a 403, it works for every parameter in the inventory, and it is the **only** form available
+when the old credential is still valid.
+
+**Two runbook corrections, both found by executing it rather than reading it:**
+
+- `.env.test` holds **three** secrets, not two. Line 18 carries `LLM_API_KEY`, read by
+  `tests/integration/llm-prompt-schema.test.mjs`. §0's inventory listed two, and §5 listed no
+  on-disk copy at all — so following the runbook would have left the integration tests pointing at
+  a key that was about to be deleted.
+- §5 said to verify "with any workflow that makes an `llm_call`, and one that embeds", which reads
+  as requiring a Slack run. Neither half does: `POST /proc/ping-llm` validates ProcFunction plus the
+  provider with no Slack, SQS or DB call, and a `getRows` `vectorSearch` descriptor makes SERV embed
+  a query string read-only. Both are now baselined before the deploy and re-run after — the
+  embedding probe returned an **identical** similarity score either side, which a merely non-empty
+  response would not have established.
+
+**Then the sweep found something bigger, and it belongs to Track B.** README Step 3 could not stand
+a fresh install up. All five `put-parameter` lines said `--type SecureString` against parameters
+that are `String` by final decision — and the decision is load-bearing at that step, because
+`{{resolve:ssm:...}}` resolves `String` only and `{{resolve:ssm-secure:...}}` is unsupported for
+Lambda environment variables. `internal-api-key` was missing from the list entirely: five documented,
+six required, and it is the one that is generated rather than obtained.
+
+**The third defect we caused ourselves, eight days ago.** The version pins added on 2026-09-06 fixed
+a silent-rotation failure and created a bootstrap failure: the pinned numbers are *this*
+installation's rotation history, and a fresh install has every parameter at version 1, so the eight
+committed pins do not resolve. Fixed in Step 3 with instructions to reset them.
+
+**That is Track B's premise arriving unprompted.** "A second person, or the same person on a new
+machine, should be able to stand the system up from the repository" was not true, and none of the
+three defects would have surfaced by reading — the first two needed the rotation, the third needed
+a change made *after* the README was last checked. It is worth carrying into Track B that the
+README's remaining steps have the same standing: unverified until someone executes them.
+
+**Commits:** `3b1eda2` (rotation + runbook), `c5580e0` (README).
+
+**Sprint 12 remains where Sessions 1 and 2 left it: scoped, not started, Prep not done.** Track A is
+still the opener.
