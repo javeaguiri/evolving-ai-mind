@@ -641,7 +641,7 @@ Resources:
       RecursiveLoop: Allow            # Workflow engine intentionally chains SQS hops per step
       Environment:
         Variables:
-          LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}'
           LLM_AGENT_URL:        'https://api.perplexity.ai/v1/agent'
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
@@ -694,7 +694,7 @@ Resources:
           PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url:4}}'
           PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url:3}}'
           EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
-          EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}'
           INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         ServProxy:
