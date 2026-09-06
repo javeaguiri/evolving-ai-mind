@@ -267,3 +267,54 @@ to require a failing merged array be refused, proven with a deliberately failing
 **Open question carried into Prep:** whether the base-version check refuses or merely warns. It is
 the one part of the patch design with no precedent in the codebase — the full-array form has always
 clobbered silently.
+
+### Session 2 — 2026-09-06 — credential rotation (no sprint work)
+
+**No Track advanced.** The session was administrative: rotating every system credential before the
+system holds real household data. Recorded here because Track B is release readiness, and handing a
+system over safely is the same concern.
+
+**Rotated and verified live — 2 of 5 secrets:**
+
+| Secret | Result |
+|---|---|
+| `internal-api-key` | SSM v2. Old key `403`, new key `200` at `/serv/schema/listPhysicalTables` |
+| `lambda_user` password | `pgc-database-url` v4, `pgd-database-url` v3. SERV reads confirmed on new connections |
+
+Remaining: `llm-api-key` (Perplexity), `slack-signing-secret`, `slack-bot-token` — in that order,
+bot token last because regeneration is a hard cutover with no overlap window.
+
+**Two engine-level findings, both now encoded in `template.yaml` and committed:**
+
+1. **SSM references must be version-pinned.** An unpinned `{{resolve:ssm:...}}` in an
+   otherwise-unchanged template can produce an empty changeset, so the rotation never deploys while
+   SSM holds the new value — a *silent partial rotation* in which the old credential keeps working
+   and everyone believes it was replaced. Pinning forces the changeset and records the live version
+   in `git diff`.
+
+2. **`AWS::ApiGateway::ApiKey` must not carry an explicit `Name`.** Changing `Value` forces
+   replacement, CloudFormation creates before deleting, and a fixed name collides with itself:
+   *"ApiKey with name evolving-mind-ai-internal-key already exists"*. This was observed as a real
+   stack rollback, not predicted. The rollback was clean, which is the second half of the finding —
+   it fails safe, but it fails.
+
+**A process rule came out of that rollback and is now in the runbook: deploy BEFORE changing a
+database password, never after.** If the deploy rolls back with the password already changed, the
+Lambdas revert to a URL the database no longer accepts and the outage persists until diagnosed.
+Deploying first puts the fragile step where its failure costs nothing.
+
+**Delivered:** `docs/ops-key-rotation.md` — the full procedure for all six SSM parameters plus the
+credentials that are not in SSM (`.env.test`, `.claude/settings.local.json`, the bastion SSH
+keypair, IAM access keys). Contains no secret values by construction.
+
+**Hygiene fixed along the way:** `.env.test` and `.claude/settings.local.json` were both `644`
+(world-readable) and are now `600`; the three `.claude/settings.local.json` permission patterns that
+embedded the API key literally were replaced with an env-free form that survives future rotations.
+Confirmed no secret has ever been committed to git.
+
+**Open and unrelated to any key — worth more than the rotations.** The RDS security group
+`sg-05c00c014cd77e239` port 5432 ingress has never been checked. RDS is `PubliclyAccessible: true`
+by final architectural decision, so the password is the only thing between the open internet and
+real data. Console-only — `BastionEC2Role` is denied `ec2:DescribeSecurityGroups`.
+
+**Sprint 12 is still at the same point as after Session 1: scoped, not started, Prep not done.**
