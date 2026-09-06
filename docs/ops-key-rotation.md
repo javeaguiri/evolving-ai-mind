@@ -27,7 +27,9 @@ client.
 
 - **The bastion EC2 SSH keypair** — grants shell on a host whose role can already read SSM.
 - **IAM access keys** for CLI use, if any exist.
-- **`.env.test`** — the single on-disk copy of `INTERNAL_API_KEY` and `PGC_DATABASE_URL`.
+- **`.env.test`** — the on-disk copy of `INTERNAL_API_KEY`, `PGC_DATABASE_URL` **and
+  `LLM_API_KEY`** (line 18, read by `tests/integration/llm-prompt-schema.test.mjs`). Three secrets,
+  not two — corrected 2026-09-06 during the Perplexity rotation, having been listed as two.
   `~/.bashrc` line 42 does `set -a; source ~/evolving-ai-mind/.env.test; set +a`, so this one file
   supplies the shell, every `dev_scripts` run, and the integration tests. Untracked, and confirmed
   never committed.
@@ -343,19 +345,105 @@ signing secret at 598), and deploy.
 rejection at `handler.mjs`; a bad bot token produces a workflow that runs but posts nothing back.
 The two fail differently, which tells you which one is wrong.
 
+**Deferred by decision, 2026-09-06.** Neither Slack secret was exposed, so both were assessed and
+skipped rather than overlooked. They remain at their original values and are the two oldest
+credentials in the inventory — rotate them on the next scheduled pass, or immediately if the Slack
+app's admin membership changes.
+
 ---
 
 ## 5. Perplexity
 
 The only rotation that is naturally zero-downtime, because Perplexity permits multiple live keys.
 
-1. Create the new key in the dashboard. **Do not delete the old one yet.**
-2. `put-parameter` into `llm-api-key`, pin `template.yaml` (line 644 and 697 — one parameter, two
-   env vars: `LLM_API_KEY` and `EMBEDDING_API_KEY`), deploy.
-3. Verify with any workflow that makes an `llm_call`, and one that embeds.
-4. **Then** delete the old key in the dashboard.
+**That property is also what makes it the hardest one to verify**, and the point is easy to miss.
+Every other rotation invalidates the old value, so a working system proves the new value deployed.
+Here both keys are live at once: a green probe after the deploy proves only that *some* valid key is
+in the environment, not that it is the new one. A silent partial rotation — SSM holding v5 while the
+Lambdas still run v4 — looks exactly like success. §5.3 is the step that distinguishes them.
 
-Step 4 is the one that gets skipped. An undeleted old key is an un-rotated key.
+1. Create the new key in the dashboard. **Do not delete the old one yet.**
+2. `put-parameter` into `llm-api-key`. Note the version it returns.
+3. Pin `template.yaml` — **lines 644 and 697**, one parameter feeding two env vars, `LLM_API_KEY`
+   on ProcFunction and `EMBEDDING_API_KEY` on ServFunction. Then `sam build && sam deploy
+   --no-confirm-changeset`.
+4. Verify — §5.2 and §5.3, both.
+5. Update `.env.test` line 18 — §5.4.
+6. **Then** delete the old key in the dashboard.
+
+The last step is the one that gets skipped. An undeleted old key is an un-rotated key.
+
+### 5.1 Baseline first
+
+Run both probes in §5.2 **before** deploying. A failure afterwards is only diagnostic if you know
+the path worked beforehand.
+
+### 5.2 The two functional probes — neither needs a workflow or Slack
+
+Both halves have a direct endpoint. Nothing here writes, and nothing costs more than one small
+completion and one embedding.
+
+**LLM half** — `ping-llm` validates ProcFunction plus the provider, with no Slack, SQS or DB call:
+
+```bash
+curl -s -X POST "$PROC_API_URL/api/v1/proc/ping-llm" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{}'
+```
+
+Expect `success: true` and a `model` of `sonar`.
+
+**Embedding half** — a `vectorSearch` descriptor makes SERV embed the query text, which is the only
+thing on that path using `EMBEDDING_API_KEY`. Read-only:
+
+```bash
+curl -s -X POST "$SERV_API_URL/api/v1/serv/table/getRows" -H "Content-Type: application/json" -H "x-api-key: $INTERNAL_API_KEY" -d '{ "tableName": "PGC_DomainHelp", "vectorSearch": { "column": "embedding", "queryText": "grocery shopping receipt", "threshold": 0.2 }, "columns": ["id", "domain"], "limit": 3 }'
+```
+
+Expect a row with a real `similarity`. **Compare the similarity value to the baseline** — an
+identical score is evidence the same embedding model returned the same vector, where a merely
+non-empty response is not.
+
+### 5.3 Prove the new key actually deployed
+
+The probes above cannot do this, for the reason in the section opener. Compare a hash of the
+deployed Lambda environment against a hash of each SSM version. **Hashes, never values** — this
+prints nothing secret, and the old version's hash is what gives the comparison meaning:
+
+```bash
+P=$(aws lambda get-function-configuration --function-name evolving-mind-ai-proc --region us-east-2 --query 'Environment.Variables.LLM_API_KEY' --output text)
+S=$(aws lambda get-function-configuration --function-name evolving-mind-ai-serv --region us-east-2 --query 'Environment.Variables.EMBEDDING_API_KEY' --output text)
+NEW=$(aws ssm get-parameter --name "/evolving-mind-ai/llm-api-key:5" --query Parameter.Value --output text --region us-east-2)
+OLD=$(aws ssm get-parameter --name "/evolving-mind-ai/llm-api-key:4" --query Parameter.Value --output text --region us-east-2)
+h(){ printf '%s' "$1" | sha256sum | cut -c1-12; }
+echo "proc $(h "$P")"; echo "serv $(h "$S")"; echo "new  $(h "$NEW")"; echo "old  $(h "$OLD")"
+unset P S NEW OLD
+```
+
+Both Lambda hashes must equal the new version's and differ from the old one's. If they match the
+old, the deploy did not re-resolve — that is the §2.1 failure, and the fix is to check the pin and
+redeploy.
+
+**This check is not Perplexity-specific.** It is the direct form of what §2.5 tests indirectly
+through a 403, it works for every parameter in the inventory, and it is the only form available
+when the old credential is still valid. Substituting the version numbers is the whole change.
+
+### 5.4 The on-disk copy
+
+`.env.test` line 18 holds `LLM_API_KEY` for the integration tests. Pull it from SSM rather than
+retyping, and keep the value out of `argv` — `sed -i "s|…|$KEY|"` puts it in the process
+arguments, visible in `ps`:
+
+```bash
+export NEWKEY=$(aws ssm get-parameter --name "/evolving-mind-ai/llm-api-key:5" --query Parameter.Value --output text --region us-east-2)
+node -e "const fs=require('fs');const p=process.env.HOME+'/evolving-ai-mind/.env.test';const t=fs.readFileSync(p,'utf8');const o=t.replace(/^LLM_API_KEY=.*$/m,'LLM_API_KEY='+process.env.NEWKEY);if(o===t){console.log('NO CHANGE — pattern did not match');}else{fs.writeFileSync(p,o,{mode:0o600});console.log('updated');}"
+grep -q "^LLM_API_KEY=$NEWKEY$" ~/evolving-ai-mind/.env.test && echo 'matches SSM' || echo 'MISMATCH'
+unset NEWKEY
+```
+
+The rewrite reports `NO CHANGE` rather than succeeding silently if the pattern misses — a silent
+no-op here leaves the tests on a key that is about to be deleted.
+
+A shell that was already running still holds the old value in memory; `.bashrc` sources `.env.test`
+at login only. Restart the shell before running the integration tests.
 
 ---
 
