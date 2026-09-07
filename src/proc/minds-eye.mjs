@@ -1241,18 +1241,39 @@ async function simulateForRegistration(steps, traceId) {
  * genuinely is the human's to determine.
  */
 async function preGateRefusal(action, params, traceId) {
-  if (action !== 'register_workflow') return null;
-  const steps = params?.steps;
-  if (!Array.isArray(steps) || steps.length === 0) return null;
+  if (action === 'register_workflow') {
+    const steps = params?.steps;
+    if (!Array.isArray(steps) || steps.length === 0) return null;
 
-  const sim = await simulateForRegistration(steps, traceId);
-  if (sim.passed) return null;
+    const sim = await simulateForRegistration(steps, traceId);
+    if (sim.passed) return null;
 
-  return {
-    error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
-    validation: sim.error_summary,
-    issues:     sim.issues,
-  };
+    return {
+      error:      'Workflow failed validation — not registered, and not sent for approval. Correct the steps and simulate again.',
+      validation: sim.error_summary,
+      issues:     sim.issues,
+    };
+  }
+
+  // The repair path had no validation gate at either end: nothing here, and no runSimulation
+  // in the write. A workflow could be edited into a state register_workflow would have
+  // refused outright, which is the wrong way round — the array being changed is already live.
+  if (action === 'propose_workflow_fix') {
+    const resolved = await resolveProposedSteps(params);
+    if (resolved.error) return resolved;
+    if (!Array.isArray(resolved.merged) || resolved.merged.length === 0) return null;
+
+    const sim = await simulateForRegistration(resolved.merged, traceId);
+    if (sim.passed) return null;
+
+    return {
+      error:      'The merged workflow fails validation — nothing was written, and it was not sent for approval. Correct the patch and simulate again.',
+      validation: sim.error_summary,
+      issues:     sim.issues,
+    };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,6 +1323,124 @@ export function renderGateValue(value) {
     : text;
 }
 
+/**
+ * Merge a patch of complete steps into a stored step array, keyed by `step` identifier.
+ *
+ * The unit is the step, never the field. A patch entry REPLACES the stored step of that
+ * identifier outright, so every submitted step stays a valid simulatable unit and the gate
+ * diff is exact rather than inferred. Field-level merging would put the engine in the
+ * business of reassembling fragments, and would let a half-specified step reach the gate.
+ *
+ * Absence means unchanged — that is the whole point of a patch — so deletion cannot be
+ * expressed by omission and is named explicitly in `removeSteps`. The full-array form could
+ * always delete by leaving a step out; without an explicit list that capability would be
+ * lost silently.
+ *
+ * Order is preserved for steps that already exist, and new steps are appended in patch
+ * order. Routing is explicit in each step, so array position carries no meaning of its own
+ * — except at index 0, which `run-workflow.mjs` uses to seed the root frame. Replacing a
+ * step in place rather than re-appending it is what keeps that stable.
+ *
+ * Pure. Reports what it did rather than deciding what to do about it: a caller refuses on
+ * `duplicatePatchKeys` or `unknownRemovals`, and the simulation refuses on the result.
+ */
+export function mergeStepPatch(currentSteps = [], { patch = [], removeSteps = [] } = {}) {
+  const removals   = new Set(removeSteps.map(String));
+  const patchByKey = new Map();
+  const duplicatePatchKeys = [];
+
+  for (const step of patch) {
+    const key = String(step?.step);
+    if (patchByKey.has(key)) duplicatePatchKeys.push(key);
+    patchByKey.set(key, step);
+  }
+
+  const currentKeys    = new Set(currentSteps.map(s => String(s.step)));
+  const unknownRemovals = [...removals].filter(k => !currentKeys.has(k));
+
+  const replaced = [];
+  const removed  = [];
+  const merged   = [];
+
+  for (const step of currentSteps) {
+    const key = String(step.step);
+    if (removals.has(key)) { removed.push(key); continue; }
+    if (patchByKey.has(key)) {
+      merged.push(patchByKey.get(key));
+      replaced.push(key);
+      patchByKey.delete(key);
+      continue;
+    }
+    merged.push(step);
+  }
+
+  const added = [...patchByKey.keys()];
+  for (const key of added) merged.push(patchByKey.get(key));
+
+  return { merged, added, replaced, removed, unknownRemovals, duplicatePatchKeys };
+}
+
+/**
+ * Resolve what a repair is actually proposing, whichever form it arrived in.
+ *
+ * Both forms end in a complete array, because the simulator only ever sees a complete
+ * workflow — a patch changes what crosses the model/engine boundary, not what the validator
+ * receives. Shared by the pre-gate refusal, the gate text and the write so none of the three
+ * can form a different opinion about what is being written.
+ */
+async function resolveProposedSteps(params, { requireBaseVersion = true } = {}) {
+  const { workflowName, steps, patch, removeSteps = [], baseVersion } = params ?? {};
+  if (!workflowName) return { error: 'workflowName is required' };
+  if (!Array.isArray(steps) && !Array.isArray(patch)) {
+    return { error: 'Send either patch (the steps you changed) or steps (the whole array)' };
+  }
+
+  const wfResp = await getRows(
+    'PGC_Workflow',
+    [{ column: 'name', op: 'eq', value: workflowName }],
+    { column: 'version', direction: 'desc' },
+    1,
+  );
+  const wf = wfResp.rows?.[0];
+  if (!wf) return { error: `Workflow "${workflowName}" not found` };
+
+  const currentSteps = wf.steps ?? [];
+
+  // Whole-array form: still accepted, and now validated the same way. No version check —
+  // it never had one, and the instruction layer steers repairs to the patch form instead.
+  if (Array.isArray(steps)) {
+    return { wf, currentSteps, merged: steps, mode: 'steps' };
+  }
+
+  // A patch is merged against the version it was read from. She reads at T0 and submits at
+  // T1; without this, whatever landed in between is overwritten with no trace. Refusing is
+  // affordable here precisely because it is a patch — recovery is re-reading the few steps
+  // being changed, not the whole workflow.
+  // Simulation writes nothing, so it merges against whatever is stored now and skips the
+  // check. The version only has to hold at the point something is written.
+  if (requireBaseVersion && (baseVersion === undefined || baseVersion === null)) {
+    return { error: 'baseVersion is required when sending a patch — pass the version read_workflow returned.' };
+  }
+  if (requireBaseVersion && Number(baseVersion) !== Number(wf.version)) {
+    return {
+      error: `Workflow "${workflowName}" has changed since you read it — patch not applied.`,
+      baseVersion:    Number(baseVersion),
+      currentVersion: wf.version,
+      remedy:         'Re-read the steps you are changing with read_workflow, rebuild the patch against them, and resubmit with the current version.',
+    };
+  }
+
+  const result = mergeStepPatch(currentSteps, { patch, removeSteps });
+  if (result.duplicatePatchKeys.length) {
+    return { error: `Patch names the same step more than once: ${result.duplicatePatchKeys.join(', ')}` };
+  }
+  if (result.unknownRemovals.length) {
+    return { error: `removeSteps names steps that do not exist: ${result.unknownRemovals.join(', ')}` };
+  }
+
+  return { wf, currentSteps, merged: result.merged, mode: 'patch', mergeReport: result };
+}
+
 async function buildGateText(action, params, traceId) {
   try {
     switch (action) {
@@ -1339,11 +1478,17 @@ async function buildGateText(action, params, traceId) {
       }
 
       case 'propose_workflow_fix': {
-        const { workflowName, steps: proposedSteps = [] } = params;
-        let currentSteps = [];
+        const { workflowName } = params;
+        let currentSteps  = [];
+        let proposedSteps = [];
         try {
-          const resp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
-          currentSteps = resp.rows?.[0]?.steps ?? [];
+          // The merged array, not the submitted one. Under a patch only the steps she sent
+          // can differ, so the diff below stops being an inference and becomes exactly what
+          // changed — a whole-array resubmission could previously show spurious differences
+          // wherever an untouched step came back reformatted.
+          const resolved = await resolveProposedSteps(params);
+          currentSteps  = resolved.currentSteps ?? [];
+          proposedSteps = resolved.merged ?? [];
         } catch { /* best-effort */ }
 
         const currentMap  = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
@@ -1755,13 +1900,24 @@ async function executeWriteTool(action, params, traceId) {
       }
 
       case 'propose_workflow_fix': {
-        const { workflowName, steps } = params;
-        if (!workflowName || !steps) return { error: 'workflowName and steps are required' };
-        const wfResp = await getRows('PGC_Workflow', [{ column: 'name', op: 'eq', value: workflowName }], { column: 'version', direction: 'desc' }, 1);
-        const wf = wfResp.rows?.[0];
-        if (!wf) return { error: `Workflow "${workflowName}" not found` };
+        const { workflowName } = params;
+        const resolved = await resolveProposedSteps(params);
+        if (resolved.error) return resolved;
 
-        const currentSteps = wf.steps ?? [];
+        const { wf, currentSteps, merged: steps, mode, mergeReport } = resolved;
+
+        // The same refusal the gate applied, re-run at the write. preGateRefusal can be
+        // bypassed — a gate approved before another session moved the workflow resolves
+        // against a different array than the one it was shown.
+        const sim = await simulateForRegistration(steps, traceId);
+        if (!sim.passed) {
+          return {
+            error:      'The merged workflow fails validation — nothing was written.',
+            validation: sim.error_summary,
+            issues:     sim.issues,
+          };
+        }
+
         const currentMap   = Object.fromEntries(currentSteps.map(s => [String(s.step), s]));
         const proposedMap  = Object.fromEntries(steps.map(s => [String(s.step), s]));
         const allKeys      = [...new Set([...Object.keys(currentMap), ...Object.keys(proposedMap)])].sort();
@@ -1782,11 +1938,19 @@ async function executeWriteTool(action, params, traceId) {
         return {
           success:          resp.success,
           newVersion:       wf.version + 1,
+          // The most likely source of a stale baseVersion is her own previous write, so the
+          // next version she needs is stated rather than left to be inferred from this one.
+          nextBaseVersion:  wf.version + 1,
+          mode,
+          ...(mergeReport ? { patched: { added: mergeReport.added, replaced: mergeReport.replaced, removed: mergeReport.removed } } : {}),
+          validation:       'passed',
           stepCountBefore:  currentSteps.length,
           stepCountAfter:   steps.length,
           stepCountMismatch: currentSteps.length !== steps.length,
           diff,
-          steps_written:    steps,
+          // Under a patch the merged array can be large and she already knows what she sent.
+          // Echoing it back spends the round's budget on something she is not missing.
+          ...(mode === 'patch' ? {} : { steps_written: steps }),
         };
       }
 
@@ -2515,10 +2679,20 @@ async function executeReadTool(action, params, traceId, session) {
       }
 
       case 'simulate_workflow': {
-        const { steps, level } = params;
-        if (!steps) return { error: 'steps is required' };
+        const { steps, patch, level } = params;
+
+        // A patch is merged here too. Without this the tool that checks a fix would demand
+        // the whole array to check it, which defeats the patch it is meant to validate.
+        let toSimulate = steps;
+        if (!Array.isArray(steps) && Array.isArray(patch)) {
+          const resolved = await resolveProposedSteps(params, { requireBaseVersion: false });
+          if (resolved.error) return resolved;
+          toSimulate = resolved.merged;
+        }
+
+        if (!Array.isArray(toSimulate)) return { error: 'Send either steps, or workflowName with patch' };
         const { servPost } = await import('../shared/serv-client.mjs');
-        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps, ...(level !== undefined ? { level } : {}) });
+        const resp = await servPost('/api/v1/proc/simulate-workflow', { steps: toSimulate, ...(level !== undefined ? { level } : {}) });
         return resp;
       }
 
