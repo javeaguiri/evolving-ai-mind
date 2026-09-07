@@ -539,3 +539,38 @@ version). `process_receipt` is the natural subject — it is the workflow the wh
 from. Session 1189's inventory planning will supply the real repair.
 
 **Track A does not close until that runs.** Tracks C and D unblock at the same moment.
+
+### Session 6 — 2026-09-07 — the README's centre of gravity (no sprint work)
+
+**A one-off administrative task, committed directly to `main` at the user's instruction** and then
+merged into the sprint branch (`d93a065`). No sprint AC advanced, nothing deployed, docs only.
+
+**The README still opened on the left/right brain split as the system's organising idea** — the
+second thing a reader met, framed as *"the system is designed around two complementary modes of
+reasoning that must work together."* That stopped being true at Sprint 10's GO, when the agent was
+measured against `create_workflow` and replaced it as the way workflows are built. The document had
+not caught up: `create_workflow` was still listed as `✅ Working — R/L brain pipeline`, and `/novia`
+still read as Sprint 5 "Phase 1" with a tool list four sprints stale.
+
+**Two sections now stand where one did.** `## The Minds-Eye Agent — The Central Tenet` leads, and
+the L/R material survives beneath it — cut to roughly a third, opening with an explicit scope line
+declaring it subordinate, and rewritten around `create_domain`'s prompts rather than
+`create_workflow`'s. The "right brain will one day evolve prompts autonomously" framing is gone: the
+scaffolding fields still exist and are still named, but the reasoning over them is now stated as the
+agent's work, done on request with a human in the gate, and **the design does not assume it will
+become an autonomous process.**
+
+**Personalisation is documented as a property, not a quirk.** The two-name table from
+`arch-minds-eye.md` §1.0 is now in the README: `minds-eye` is the static system name and requires a
+code change; the display name is one row in `PGC_SystemContext.minds_eye_preferences` and requires
+one `updateRows`. **"Novia" is stated as the author's choice rather than a system fact** — a reader
+standing this up for their own household is told plainly that the name is theirs to set. This is the
+Static System vs Evolving Artifacts boundary applied to identity, and it reads as an argument for the
+boundary rather than a footnote about it.
+
+**The claim the section rests on is measured, not asserted:** $1.376 against the $1.42 pipeline
+baseline to build, and $0.672 to repair unaided from a symptom — the second being the thing a
+generation pipeline cannot do at all, because it has no way to look at what it built.
+
+**Nothing about the sprint changed.** AC1 still awaits its three live cases from `/novia`, and
+Tracks C and D still unblock on it.
