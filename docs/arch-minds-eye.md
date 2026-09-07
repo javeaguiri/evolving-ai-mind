@@ -213,6 +213,46 @@ Two boundaries hold it in place:
 A failed `PGC_IntentMap` write is reported rather than swallowed: the workflow exists but no
 phrase reaches it, and that is a state the next turn has to know about.
 
+**`propose_workflow_fix`** (Sprint 12, Track A) — `{ workflowName, patch, removeSteps?,
+baseVersion, reasoning }`, or `{ workflowName, steps, reasoning }` for a full rewrite. Changes a
+workflow that already exists.
+
+**Granularity is the step, never the field.** A patch entry replaces the stored step of that
+identifier outright; it is not merged field by field. That keeps every submitted step a valid,
+simulatable unit, keeps L0/L1/L2 running against the merged array, and makes the gate diff exact
+rather than inferred — under a patch only the steps she sent can differ, where a resubmitted full
+array could show spurious differences wherever an untouched step came back reformatted.
+
+Four properties, and the first is the reason the tool changed:
+
+- **Only the steps being changed have to reach her intact.** The tool previously took the
+  COMPLETE array, so repairing one step meant reading and resubmitting all of them. On a workflow
+  past the transcript cap the submitted array was part-read and part-remembered, and that is the
+  root of the whole 2026-08-27 defect class — `process_receipt` step 13 silently losing four
+  fields. Sprint 11 made the full read survivable; the patch makes it unnecessary.
+- **Absence means unchanged**, so deletion is explicit in `removeSteps`. The full-array form could
+  always delete by leaving a step out; without an explicit list that capability would have
+  disappeared silently.
+- **The merged array is validated before the write, at both ends.** It was validated at *neither*
+  before Sprint 12: `preGateRefusal` opened with a `register_workflow`-only guard, and the write
+  body had no `runSimulation` at all — so a repair could leave a workflow in a state
+  `register_workflow` would have refused outright, on an array that is already live.
+  `simulateForRegistration` is shared with `register_workflow` rather than reimplemented.
+- **`baseVersion` refuses a write onto a workflow that moved.** She reads at T0 and submits at T1;
+  the full-array form overwrote anything that landed between with no trace, and could not have done
+  otherwise. Refusing is affordable under a patch because recovery is re-reading the few steps
+  being changed. The likeliest source of a mismatch is her own previous write, so the result
+  returns `nextBaseVersion` to carry forward.
+
+`mergeStepPatch` is pure and exported; `resolveProposedSteps` is shared by the pre-gate refusal,
+the gate text and the write, so none of the three can form a different opinion about what is being
+written. **The simulator never sees a patch** — it always receives a complete workflow. A patch
+changes what crosses the model/engine boundary, not what the validator receives.
+
+`simulate_workflow` accepts the same patch form and merges server-side, since a tool that demanded
+the whole array in order to check a fix would defeat the patch it was checking. It skips the
+version check because it writes nothing.
+
 **A domain workflow must declare at least one invocation phrase.** `intent_keywords` is derived
 from `intentPhrases` when the field is omitted, and a `domain`-carrying registration that supplies
 neither is refused. The consequence of allowing it is misrouting rather than silence: the generic

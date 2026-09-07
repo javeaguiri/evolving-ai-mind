@@ -485,3 +485,57 @@ and the newly-enabled connection logging would attribute two people to one accou
 key has ever been on this host or in a transcript.
 
 **Sprint 12 is still scoped, not started, Prep not done.** Track A remains the opener.
+
+### Session 5 — 2026-09-07 — Track A built and deployed; AC1 awaits live proof
+
+**Sprint 12 has started.** Prep and Track A landed in one session, commit `032a4d2`, deployed with
+both `PGC_SystemContext` rows upserted (`minds_eye_system_prompt` v32 → **v33**,
+`minds_eye_tool_schemas` v6 → **v7**). Regression check first: `/help` from Slack confirmed the
+slackbot → SQS → proc → serv → callback path that Session 4's curl probes could not reach.
+
+**All five open design questions were settled before any code was written**, and four of the five
+went the way the sprint doc leaned. The fifth — the one with no precedent — was decided as
+**refusing, not advisory**: `baseVersion` is required with a patch and a mismatch refuses the write.
+The argument that would have made refusal brutal under the full-array form no longer applies, because
+recovery is re-reading the few steps being changed. Its designed-for interaction: **the likeliest
+source of a stale version is her own previous write**, so the result returns `nextBaseVersion` and
+v33 says to carry it forward, or the refusal would mostly fire on false positives.
+
+**Prep found the artifacts were the smaller half.** `minds_eye_context_index` v3 turned out to carry
+no reference to the repair path at all, so only two rows needed changing, not three. The v32 repair
+block instructed reading the whole array in ranges — advice a patch makes unnecessary — and that is
+what v33 replaces.
+
+**The sprint doc understated the defect, and the code says so plainly.** It recorded that
+`propose_workflow_fix` does not simulate. It also does not simulate *at the gate*: `preGateRefusal`
+opened with `if (action !== 'register_workflow') return null`. **The repair path validated at
+neither end**, so a repair could leave a workflow in a state `register_workflow` would have refused
+outright — on an array that is already live, which is the wrong way round. Both ends now run the
+shared `simulateForRegistration` against the merged array.
+
+**A second thing nobody had filed.** `stepCountMismatch` has been computed and returned by the tool
+since it was written, and **nothing reads it**. Someone anticipated precisely the failure that later
+occurred — a short array silently replacing a long one — and shipped a flag rather than a refusal.
+It survives as reporting now that validation does the guarding.
+
+**Design decisions worth keeping.** Granularity is the step, never the field. A replaced step keeps
+its array position, so index 0 cannot drift — `run-workflow.mjs` seeds the root frame from it.
+Absence means unchanged, so deletion is explicit in `removeSteps`; the full-array form could delete
+by omission and that capability would otherwise have disappeared silently. `mergeStepPatch` is pure
+and exported, and `resolveProposedSteps` is shared by the pre-gate refusal, the gate text and the
+write so the three cannot disagree about what is being written. The simulator still only ever
+receives a complete workflow.
+
+**Tests 1044 → 1054**, ten of them on the merge. The ASCII-only assertion on the tool schemas row
+caught em dashes in the new tool descriptions — the seed-encoding convention working as designed,
+on the first change to touch it.
+
+**AC1 is not met yet, and this is the honest status.** The contract is built, deployed and unit
+tested; the criterion requires it verified live from `/novia` including one deliberately failing
+patch. Three cases to run from Slack: a single-step repair applied through the gate, a patch whose
+merged array fails L1 (expect refusal before the gate with the issues returned and the loop still
+running), and a second patch reusing a stale `baseVersion` (expect refusal with the current
+version). `process_receipt` is the natural subject — it is the workflow the whole defect class came
+from. Session 1189's inventory planning will supply the real repair.
+
+**Track A does not close until that runs.** Tracks C and D unblock at the same moment.
