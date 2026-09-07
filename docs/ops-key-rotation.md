@@ -25,7 +25,27 @@ client.
 
 ### Credentials that are not in SSM and are easy to forget
 
-- **The bastion EC2 SSH keypair** — grants shell on a host whose role can already read SSM.
+- **The bastion EC2 SSH keypair** — grants shell on a host whose role can already read SSM. Port 22
+  is open to `0.0.0.0/0` and SSH is key-only (`passwordauthentication no`, verified 2026-09-07), so
+  this keypair is the **sole** control on the host. Rotate it by adding the new public key to
+  `~/.ssh/authorized_keys` and removing the old line — **never** by changing the CloudFormation
+  parameter, see below. The overlap window carries the same hazard as §5.3: while both keys are
+  authorised, a successful login proves *a* key works, not which one. Remove the old entry and
+  re-test from every device before calling the rotation done.
+  *Status 2026-09-07: `bastion-key-sept-2026` added and confirmed working from the PC;
+  `bastion-host-key` still present. Incomplete until Blink carries the new key and the old line is
+  removed.*
+- **The CloudFormation stack parameters** (`evomind-infrastructure`). Two of them hold or name
+  credentials, and **both diverge from reality by design** — leave them alone:
+  - `DBPassword` (`NoEcho`) is the `lambda_user` master password as last supplied at deploy time.
+    §3 changes the live password with `ALTER USER`, not through CloudFormation, so after any
+    rotation the stack holds a **stale** value. It is inert, because CloudFormation only calls
+    `ModifyDBInstance` when the parameter *changes*, and `sam deploy` reuses previous values for
+    parameters not overridden. The trap is a later deploy that supplies the pre-rotation value
+    explicitly: that would reset the master password out from under SSM and break every Lambda.
+  - `YourKeyNameParameter` names the original EC2 keypair. `KeyName` on `AWS::EC2::Instance` is
+    **replacement-forcing** — changing it destroys and recreates the bastion, taking the repository,
+    `.env.test` and everything else on disk with it.
 - **IAM access keys** for CLI use, if any exist.
 - **`.env.test`** — the on-disk copy of `INTERNAL_API_KEY`, `PGC_DATABASE_URL` **and
   `LLM_API_KEY`** (line 18, read by `tests/integration/llm-prompt-schema.test.mjs`). Three secrets,
@@ -55,18 +75,41 @@ client.
 
 Do these before changing any value.
 
-1. **Confirm the RDS security group does not allow `0.0.0.0/0` on 5432.**
-   Security group `sg-05c00c014cd77e239`, region `us-east-2`. The bastion role is denied
-   `ec2:DescribeSecurityGroups`, so this is a console check. Ingress should be the Lambda egress
-   range and the bastion only. A fresh password behind an open security group is worth less than
-   an old password behind a tight one.
+1. **Read the RDS security group, and know in advance what it will say.** Security group
+   `sg-05c00c014cd77e239`, region `us-east-2`. The bastion can now read it directly —
+   `ec2:DescribeSecurityGroups` was granted 2026-09-07:
+
+   ```
+   aws ec2 describe-security-groups --group-ids sg-05c00c014cd77e239 --region us-east-2 --query "SecurityGroups[0].IpPermissions" --output json
+   ```
+
+   **Port 5432 is open to `0.0.0.0/0`, by design, and cannot be closed.** `RDSPostgresIngress` in
+   `template.yaml` declares it, because Lambda-outside-VPC means the functions arrive from AWS
+   public IPs that are unknowable in advance — there is no source to scope to. The two
+   `SourceSecurityGroupId` entries alongside it are **decorative**: `LambdaSecurityGroup` is
+   attached to no function (no `VpcConfig` exists anywhere in the template), and the bastion rule is
+   subsumed by the open one. The group therefore *reads* as scoped and is not.
+
+   The consequence is the reason every step below is load-bearing rather than hygienic: **the
+   password is the only thing between the open internet and the data.** First verified 2026-09-07 —
+   deployed rules matched the template exactly, no drift.
 
 2. **Confirm no workflow runs are in flight.** Rotation of `internal-api-key` and of the database
    password both have a window where in-flight calls fail. SQS retries cover the async paths, but
    a suspended `human_gate` waiting on a user is better resumed or abandoned first.
 
 3. **Confirm both database URLs use the same role.** If `pgc-database-url` and `pgd-database-url`
-   embed different users, §3 changes from one `ALTER USER` to two.
+   embed different users, §3 changes from one `ALTER USER` to two. Extract the user without
+   printing the password:
+
+   ```
+   aws ssm get-parameter --name /evolving-mind-ai/pgc-database-url --region us-east-2 --query Parameter.Value --output text | sed -E 's#^([a-z]+)://([^:]+):[^@]+@([^:/]+)[:0-9]*/(.*)$#user=\2 host=\3 db=\4#'
+   ```
+
+   Checked 2026-09-07: both are `lambda_user` on the same host and database. Note that
+   `lambda_user` is also the RDS `MasterUsername`, so the system has exactly **one** database
+   credential and it is the master. Any additional consumer — a spreadsheet, a reporting tool —
+   should get its own least-privilege role rather than this one.
 
 4. **Shell history hygiene — set this up once, now.** Every command below that takes a value uses
    `read -rs`, so the value lands in a shell variable and never in `~/.bash_history`. Do not

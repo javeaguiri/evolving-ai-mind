@@ -394,3 +394,88 @@ both already say to restart the shell; this is what that instruction is for.
 
 **Sprint 12 remains where Sessions 1 and 2 left it: scoped, not started, Prep not done.** Track A is
 still the opener.
+
+### Session 4 — 2026-09-07 — the security group, and a deployer role that was never complete
+
+**No Track advanced, but the findings are Track B's** — release readiness is about handing the
+system over safely, and this session established what a second person would actually inherit.
+
+**The standing item from §1 of the runbook was executed for the first time.** *"Confirm the RDS
+security group does not allow `0.0.0.0/0` on 5432"* had been carried unchecked since Session 2. The
+answer is that it does, deliberately, and **cannot be closed**: `RDSPostgresIngress` declares it
+because Lambda-outside-VPC means the functions arrive from AWS public IPs with no source to scope
+to. Deployed rules match the template exactly — no drift.
+
+**The part that was not predicted: the group reads as scoped and is not.** Two of its three ingress
+entries are decorative. `LambdaSecurityGroup` is referenced in exactly one place in the entire
+template — the RDS ingress rule itself — and is attached to **no function**, because no `VpcConfig`
+exists anywhere. The bastion rule is subsumed by the open one. Anyone tightening this group by
+reading it would edit the two rules that do nothing and leave the one that governs.
+
+**The Excel requirement was clarified, and it dissolved a planned change.** The bastion was built
+for a home laptop to reach PostgreSQL from Excel; because 5432 is already open, **the bastion is not
+what makes that work** and an SSH tunnel would buy nothing. An IP allowlist on port 22 was drafted,
+then abandoned on two facts: the address is dynamic across two locations — logins came from three
+distinct IPs in two days, and the address supplied for the allowlist was not the one the session was
+connected from — and **SSM Session Manager cannot serve Blink on iOS**, which has no Session Manager
+plugin. A PC-only solution buys nothing while the port stays open for the phone.
+
+**That reframed port 22 rather than hardening it.** SSH is key-only (`passwordauthentication no`,
+`kbdinteractiveauthentication no`), zero failed auth attempts in 24h, six distinct source IPs in the
+retained week of which at least three are the user's. The realistic attack is key compromise, not
+brute force — so the keypair is the control, and rotating it is worth more than the allowlist would
+have been. **The user rotated it the same session**: `bastion-key-sept-2026` added and working from
+the PC, old key still present pending Blink.
+
+**Deployed (three attempts, two phases each):** connection logging (`log_connections`,
+`log_disconnections` — dynamic, active immediately), `DeletionProtection: true`,
+`BackupRetentionPeriod` 1 → 7, and `AmazonSSMManagedInstanceCore` on `BastionEC2Role` as break-glass
+shell access independent of port 22.
+
+**A correction that cancelled a planned outage.** The parameter group was written to set
+`rds.force_ssl: "1"` on the premise that the server accepted plaintext connections. It does not:
+`rds.force_ssl` is already `1` with `Source: system` — the PostgreSQL 16 engine default — and its
+`ApplyType` is **dynamic**, not static. TLS enforcement was never missing, and **no reboot was
+needed**. CloudFormation silently dropped the parameter as a no-op against the default, which is why
+`--source user` lists only the two logging parameters. The gap described did not exist.
+
+**The session's real finding is `BastionEC2Role`, and it belongs to Track B.** Three permissions
+were missing, each surfaced by a CloudFormation rollback rather than by inspection:
+`rds:DescribeDBParameterGroups` + the parameter-group lifecycle, `rds:DescribeEngineDefaultParameters`,
+and `ec2:DescribeSecurityGroups` — the last of which is required to resolve
+`!GetAtt RDSSecurityGroup.GroupId`, so **any** update to `EvoMindDB` failed without it. CloudFormation
+runs as this role when deploying from the bastion and **denies one action per attempt**, so the set
+had to be discovered serially. Each fix also needed **two** deploys, because a changeset carrying
+both an IAM grant and the resource needing it cannot rely on the grant being effective in the same
+operation.
+
+**This is Session 3's README finding one layer down.** The deployer role has never been complete;
+nothing revealed it because the stack had never been asked for a resource type it had not created
+before. A fresh install would hit the same wall, and — like the README's version pins — it is
+invisible to reading. All three rollbacks were clean, which is the second half of the finding: it
+fails safe, but it fails.
+
+**A credential store nobody had listed.** The `evomind-infrastructure` stack holds `DBPassword`
+(`NoEcho`, the `lambda_user` master password) and `YourKeyNameParameter`. Both now diverge from
+reality **by design** — §3 changes the password with `ALTER USER`, and the SSH key was rotated
+through `authorized_keys` — and both must be left alone: supplying the pre-rotation `DBPassword` on a
+later deploy would reset the master password out from under SSM, and `KeyName` on
+`AWS::EC2::Instance` is replacement-forcing, so changing it would destroy this host. Added to the
+runbook's §0 inventory, which listed neither.
+
+**Also established:** `pgc-database-url` and `pgd-database-url` both connect as `lambda_user`, which
+is *also* the RDS `MasterUsername` — the system has exactly **one** database credential and it is
+the master. That is the argument for a least-privilege `excel_user` role before any financial data
+exists, not after.
+
+**Verified after deploy:** `ping-llm` returns `sonar`; `getRows` and a `vectorSearch` descriptor both
+succeed. 1044/1044 unit tests pass — though no `.mjs` changed, so the meaningful regression surface
+is the Slack path, which is the user's to exercise.
+
+**Open from this session:** the `excel_user` role; removing `bastion-host-key` from
+`authorized_keys` once Blink carries the new key; whether to re-assert `DBPassword` so the stack
+matches reality; and `StorageEncrypted`, which is absent and **cannot be changed in place** —
+snapshot, encrypted copy, restore, new endpoint. Raised now rather than filed because the financial
+data does not exist yet, and this is the cheapest that operation will ever be.
+
+**Sprint 12 is still scoped, not started, Prep not done.** Track A remains the opener.
