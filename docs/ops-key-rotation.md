@@ -32,9 +32,13 @@ client.
   parameter, see below. The overlap window carries the same hazard as §5.3: while both keys are
   authorised, a successful login proves *a* key works, not which one. Remove the old entry and
   re-test from every device before calling the rotation done.
-  *Status 2026-09-07: `bastion-key-sept-2026` added and confirmed working from the PC;
-  `bastion-host-key` still present. Incomplete until Blink carries the new key and the old line is
-  removed.*
+  *Status 2026-09-07: `bastion-key-sept-2026` added and confirmed working from the PC; Blink still
+  to be updated. `bastion-host-key` is **retained by decision, not by omission** — it may become a
+  collaborator's key. The tradeoff attached to that decision: a shared key is shared **identity**,
+  not just shared access — both parties log in as `ec2-user`, so `last` and the connection logging
+  enabled on 2026-09-07 would show two people as one. A separate user account, or a separate host,
+  resolves that; the choice is deferred to Track B. Neither private key has ever been on this host
+  or in a transcript — `authorized_keys` holds public keys only.*
 - **The CloudFormation stack parameters** (`evomind-infrastructure`). Two of them hold or name
   credentials, and **both diverge from reality by design** — leave them alone:
   - `DBPassword` (`NoEcho`) is the `lambda_user` master password as last supplied at deploy time.

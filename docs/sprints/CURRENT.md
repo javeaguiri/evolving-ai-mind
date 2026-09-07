@@ -472,10 +472,16 @@ exists, not after.
 succeed. 1044/1044 unit tests pass — though no `.mjs` changed, so the meaningful regression surface
 is the Slack path, which is the user's to exercise.
 
-**Open from this session:** the `excel_user` role; removing `bastion-host-key` from
-`authorized_keys` once Blink carries the new key; whether to re-assert `DBPassword` so the stack
-matches reality; and `StorageEncrypted`, which is absent and **cannot be changed in place** —
-snapshot, encrypted copy, restore, new endpoint. Raised now rather than filed because the financial
-data does not exist yet, and this is the cheapest that operation will ever be.
+**Carried to Track B by decision, not left open.** The `excel_user` role; whether to re-assert
+`DBPassword` so the stack matches reality; a Slack end-to-end covering the two tiers the curl probes
+do not reach; and `StorageEncrypted`, which is absent and **cannot be changed in place** — snapshot,
+encrypted copy, restore, new endpoint. That last one is raised now rather than filed because the
+financial data does not exist yet, and this is the cheapest that operation will ever be.
+
+**`bastion-host-key` is retained deliberately.** It may become a collaborator's key. The decision on
+*how* a collaborator gets access — a second host, or a separate user account on this one — is
+deferred to Track B, with the tradeoff on the record: a shared key is shared **identity**, so `last`
+and the newly-enabled connection logging would attribute two people to one account. Neither private
+key has ever been on this host or in a transcript.
 
 **Sprint 12 is still scoped, not started, Prep not done.** Track A remains the opener.
