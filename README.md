@@ -16,49 +16,66 @@ The design philosophy is strict: **LLMs are used sparingly.** Once a workflow is
 
 Over time the brain becomes smarter. It generates new schemas, new workflows, new prompts — and records the quality of its own outputs so it can improve them. This is what makes it self-evolving.
 
+What makes it *usable* is the **minds-eye agent** — a conversational agent that reasons about the system's own state and extends, repairs and maintains it on request. You give the agent whatever name you like. Everything below is machinery the agent operates.
+
 ---
 
-## The Left Brain and the Right Brain
+## The Minds-Eye Agent — The Central Tenet
 
-The system is designed around two complementary modes of reasoning that must work together. Neither is sufficient alone.
+**Everything else in this system exists to be operated by an agent that reasons about it.**
 
-### Left Brain — Structured, Logical, Language-Driven
-The left brain is what we are currently building:
+The minds-eye agent is how a person works with evolving-mind. Where the rest of the system executes pre-defined workflows in response to classified intents, the agent reasons dynamically about the system's current state and chooses its own action sequence — reading the schema, querying live rows, simulating a change, and proposing a write that a human confirms before it lands. It is invoked conversationally from Slack, and its scope is the whole system rather than one workflow.
 
-- Natural language → intent → workflow → data
-- Self-generating database schemas and table definitions
-- Persistent workflow definitions with step-by-step execution
-- Human-in-the-loop gates for confirmation and error recovery
-- LLM-assisted prompt evolution and quality scoring
+### It has a name, and the name is yours to choose
 
-The left brain is deterministic by design. It stores everything in PostgreSQL. It reuses what it knows. It costs almost nothing per operation.
+The agent has two names, and only one of them belongs to the code:
 
-### Right Brain — Creative, Associative, Self-Correcting
+| Name | Where it lives | How to change it |
+|---|---|---|
+| **`minds-eye`** | System code — `minds-eye.mjs`, the `MINDS_EYE` SQS message types, `session_type = 'minds_eye'` | A code change. This is the static system name |
+| **Your name for the agent** | `PGC_SystemContext.minds_eye_preferences.name` | One `updateRows` call — no code touch, no migration, no deploy |
 
-The right brain is partially operational. Within `create_workflow`, the full L/R brain pipeline now runs end-to-end:
+In this repository the second name is **Novia**, because that is what the author calls her. That is a runtime preference, not a system fact: every user-facing message reads the display name from `PGC_SystemContext` at session start, so a household that prefers *Ada*, *Jarvis*, or simply *Brain* changes one row and the system answers to it. The Slack command — `/novia` here — is registered in the Slack app dashboard rather than in code, and renames the same way.
 
-1. **Right brain research** (`research_workflow_domain` — Perplexity sonar model) retrieves domain-specific best practices, canonical data patterns, and surfaces preference questions relevant to the domain the workflow will operate on.
-2. **Preference gates** surface from research output — the user answers structured questions before the left brain generates a single step.
-3. **Left brain generation** (`generate_workflow_steps`) receives the research findings and confirmed preferences, producing a structurally sound step array that implements known user choices rather than LLM guesses.
-4. **Post-generation simulation** (routing matrix + js_transform smoke test) validates the generated workflow structurally before registration. If issues are found, `fix_workflow_routing` corrects them and re-simulates.
+This is the Static System vs Evolving Artifacts boundary applied to identity. Personalising the agent is not a fork and not config sprawl. It is one row in a table the system already owns.
 
-This pattern — right brain research → preference elicitation → left brain execution → self-correction — is now validated in production.
+### What the agent does
 
-**What the right brain does not yet do:**
-- **Prompt evolution** — analyse `PGC_Prompt.error_log` and `output_sample` to suggest prompt improvements autonomously. The left brain records what happened; the right brain does not yet reason about why or what to change.
-- **Pattern recognition across domains** — identify when a new user intent is semantically similar to an existing workflow even when the wording is completely different (requires pgvector).
-- **Schema analogy** — draw on existing domains to propose better schema structures for new ones.
+| Role | What it means |
+|---|---|
+| **Extender** | Designs, simulates and registers new workflows; extends existing ones; chains workflows around a decision; does in one conversation what used to take several human-triggered commands. This is the primary role |
+| **Improver** | Changes data, configuration and schema across the Contract, Instruction and Generation fault domains. Every write passes a human confirmation gate |
+| **Advisor** | Surfaces what it noticed in passing — cost patterns, routing coverage gaps, domain health signals — appended to the answer it was asked for, never as an unsolicited session |
 
-**The critical insight:** Many "code problems" encountered today — FK normalisation, JSON schema enforcement, defensive validation — are symptoms of the left brain working without the right brain. The correct fix is not more defensive code. It is building the feedback loop between the two sides so the system can reason about and correct its own outputs. That loop is now beginning to close.
+It works through a catalog of native function-calling tools. Read tools (`query_table`, `read_workflow`, `read_prompt`, `simulate_workflow`, `search_domain_help`, `read_session_entry`, …) run without confirmation. Write tools (`register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `update_data`, `create_view`, `drop_table`, `schedule_workflow`, …) are gated — the agent proposes, the human approves, and only then does anything change. Harness defects it diagnoses and reports; it does not patch system code.
 
-The scaffolding for this feedback loop is already in the schema:
-- `PGC_Prompt.input_variables` — documents what the prompt expects
-- `PGC_Prompt.output_schema` — the expected JSON shape of a correct LLM response
-- `PGC_Prompt.output_sample` — a representative successful output for regression checking
-- `PGC_Prompt.error_log` — structured error history: `{ attempts: [{ at, error_type, error_message, llm_raw_output, recovery_action }] }`
-- `PGC_WorkflowRunStep` — append-only audit log of every step execution
+### Why this is the central tenet and not a feature
 
-These fields exist precisely so the right brain has the data it needs to reason about quality and improvement.
+Workflow generation used to be a fixed pipeline (`create_workflow`) that asked the questions it had been told to ask and produced what it could. That pipeline has now been measured against the agent doing the same job in conversation, and the agent wins on the two properties that matter for a system meant to be lived with:
+
+- **It costs no more.** Building a real workflow end-to-end through the agent, registered to registered, came in at **$1.376** against the pipeline's **$1.42** for equivalent work.
+- **It repairs.** Given a symptom and nothing else, it diagnosed and fixed a live defect unaided for **$0.672** — something a generation pipeline cannot do at all, because it has no way to look at what it built.
+
+The agent is therefore not a helper bolted onto the brain. It is how the brain is extended, corrected, and maintained over its life. Everything the rest of this README describes is machinery the agent operates.
+
+---
+
+## Left Brain and Right Brain — Domain Creation and Administration
+
+**Scope: this pattern governs domain creation and administrative generation. It is subordinate to the minds-eye agent, which decides when to invoke it and reviews what it produces.**
+
+Prompts on the generation path are written in two complementary modes. The division is a discipline for authoring prompts, not a layer of the runtime:
+
+| Mode | Concern | In `create_domain` |
+|---|---|---|
+| **Right brain** | Environmental awareness — surfacing general subject-matter content the system does not already hold | `research_domain_schema` retrieves canonical patterns for the domain being created and raises the preference questions worth asking |
+| **Left brain** | Analytical, structured reasoning — turning that material into something the engine can execute | `design_table`, `revise_domain_schema` and `generate_domain_aliases` convert research and confirmed preferences into a relational schema, then validate it |
+
+Between the two sit **preference gates**: the user answers structured questions before the left brain designs anything, so the result implements known choices rather than LLM guesses.
+
+The quality scaffolding for this path lives in the schema — `PGC_Prompt.input_variables`, `output_schema`, `output_sample` and `error_log`, plus the append-only `PGC_WorkflowRunStep` audit log. Those records exist so generation quality can be reasoned about after the fact. **Today that reasoning is the agent's work, done on request with a human in the gate** — not an autonomous background process, and the design does not assume it will become one.
+
+New prompts added to the domain-creation and administration path keep the division. Prompts written for the agent's own loop do not: it reasons across both modes within a single conversation, which is the whole point of it.
 
 ---
 
@@ -295,7 +312,7 @@ evolving-mind-ai/
 | `/create-domain` | ✅ Working | Full Step Processor flow: LLM → js_transform → edit_list gate → confirm gate → DDL iterator → register → notify |
 | `/help` | ✅ Working | confirm gate → notify — proven end-to-end through Step Processor |
 | `/shutdown` | ✅ Working | Cancels active WorkflowRuns, enqueues cancel to WorkflowQueue |
-| `create_workflow` | ✅ Working | End-to-end workflow generation: R/L brain pipeline (research → preference gates → step generation → simulation → fix loop → register). Generates working domain workflows from a natural language description. Validated in prod with flashcard quiz domain. |
+| `create_workflow` | ⚠️ Superseded | The original generation pipeline (research → preference gates → step generation → simulation → fix loop → register). Still runs, but workflows are now built through the minds-eye agent instead — measured at equivalent cost, and able to repair what it builds. Retained pending a dependency sweep. |
 | Human gate — confirm | ✅ Working | Suspend, resume, advance |
 | Human gate — choice | ✅ Working | Single-select with `reveal` inline card support; iterator option expansion |
 | Human gate — text_input | ✅ Working | Modal text input; result written to `output_key` |
@@ -306,7 +323,7 @@ evolving-mind-ai/
 | Three-tier architecture | ✅ Enforced | PROC calls SERV via fetch(), no Lambda invoke |
 | Callback abstraction | ✅ Complete | `callback: { provider, channel, threadId }` throughout |
 | Workflow versioning | ✅ Working | `dev_scripts/upsert-workflow.mjs` — push new versions without deploy |
-| `/novia` — Novia Phase 1 | ✅ Working | Agentic reasoning loop: context assembly (Layer 1 PGC catalog + Layer 2 memory), read tools (query_table, read_workflow, simulate_workflow, etc.), gated write tools (propose_workflow_fix, update_data, etc.), turn + action limit gates with Continue/Follow-up/Cancel, thread session continuity, factual + diagnostic memory writes |
+| `/novia` — the minds-eye agent | ✅ Working | The primary way the system is extended and repaired. Native function-calling loop over a full tool catalog: context assembly (Layer 1 PGC catalog + Layer 2 memory), read tools (`query_table`, `read_workflow`, `read_prompt`, `simulate_workflow`, `read_session_entry`, …), gated write tools (`register_workflow`, `propose_workflow_fix`, `propose_schema_fix`, `update_data`, `schedule_workflow`, …), bounded tool output that names what it withheld, turn + action limit gates with Continue/Follow-up/Cancel, thread session continuity, factual + diagnostic memory writes. Display name configurable in `PGC_SystemContext` |
 | pgvector semantic search | ✅ Active | `PGC_DomainHelp.embedding` populated; used by Novia `search_domain_help` and intent classifier Pass 2 domain alias matching |
 | PGC_Session / PGC_SessionEntry | ✅ Live | Session storage for Novia, /chat, /explain; `minds_eye_turn_count`, `minds_eye_action_count` counters; `compressed` column for future context compression; `role = 'tool'` for Novia tool-call transcript |
 
