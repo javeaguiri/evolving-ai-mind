@@ -157,6 +157,11 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: BastionEC2Role
+      # Break-glass shell access via SSM Session Manager. Port 22 remains the primary
+      # route (Blink on iOS cannot run the Session Manager plugin); this is the path
+      # back in if SSH ever fails, and it needs no inbound rule.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -521,6 +526,16 @@ Resources:
       FromPort: 5432
       ToPort: 5432
       CidrIp: 0.0.0.0/0 # Allows the public Lambda to reach the DB
+  EvoMindDBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: evo_mind - force TLS and log connections
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: "1"
+        log_connections: "1"
+        log_disconnections: "1"
+
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
@@ -537,6 +552,9 @@ Resources:
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
       AllocatedStorage: '20'
+      DBParameterGroupName: !Ref EvoMindDBParameterGroup
+      DeletionProtection: true
+      BackupRetentionPeriod: 7
 
   BastionHost:
     Type: AWS::EC2::Instance
