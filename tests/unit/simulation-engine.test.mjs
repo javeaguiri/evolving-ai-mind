@@ -1216,6 +1216,44 @@ describe('L1 option-set bounds — options_key fed by an unbounded query', () =>
     assert.equal(result.passed, false);
   });
 
+  it('takes the weakest verdict across EVERY writer of the key, not just the first', () => {
+    // A bounded query at the top and an unbounded re-query inside a loop both write
+    // `items`. The gate breaks on whichever ran last, so checking only the first writer
+    // (which is all writtenByStep records) would pass a workflow that cannot render.
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Records', limit: 20 }, on_success: 'next', on_else: 'cancel', output_key: 'items' },
+      ...pickerWorkflow({ tableName: 'PGD_Records', limit: 20 }, { type: 'select', options_key: 'items' }).slice(1),
+      { step: '9', type: 'serv_query', input: { tableName: 'PGD_Records' }, on_success: '2', on_else: 'cancel', output_key: 'items' },
+    ];
+
+    const issue = boundIssue(runSimulation({ steps, traceId: 't' }));
+    assert.ok(issue, 'a second, unbounded write of the same key must still be caught');
+    assert.match(issue.detail, /step "9"/);
+    assert.equal(issue.severity, undefined);
+  });
+
+  it('warns rather than refuses when the limit is a token resolved at runtime', () => {
+    // The refusal must rest on what the step TEXT states. A {{token}} limit may well be
+    // within the cap; refusing it would block a legitimate design on a guess.
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: '{{page_size}}' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+    const issue = boundIssue(result);
+
+    assert.ok(issue);
+    assert.equal(issue.severity, 'warning', 'an unknowable bound is reported, never refused');
+    assert.match(issue.detail, /resolves at runtime/);
+  });
+
+  it('accepts a limit given as a numeric string, as SERV itself does', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: '25' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+    assert.equal(boundIssue(result), undefined);
+  });
+
   it('leaves a text field alone — no cap applies to one', () => {
     const result = runSimulation({
       steps:   pickerWorkflow({ tableName: 'PGD_Records' }, { type: 'text' }),

@@ -705,8 +705,16 @@ export function runLevel1StaticAnalysis(steps) {
           }
 
           if (!field.options_key) continue;
-          const baseKey  = String(field.options_key).split('.')[0];
-          const producer = stepsByKey.get(writtenByStep[baseKey]);
+          const baseKey = String(field.options_key).split('.')[0];
+
+          // EVERY writer of the key, not just the first. writtenByStep records the first
+          // one, which is the wrong question here: a key written by a bounded query at the
+          // top and re-written by an unbounded one inside a loop is unbounded, and checking
+          // only the first would pass it. The gate breaks on whichever write ran last.
+          const producers = steps.filter(p =>
+            String(p.output_key ?? '').split(',').some(k => k.trim().split('.')[0] === baseKey)
+          );
+          const producer = producers[0];
 
           if (!producer) {
             issues.push({
@@ -719,28 +727,50 @@ export function runLevel1StaticAnalysis(steps) {
             continue;
           }
 
-          if (!String(producer.type).startsWith('serv_')) {
+          // Classify each writer, then take the weakest verdict across all of them. Only two
+          // things are knowable from a step definition: a step type that reads rows, and a
+          // literal limit on it. Anything else — a js_transform, a limit that is itself a
+          // {{token}} resolved at runtime — is genuinely unknowable HERE, and the honest
+          // report for unknowable is a warning. Refusal is reserved for the one case that is
+          // certain from the text alone: a read with no bound declared at all.
+          const verdicts = producers.map((p) => {
+            if (!String(p.type).startsWith('serv_')) {
+              return { kind: 'unknowable', step: p.step,
+                why: `is a ${p.type}, whose output length is not stated anywhere in the step` };
+            }
+            const declared = p.input?.limit;
+            if (declared === undefined) {
+              return { kind: 'unbounded', step: p.step, why: 'declares no input.limit' };
+            }
+            const literal = typeof declared === 'number' ? declared
+              : (/^\d+$/.test(String(declared)) ? Number(declared) : null);
+            if (literal === null) {
+              return { kind: 'unknowable', step: p.step,
+                why: `sets input.limit to ${JSON.stringify(declared)}, which resolves at runtime` };
+            }
+            if (literal > cap) {
+              return { kind: 'unbounded', step: p.step, why: `declares input.limit ${literal}` };
+            }
+            return { kind: 'bounded', step: p.step };
+          });
+
+          const unbounded  = verdicts.find(v => v.kind === 'unbounded');
+          const unknowable = verdicts.find(v => v.kind === 'unknowable');
+
+          if (unbounded) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type}, which accepts at most ${cap} options, but they come from "${field.options_key}" — written by step "${unbounded.step}", which ${unbounded.why} and can return more rows than that. Filter step "${unbounded.step}" down to one category or search term, or set its input.limit to ${cap} or fewer and let the user narrow the list first.`,
+            });
+          } else if (unknowable) {
             issues.push({
               check:         'gate_option_set_unbounded',
               step:          stepKey,
               failure_class: 'gate_option_set_unbounded',
               severity:      'warning',
-              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", built by step "${producer.step}" (${producer.type}). Its length is not knowable here — make sure it cannot exceed the ${cap} options a ${field.type} accepts.`,
-            });
-            continue;
-          }
-
-          const producerLimit = producer.input?.limit;
-          const numericLimit  = typeof producerLimit === 'number'
-            ? producerLimit
-            : (/^[0-9]+$/.test(String(producerLimit ?? '')) ? Number(producerLimit) : null);
-
-          if (numericLimit === null || numericLimit > cap) {
-            issues.push({
-              check:         'gate_option_set_unbounded',
-              step:          stepKey,
-              failure_class: 'gate_option_set_unbounded',
-              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type}, which accepts at most ${cap} options, but they come from "${field.options_key}" — written by step "${producer.step}", which ${producerLimit === undefined ? 'declares no input.limit' : `declares input.limit ${JSON.stringify(producerLimit)}`} and can return more rows than that. Filter step "${producer.step}" down to one category or search term, or set its input.limit to ${cap} or fewer and let the user narrow the list first.`,
+              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", written by step "${unknowable.step}", which ${unknowable.why}. Its length cannot be checked here — make sure it cannot exceed the ${cap} options a ${field.type} accepts.`,
             });
           }
         }
