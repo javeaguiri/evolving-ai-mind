@@ -28,6 +28,19 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // picks one record followed by a small form to edit it.
 const MAX_GATE_FIELDS = 40;
 
+// WIDGET_OPTION_LIMIT — the most options each form field type can carry. These are
+// Slack's element ceilings, mirrored here the same way MAX_GATE_FIELDS mirrors a design
+// budget: past them Slack rejects the whole message, so the gate never posts and the run
+// wedges waiting for a click on something that was never rendered. The authority is
+// callback.mjs's constant of the same name; this copy exists because simulation-engine is
+// a pure PROC module and may not import the experience tier to ask.
+const WIDGET_OPTION_LIMIT = {
+  select:       100,
+  multi_select: 100,
+  radio:        10,
+  checkbox:     10,
+};
+
 // ---------------------------------------------------------------------------
 // runSimulation — exported for the HTTP simulate-workflow endpoint.
 // Called identically from executeSimulate (step type) and simulate-workflow.mjs
@@ -500,6 +513,10 @@ export function runLevel1StaticAnalysis(steps) {
   // Build a set of all step keys for dead-target checking
   const stepKeys = new Set(steps.map(s => String(s.step)));
 
+  // Key -> step, so a check that finds the step which WROTE a local_state key can read
+  // that step's own definition. Used by the option-set bound check below.
+  const stepsByKey = new Map(steps.map(s => [String(s.step), s]));
+
   // State flow tracking — per-step reads/writes, and global write registry.
   // 'reads'  = base keys this step references via template tokens or input_key/items_key.
   // 'writes' = base keys this step writes to local_state via output_key (step or option level).
@@ -661,6 +678,72 @@ export function runLevel1StaticAnalysis(steps) {
           failure_class: 'gate_too_many_fields',
           detail:        `human_gate step "${stepKey}" declares ${s.fields.length} fields; a single gate can present at most ${MAX_GATE_FIELDS}. Past that the gate cannot be rendered at all and the run stalls waiting for it. Redesign as a selection gate that picks ONE record, followed by a small form to edit that record — or drop fields the user did not ask for.`,
         });
+      }
+
+      // Option-set bounds — a form field's choices must fit the control that carries
+      // them. An inline list is countable here and is refused outright. A list pulled
+      // from local_state via options_key is not countable at design time, so the check
+      // moves to the thing that DOES bound it: the step that wrote the key. A query with
+      // no limit can return the whole table, and a dropdown fed by the whole table is a
+      // gate that stops rendering the day the table outgrows the widget — which is a
+      // silent stall, not a degraded list. Refusing here forces the filter-or-limit
+      // decision into the design, where it can still be made cheaply.
+      if (Array.isArray(s.fields)) {
+        for (const field of s.fields) {
+          if (!field || typeof field !== 'object') continue;
+          const cap = WIDGET_OPTION_LIMIT[field.type];
+          if (cap === undefined) continue;
+
+          if (Array.isArray(field.options) && field.options.length > cap) {
+            issues.push({
+              check:         'gate_too_many_options',
+              step:          stepKey,
+              failure_class: 'gate_too_many_options',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type} with ${field.options.length} inline options; that control accepts at most ${cap}. Past the cap the message is rejected outright and the gate never posts. Use a narrower option set, or split the choice across two gates.`,
+            });
+            continue;
+          }
+
+          if (!field.options_key) continue;
+          const baseKey  = String(field.options_key).split('.')[0];
+          const producer = stepsByKey.get(writtenByStep[baseKey]);
+
+          if (!producer) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              severity:      'warning',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", but no prior step writes "${baseKey}" — the size of that set cannot be checked here. A ${field.type} accepts at most ${cap} options.`,
+            });
+            continue;
+          }
+
+          if (!String(producer.type).startsWith('serv_')) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              severity:      'warning',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", built by step "${producer.step}" (${producer.type}). Its length is not knowable here — make sure it cannot exceed the ${cap} options a ${field.type} accepts.`,
+            });
+            continue;
+          }
+
+          const producerLimit = producer.input?.limit;
+          const numericLimit  = typeof producerLimit === 'number'
+            ? producerLimit
+            : (/^[0-9]+$/.test(String(producerLimit ?? '')) ? Number(producerLimit) : null);
+
+          if (numericLimit === null || numericLimit > cap) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type}, which accepts at most ${cap} options, but they come from "${field.options_key}" — written by step "${producer.step}", which ${producerLimit === undefined ? 'declares no input.limit' : `declares input.limit ${JSON.stringify(producerLimit)}`} and can return more rows than that. Filter step "${producer.step}" down to one category or search term, or set its input.limit to ${cap} or fewer and let the user narrow the list first.`,
+            });
+          }
+        }
       }
 
       // review_object never writes output_key.

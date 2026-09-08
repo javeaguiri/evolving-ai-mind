@@ -1127,3 +1127,100 @@ describe('runLevel0ShapeCheck — one_of satisfies a requirement by group', () =
     assert.match(r.issues[0].detail, /missing required field "output_key"/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Option-set bounds — a dropdown fed by an unbounded query (session 1189)
+//
+// Slack rejects the whole message past a control's option cap, so the gate never
+// posts and the run wedges waiting on a dialog nobody saw. The count is unknowable
+// at design time when options come from options_key, so the check moves to the step
+// that wrote the key: a query with no limit can return the whole table.
+// PGD_Inventory stood at 132 rows against a 100-option dropdown when this was written.
+// ---------------------------------------------------------------------------
+
+describe('L1 option-set bounds — options_key fed by an unbounded query', () => {
+  const pickerWorkflow = (queryInput, field) => [
+    { step: '1', type: 'serv_query', input: queryInput, on_success: 'next', on_else: 'cancel', output_key: 'items' },
+    {
+      step: '2', type: 'human_gate', gate_type: 'form',
+      message_template: 'Pick one',
+      fields: [{ name: 'item', label: 'Item', ...field }],
+      output_key: 'picked',
+      options: [{ label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+      on_cancel: 'cancel', on_success: 'next',
+    },
+    { step: '3', type: 'end' },
+  ];
+
+  const boundIssue = result => result.static_analysis.issues
+    .find(i => i.failure_class === 'gate_option_set_unbounded');
+
+  it('refuses a select whose options come from a query with no limit', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    const issue = boundIssue(result);
+    assert.ok(issue, 'an unbounded query feeding a 100-option dropdown must be refused');
+    assert.equal(issue.severity, undefined, 'this is a hard refusal, not a warning');
+    assert.match(issue.detail, /declares no input\.limit/);
+    assert.equal(result.passed, false);
+  });
+
+  it('refuses a checkbox whose query limit exceeds the tighter cap that control has', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: 50 }, { type: 'checkbox', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    const issue = boundIssue(result);
+    assert.ok(issue, 'a checkbox accepts 10 options; a limit of 50 can exceed it');
+    assert.match(issue.detail, /at most 10 options/);
+  });
+
+  it('accepts the same design once the query is bounded below the cap', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: 25 }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    assert.equal(boundIssue(result), undefined,
+      `a bounded query must pass; got: ${JSON.stringify(result.static_analysis.issues)}`);
+  });
+
+  it('warns rather than refuses when a js_transform built the set, whose length it cannot know', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Records', limit: 10 }, on_success: 'next', on_else: 'cancel', output_key: 'rows' },
+      { step: '2', type: 'js_transform', input_key: 'rows', expression: 'local_state.rows', on_success: 'next', output_key: 'items' },
+      ...pickerWorkflow({ tableName: 'PGD_Records', limit: 10 }, { type: 'select', options_key: 'items' }).slice(1),
+    ];
+    steps[2] = { ...steps[2], step: '2b' };
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = boundIssue(result);
+
+    assert.ok(issue, 'an unknowable length is still worth saying out loud');
+    assert.equal(issue.severity, 'warning', 'but it must not block a design that may be fine');
+  });
+
+  it('refuses an inline option list longer than the control accepts', () => {
+    const options = Array.from({ length: 14 }, (_, i) => ({ value: String(i), label: `Item ${i}` }));
+    const steps   = pickerWorkflow({ tableName: 'PGD_Records', limit: 5 }, { type: 'radio', options });
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = result.static_analysis.issues.find(i => i.failure_class === 'gate_too_many_options');
+
+    assert.ok(issue, 'an inline list is countable here and must be refused outright');
+    assert.match(issue.detail, /14 inline options/);
+    assert.equal(result.passed, false);
+  });
+
+  it('leaves a text field alone — no cap applies to one', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records' }, { type: 'text' }),
+      traceId: 't',
+    });
+    assert.equal(boundIssue(result), undefined);
+  });
+});

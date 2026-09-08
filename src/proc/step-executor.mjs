@@ -850,6 +850,28 @@ async function executeServInsert({ step, localState, traceId }) {
 // loudly broken only if nobody is relying on the ranking, and lazy name matching is entirely
 // the ranking.
 
+/**
+ * describeSilentTruncation — did this read lose rows the step never agreed to lose?
+ *
+ * A step that stated no limit and filled SERV's default one read a cut of the table
+ * without asking for a cut. local_state carries a plain array, so the bound cannot
+ * survive into it: every downstream step, gate and count treats the partial list as the
+ * whole table, and the only symptom is a record that cannot be found. A step that means
+ * "the first N" says so with an explicit limit and is left alone.
+ *
+ * Pure, and exported so the decision can be tested without standing up SERV.
+ *
+ * @returns {string|null}  the failure message, or null when the read was complete
+ *                         or its bound was the caller's own choice
+ */
+export function describeSilentTruncation(resp, stepKey, tableName) {
+  if (!resp?.truncated || resp.limit_applied !== 'default') return null;
+  return `serv_query step "${stepKey}" read ${resp.count} rows from "${tableName}" but ` +
+    `${resp.total_matching ?? 'more'} match — the step declares no input.limit, so SERV's ` +
+    `default of ${resp.limit} silently cut the result. Set an explicit input.limit if a ` +
+    'partial read is intended, or narrow the query with filters so the whole result fits.';
+}
+
 async function executeServQuery({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input ?? {}, localState);
   const { tableName, filters, orderBy, limit, vectorSearch, columns } = resolvedInput;
@@ -869,6 +891,9 @@ async function executeServQuery({ step, localState, traceId }) {
   if (!resp.success) {
     throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
   }
+
+  const cut = describeSilentTruncation(resp, step.step, tableName);
+  if (cut) throw new Error(cut);
 
   return {
     outputValue: resp.rows ?? [],

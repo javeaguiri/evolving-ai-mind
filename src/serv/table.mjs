@@ -105,6 +105,13 @@ async function getRows(req) {
     columns      = null,
   } = req.body;
 
+  // Whether the caller chose this bound or inherited it. A caller that asked for 10
+  // rows and got 10 is reading exactly what it requested; a caller that asked for
+  // nothing and got the default is reading a cut of unknown size. Only the second is
+  // a silent bound, and only PROC can tell the two apart — so the distinction travels
+  // with the response rather than being re-derived downstream.
+  const limitApplied = req.body.limit === undefined ? 'default' : 'caller';
+
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
   }
@@ -180,6 +187,8 @@ async function getRows(req) {
     if (target === 'pgd') await dbClient.connect();
 
     let result;
+    // The bound actually applied to this read — the vector path narrows it further.
+    let effectiveLimit = safeLimit;
 
     if (vectorSearch) {
       // --- pgvector cosine similarity search ---
@@ -187,6 +196,7 @@ async function getRows(req) {
       const queryVec      = await embedText(vectorSearch.queryText, req.correlationId);
       const threshold     = vectorSearch.threshold ?? 0.75;
       const vsLimit       = Math.min(vectorSearch.limit ?? safeLimit, safeLimit);
+      effectiveLimit      = vsLimit;
       const vsCol         = `"${vectorSearch.column}"`;
 
       // Regular filters fill $1..$n; vector is $n+1; threshold is $n+2.
@@ -229,6 +239,21 @@ async function getRows(req) {
       result = await dbClient.query(sql, values);
     }
 
+    // A read that filled its limit exactly may have left rows behind. Saying so — and
+    // saying how many — is what separates a bounded view from a silently truncated one:
+    // nothing downstream can otherwise tell a complete answer from a cut one. The extra
+    // COUNT runs only on that boundary, never on an ordinary read, and it must run while
+    // the connection is still open.
+    const truncated = result.rows.length === effectiveLimit;
+    let totalMatching;
+    if (truncated && !vectorSearch) {
+      const { whereClause, values } = buildWhereClause(filters);
+      const countResult = await dbClient.query(
+        `SELECT COUNT(*)::int AS total FROM "${tableName}" ${whereClause}`, values
+      );
+      totalMatching = countResult.rows[0].total;
+    }
+
     if (target === 'pgd') await dbClient.end();
 
     // Truncate vector columns to 5 chars + '...' — enough to confirm populated
@@ -253,6 +278,10 @@ async function getRows(req) {
       success:       true,
       tableName,
       count:         rows.length,
+      limit:         effectiveLimit,
+      limit_applied: limitApplied,
+      ...(truncated ? { truncated: true } : {}),
+      ...(totalMatching !== undefined ? { total_matching: totalMatching } : {}),
       rows,
       correlationId: req.correlationId,
     }, req.correlationId);
