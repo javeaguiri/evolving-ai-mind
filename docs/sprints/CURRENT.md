@@ -574,3 +574,76 @@ generation pipeline cannot do at all, because it has no way to look at what it b
 
 **Nothing about the sprint changed.** AC1 still awaits its three live cases from `/novia`, and
 Tracks C and D still unblock on it.
+
+### Session 7 — 2026-09-08 — the gate contract was lying, and nothing could tell
+
+**AC1's live cases were dropped from the ordering** at the user's direction: the priority is
+the workflow that makes the system useful to its owner, and AC1 will be verified when the
+repair loop is next exercised rather than being staged ahead of everything else.
+
+**The session started as a capability check and became a contract audit.** Session 1189 had
+Novia designing the inventory correction workflow, and she told the user — under a heading
+reading *"The Honest Tradeoff"* — that the platform's form *"can only collect selections, not
+edits to individual values"*, then designed a checkbox-to-delete plus one-text-box-to-add
+workaround for alias editing. **Truncation was ruled out as the cause first:** entry 11 is the
+52,477-character `PGC_StepType` dump, `capOutput` gave her 0–15,000 and she paged 15,000–28,000
+and 27,000–40,000; the `fields` contract sits at offset 25,673 and *"OPENS WITH"* at 25,940.
+She had it in front of her. This was not a bounding defect.
+
+**Five findings, four fixed, one of them not previously suspected.**
+
+1. **Instruction.** `resolveFormFields` has accepted `fields` as a `{{template}}` reference
+   since the form gate shipped, and `form-gate.test.mjs` covers it in three places. The
+   contract never said so, while `reveals` and `options`/`iterator` both document their
+   runtime forms. One templated array gives one pre-filled text field per alias — the
+   capability she concluded was missing.
+2. **Execution.** The contract promised *"an untouched field submits its default (the option's
+   `value` for select/radio)"*. `buildInputElement` emitted nothing for `select`,
+   `multi_select`, `radio`, `checkbox` or `datetime` — zero hits for `initial_option`,
+   `initial_options` or `initial_date_time` anywhere in `src/` or `tests/`. **Sprint 11's
+   instruction-twin pattern with the halves reversed:** the artifact promised what the engine
+   would not do.
+3. **Execution.** Form option sets were unbounded. `list_selection` has guarded Slack's
+   100-option cap since it shipped (`callback.mjs`); the form path guarded nothing and L1
+   checked field count but never option count. `PGD_Inventory` is at **132 rows**, so an item
+   picker over it would have been rejected by Slack outright and the run would have waited on
+   a dialog nobody was shown.
+4. **Capability, not defect.** Multi-row selection already exists — a `form` gate with a
+   `multi_select` or `checkbox` field over `options_key`. `list_selection` is single-pick by
+   design and she offered nothing else.
+5. **Found while measuring #3, and nobody had filed it.** `getRows` defaults to `limit: 100`
+   and reports `count` as rows returned, which reads as a total. **23 `serv_query` steps across
+   the registered workflows declare no `input.limit`.** None exceeds the default today once its
+   own filters apply — the closest are `help` over `PGC_IntentMap` (91) and
+   `budget_vs_expense_report` over `PGD_Expenses` (92) — but both cross 100 with ordinary use.
+
+**A first read of #5 was wrong and is corrected here rather than quietly.** Counting table
+totals rather than filtered results produced a claim that `flashcard_quiz_session` could never
+draw 288 of 388 cards. Step 4 filters by `deck_id` and the largest deck holds **48**. Nothing
+is broken by the new failure; the commit message was amended before the branch was reviewed.
+
+**The decision that shaped the fix.** Runtime degradation and design-time refusal are not
+alternatives. The engine caps and *announces* — the widget survives, the block hint names the
+true total — because the values are listed nowhere else in a form gate, so a text-box fallback
+would leave nothing selectable at all. **L1 is what actually prevents it:** an inline list over
+the cap is refused, and so is an `options_key` fed by a query that can return more rows than the
+control accepts, found through `writtenByStep`. Where the producing step is a `js_transform`
+whose length is genuinely unknowable, it warns rather than refuses.
+
+**AC6's argument now has a specimen.** The deeper problem is not that she was wrong; it is that
+a non-technical owner has no external check, and a confidently-stated false limit becomes
+folklore cited as fact in the next session. `gate-contract-conformance.test.mjs` is the half
+that needs no one present: it parses the field types and the option caps **out of the contract
+text** and asserts the renderer honours every claim, so drift fails in `node --test` rather than
+in a design conversation. The other half — letting her *check* instead of assume, since
+`simulate_workflow` executes nothing and she has never seen a rendered gate — is what AC6 is
+about, and this session is the evidence for deciding it.
+
+**Shipped, deployed and verified live.** `sam deploy`, `upsert-step-type.mjs` reporting
+`human_gate updated` and 18 unchanged. SERV's three cases confirmed against production rows:
+default-limit read of `PGD_Inventory` returns `truncated: true, total_matching: 132`; a
+caller-chosen `limit: 5` reports `limit_applied: caller`; an 8-row complete read reports
+neither. **1044 → 1079 unit tests.**
+
+**Next:** the inventory correction workflow, built with Novia in a fresh session, with the
+templated-`fields` capability and the option caps now in the contract she reads.
