@@ -1217,6 +1217,19 @@ function buildListTable(items, parentHeading) {
   return [`# ${parentHeading}`, ...sections].join('\n\n');
 }
 
+// WIDGET_OPTION_LIMIT — Slack's per-element option ceilings, from its block element
+// reference. These are not style budgets: past them Slack rejects the whole MESSAGE
+// with invalid_blocks, so the gate never posts and the run wedges waiting for a click
+// on something that was never rendered. simulation-engine refuses a design that can
+// exceed them (check `gate_too_many_options`); this is the runtime net for a set whose
+// size is only known once the data is read.
+export const WIDGET_OPTION_LIMIT = {
+  select:       100,
+  multi_select: 100,
+  radio:        10,
+  checkbox:     10,
+};
+
 // buildInputElement — the one place a UI-agnostic form field type becomes a Slack
 // element. /proc never names a Slack widget; it says 'date' and this decides that
 // means a datepicker. A new widget is a new row here — never a new gate_type.
@@ -1224,61 +1237,119 @@ function buildListTable(items, parentHeading) {
 // Every element below works in a *message* (verified against Slack's element table:
 // number/email/url/file inputs are modal-only, so they are deliberately absent —
 // a workflow needing those should collect text and validate it in a js_transform).
-function buildInputElement(field) {
+//
+// Returns { element, hint }. `hint` is the block's provenance line and is set only
+// when this function bounded something the workflow asked for — a caller that drops
+// it turns an announced bound back into a silent one.
+export function buildInputElement(field) {
   const action_id   = 'form_value';
   const placeholder = field.placeholder
     ? { placeholder: { type: 'plain_text', text: String(field.placeholder) } }
     : {};
-  const options = (field.options ?? []).map(o => ({
+  const allOptions = (field.options ?? []).map(o => ({
     text:  { type: 'plain_text', text: truncateOption(String(o.label)) },
     value: String(o.value),
   }));
 
+  // Bound the set to what the element accepts, and say so. Truncating in silence is
+  // the failure this replaces: a row past the cap is simply unreachable, and nothing
+  // downstream can tell a complete list from a cut one. Keeping the widget rather than
+  // degrading to a text box keeps the pick deterministic — the values are named nowhere
+  // else in the gate, so a free-text box would leave nothing selectable at all.
+  const cap     = WIDGET_OPTION_LIMIT[field.input_type];
+  const bounded = cap !== undefined && allOptions.length > cap;
+  const options = bounded ? allOptions.slice(0, cap) : allOptions;
+  const hint    = bounded
+    ? `Showing the first ${cap} of ${allOptions.length} choices — this control accepts no more. Narrow the list to reach the rest.`
+    : undefined;
+  const withHint = element => (hint ? { element, hint } : { element });
+
+  // initial_* — the value the field OPENS WITH, which is what an edit form needs on
+  // every field: the user sees current values and changes only what they mean to change.
+  // An option-backed element must name its initial by VALUE and that value must be one
+  // of the options actually rendered, or Slack rejects the block — so the match runs
+  // against the bounded list, never the full one.
+  const initialValues = field.initial === undefined || field.initial === null
+    ? []
+    : (Array.isArray(field.initial) ? field.initial : [field.initial]).map(String);
+  const chosen = options.filter(o => initialValues.includes(o.value));
+
   switch (field.input_type) {
     case 'text':
     case 'textarea':
-      return {
+      return withHint({
         type: 'plain_text_input',
         action_id,
         multiline: field.input_type === 'textarea',
         ...placeholder,
         ...(field.initial !== undefined ? { initial_value: String(field.initial) } : {}),
-      };
+      });
 
     case 'select':
       if (options.length === 0) return null;
-      return { type: 'static_select', action_id, options, ...placeholder };
+      return withHint({
+        type: 'static_select',
+        action_id,
+        options,
+        ...placeholder,
+        ...(chosen.length > 0 ? { initial_option: chosen[0] } : {}),
+      });
 
     case 'multi_select':
       if (options.length === 0) return null;
-      return { type: 'multi_static_select', action_id, options, ...placeholder };
+      return withHint({
+        type: 'multi_static_select',
+        action_id,
+        options,
+        ...placeholder,
+        ...(chosen.length > 0 ? { initial_options: chosen } : {}),
+      });
 
     case 'radio':
       if (options.length === 0) return null;
-      return { type: 'radio_buttons', action_id, options };
+      return withHint({
+        type: 'radio_buttons',
+        action_id,
+        options,
+        ...(chosen.length > 0 ? { initial_option: chosen[0] } : {}),
+      });
 
     case 'checkbox':
       if (options.length === 0) return null;
-      return { type: 'checkboxes', action_id, options };
+      return withHint({
+        type: 'checkboxes',
+        action_id,
+        options,
+        ...(chosen.length > 0 ? { initial_options: chosen } : {}),
+      });
 
     case 'date':
-      return {
+      return withHint({
         type: 'datepicker',
         action_id,
         ...placeholder,
         ...(field.initial ? { initial_date: String(field.initial) } : {}),
-      };
+      });
 
     case 'time':
-      return {
+      return withHint({
         type: 'timepicker',
         action_id,
         ...placeholder,
         ...(field.initial ? { initial_time: String(field.initial) } : {}),
-      };
+      });
 
-    case 'datetime':
-      return { type: 'datetimepicker', action_id };
+    // datetimepicker carries no placeholder in Slack's element table, and its initial
+    // is a Unix timestamp rather than a formatted string — a non-numeric default is
+    // dropped rather than sent, because Slack rejects the block over it.
+    case 'datetime': {
+      const epoch = Number(field.initial);
+      return withHint({
+        type: 'datetimepicker',
+        action_id,
+        ...(Number.isInteger(epoch) ? { initial_date_time: epoch } : {}),
+      });
+    }
 
     default:
       return null;
@@ -1529,13 +1600,16 @@ export function dialogToBlocks(dialog, workflowRunId, gateType) {
         // block_id encodes the field name so interactive.mjs can rebuild the answers
         // as a map. '::' separates the run id from the name — names may contain
         // underscores, so an underscore-delimited id could not be split back reliably.
-        const element = buildInputElement(field);
-        if (!element) break;   // unknown field type — nothing to render
+        const built = buildInputElement(field);
+        if (!built) break;   // unknown field type — nothing to render
         blocks.push({
           type:     'input',
           block_id: `${FORM_BLOCK_PREFIX}${workflowRunId}::${field.name}`,
-          element,
+          element:  built.element,
           label:    { type: 'plain_text', text: field.label || field.name },
+          // A bound this tier applied is stated on the block that carries it — the
+          // field says how many choices it withheld and how to reach the rest.
+          ...(built.hint ? { hint: { type: 'plain_text', text: built.hint } } : {}),
           // Slack enforces `optional` only on modal submit — a message's Submit
           // button does not validate. run-workflow re-checks required fields on
           // resume and re-renders the gate rather than advancing with a gap.
