@@ -647,3 +647,22 @@ neither. **1044 → 1079 unit tests.**
 
 **Next:** the inventory correction workflow, built with Novia in a fresh session, with the
 templated-`fields` capability and the option caps now in the contract she reads.
+
+**Session 7 addendum — the validator was reviewed after it was written, and two defects found.**
+The user's challenge was *"how does L1 know how many items to expect? That code sounds brittle."*
+It does not know and does not try — it asks a syntactic question of the step that wrote the key,
+never estimating a row count. But the review found two real faults. `writtenByStep` records only
+the FIRST writer of a key, so a key written by a bounded query and re-written by an unbounded one
+inside a loop would have passed while the gate still broke; every writer is now collected and the
+weakest verdict taken. And a limit given as a `{{token}}` failed the literal-number test and was
+**refused** — a false positive on a legitimate design, and the one mistake a validator must not
+make (see [[feedback_validator_before_workflow]]). Verdicts are now three-valued: **bounded**
+(literal limit at or under the cap), **unbounded** (no limit declared, or a literal above it —
+refused), **unknowable** (runtime-resolved limit, or a `js_transform` producer — warned). Refusal
+is reserved for what the step text makes certain.
+
+**Two limits are documented in the code rather than papered over:** the check follows one hop, so
+`query → js_transform → gate` warns rather than refuses; and it ignores filters, so a naturally
+small filtered query must still state a limit. Both are deliberate — the alternative is inferring
+what a sandboxed expression returns, or reasoning about filter selectivity. Shipped as `0d240a1`
+and deployed; 1079 → **1082 unit tests**.
