@@ -1262,3 +1262,41 @@ describe('L1 option-set bounds — options_key fed by an unbounded query', () =>
     assert.equal(boundIssue(result), undefined);
   });
 });
+
+// ---------------------------------------------------------------------------
+// error_summary severity — a warning that reads like an error is a second thing to fix
+//
+// Session 1196: four repair rounds against a refusal whose two lines were an option-set
+// WARNING and an unresolved-template ERROR, rendered identically. Only the second one
+// refused the write. The issue objects have carried `severity` since the check shipped;
+// this rendering dropped it.
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — error_summary severity', () => {
+
+  it('marks a warning as a warning, and leaves an error unmarked', () => {
+    // A gate whose options come from a js_transform warns (length unknowable); a template
+    // reading a key nothing writes is an error.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '(function(){ return []; })()', output_key: 'rows', on_success: '2' },
+      { step: '2', type: 'human_gate', gate_type: 'form', message_template: 'pick',
+        fields: [{ name: 'picked', type: 'multi_select', options_key: 'rows' }], on_success: '3' },
+      { step: '3', type: 'notify', message_template: 'total {{missing_key.count}}', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, level: 2, traceId: 'sev-test' });
+    assert.equal(result.passed, false);
+
+    const lines = result.error_summary.split('\n');
+    const warned = lines.filter(l => l.includes('[warning]'));
+    const errors = lines.filter(l => !l.includes('[warning]') && l.trim());
+
+    assert.ok(warned.length >= 1, `expected a marked warning in:\n${result.error_summary}`);
+    assert.ok(errors.length >= 1, `expected an unmarked error in:\n${result.error_summary}`);
+    assert.ok(
+      errors.some(l => l.includes('missing_key')),
+      `the unresolved template must be the unmarked line:\n${result.error_summary}`
+    );
+  });
+});

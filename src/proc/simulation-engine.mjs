@@ -88,9 +88,15 @@ const staticSpecialButtons = s => (Array.isArray(s?.special_buttons) ? s.special
 function buildErrorSummary({ shapeIssues = [], staticIssues = [], routingMatrix = null, smokeTest = null }) {
   const lines = [];
 
+  // A warning says so. Every line here used to read the same whether it blocked the write
+  // or not, so a warning sat beside an error looking exactly like a second thing to fix —
+  // session 1196 spent four repair rounds partly on an option-set warning that was never
+  // what refused her patch. The issue objects have carried `severity` all along; only this
+  // rendering dropped it.
   const push = (list, cap, prefix) => {
     list.slice(0, cap).forEach(i => {
-      lines.push(`- ${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
+      const severity = i.severity === 'warning' ? '[warning] ' : '';
+      lines.push(`- ${severity}${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
     });
     if (list.length > cap) lines.push(`- ...and ${list.length - cap} more`);
   };

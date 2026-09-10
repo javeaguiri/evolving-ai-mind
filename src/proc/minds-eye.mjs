@@ -1270,6 +1270,7 @@ async function preGateRefusal(action, params, traceId) {
       error:      'The merged workflow fails validation — nothing was written, and it was not sent for approval. Correct the patch and simulate again.',
       validation: sim.error_summary,
       issues:     sim.issues,
+      ...mergeOutcome(resolved.mergeReport, resolved.merged),
     };
   }
 
@@ -1374,10 +1375,85 @@ export function mergeStepPatch(currentSteps = [], { patch = [], removeSteps = []
     merged.push(step);
   }
 
-  const added = [...patchByKey.keys()];
-  for (const key of added) merged.push(patchByKey.get(key));
+  // An added step is placed after the step that routes to it, never appended.
+  //
+  // Appending looks harmless because routing is followed by key, and L1 does reject an
+  // unreachable step or a dead target. But L1's data-flow trace walks the array in what it
+  // calls "canonical (top-to-bottom) execution order", so a step appended at the end is
+  // treated as writing its output_key AFTER every step already in the array. Session 1196:
+  // a patch replaced steps 16 and 17 and added 16b between them; 16b landed at index 37,
+  // past 17 and past the `end` step, and the merged array was refused with
+  // `unresolved_template_variable` on step 17 for a key 16b plainly writes. The patch was
+  // correct and there was no observation available to her that said otherwise.
+  //
+  // Placing by router, not by name: "16b" sorting after "16" is a convention the engine
+  // does not read, and a patch is free to add a step called anything. Chains are resolved
+  // by repeating the pass — 16c placed after 16b once 16b itself has a position. Anything
+  // nothing routes to is appended, where L1's unreachable-step check is the right answer.
+  const added   = [...patchByKey.keys()];
+  const pending = new Set(added);
+
+  let placedOne = true;
+  while (pending.size && placedOne) {
+    placedOne = false;
+    for (const key of [...pending]) {
+      const routerIdx = merged.findIndex(s => stepRoutesTo(s, key));
+      if (routerIdx === -1) continue;
+      merged.splice(routerIdx + 1, 0, patchByKey.get(key));
+      pending.delete(key);
+      placedOne = true;
+    }
+  }
+  for (const key of pending) merged.push(patchByKey.get(key));
 
   return { merged, added, replaced, removed, unknownRemovals, duplicatePatchKeys };
+}
+
+/**
+ * What the merge produced, for whoever is being judged on it.
+ *
+ * A patch is validated against the merged array, and until now nothing ever showed her that
+ * array. Session 1196: the refusal said step 17 read a key "not written by any prior step"
+ * while her patch wrote it in a step she had just submitted — true of the merged array,
+ * false of the patch, and the merged array was the one thing she could not see. Every
+ * verification available to her agreed with the refusal, because they were all reading the
+ * same hidden order.
+ *
+ * `step_order` is the field that matters: it is where a placement fault becomes visible at
+ * a glance. Returned on refusal and on success alike — a merge that quietly put a step
+ * somewhere unintended is worth seeing even when it validates.
+ */
+export function mergeOutcome(mergeReport, mergedSteps) {
+  if (!mergeReport) return {};
+  return {
+    patched: {
+      added:      mergeReport.added,
+      replaced:   mergeReport.replaced,
+      removed:    mergeReport.removed,
+      step_order: (mergedSteps ?? []).map(s => String(s.step)),
+    },
+  };
+}
+
+/**
+ * Does this step's routing name `targetKey`?
+ *
+ * Every field the engine treats as a routing target, including the per-option and
+ * per-button ones a human_gate carries — a gate is the commonest place a new step is
+ * hung off. `next` is not a match: it is positional, and a step reached only by `next`
+ * has no named router to sit behind.
+ */
+function stepRoutesTo(step, targetKey) {
+  const target = String(targetKey);
+  const names  = value => value != null && String(value).replace(/^step:/, '') === target;
+
+  for (const field of ['on_success', 'on_else', 'on_cancel', 'on_complete', 'on_empty', 'on_error']) {
+    if (names(step?.[field])) return true;
+  }
+  for (const opt of [...(step?.options ?? []), ...(step?.special_buttons ?? [])]) {
+    if (names(opt?.on_select)) return true;
+  }
+  return false;
 }
 
 /**
@@ -1915,6 +1991,7 @@ async function executeWriteTool(action, params, traceId) {
             error:      'The merged workflow fails validation — nothing was written.',
             validation: sim.error_summary,
             issues:     sim.issues,
+            ...mergeOutcome(mergeReport, steps),
           };
         }
 
@@ -1942,7 +2019,7 @@ async function executeWriteTool(action, params, traceId) {
           // next version she needs is stated rather than left to be inferred from this one.
           nextBaseVersion:  wf.version + 1,
           mode,
-          ...(mergeReport ? { patched: { added: mergeReport.added, replaced: mergeReport.replaced, removed: mergeReport.removed } } : {}),
+          ...mergeOutcome(mergeReport, steps),
           validation:       'passed',
           stepCountBefore:  currentSteps.length,
           stepCountAfter:   steps.length,
@@ -2740,16 +2817,21 @@ async function executeReadTool(action, params, traceId, session) {
         // A patch is merged here too. Without this the tool that checks a fix would demand
         // the whole array to check it, which defeats the patch it is meant to validate.
         let toSimulate = steps;
+        let merge      = {};
         if (!Array.isArray(steps) && Array.isArray(patch)) {
           const resolved = await resolveProposedSteps(params, { requireBaseVersion: false });
           if (resolved.error) return resolved;
           toSimulate = resolved.merged;
+          // What was simulated is not what she sent — it is her patch merged into the stored
+          // array. Saying which array was judged, and in what order, is the difference
+          // between a result she can act on and one she can only disbelieve.
+          merge = mergeOutcome(resolved.mergeReport, resolved.merged);
         }
 
         if (!Array.isArray(toSimulate)) return { error: 'Send either steps, or workflowName with patch' };
         const { servPost } = await import('../shared/serv-client.mjs');
         const resp = await servPost('/api/v1/proc/simulate-workflow', { steps: toSimulate, ...(level !== undefined ? { level } : {}) });
-        return resp;
+        return { ...resp, ...merge };
       }
 
       case 'search_domain_help': {
