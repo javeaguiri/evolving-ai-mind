@@ -666,3 +666,71 @@ is reserved for what the step text makes certain.
 small filtered query must still state a limit. Both are deliberate — the alternative is inferring
 what a sandboxed expression returns, or reasoning about filter selectivity. Shipped as `0d240a1`
 and deployed; 1079 → **1082 unit tests**.
+
+### Session 8 — 2026-09-10 — the memory Novia wrote, and could not find
+
+**Session 1189 saved an approved `review_inventory` design. Session 1195 looked for it twice,
+correctly, and told the user it did not exist.** The row was intact throughout — `PGC_Memory`
+id 356, 4,509 characters. **Five gaps sat between the write and the read, and any one of them
+alone was enough**, which is why the first was not the whole answer.
+
+1. **`deriveScope` let the last `search_domain_help` win.** Session 1189 read up on inventory
+   (seq 2), then on recipes (seq 4), then designed against inventory. The memory was filed
+   under `recipes`. The `list_tables` and `read_workflow` rules beside it were already guarded
+   with `!scope.domain`; the help rule was not. The rule now stated plainly: **an exploration
+   tool fills a gap, an authoritative write states the fact.**
+2. **The harness replaced her scope rather than merging it, and cannot derive a subject that
+   does not exist yet.** Every rule keys off a workflow already registered, read or fixed — so
+   her second probe, `scope contains { workflow: "review_inventory" }`, could never have
+   matched. `mergeMemoryScope` makes the derived scope the floor and lets every key she states
+   win over it. **The one case the harness cannot derive is the one that most needs a scope.**
+3. **Both of her memory reads sorted `priority DESC`.** The scale is 1-10 with **lower meaning
+   more important** — `arch-memory.md` §4.4, and the direction `memory-client.mjs` has always
+   read it in. The reads ranked the least important band first, and the fire-and-forget
+   `run_complete` rows sit at 8 precisely so they rank last. Ten of them filled every page of
+   the inventory domain. **Nothing needed demoting: the sort was backwards.** The remedy
+   proposed before the doc was read — raising her memories above the noise — would have been
+   the wrong fix in the right direction, and would have put `minds-eye.mjs` further out of step
+   with the canonical retrieval path instead of back in line with it.
+4. **The opening context block had the same inversion, plus an ascending `id` tiebreak** — so
+   it selected the *oldest* rows of the *least* important band. Every session since June opened
+   on the same five `Completed workflow 'add_entity' for domain 'flashcards'` one-liners, under
+   a header reading `RECENT MEMORIES`, and nothing written afterwards could ever reach it.
+5. **The read tools dropped their own bounding provenance.** `read_memory`, `query_table` and
+   `list_capabilities` reshaped `getRows` to `{ count, rows }`, discarding the `limit`,
+   `truncated` and `total_matching` fields Session 7 added and verified live. `count` then reads
+   as a total: she saw ten rows and reported ten. **Session 7 gave SERV the provenance and the
+   agent who most needed it never saw it** — `query_table` is 28 of the 50 tool results that
+   have ever exceeded the transcript cap.
+
+**The instruction twin, fixed with the engine.** `minds_eye_system_prompt` v33 said *"Scope is
+auto-derived by the harness. Do not include scope in params"*, and framed `write_memory` as
+diagnostic reasoning after a change — *"Skip write_memory only if you made no changes"*. **An
+approved design for a later session is neither a change nor a diagnosis**, so the instruction
+did not cover the thing the user actually asked her to do. v34 states the priority scale, tells
+her to name a subject the harness cannot see, and names an approved design as a reason to write.
+Tool schemas v8 expose `scope`, `tags` and `priority` — all three of which the tool body has
+accepted since it was written, and none of which the schema mentioned.
+
+**Deployed, both context rows upserted, 1082 → 1110 unit tests.** Memory 356 corrected in place
+to `{ domain: inventory, workflow: review_inventory }`, priority 3, tags `[workflow_design]`;
+`content` and `memory_type` untouched. **Both of session 1195's probes now return it** — the
+domain probe at rank 4 of 35 with `truncated` and `total_matching` stated, the workflow probe
+directly, and the `run_complete` rows displaced off the first page entirely.
+
+**One thing deliberately not done.** The opening block was not given a recency band. It is
+assembled once per round and forms the head of the round's cached prefix, so a band that
+reshuffles whenever she writes a memory would forfeit the prefix on the next round of the same
+session — the Sprint 10 finding. The corrected scale already fixes what recency was meant to
+fix: the June one-liners are gone because they are priority 8, not because they are old.
+`created_at DESC` survives as the within-band tiebreak, where it costs nothing.
+
+**`arch-memory.md` reviewed for regression, as asked, and it is what caught #3.** The doc was
+silent on the whole minds-eye path — §5 covered the step type and the fire-and-forget writer,
+§6 covered `memory-client.mjs`, §14 had no row for any of it — **which is how an inverted sort
+lived in a second reader of the same table without contradicting anything written down.** Now:
+§4.4 states the scale binds every reader; §5.6 documents the agent write and the derive rule;
+§6.4 documents both agent read paths and the provenance requirement; §14 carries three rows.
+
+**Next:** the inventory correction workflow, built with Novia in a fresh session — she can now
+be told to recall the design, and the recall works.
