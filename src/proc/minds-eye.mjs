@@ -858,7 +858,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
 
       } else if (HOUSEKEEPING_TOOLS.has(action)) {
         const enrichedParams = action === 'write_memory'
-          ? { ...params, scope: deriveScope(workingHistory) }
+          ? { ...params, scope: mergeMemoryScope(deriveScope(workingHistory), params.scope) }
           : params;
         const hkResult = await executeWriteTool(action, enrichedParams, traceId);
         const hkEntry  = JSON.stringify({ tool: action, params: enrichedParams, result: hkResult, items: entryItems, turn: turnCount });
@@ -2139,7 +2139,12 @@ export function deriveScope(workingHistory) {
     if (tool === 'register_workflow'    && params.domain)                 scope.domain   = params.domain;
     if (tool === 'propose_workflow_fix' && params.workflowName)           scope.workflow = params.workflowName;
     if (tool === 'read_workflow'         && params.workflowName && !scope.workflow) scope.workflow = params.workflowName;
-    if (tool === 'search_domain_help'   && result.results?.[0]?.domain)  scope.domain   = result.results[0].domain;
+    // First writer wins for the exploration tools, last writer wins for the authoritative
+    // ones. A help search or a table listing is a guess at the subject; registering or fixing
+    // a named workflow states it. Without the guard here the LAST domain searched won, so a
+    // session that read up on two domains before designing against the first was scoped to
+    // the second — which is how a review_inventory design came to be filed under `recipes`.
+    if (tool === 'search_domain_help'   && result.results?.[0]?.domain && !scope.domain) scope.domain = result.results[0].domain;
     if (tool === 'list_tables'          && params.domain && !scope.domain) scope.domain  = params.domain;
     if (tool === 'propose_schema_fix'   && params.tableName)              scope.table    = params.tableName;
     if (tool === 'drop_table'           && params.tableName)              scope.table    = params.tableName;
@@ -2147,6 +2152,35 @@ export function deriveScope(workingHistory) {
     if (tool === 'drop_view'            && params.tableName)              scope.table    = params.tableName;
   }
   return scope;
+}
+
+// Merge a supplied memory scope over a derived one (pure — no I/O)
+//
+// The harness can only derive a scope from what the session touched, which names a workflow
+// that already exists. The case with no rule is the one that most needs a scope: a design
+// recorded for a workflow not yet built, whose subject is knowable only to its author. So the
+// derived scope is the floor and every key she states wins over it. A non-object is ignored
+// rather than spread — spreading a string would scatter its characters across the scope.
+export function mergeMemoryScope(derived, supplied) {
+  const isPlainObject = v => typeof v === 'object' && v !== null && !Array.isArray(v);
+  return isPlainObject(supplied) ? { ...derived, ...supplied } : derived;
+}
+
+// Carry a getRows read's own bounding provenance into a tool result (pure — no I/O)
+//
+// A bounded view must carry its own provenance. SERV reports how it bounded a read — the
+// limit it applied, whether rows were left behind, and how many matched in total — and every
+// read tool here reshaped the response to { count, rows } and dropped all three. `count` then
+// reads as a total, which is how a ten-row page of PGC_Memory was reported as the whole table
+// and a design memory sitting outside the page was reported as not existing. The limit is
+// carried too, because the default is chosen here and is otherwise invisible to the caller.
+export function withReadProvenance(resp) {
+  return {
+    count: resp.count,
+    ...(resp.limit_applied      ? { limit: resp.limit, limit_applied: resp.limit_applied } : {}),
+    ...(resp.truncated          ? { truncated: true } : {}),
+    ...(resp.total_matching !== undefined ? { total_matching: resp.total_matching } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2243,6 +2277,10 @@ async function loadPrefsAndPrompt() {
 // Assemble Layer 1 (workflows) and Layer 2 (memory) context
 // ---------------------------------------------------------------------------
 
+// How many memories ride in front of every round. Named because the header states it: a
+// bound the reader can see is a bound the reader can decide to go past.
+const MEMORY_CONTEXT_LIMIT = 5;
+
 async function assembleContext() {
   // Both sorts carry a unique trailing term. priority ties across most of PGC_Memory, and
   // LIMIT 5 cuts the tied group at a point Postgres does not promise to keep stable — so
@@ -2250,9 +2288,16 @@ async function assembleContext() {
   // goes into `instructions`, ahead of the whole transcript, so a reshuffle between rounds
   // invalidates the round's entire cached prefix. PGC_Workflow.name is already unique; the
   // term is there so the guarantee rests on the sort rather than on that fact staying true.
+  //
+  // priority ASC is the documented scale (arch-memory.md 4.4) and the direction
+  // memory-client.mjs reads it in. Sorted DESC with an ascending id tiebreak, this block
+  // selected the OLDEST rows of the LEAST important band: every session opened on the same
+  // five June workflow-completion one-liners, and nothing written since could reach it.
+  // created_at DESC restores recency within a band; id DESC keeps the tiebreak unique, so
+  // the cached prefix is as stable as it was before.
   const [workflowsResp, memResp] = await Promise.all([
     getRows('PGC_Workflow', [], [{ column: 'name', direction: 'asc' }], 50),
-    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'desc' }, { column: 'id', direction: 'asc' }], 5),
+    getRows('PGC_Memory',   [], [{ column: 'priority', direction: 'asc' }, { column: 'created_at', direction: 'desc' }, { column: 'id', direction: 'desc' }], MEMORY_CONTEXT_LIMIT),
   ]);
 
   const workflowSummary = (workflowsResp.rows ?? [])
@@ -2263,7 +2308,9 @@ async function assembleContext() {
   const memSummary = (memResp.rows ?? [])
     .map(m => `[${m.memory_type}] ${m.content}`)
     .join('\n');
-  const layer2Context = memSummary ? `RECENT MEMORIES:\n${memSummary}` : '';
+  // Named for what the sort actually returns. "RECENT" was a claim the ordering did not keep,
+  // and read_memory is the tool for going past these five.
+  const layer2Context = memSummary ? `MEMORIES (highest priority first, ${MEMORY_CONTEXT_LIMIT} of them — read_memory for the rest):\n${memSummary}` : '';
 
   return { layer1Context, layer2Context };
 }
@@ -2548,7 +2595,7 @@ async function executeReadTool(action, params, traceId, session) {
         // because a JSONB column comes back whole. getRows has taken the whitelist since
         // Sprint 10; it simply was never passed through here.
         const resp = await getRows(tableName, filters, orderBy, limit ?? 20, vectorSearch, columns);
-        return { count: resp.count, rows: resp.rows ?? [] };
+        return { ...withReadProvenance(resp), rows: resp.rows ?? [] };
       }
 
       case 'run_sql': {
@@ -2614,7 +2661,7 @@ async function executeReadTool(action, params, traceId, session) {
         if (category) filters.push({ column: 'category', op: 'eq', value: category });
         if (status)   filters.push({ column: 'status',   op: 'eq', value: status });
         const resp = await getRows('PGC_Capability', filters, { column: 'capability_key', direction: 'asc' }, 100);
-        return { count: resp.count, capabilities: resp.rows ?? [] };
+        return { ...withReadProvenance(resp), capabilities: resp.rows ?? [] };
       }
 
       case 'list_schedules': {
@@ -2636,8 +2683,17 @@ async function executeReadTool(action, params, traceId, session) {
 
       case 'read_memory': {
         const { filters = [], limit } = params;
-        const resp = await getRows('PGC_Memory', filters, { column: 'priority', direction: 'desc' }, limit ?? 10);
-        return { count: resp.count, rows: resp.rows ?? [] };
+        // PGC_Memory.priority is 1-10 with LOWER meaning more important (arch-memory.md 4.4),
+        // which is the direction memory-client.mjs has always read it in. This sorted DESC and
+        // so ranked the least important band first: the fire-and-forget run_complete rows sit
+        // at 8, and ten of them filled every page of a domain's memories.
+        const resp = await getRows(
+          'PGC_Memory',
+          filters,
+          [{ column: 'priority', direction: 'asc' }, { column: 'created_at', direction: 'desc' }, { column: 'id', direction: 'desc' }],
+          limit ?? 10
+        );
+        return { ...withReadProvenance(resp), rows: resp.rows ?? [] };
       }
 
       case 'read_workflow': {
