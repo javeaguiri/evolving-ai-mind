@@ -734,3 +734,72 @@ lived in a second reader of the same table without contradicting anything writte
 
 **Next:** the inventory correction workflow, built with Novia in a fresh session — she can now
 be told to recall the design, and the recall works.
+
+### Session 9 — 2026-09-10 — Track C built, and the patch loop's first added step
+
+**`review_inventory` is registered and repaired: workflow 359, v1 at 14:41, v2 at 15:11.** Built
+by Novia in session 1196 from the design she recalled out of `PGC_Memory` — the memory session 8
+made findable. The build path was hers throughout: convention bridge, `PGC_StepType`, a gated
+`addColumn` for `consumption_rate_per_day`, `register_workflow` refused once on validation and
+passing on the second attempt at 37 steps.
+
+**AC1 is met, on the workflow the whole defect class came from.** Both halves, live from
+`/novia`, and neither was staged:
+
+| AC1 clause | Evidence |
+|---|---|
+| A merged array that fails is refused | Seqs 26 and 28 — refused before the gate, issues returned, loop still running |
+| A single-step repair applied without resubmitting the whole array | Seq 33 — `patched: { added: ["16b"], replaced: ["16","17"] }`, 37 → 38 steps, v1 → v2 |
+| `baseVersion` carried | `baseVersion: 1` on every attempt; `nextBaseVersion: 2` returned |
+
+**But it took a harness fix to get there, and the defect is the sprint's sharpest finding yet.**
+Her patch replaced steps 16 and 17 and **added 16b between them** — the first patch ever to add a
+step. `mergeStepPatch` appended it: index 37, past 17 and past the `end` step. L1's data-flow trace
+walks the array in what its own comment calls *"canonical (top-to-bottom) execution order"*, so
+`shopping_result` was judged unwritten at the point step 17 reads it, and the merge was refused
+with `unresolved_template_variable` **for a key her patch plainly writes**.
+
+**Session 5 reasoned about position for replaced steps and not for added ones.** *"A replaced step
+keeps its array position, so index 0 cannot drift"* is in the record; the add case was weighed
+purely on routing — L1 rejects unreachable steps and dead targets, which is true and was never the
+issue. **Array position is a second contract L1 depends on, and nothing named it.** The unit test
+that should have caught it asserted `merged.at(-1).step === '3g'` on this exact shape — a gate
+routing to a new `js_transform`. It asserted the behaviour rather than the requirement.
+
+**What makes this worse than a wrong answer: she could not have found it.** `read_workflow` returns
+the stored array, which had no 16b because the write was refused. `simulate_workflow` returned the
+same refusal. Neither reported anything about the merge. **The array being judged was the one thing
+she could not see, and every check available to her agreed with the refusal because they were all
+reading the same hidden order.** She looped four times and the corrections still open to her — inline
+the transform, abandon the added step — would each have produced a worse workflow that validated.
+**A false validator result does not merely block; it applies pressure toward a worse design.**
+
+**Three fixes, deployed.** `mergeStepPatch` places an added step immediately after the step that
+routes to it (all six step-level routing fields plus per-option and per-button `on_select`, pass
+repeated so a chain resolves; anything unrouted still appended, for L1's unreachable check to
+answer). `mergeOutcome` reports `added` / `replaced` / `removed` / **`step_order`** on both
+refusals, the success path and the `simulate_workflow` patch path — **the Sprint 11 bounded-view
+rule applied to a view nobody had classed as one.** `buildErrorSummary` marks `[warning]`; the
+issues have carried `severity` since the check shipped and only the rendering dropped it, so the
+step-3 option-set warning read exactly like the error beside it and took part of four repair rounds
+while never being what refused the write.
+
+Verified against the real functions before and after, with the stored steps and her exact seq-28
+patch: appended → `passed: false`; placed after 16 → `passed: true`, zero issues. The live result
+at seq 33 returned the order with `16b` at index 35, and the stored v2 matches it exactly.
+**1110 → 1119 unit tests.** No seed changes — both tool descriptions were already accurate, and
+`propose_workflow_fix` already told her that adding a step means bringing its routers into the
+patch, which is what makes placement work.
+
+**Two findings recorded and not fixed.** `turnSucceeded` treats a `simulate_workflow` result as a
+success because it reports `passed: false` rather than `error` or `success: false`, so four failed
+simulations were narrated to the user as progress. And the `__pending__` entry is never cleared
+after an approved action gate, so a second click on an already-approved gate re-executes the write
+— unreachable while `chat.update` succeeds, which it did, but that call is logged non-fatal.
+
+**Also this session:** the Novia memory layer fixed end to end (session 8 note above), and
+`SlackResultsQueue`'s missing ordering and duplicate guarantees filed to the backlog at low
+priority with the FIFO dedup trap written in.
+
+**Next:** the user tests `review_inventory` v2 end to end from Slack. Track D (the two vector
+thresholds) and Track E (`edit_budget` retest) are both unblocked and unstarted.
