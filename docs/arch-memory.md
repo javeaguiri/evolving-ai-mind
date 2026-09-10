@@ -161,6 +161,12 @@ When multiple memories match, the harness orders by:
 3. created_at DESC — most recent first within same priority and type
 ```
 
+**The direction of the scale is binding on every reader of `PGC_Memory`**, not only on
+`memory-client.mjs`. A reader that sorts `priority DESC` returns the least important band
+first: `run_complete` sits at 8 precisely so it ranks last, and a page ordered the wrong way
+is filled with it. Both of the minds-eye reads — `read_memory` and the opening context block
+— sort ascending, with `created_at DESC` as the tiebreak.
+
 ---
 
 ## 5. Memory Writing
@@ -281,6 +287,29 @@ if (shouldWriteEpisodicMemory(run)) {
 
 `memory-writer.mjs` handles `MEMORY_WRITE` messages. Current content is deterministic
 distillation (zero LLM cost): `"Completed workflow '<name>' for domain '<domain>'"`.
+
+---
+
+### 5.6 `write_memory` — the minds-eye tool (`minds-eye.mjs`)
+
+Novia's own write. Distinct from both the step type in §5.4 and the fire-and-forget writer
+in §5.5: it records what no other path can derive — a design the user approved, a diagnosis,
+what is still open — and it is the only write whose subject may not exist yet.
+
+| Field | Who supplies it |
+|---|---|
+| `content` | The agent. Required. |
+| `scope` | `deriveScope(workingHistory)` supplies a floor from the workflows, tables and domains the session's tool calls touched; every key the agent passes overrides it (`mergeMemoryScope`). |
+| `memory_type`, `tags`, `priority` | The agent. Defaults: `episodic`, `[]`, `5`. |
+
+`deriveScope` reads the session's tool history under one rule: **an exploration tool fills a
+gap, an authoritative write states the fact.** `search_domain_help`, `list_tables` and
+`read_workflow` set a key only when it is unset; `register_workflow`, `propose_workflow_fix`,
+`propose_schema_fix`, `drop_table`, `create_view` and `drop_view` overwrite it.
+
+What it cannot derive is a subject with no row behind it. A workflow designed but not yet
+registered has no `PGC_Workflow` entry for any rule to find, so its design memory carries the
+scope the agent states, or it is reachable afterwards only by a `like` filter on content.
 
 ---
 
@@ -422,6 +451,27 @@ The block is omitted entirely when no memories are retrieved.
 `{ domain, workflow: create_workflow }` — which scope expansion already handles —
 but `scope_additions` makes the domain explicit when it comes from `input.domain`
 rather than `run.input.domain`.
+
+---
+
+### 6.4 Minds-eye retrieval (`minds-eye.mjs`)
+
+Novia does not use `retrieveMemories()`. She has two paths, both reading `PGC_Memory`
+directly through `getRows` and both ordered by the scale in §4.4 — `priority ASC`, then
+`created_at DESC`, then a unique trailing term.
+
+| Path | Bound | Purpose |
+|---|---|---|
+| `assembleContext()` | `MEMORY_CONTEXT_LIMIT` rows, unfiltered | Rides in `instructions` ahead of the transcript, every round. The block names its own bound and points at `read_memory` for the rest. |
+| `read_memory` tool | `limit`, default 10 | Targeted lookup — `jsonb_contains` on scope, or a `like` on content when the scope is unknown. |
+
+The opening block is assembled once per round and forms the head of the round's cached
+prefix, so both of its sort terms are deterministic and the trailing term is unique: a
+reshuffle between rounds invalidates the round's entire prefix.
+
+Every minds-eye read that reshapes a `getRows` response carries that read's own bounding
+provenance through `withReadProvenance` — `limit`, `limit_applied`, `truncated`,
+`total_matching`. Without it `count` reads as a total, and a page reads as the whole table.
 
 ---
 
@@ -717,6 +767,9 @@ For memory maintenance beyond SQS delay limits:
 | `parse_entity_input` memory_config (classify-intent data load path) | ✅ Done | 4 |
 | `write_memory` schema in workflow-schema.json | ✅ Done | 4 |
 | Targeted per-scope retrieval (`jsonb_contained_by` operator, no unscoped fetch) | ✅ Done | 7 |
+| Minds-eye `write_memory` — agent-supplied scope over a derived floor (`mergeMemoryScope`) | ✅ Done | 12 |
+| Minds-eye reads ordered by the documented priority scale (§4.4) | ✅ Done | 12 |
+| Bounding provenance on minds-eye reads (`withReadProvenance`) | ✅ Done | 12 |
 | History threading within a workflow run | 🔲 Deferred | Sprint 5 |
 | Novia /chat Mode 4 agentic loop | 🔲 Deferred | Sprint 5 |
 | Memory consolidation (nightly sonar distillation) | 🔲 Deferred | Backlog |
