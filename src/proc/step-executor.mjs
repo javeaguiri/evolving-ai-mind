@@ -376,6 +376,30 @@ export function resolveFormFields(step, localState) {
 }
 
 /**
+ * optionRowKey — which key on an option row carries its value, or its label.
+ *
+ * `{ value, label }` is the standard option shape: HTML's <option>, Slack's own option
+ * object, and what a js_transform building a picker list naturally emits. `{ id, name }`
+ * is what a raw table read returns. Both reach a form field through the same options_key,
+ * so the row itself settles which it is — a key the field declares wins, then the standard
+ * shape, then the table shape.
+ *
+ * Inferring rather than defaulting is the point. The inline `options` branch has always
+ * read `value`/`label`; the options_key branch defaulted to `id`/`name` alone, so the same
+ * field rendered one shape and silently produced the string "undefined" for the other —
+ * a gate whose every option read `undefined`, with nothing logged.
+ *
+ * @param {object} row       one option row
+ * @param {string} declared  the field's option_value_key / option_label_key, if any
+ * @param {string} standard  the standard-shape key ('value' or 'label')
+ * @param {string} fallback  the table-shape key ('id' or 'name')
+ */
+export function optionRowKey(row, declared, standard, fallback) {
+  if (declared) return declared;
+  return row[standard] !== undefined ? standard : fallback;
+}
+
+/**
  * Build a fully resolved HUMAN_GATE dialog from a human_gate step definition.
  * Called by executeHumanGate, and by resume_gate both to resolve a list_selection
  * click back to its row and to re-render a gate that stays suspended.
@@ -497,11 +521,12 @@ export function buildDialog(step, localState) {
             : { value: String(o), label: String(o) });
         } else if (field.options_key) {
           const rows = resolvePath(localState, field.options_key) ?? [];
-          const valueKey = field.option_value_key ?? 'id';
-          const labelKey = field.option_label_key ?? 'name';
-          options = (Array.isArray(rows) ? rows : []).map(row => (row && typeof row === 'object')
-            ? { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) }
-            : { value: String(row), label: String(row) });
+          options = (Array.isArray(rows) ? rows : []).map(row => {
+            if (!row || typeof row !== 'object') return { value: String(row), label: String(row) };
+            const valueKey = optionRowKey(row, field.option_value_key, 'value', 'id');
+            const labelKey = optionRowKey(row, field.option_label_key, 'label', 'name');
+            return { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) };
+          });
         }
 
         fields.push({

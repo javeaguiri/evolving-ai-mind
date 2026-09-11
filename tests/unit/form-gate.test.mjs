@@ -86,6 +86,48 @@ describe('buildDialog — form gate', () => {
     assert.deepEqual(inputs(dialog)[0].options, [{ value: 'kg', label: 'Kilograms' }]);
   });
 
+  it('reads a transform-built { value, label } row without being told to', () => {
+    // The shape a js_transform naturally emits when it builds a picker list, and the
+    // same shape the inline `options` branch has always accepted. The rows branch used
+    // to default to id/name alone, so every option rendered the string "undefined" —
+    // live specimen: review_inventory step 3, a multi_select whose list never appeared.
+    const dialog = buildDialog(
+      formStep([{ name: 'selected_ids', type: 'multi_select', options_key: 'page_data' }]),
+      { page_data: [{ value: '25', label: 'Red Wine [qty: 2]' }] },
+    );
+    assert.deepEqual(inputs(dialog)[0].options, [{ value: '25', label: 'Red Wine [qty: 2]' }]);
+  });
+
+  it('still reads an { id, name } table row, and settles each row on its own shape', () => {
+    const dialog = buildDialog(
+      formStep([{ name: 'pick', type: 'select', options_key: 'rows' }]),
+      { rows: [{ id: 3, name: 'Groceries' }, { value: 'kg', label: 'Kilograms' }] },
+    );
+    assert.deepEqual(inputs(dialog)[0].options, [
+      { value: '3',  label: 'Groceries' },
+      { value: 'kg', label: 'Kilograms' },
+    ]);
+  });
+
+  it('lets a declared key win over a row that carries the standard shape too', () => {
+    const dialog = buildDialog(
+      formStep([{
+        name: 'pick', type: 'select', options_key: 'rows',
+        option_value_key: 'id', option_label_key: 'name',
+      }]),
+      { rows: [{ id: 9, name: 'From the table', value: 'ignored', label: 'ignored too' }] },
+    );
+    assert.deepEqual(inputs(dialog)[0].options, [{ value: '9', label: 'From the table' }]);
+  });
+
+  it('falls back to the value as the label when a row carries no label at all', () => {
+    const dialog = buildDialog(
+      formStep([{ name: 'pick', type: 'select', options_key: 'rows' }]),
+      { rows: [{ value: 'kg' }] },
+    );
+    assert.deepEqual(inputs(dialog)[0].options, [{ value: 'kg', label: 'kg' }]);
+  });
+
   it('accepts inline options, as objects or bare strings', () => {
     const dialog = buildDialog(formStep([
       { name: 'a', type: 'radio',  options: [{ value: 1, label: 'One' }] },
