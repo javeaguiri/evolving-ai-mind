@@ -803,3 +803,60 @@ priority with the FIFO dedup trap written in.
 
 **Next:** the user tests `review_inventory` v2 end to end from Slack. Track D (the two vector
 thresholds) and Track E (`edit_budget` retest) are both unblocked and unstarted.
+
+### Session 10 — 2026-09-11 — three fault domains behind one missing checkbox list
+
+**AC3's first live test, and it found a defect in each of three domains.** The user ran
+`review_inventory` and reported two error messages together. They came from **two different runs**,
+which is the first thing that had to be established rather than assumed:
+
+| When (UTC) | Run | What |
+|---|---|---|
+| 09-10 16:39:39 | **807** `review_inventory` v2 | Failed at step 1 — the silent-cut refusal, 100 of 132 rows |
+| 09-10 16:39:41 | **808** `fix_workflow` v12 | Auto-triggered with the `gate_option_set_unbounded` issue as input — **the second message** — and failed itself |
+| 09-11 11:12 | session 1196 seq 36–38 | Novia read steps 1 and 16, proposed `limit: 10000` on both. Approved → **v3** |
+| 09-11 11:27 | **809** `review_inventory` v3 | Step 1 read all 132 rows. Gate posted with no picker |
+
+The run id in her prompt — *"runId 308"* — matches no `PGC_WorkflowRun` and no workflow. It cost
+nothing only because she went straight to `read_workflow` and never looked it up.
+
+**1. The limits: Generation, and hers to find.** She caught **step 16** as well as step 1 — a second
+unbounded read of `PGD_Inventory` that would have failed identically on *Exit to Shopping List*.
+With an explicit limit `limit_applied` becomes `caller`, so the check correctly falls silent: the
+bound is then the workflow's declared choice, which is the whole distinction the check draws.
+
+**2. The missing list: Generation, still open.** Step 2 declares `output_key: "page_data,page_meta"`
+and its expression returns `{ page_options, page_meta }`. `resolveOutputWrites` skips a declared key
+the object omits — deliberate, so a step may produce a subset — so **`page_data` is never written**.
+Run 809's `local_state` carries `all_items` (132), `page_meta` and no `page_data`. Step 3's
+`options_key` resolved to `[]`, `buildInputElement` returns `null` on an empty option set, and the
+field was dropped. **The gate posted a correct header over nothing, and every layer behaved as
+designed.** L1 cannot see it: the data-flow trace models the declared `output_key`, not what the
+expression returns.
+
+**3. The option shape: Execution, fixed and deployed (`bfc301b`).** Behind the missing key sat a
+second defect that a rename alone would have swapped one wrong output for another. The `options_key`
+branch defaulted to `id`/`name`; the inline `options` branch four lines above had always read
+`value`/`label`. **Same field, two incompatible row shapes decided only by where the options came
+from** — and a `js_transform` building a picker emits the standard one, so both lookups missed and
+every option would have rendered the string `"undefined"`. `optionRowKey` now settles each row on
+its own shape: a declared key, then the standard shape, then the table shape. Swept first — there
+are exactly **two** `options_key` uses in any registered workflow, and `edit_budget` had to *declare*
+`option_value_key`/`option_label_key` to reach the standard shape, which is the argument for the fix
+rather than an obstacle to it. 1119 → **1123** unit tests.
+
+**4. `fix_workflow` has never once completed. Contract, unfixed.** Run 808 died on
+`ajv /corrected_steps/0 — must NOT have additional properties: input, output_key, on_success,
+on_else`. `PGC_Prompt` id 55 (`fix_workflow_steps` v4) declares `corrected_steps.items` with exactly
+two permitted properties — `step` and `type` — and `additionalProperties: false`, while the prompt
+text in the same row instructs *"Produce a fully corrected step array (complete array — not a
+diff)."* **The instruction and the schema contradict each other absolutely, and the model was
+rejected for obeying the instruction.** All four `fix_workflow` runs ever recorded — 468, 640, 808
+and one earlier — failed at step 4 on this identical error, spanning 2026-06-16 to 2026-09-10. Rows
+**26** (v1, `additionalProperties: true`) and **32** (v2) are duplicate `fix_workflow_steps` prompts
+alongside 55; row 26 would have worked. Whether `fix_workflow` is worth repairing at all now that
+Novia does repairs is a live question — that it has never worked belongs on the record either way.
+
+**Next:** Novia patches step 2 in a fresh session — return `page_data`, and `pageSize` 100 → 50 for
+margin under the `multi_select` cap. Run 809 is left at `awaiting_human_gate` for the user to
+decide. Track D and Track E remain unblocked and unstarted.
