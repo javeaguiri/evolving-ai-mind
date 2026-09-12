@@ -376,7 +376,20 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const routingMatrix = runRoutingMatrix(steps, traceId);
 
   // ── Level 2b — js_transform smoke test ──────────────────────────────────
-  const smokeTest = runJsTransformSmokeTest(steps, traceId);
+  const smokeTest = runJsTransformSmokeTest(steps, traceId, stateFlow);
+
+  // The trace is the thing a reader trusts to say where a key comes from, and for a
+  // js_transform L1 can only report the declaration — which is the step's intent, not its
+  // effect. The smoke test has just executed the expression under the real output_key rule,
+  // so the executed writes replace the declared ones and the declaration is kept alongside
+  // when they differ. Without this the trace does not merely omit the defect: it asserts
+  // the key exists, and a repair aimed at that assertion is confirmed by the harness.
+  for (const [stepKey, { declared, written }] of Object.entries(smokeTest.resolved_writes ?? {})) {
+    const flow = stateFlow[stepKey];
+    if (!flow) continue;
+    flow.writes = [...written].sort();
+    if (declared.some(k => !written.includes(k))) flow.declared_writes = [...declared].sort();
+  }
 
   const l2Passed = routingMatrix.passed && smokeTest.passed;
 
@@ -992,6 +1005,22 @@ export function runLevel1StaticAnalysis(steps) {
               detail:        `${s.type} step "${stepKey}" filters[${fi}] has invalid op "${f.op}". Valid ops: eq, neq, gt, gte, lt, lte, like, in, is_null, not_null, jsonb_contains, jsonb_contained_by — never use SQL operators like "=", "!=", "contains"`,
             });
           }
+        }
+      }
+    }
+
+    // A field's options_key is a read of local_state, and until now the trace did not
+    // model it as one. The gate size checks above already parse the field, so the engine
+    // knew about the key and simply never recorded the dependency: review_inventory's
+    // step 3 read "page_data" and the trace reported its reads as ["page_meta"] alone.
+    // A read nobody records is a read nothing can check.
+    if (Array.isArray(s.fields)) {
+      for (const field of s.fields) {
+        if (!field || typeof field !== 'object' || !field.options_key) continue;
+        const baseKey = String(field.options_key).split('.')[0].replace(/\[.*/, '');
+        if (baseKey && baseKey !== 'item') {
+          stepReads.add(baseKey);
+          allReadsEver.add(baseKey);
         }
       }
     }
@@ -1757,13 +1786,24 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
   }
 }
 
-function runJsTransformSmokeTest(steps, traceId) {
+function runJsTransformSmokeTest(steps, traceId, stateFlow = {}) {
   const issues        = [];
   let stepsTested     = 0;
   const mockState     = { input: {} };
   // Base output_keys whose mockState value is a placeholder fallback rather
   // than a real computed result — see checkStepInputContracts.
   const uncertainKeys = new Set();
+  // What each js_transform's expression actually wrote, keyed by step. The L1 trace can
+  // only model the declaration; this is the executed truth, and runSimulation folds it
+  // back into state_flow so the trace reports what local_state would really hold.
+  const resolvedWrites = {};
+
+  // Every OTHER step whose recorded reads include this base key. Reachability is not
+  // asserted — a key read on any branch is a key the workflow depends on.
+  const readersOf = (baseKey, writerStepKey) =>
+    Object.entries(stateFlow)
+      .filter(([st, flow]) => st !== writerStepKey && (flow?.reads ?? []).includes(baseKey))
+      .map(([st]) => st);
 
   for (const s of steps) {
     const key = String(s.step);
@@ -1870,6 +1910,45 @@ function runJsTransformSmokeTest(steps, traceId) {
               if (isFallback) uncertainKeys.add(baseOut);
             }
           }
+
+          // What the expression returned, against what the step declared. resolveOutputWrites
+          // matches a comma list by NAME: a declared key the object omits is skipped, and a
+          // returned key nothing declares is discarded. Both losses are silent, and the trace
+          // reported the declaration either way — so a step that wrote nothing at all read back
+          // as a step that wrote both its keys.
+          //
+          // A fallback carries no return to compare, and a subset return is legitimate
+          // (create_workflow step 21a writes skeleton_error_summary only when there is one),
+          // so this reports rather than refuses — until a later step reads the dropped key,
+          // which is the point at which a subset stops being a choice and becomes a defect.
+          if (!isFallback) {
+            const declared = s.output_key.split(',').map(k => k.trim().split('.')[0]).filter(Boolean);
+            const written  = writes.map(w => w.key.split('.')[0]);
+            resolvedWrites[key] = { declared, written };
+
+            if (declared.length > 1) {
+              const notReturned = declared.filter(k => !written.includes(k));
+              if (notReturned.length > 0) {
+                const returnedKeys  = (result && typeof result === 'object' && !Array.isArray(result))
+                  ? Object.keys(result) : [];
+                const undeclared    = returnedKeys.filter(k => !declared.includes(k));
+                const consumers     = notReturned.filter(k => readersOf(k, key).length > 0);
+                const spare         = undeclared.length > 0
+                  ? ` The expression returns ${undeclared.map(k => `"${k}"`).join(', ')}, which the step does not declare — that value is discarded.`
+                  : '';
+                const consumed      = consumers.length > 0
+                  ? ` Step${consumers.length > 1 ? 's' : ''} ${[...new Set(consumers.flatMap(k => readersOf(k, key)))].map(st => `"${st}"`).join(', ')} read ${consumers.map(k => `"${k}"`).join(', ')}, and will resolve against nothing.`
+                  : '';
+                issues.push({
+                  check:         'output_key_not_returned',
+                  step:          key,
+                  failure_class: 'output_key_not_returned',
+                  ...(consumers.length > 0 ? {} : { severity: 'warning' }),
+                  detail:        `js_transform step "${key}" declares output_key "${s.output_key}" but its expression returned only ${written.map(k => `"${k}"`).join(', ') || 'nothing'}. A comma-separated output_key is matched by name, so ${notReturned.map(k => `"${k}"`).join(', ')} ${notReturned.length > 1 ? 'are' : 'is'} never written to local_state.${spare}${consumed} Return the declared key from the expression, or declare the key the expression returns — do not point the reader at a path that is never written.`,
+                });
+              }
+            }
+          }
         }
       }
     } else {
@@ -1912,9 +1991,10 @@ function runJsTransformSmokeTest(steps, traceId) {
   const tagged = issues.map(i => ({ ...i, hard: isHardSmokeFailure(i) }));
 
   return {
-    passed:       tagged.every(i => !i.hard),
-    steps_tested: stepsTested,
-    issues:       tagged,
+    passed:         tagged.every(i => !i.hard),
+    steps_tested:   stepsTested,
+    issues:         tagged,
+    resolved_writes: resolvedWrites,
   };
 }
 
@@ -1922,6 +2002,10 @@ function isHardSmokeFailure(issue) {
   return issue.failure_class === 'js_transform_syntax_error' ||
          issue.failure_class === 'js_transform_void_return'  ||
          issue.failure_class === 'output_key_destructure_mismatch' ||
+         // A declared key nothing returns is advisory on its own — a subset return is a
+         // legitimate pattern — and hard once a step reads it, which the issue's own
+         // severity records. Re-deriving that here would put the verdict in two places.
+         (issue.failure_class === 'output_key_not_returned' && issue.severity !== 'warning') ||
          (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 
