@@ -932,7 +932,7 @@
         "field": "message_template",
         "required": true,
         "one_of": ["message_template", "message"],
-        "description": "Message text \u2014 supports {{template}} substitution from local_state. The engine reads message_template first and falls back to `message`, so either name satisfies this requirement; prefer message_template, which is what every other notify step uses."
+        "description": "Message text \u2014 supports {{template}} substitution from local_state, and is rendered as standard markdown, so headings, lists and tables render as written. The engine reads message_template first and falls back to `message`, so either name satisfies this requirement; prefer message_template, which is what every other notify step uses. Substitution is textual and every token resolves to a single string: an array becomes its elements joined with \", \" and each object element JSON-stringified, and an object becomes its JSON \u2014 silently, and never as repeated lines or as table rows. So a token holding an array of row objects lands as one line of JSON wherever it sits, which in a table body ends the table after the header. Build repeated content as text in the step that prepares it: a js_transform that returns the rows already joined with newlines (each row a string such as \"| \" + r.first + \" | \" + r.second + \" |\"), and a message_template carrying the header row, the separator row, and one token for the body. The engine never expands an array into lines."
       },
       {
         "type": "string",
