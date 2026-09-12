@@ -860,3 +860,71 @@ Novia does repairs is a live question — that it has never worked belongs on th
 **Next:** Novia patches step 2 in a fresh session — return `page_data`, and `pageSize` 100 → 50 for
 margin under the `multi_select` cap. Run 809 is left at `awaiting_human_gate` for the user to
 decide. Track D and Track E remain unblocked and unstarted.
+
+### Session 11 — 2026-09-12 — the harness confirmed the wrong fix, and Novia read the run
+
+**`review_inventory` works — v5, and the repair that got there was Novia's, unaided, from a run id.**
+The session began on the missing checkbox list and ended with the question underneath it answered:
+*is her blindness to `local_state` a reachability problem or a discipline problem?*
+
+| Version | Who | What |
+|---|---|---|
+| v3 → **v4** | session 1198 seq 1–9 | `pageSize` 100 → 50 (correct), and `options_key` `"page_data"` → `"page_data.page_options"` — **wrong, and it shipped** |
+| v4 → **v5** | session 1198 seq 10–25 | step 2 `output_key` → single `page_state`; step 3 reads `page_state.page_options`; step 4 returns the `nav_result` it declares |
+
+**1. The defect, confirmed from run 810's own state.** Step 2 declared `output_key: "page_data,page_meta"`
+and returned `{ page_options, page_meta }`. `resolveOutputWrites` matches a comma list **by name**, so
+`page_data` was never written and `page_options` — declared by nothing — was discarded. Run 810's
+`local_state` carried `all_items`, `page_meta`, `page_form`, and neither of the other two. The gate's one
+field resolved to `[]`, `buildInputElement` returned `null`, and the field was dropped: a correct header,
+four working buttons, no picker. Every layer behaved as designed.
+
+**2. Why v4 was wrong, and this is the finding.** Session 1198 patched the **reader** to
+`"page_data.page_options"` — a path whose root does not exist. She reached that from the workflow
+definition alone, and checked it against `simulate_workflow`, which returned `passed: true` and
+`"2": { writes: ["page_data","page_meta"] }`. **`state_flow` derived a `js_transform`'s writes from its
+declared `output_key` — intent, not effect — so the trace asserted the very key that is never written.
+The harness did not miss her error; it confirmed it.**
+
+**3. Validation, fixed (`7dab502`).** L2b already executes the expression under the real `output_key`
+rule, so the executed writes now replace the declared ones in `state_flow`, `declared_writes` is kept
+alongside when they differ, and the divergence is reported as `output_key_not_returned` — advisory
+alone, because a subset return is legitimate (`create_workflow` 21a), and **hard once another step reads
+the dropped key**. A field's `options_key` is now recorded as a read, which is what makes that
+distinction available; the gate size checks already parsed it and the trace never recorded the
+dependency. Swept all 17 registered workflows: `review_inventory` only, no false positives — and it
+named **step 4**, which nobody had filed: `nav_result` declared, `nav_flag` returned, `5a` reads
+`nav_result`. Paging was broken identically. 1123 unit tests, unchanged and passing.
+
+**4. Instruction, fixed (`f6613b9`) — and the first diagnosis of it was wrong.** The comma form was
+*not* undocumented, as this session first reported; a case-sensitive grep missed `js_transform`'s own
+`input_contract`. It said *"destructure an object return value into multiple top-level local_state keys"*,
+which reads equally well as *the returned object lands under the first key* — an ambiguity that
+**supports** the model she held. Both contracts now state the deciding rule: matched by name, a declared
+name the object omits is skipped, a returned property nothing declares is discarded, both silently.
+
+**5. The probe — and it answers the question.** Given *runId 811* and nothing else, her **first action**
+was `run_sql` against `PGC_WorkflowRun`. She guessed a `workflow_name` column, was refused, recovered via
+`list_tables`, joined to `PGC_Workflow` for the name, and then read **`PGC_WorkflowRunStep`** for the
+per-step `input_snapshot`/`output_snapshot`. Bounded and targeted throughout — she never pulled the run
+row whole, which at **37,870 characters** against a 15,000 cap would have returned the item list and
+withheld the finding. She then read step 4 and 5a/5b **unprompted** and fixed the second instance.
+
+**So it was never discipline, and only half reachability.** Given a run id she reads it, and reads it
+well. What she cannot do is *obtain* one: the user's report carries a symptom, not a run number, and
+session 1196 invented *"runId 308"*. **`read_workflow_run`'s value is the run-identity half — resolving
+the latest `failed`/`awaiting_human_gate` run for a named workflow — not the bounded view she already
+builds herself with SQL.** Backlog entry recorded and amended accordingly; `PGC_WorkflowRunStep` is the
+better source than `stack[top].local_state` and is already bounded per step.
+
+**Verified independently:** v5 simulates clean under the new engine — `passed: true`, no
+`output_key_not_returned`, and `state_flow` for step 2 now reads `writes: ["page_state"]` with no
+divergence to report.
+
+**Not deployed.** Both changes are committed and pushed only — `sam deploy` for `simulation-engine.mjs`
+and `node dev_scripts/upsert-step-type.mjs` for the contract. Novia's v5 was built against the **old**
+harness, which makes the probe result cleaner, not weaker.
+
+**Next:** deploy both, then Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest).
+Run 809 and 810 remain at `awaiting_human_gate`. AC3's remaining verbs — rename, merge, recategorise,
+alias-fix on `PGD_Inventory` 25 and `PAN MOLD INT ALTEZ` — are still unexercised.
