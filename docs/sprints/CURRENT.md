@@ -928,3 +928,68 @@ harness, which makes the probe result cleaner, not weaker.
 **Next:** deploy both, then Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest).
 Run 809 and 810 remain at `awaiting_human_gate`. AC3's remaining verbs — rename, merge, recategorise,
 alias-fix on `PGD_Inventory` 25 and `PAN MOLD INT ALTEZ` — are still unexercised.
+
+### Session 12 — 2026-09-12 — the shopping list, and AC1's second unrehearsed case
+
+**Deployed Session 11's two changes, then the next defect found them unnecessary.** `sam deploy`
+(`7dab502`, `simulation-engine.mjs`) and `upsert-step-type.mjs` (`f6613b9`, `js_transform` updated,
+18 unchanged) both landed before anything live was read as evidence.
+
+**1. The defect.** `review_inventory`'s shopping list rendered a correct GFM header and then one
+paragraph of comma-joined JSON. Run 812 step 17's `output_snapshot` carries the literal message.
+Step 17's `message_template` hand-drew a table header and interpolated
+`{{shopping_data.shopping_list}}` — an array of five row objects — into the body.
+`template-resolver.mjs:97` joins an array with `", "` and JSON-stringifies each object element, so
+the table ended after the separator and the rows arrived as prose beneath it. **Both components did
+exactly what they specify:** step 16b returned the rows it declared (`shopping_count` 5 was right on
+screen), and the resolver rendered them as documented. Fault domain **Instruction → Generation**.
+
+**2. What the contract did and did not say.** `message_template` said only *"supports {{template}}
+substitution"* — silent on non-scalars. Two fields below, `reveal` documents an array of record
+objects auto-rendering as a real table and warns *"do not hand-format pipe-delimited text to fake a
+table"*. The behaviour is real; it lives on a different field. Generalising it is the error, and the
+contract invited it. Fixed (`da85764`): every token resolves to a single string, what an array and an
+object each become, that both losses are silent, and that repeated content is built as text in the
+step that prepares it.
+
+**3. A correction made mid-diagnosis, and it changed the fix.** This session first reported that a
+notify's main text goes through `textToBlocks` → `mrkdwn`, which cannot render a table, and proposed
+extending the renderer. The user's correction — *Slack supports a markdown block type* — was right:
+`run-workflow.mjs:520` has always set `format: 'markdown'` on every notify enqueue, so the text goes
+through `markdownToBlocks` → top-level `markdown` blocks, which do render standard tables
+(`slack-block-kit.md:749`; the "cannot render a table" restriction at :1051 belongs to the reveal
+*container*). **No renderer change was needed, and none was made.** It also explains the symptom
+precisely: the header was a real rendered table, and it ended where the pipes stopped.
+
+**4. Novia's repair — AC1's second live case, unrehearsed.** Session 1199, 12 entries, 94 seconds,
+two of 38 steps touched. She called `simulate_workflow` **with `patch`** before proposing — the
+affordance Track A added because a patch-holder otherwise cannot pre-validate — then
+`propose_workflow_fix` in `mode: "patch"` against `baseVersion: 5`:
+`replaced: ["16b","17"], added: [], removed: []`, 38 → 38 steps, `validation: "passed"`, diff exact
+on two fields. **Two calls she made better than the brief:** an empty-state row so an empty list
+still renders as a table, and dropping `shopping_list` from the return entirely rather than keeping
+it as suggested — nothing reads it, and `state_flow` proves it.
+
+**Verified three ways.** Stored v6 simulated independently (`passed: true`, L2, only the pre-existing
+step-3 warning); the real 16b expression executed against all 132 live `PGD_Inventory` rows; and then
+**run 813, live from Slack — five proper rows.**
+
+**5. The observation worth carrying.** She diagnosed from the **workflow definition, not the run**.
+She pulled run 812's row and never its step output — step 17's `output_snapshot`, the literal broken
+message, was one query away. It came out right only because the symptom report was unusually precise.
+**Same shape as session 1198's wrong v4 fix**, where the definition alone misled her. Session 1198's
+probe showed that *given* a run id she reads runs well; this shows she does not reach for run
+evidence unprompted when a plausible diagnosis is available from the definition. That strengthens the
+`read_workflow_run` backlog entry rather than weakening it. Secondary: `workflow_name` on
+`PGC_WorkflowRun` was guessed and refused in **both** sessions.
+
+**Backlogged, not built:** L2 checks that a `message_template` token *resolves*, never to what type.
+An array or object token is JSON soup in a user-facing message, every time, and statically knowable —
+`state_flow` has carried the resolved type since `7dab502`. Same family as `output_key_not_returned`.
+Recorded with run 812 as the specimen and an explicit instruction not to build it from one case.
+
+**Note:** the contract fix did not guide this repair — she never queried `PGC_StepType`. Its first
+real test is the next notify anyone writes.
+
+**Next:** Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest). Runs 809 and 810
+remain at `awaiting_human_gate`. AC3's remaining verbs are still unexercised.
