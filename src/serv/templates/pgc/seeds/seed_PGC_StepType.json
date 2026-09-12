@@ -98,7 +98,7 @@
         "type": "string",
         "field": "output_key",
         "required": true,
-        "description": "Dot-path where the result is written to local_state. Comma-separate multiple keys (e.g. \"a,b,c\") to destructure an object return value into multiple top-level local_state keys simultaneously."
+        "description": "Dot-path where the result is written to local_state. Comma-separate multiple keys (e.g. \"a,b,c\") to destructure an object return value into multiple top-level local_state keys simultaneously. Destructuring matches BY NAME: each listed key is looked up as a property of exactly that name on the returned object. A listed key the object does not carry is skipped, and a property the object returns that no listed key names is discarded \u2014 both silently, and neither reaches local_state. So output_key \"a,b\" over a return of { x: ..., b: ... } writes b alone; a is never written, and every later {{a}} resolves against nothing while the workflow carries on. Declare the names the expression actually returns, and return the names the step declares. A single output_key writes the whole value whatever its shape, so \"a\" over { x: ..., b: ... } puts the entire object at a and it is read as a.x and a.b. A comma list over a scalar, null, or an array throws \u2014 there are no names to match."
       },
       {
         "type": "string",
@@ -111,7 +111,7 @@
       {
         "type": "any",
         "field": "output_key",
-        "description": "Result of the expression written to local_state[output_key]"
+        "description": "Result of the expression written to local_state[output_key]. A comma-separated output_key writes one key per name matched on the returned object: a declared name the object omits is not written, and a returned property nothing declares is discarded. The keys a step actually wrote are what the simulation state_flow reports, alongside declared_writes when the two differ."
       }
     ],
     "on_success_options": [
