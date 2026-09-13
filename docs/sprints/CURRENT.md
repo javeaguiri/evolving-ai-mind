@@ -1017,3 +1017,25 @@ recordings, `PGC_WorkflowRunStep` snapshots are her diagnostic evidence, and a P
 makes space reusable rather than returning it.
 
 **Next:** unchanged — Track D and Track E.
+
+### Session 14 — 2026-09-13 — Claude Code health check (no sprint work)
+
+**No Track advanced.** This was tooling housekeeping, run with `/doctor`.
+
+**`CLAUDE.md` 34,115 → ~27,000 chars (`34140f9`).** The Sprint 7–10 narratives in *Current State*
+now point to `sprint-07.md` through `sprint-10.md` rather than repeating them. That saves ~1.7k
+tokens (est.) of context every session.
+
+**The logging method was wrong in `CLAUDE.md`, and the cause is now confirmed.** *Monitoring* told
+sessions to pipe four `aws logs tail --follow` streams through `sed` into `/tmp/lambda-logs.txt` and
+watch the file with Monitor. That contradicted the standing feedback that this method lags. **The
+cause is block buffering, not `nohup` or `tail -f`.** `sed` writing to a file, and the `aws` CLI
+writing to a pipe, hold low-volume lines until ~4 KB accumulates. Tested: a piped `sed` had written
+0 bytes after 1s, and `sed -u` had written 16. `grep --line-buffered` on the reading end could never
+compensate. *Monitoring* now prescribes on-demand `aws logs tail --since 10m`, one per Lambda in
+parallel.
+
+**Environment:** auto mode is now the default permission mode (user settings), and the three unused
+claude.ai Google connectors were removed. Claude Code 2.1.270 is current.
+
+**Next:** unchanged — Track D (two thresholds, both still 0.4) and Track E (`edit_budget` retest).
