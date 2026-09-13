@@ -173,26 +173,19 @@ No linter or formatter is configured. Code review is done against `docs/code-rev
 
 Bootstrap (install-time only, NOT on Lambda cold start): `POST /api/v1/serv/bootstrap`
 
-### Monitoring (tail all Lambda logs live)
+### Monitoring (read Lambda logs on demand)
 
-**Step 1** — Start tailing (single Bash call, all four lambdas → `/tmp/lambda-logs.txt`):
+Read logs when something has happened, scoped by time. Each command returns. Run all four in parallel:
 
 ```bash
-truncate -s 0 /tmp/lambda-logs.txt 2>/dev/null || touch /tmp/lambda-logs.txt; nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slackbot --follow --format short --region us-east-2 2>&1 | sed "s/^/[slackbot] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-proc --follow --format short --region us-east-2 2>&1 | sed "s/^/[proc] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-serv --follow --format short --region us-east-2 2>&1 | sed "s/^/[serv] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 & nohup bash -c 'aws logs tail /aws/lambda/evolving-mind-ai-slack-callback-listener --follow --format short --region us-east-2 2>&1 | sed "s/^/[callback] /" >> /tmp/lambda-logs.txt' > /dev/null 2>&1 &
+aws logs tail /aws/lambda/evolving-mind-ai-proc --since 10m --format short --region us-east-2
 ```
 
-**Step 2** — Start a Monitor on the file (use the Monitor tool with `persistent: true`):
+Repeat for `-slackbot`, `-serv` and `-slack-callback-listener`. Widen `--since` if needed, and narrow the output with `| grep -E "<pattern>"` if you want.
 
-```
-command: tail -f /tmp/lambda-logs.txt | grep --line-buffered -E "<pattern>"
-```
+**Never pipe a `--follow` stream into a file** (`nohup`, background jobs, Monitor on `/tmp/lambda-logs.txt`). The writers in that chain block-buffer: `sed` writing to a file and the `aws` CLI writing to a pipe hold low-volume lines until ~4 KB accumulates. The file lags, and reads return stale logs during a live diagnosis.
 
-Use a grep pattern that covers both success and failure signals, e.g.:
-```
-step-executor|run-workflow|HUMAN_GATE|WORKFLOW_ERROR|workflow.*complete|failed|error|step [0-9]|workflowRunId
-```
-
-This produces per-event notifications in the conversation as each matching log line arrives.
+For workflow diagnosis, `PGC_WorkflowRunStep` and `PGC_WorkflowRun` are usually the better evidence.
 
 ---
 
@@ -233,21 +226,7 @@ Full data/SERV API + curl cookbook: `docs/arch-data.md` — PGC schema, SERV end
 
 ## Current State
 
-**Sprint 7 closed 2026-07-12 (branch `sprint/07-mvp-functionality-gaps`).** MVP functionality gaps. All ACs met except one carried item (D3). Highlights: `serv_upsert` step type + L2 data-flow trace; `form` gate type (a widget is a field type, not a gate type) and `text_input` retired from the instruction layer; `choice` renders as a dropdown past five options; `list_selection` markdown-table rendering with grouped `static_select`; view infrastructure (`PGC_Schema.type`/`select_sql`, `createView`); `PGC_IntentMap` one row per phrase; `/explain` step-selection gate; Novia SOP library. Late-sprint work concentrated on **silent failure**: repair loops that regenerated without being told what failed, a renderer that posted messages Slack rejected, and a schema registry that lied.
-
-**Sprint 8 closed 2026-07-25 (branch `sprint/08-replay-harness`).** Replay harness & cost stop. The sprint's thesis is proven — the `create_workflow` development loop is free. The **LLM replay harness** (`docs/arch-replay.md`) serves a recorded response from `PGC_SessionEntry` instead of calling Perplexity, keyed by a **content fingerprint of the assembled request** (seven component hashes + composite; `fingerprint.mjs`/`replay-corpus.mjs`/`replay.mjs`) computed at the `callLlm` seam; gates stay real, SERV is not stubbed. Measured: runs 720+721 = 16 `llm_call`s, **0 live**; a full dev cycle costs **$0** — one paid build ≈ $1.42 (run 729), then free forever. New: `awaiting_llm_break` run status; `resume_llm`/`REPLAY`/`REPLAY_RESUME` SQS; `/proc/replay` endpoints; `/replay` + `/shutdown <runId>`-reaches-break; break drift report (component + per-`input`-key + `local_state` diff + blast radius + disposition); Block Kit break resolution; `dev_scripts/replay.mjs`; L1 gate-size check. Experience/procedure partition **swept clean** — every standard-markdown gap closed in `callback.mjs` code (`toSlackMrkdwn`), zero Slack/mrkdwn references across 24 prompts + 36 context rows. **AC6/AC7 dropped, AC11→backlog; AC10 partial** — the `edit_budget` build validated (registered, id 356), but the generated workflow's runtime surfaced create_workflow design-quality defects that carry to Sprint 9.
-
-**Sprint 9 closed 2026-08-06 (branch `sprint/09-novia-builds-workflows`).** Novia builds workflows. **6 of 9 ACs met.** The sprint's question was whether conventions alone are enough for an agent that can already write code — and the answer, on the build, is yes: `edit_budget` (id 357) was designed in Slack conversation, simulated clean, and registered via `register_workflow` with **no `create_workflow` involvement at any point**. The **convention bridge** (`PGC_SystemContext` id 45, loaded on demand) was fetched *unprompted as session 1121's first action*, and `PGC_StepType` queried before designing — AC1/AC2 confirmed live rather than by inspection. New: **L0** shape validation as a `level` selector on `runSimulation` (composed from `input_contract`, never hand-authored; `skeleton` flag gone; `step-type-registry.mjs` added); **`register_workflow`** gated write tool that refuses any array failing L0+L1+L2; **`option_source`** (`static | dynamic`) on the `human_gate` contract with divergent render bounds in `callback.mjs` (AC7 — both gates confirmed live under one deployment, which a threshold bump cannot produce); **L1 numeric-index check**, plus a template walk that finally descends the whole step input rather than its top level. 725 → 774 unit tests.
-
-**What did not come free is the finding.** AC5's runtime half needed repairs made outside the Novia path. AC9 measured **$2.73** to build against the **$1.42** `create_workflow` baseline, plus **$3.40** for a repair session that did not complete — so the cost evidence the dissolution decision is gated on **does not yet favour the Novia path**, and should be re-measured after the transcript fix. AC6 was moved from partial to **not met** on discovering the binding budget was never `turn_limit`: the round runs inside one 240s Lambda. The single largest defect found: **Novia could not see her own work** — `buildUserMessage` dropped a tool entry's `params`, so every step array she submitted was persisted and invisible to her, and she rebuilt all 23 steps from reasoning each turn.
-
-**Sprint 10 closed 2026-08-22 (branch `sprint/10-viability-checkpoints`).** Viability checkpoints — a make-or-break sprint whose deliverable was a written go/no-go, with every threshold fixed in the sprint doc **before** any number was observed. **Outcome: GO** — 9 PASS, 2 MARGINAL, 2 NOT MEASURED across 13 ACs. Novia replaces `create_workflow` as the way workflows are built: **$1.376** to build `process_receipt` registered-to-registered against the $1.42 `create_workflow` baseline, and **$0.672** to diagnose and repair a defect unaided from a symptom alone. Checkpoint 1 (~$21/mo AWS) and Checkpoint 2 pass; **Checkpoint 3 passes on its binary threshold** — a raw-Spanish grocery receipt and a restaurant receipt both route correctly from Slack with no hand-repair. Shipped: **native function calling** for Novia's loop (`callLlmWithTools`, 29 tool schemas, `ACTION_SCHEMA` deleted) with `cacheRead` = the previous turn's entire `inputTokens`; `serv_query` `vectorSearch` + `columns` pass-through; **capability and scheduling tools on EventBridge Scheduler**, built for real; `addForeignKey`/`addUniqueConstraint`. 823 → 997 unit tests.
-
-**The load-bearing finding: never append a user message mid-round** — one trailing user item forfeits the whole prefix credit for that turn, measured twice with everything else held constant. Fixed on the `respond`-tool path; still open on the prose-reply path and on gate resume, together **58%** of one session's spend.
-
-**What the GO does not claim, and this is the sprint's largest evidence gap: that cost per receipt falls with use.** Every part of the alias-learning machine is built and proven live — per-item `vectorSearch` on both tables, same-language alias matching, 84 aliases persisted as raw receipt strings — and **AC9 is unmeasured**. Run 782's four items were entirely new vocabulary (`auto_matched: 0`), so the 2.4× per-item drop it showed is attributable to two engine fixes, not to learning. The measurement protocol was pre-registered in git before that run precisely so the distinction could be drawn afterwards rather than argued about. It closes on one ordinary shopping trip whose items overlap the alias table.
-
-**Every significant defect this sprint was found by running the system, not by reading it** — seven engine defects on 2026-08-16, two on 2026-08-19, and a third on 2026-08-22 that surfaced only because the backlog entry said *re-probe rather than trust the response shape*.
+Sprints 7–10: see `docs/sprints/sprint-07.md` through `docs/sprints/sprint-10.md` (outcome, validation, retro).
 
 **Sprint 11 closed early 2026-08-22 → 2026-08-30 (branch `sprint/11-usability-and-admin`).** Usability and administration. **2 of 6 ACs met, plus the sprint's actual body of work, which was never an AC.** AC1 — `/help` now derives a domain's panel from live `PGC_Workflow` and `PGC_IntentMap` rows rather than a stored snapshot, so a phrase added after registration appears without a help entry being written; verified live on three domains. AC4 — a reveal table chunks at 8 rows with the real header repeated, so no row is unreachable. AC6 — release-readiness **decided, not defaulted**: scoped into Sprint 12, ending five sprints of deferral. AC2, AC3 and AC5 were not started, and closing early was the decision, because all three route through Novia editing or building a workflow and that loop was found blind at both ends.
 
