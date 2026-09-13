@@ -993,3 +993,27 @@ real test is the next notify anyone writes.
 
 **Next:** Track D (two thresholds, still 0.4) and Track E (`edit_budget` retest). Runs 809 and 810
 remain at `awaiting_human_gate`. AC3's remaining verbs are still unexercised.
+
+### Session 13 — 2026-09-13 — storage audit (no sprint work)
+
+**No Track advanced.** Administrative: where the storage actually sits, on both sides.
+
+**The bastion's root volume was at 97% — 272 MB free of 8 GB**, enough to break a `sam build`,
+`npm install` or git operation mid-deploy. The bulk was not the project: the npm download cache
+(1.9 GB) and the systemd journal (837 MB). Both cleared (`npm cache clean --force`,
+`journalctl --vacuum-size=100M`) → **64%, 2.9 GB free**. The repo is 162 MB. Nothing prevents the
+cache and journal refilling; worth checking before any Track B deploy work.
+
+**RDS is nowhere near a limit.** `sysrdsevomind`, 20 GB gp2, **18.2 GB free**, storage autoscaling
+off. `evo_mind` is **85 MB** — PGC 57 MB, PGD 18 MB. `PGC_SessionEntry` and `PGC_WorkflowRun` are
+24 MB each, 56% of the database between them, almost entirely TOAST — a terminal run keeps its
+whole `stack` (~60 kB per run) and nothing prunes either table. PGD tables are small in rows and
+heavy in embedding storage.
+
+**Backlogged (`200a67b`):** a Novia `storage_report` read tool and a gated `purge_rows` write tool,
+eligibility rules in system code and shared with the three existing scheduled table-maintenance
+entries. Three design questions are recorded against it — purging transcripts destroys replay
+recordings, `PGC_WorkflowRunStep` snapshots are her diagnostic evidence, and a PostgreSQL `DELETE`
+makes space reusable rather than returning it.
+
+**Next:** unchanged — Track D and Track E.
