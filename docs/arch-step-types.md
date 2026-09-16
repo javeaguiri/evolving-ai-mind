@@ -598,6 +598,26 @@ Use `iterator` instead of a preceding `js_transform` step when gate options come
 from a variable-length array. L1 validation skips the unresolved-key check for
 options that carry `iterator` (tokens resolve at runtime against each item).
 
+###### `condition` on options
+
+Any option except the cancel option may carry `condition` — a JavaScript expression
+evaluated against `local_state` (for an `iterator` option, against `{...localState, ...item}`
+per row). The option is kept only while the expression is true. `resolveGateOptions` does
+the filtering, and both `buildDialog` and `resumeGate` read its list, so a hidden option is
+neither rendered nor accepted as an answer. An expression that throws hides the option.
+L1 refuses a condition that does not compile (`gate_option_condition_invalid`) and a
+condition on the cancel option (`gate_option_condition_on_cancel`).
+
+```json
+"options": [
+  { "label": "Previous Page", "action": "prev_page", "on_select": "4",
+    "condition": "page_state.page_meta.current_page > 1" },
+  { "label": "Next Page", "action": "next_page", "on_select": "4",
+    "condition": "page_state.page_meta.current_page < page_state.page_meta.total_pages" },
+  { "label": "Cancel", "action": "cancel", "on_select": "cancel" }
+]
+```
+
 ###### Template syntax
 
 Templates appear in `message_template`, `input` values, and `context_key`. The

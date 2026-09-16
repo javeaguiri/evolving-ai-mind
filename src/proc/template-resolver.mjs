@@ -172,6 +172,20 @@ function evalExpression(token, localState) {
  * @returns {boolean}
  */
 export function evalItemCondition(condition, item) {
+  return evalCondition(condition, { item });
+}
+
+/**
+ * Evaluate a boolean condition expression with the given object's keys in scope.
+ * The one evaluator behind every show/hide condition: a list_selection row's
+ * item_action (scope `{ item }`) and a human_gate option (scope is local_state, so
+ * `page_state.page_meta.current_page > 1` reads the same state a js_transform does).
+ *
+ * @param {string} condition   Expression string
+ * @param {object} context     Names in scope for the expression
+ * @returns {boolean}          True when absent; false when it throws
+ */
+export function evalCondition(condition, context) {
   // No condition means "show for every item" — a condition is a filter, and an
   // absent filter must not filter everything out. Latent bug found Sprint 7
   // Track D2: evaluating `(${undefined})` silently returned false, so any
@@ -180,7 +194,7 @@ export function evalItemCondition(condition, item) {
   // list_selection case) had no live workflow exercising it until now.
   if (!condition) return true;
   try {
-    return Boolean(vm.runInNewContext(`(${condition})`, { item }, { timeout: 200 }));
+    return Boolean(vm.runInNewContext(`(${condition})`, Object.assign({}, context), { timeout: 200 }));
   } catch (e) {
     console.warn('template-resolver: condition eval failed', {
       condition,
