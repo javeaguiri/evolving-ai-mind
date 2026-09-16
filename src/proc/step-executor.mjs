@@ -330,14 +330,18 @@ export function resolveGateOptions(step, localState) {
     condition: undefined,
   });
 
+  // Both spellings are in scope: bare keys, and `local_state.<key>` as every js_transform
+  // writes it (session 1216 wrote the latter, and was hidden on every page).
+  const shown = (option, state) => evalCondition(option.condition, { ...state, local_state: state });
+
   return resolvedOptions.flatMap(option => {
     if (!option.iterator) {
-      return evalCondition(option.condition, localState) ? [resolveOption(option, localState)] : [];
+      return shown(option, localState) ? [resolveOption(option, localState)] : [];
     }
     const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
     return items
       .map(item => ({ ...localState, ...item }))
-      .filter(state => evalCondition(option.condition, state))
+      .filter(state => shown(option, state))
       .map(state => resolveOption(option, state));
   });
 }

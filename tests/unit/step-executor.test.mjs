@@ -1976,6 +1976,21 @@ describe('resolveGateOptions — option condition', () => {
     assert.deepEqual(actions(onPage(1, 1)), ['cancel']);
   });
 
+  it('accepts local_state.<key>, the spelling every js_transform uses (session 1216)', () => {
+    const v7 = {
+      options: [
+        { label: 'Previous Page', action: 'prev_page', on_select: '4',
+          condition: "local_state.page_state.page_meta.is_first_page !== 'yes'" },
+        { label: 'Next Page', action: 'next_page', on_select: '4',
+          condition: "local_state.page_state.page_meta.is_last_page !== 'yes'" },
+      ],
+    };
+    const flags = (first, last) => ({ page_state: { page_meta: { is_first_page: first, is_last_page: last } } });
+    assert.deepEqual(resolveGateOptions(v7, flags('yes', '')).map(o => o.action), ['next_page']);
+    assert.deepEqual(resolveGateOptions(v7, flags('', '')).map(o => o.action), ['prev_page', 'next_page']);
+    assert.deepEqual(resolveGateOptions(v7, flags('', 'yes')).map(o => o.action), ['prev_page']);
+  });
+
   it('does not carry the condition into the resolved option', () => {
     assert.ok(resolveGateOptions(pager, onPage(2, 3)).every(o => o.condition === undefined));
   });
