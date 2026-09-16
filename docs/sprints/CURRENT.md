@@ -1187,6 +1187,35 @@ option). `resolveGateOptions` filters, so a hidden option is neither drawn nor a
 not compile (`gate_option_condition_invalid`) and a condition on the cancel option
 (`gate_option_condition_on_cancel`). 1159 → **1167** unit tests.
 
-**Next:** Novia patches `review_inventory` step 3 with a `condition` on Previous and Next
-(`page_state.page_meta.current_page` against `total_pages`), then the user pages through it from
-Slack. The session 15 list still stands: session 1211's gate, then Track D and Track E.
+**Session 1216 — Novia's v7, applied, and broken in two places.** Asked to hide the pager
+buttons and to keep a selection list across pages, she built both: `merged_selection`, a remove
+field, and the selection shown in the header. The design is sound. Two defects, both confirmed by
+replaying v7 through the real `resolveGateOptions` and `resolveOutputWrites`:
+- **Previous and Next were hidden on every page (Execution, and my Instruction gap).** She wrote
+  `local_state.page_state…`, the form every `js_transform` uses, and the engine put only bare
+  keys in scope. **✅ DONE `1cf7ce6` (deployed, upserted)** — both spellings are in scope, and the
+  contract names both.
+- **The selection is never saved (Generation).** Step 4 returns `merged_selection` and
+  `selected_ids_int`, but its `output_key` is still `nav_result,page_offset`, so both are dropped.
+  Selections vanish on each page change, and Edit/Merge always loops back to step 3 because 5b
+  and 5d read a key nothing writes. Only Exit to Shopping List works. **Open — Novia patches step
+  4's `output_key`.**
+
+**Why her simulation passed (Validation, open).** The data-flow trace sees `input_key` only, not
+`local_state.X` inside an expression. The smoke test ran step 4's default branch, which returns
+only the declared keys, and L2 ran no paths. Two checks proposed, for both directions:
+- **writer:** parse the expression and refuse a returned object literal whose keys fall outside a
+  comma `output_key`, in every branch;
+- **reader:** refuse an expression that reads a `local_state.X` no step writes.
+
+Both must be run against every registered workflow before either may block.
+
+Her memory entry from session 1216 (the `write_memory` call) says v7 works. Correct it once v8 is
+proven.
+
+**Next:**
+1. Novia patches step 4's `output_key` to `nav_result,page_offset,merged_selection,selected_ids_int`.
+   Also ask her to keep the selection until the edit or merge is actually saved (today, cancelling
+   that form loses it). Then the user pages through it from Slack.
+2. The two validation checks above.
+3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
