@@ -1952,6 +1952,89 @@ describe('resolveGateOptions', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gate option condition — a pager's Previous/Next shown only where they lead somewhere
+// ---------------------------------------------------------------------------
+
+describe('resolveGateOptions — option condition', () => {
+  const pager = {
+    step: '3', type: 'human_gate', gate_type: 'form', on_cancel: 'cancel',
+    options: [
+      { label: 'Previous Page', action: 'prev_page', on_select: '4',
+        condition: 'page_state.page_meta.current_page > 1' },
+      { label: 'Next Page', action: 'next_page', on_select: '4',
+        condition: 'page_state.page_meta.current_page < page_state.page_meta.total_pages' },
+      { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+    ],
+  };
+  const onPage = (current, total) => ({ page_state: { page_meta: { current_page: current, total_pages: total } } });
+  const actions = state => resolveGateOptions(pager, state).map(o => o.action);
+
+  it('hides Previous on the first page and Next on the last', () => {
+    assert.deepEqual(actions(onPage(1, 3)), ['next_page', 'cancel']);
+    assert.deepEqual(actions(onPage(2, 3)), ['prev_page', 'next_page', 'cancel']);
+    assert.deepEqual(actions(onPage(3, 3)), ['prev_page', 'cancel']);
+    assert.deepEqual(actions(onPage(1, 1)), ['cancel']);
+  });
+
+  it('does not carry the condition into the resolved option', () => {
+    assert.ok(resolveGateOptions(pager, onPage(2, 3)).every(o => o.condition === undefined));
+  });
+
+  it('a hidden option is absent from the rendered buttons', () => {
+    const dialog  = buildDialog(pager, onPage(1, 3));
+    const buttons = dialog.fields.find(f => f.type === 'actions').buttons.map(b => b.action);
+    assert.deepEqual(buttons, ['next_page', 'cancel']);
+  });
+
+  it('an expression that throws hides the option rather than failing the gate', () => {
+    const broken = { options: [{ label: 'X', action: 'x', on_select: 'next', condition: 'missing.path > 1' }] };
+    assert.deepEqual(resolveGateOptions(broken, {}), []);
+  });
+
+  it('an iterator option evaluates the condition per row', () => {
+    const perRow = {
+      options: [{ label: '{{label}}', value: '{{id}}', iterator: 'rows', on_select: 'next', condition: 'net > 0' }],
+    };
+    const state = { rows: [{ id: 1, label: 'a', net: 5 }, { id: 2, label: 'b', net: -1 }] };
+    assert.deepEqual(resolveGateOptions(perRow, state).map(o => o.value), ['1']);
+  });
+});
+
+describe('L1 — gate option condition', () => {
+  const gateWith = options => [
+    { step: '1', type: 'human_gate', gate_type: 'confirm', on_cancel: 'cancel', options },
+    { step: 'end', type: 'end' },
+  ];
+  const failures = steps => runSimulation({ steps }).static_analysis.issues.map(i => i.failure_class);
+
+  it('accepts a valid condition', () => {
+    const steps = gateWith([
+      { label: 'Go', action: 'confirm', on_select: 'end', condition: 'a.b > 1' },
+      { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+    ]);
+    const found = failures(steps);
+    assert.ok(!found.includes('gate_option_condition_invalid'), found.join(', '));
+    assert.ok(!found.includes('gate_option_condition_on_cancel'), found.join(', '));
+  });
+
+  it('refuses a condition that does not compile — it would hide its option on every run', () => {
+    const steps = gateWith([
+      { label: 'Go', action: 'confirm', on_select: 'end', condition: 'a.b >' },
+      { label: 'Cancel', action: 'cancel', on_select: 'cancel' },
+    ]);
+    assert.ok(failures(steps).includes('gate_option_condition_invalid'));
+  });
+
+  it('refuses a condition on the cancel option', () => {
+    const steps = gateWith([
+      { label: 'Go', action: 'confirm', on_select: 'end' },
+      { label: 'Cancel', action: 'cancel', on_select: 'cancel', condition: 'a > 1' },
+    ]);
+    assert.ok(failures(steps).includes('gate_option_condition_on_cancel'));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resolveDisplayText — the one string in the gate payload nobody resolved
 //
 // Run 776, workflow 358 step 4: button_label "View items ({{parsed_receipt.items.length}})"

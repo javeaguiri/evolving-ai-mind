@@ -657,6 +657,33 @@ export function runLevel1StaticAnalysis(steps) {
         });
       }
 
+      // An option's condition fails closed at runtime — an expression that cannot compile
+      // hides its option on every run, silently. And the cancel option is the one exit a
+      // gate is required to offer, so it may never be conditional.
+      for (const opt of staticOptions(s)) {
+        if (opt?.condition === undefined) continue;
+        if (opt.action === 'cancel' || opt.value === 'cancel') {
+          issues.push({
+            check:         'gate_option_condition_on_cancel',
+            step:          stepKey,
+            failure_class: 'gate_option_condition_on_cancel',
+            detail:        `human_gate step "${stepKey}" puts a condition on its cancel option; the cancel option must always be offered. Remove the condition.`,
+          });
+          continue;
+        }
+        try {
+          if (typeof opt.condition !== 'string') throw new Error('not a string');
+          new vm.Script(`(${opt.condition})`);
+        } catch (e) {
+          issues.push({
+            check:         'gate_option_condition_invalid',
+            step:          stepKey,
+            failure_class: 'gate_option_condition_invalid',
+            detail:        `human_gate step "${stepKey}" option "${opt.action ?? opt.value ?? opt.label}" has a condition that is not a valid JavaScript expression (${e.message}): ${JSON.stringify(opt.condition)}. A condition that cannot be evaluated hides its option on every run.`,
+          });
+        }
+      }
+
       if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
         issues.push({
           check:         'missing_on_cancel',

@@ -47,6 +47,7 @@ import {
   resolveTemplate,
   resolveInput,
   evalItemCondition,
+  evalCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
 import { loadStepTypeContracts } from './step-type-registry.mjs';
@@ -281,6 +282,11 @@ async function executeHumanGate({ step, localState, run, traceId }) {
  * these gates, so the bug stayed hidden until a gate needed a real routing decision.
  * One resolver, one list, no divergence.
  *
+ * An option carrying `condition` is dropped when the expression is false, evaluated
+ * against the same state its label resolves against (local_state, merged with the row
+ * for an iterator option). Dropping it here, not in the renderer, is what makes a hidden
+ * option unanswerable as well as invisible: resumeGate matches against this same list.
+ *
  * @param {object} step        human_gate step definition
  * @param {object} localState
  * @returns {Array}            Fully resolved options, iterator entries expanded
@@ -321,12 +327,18 @@ export function resolveGateOptions(step, localState) {
     ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
     ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
     iterator: undefined,
+    condition: undefined,
   });
 
   return resolvedOptions.flatMap(option => {
-    if (!option.iterator) return [resolveOption(option, localState)];
+    if (!option.iterator) {
+      return evalCondition(option.condition, localState) ? [resolveOption(option, localState)] : [];
+    }
     const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
-    return items.map(item => resolveOption(option, { ...localState, ...item }));
+    return items
+      .map(item => ({ ...localState, ...item }))
+      .filter(state => evalCondition(option.condition, state))
+      .map(state => resolveOption(option, state));
   });
 }
 
