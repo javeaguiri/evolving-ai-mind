@@ -1150,12 +1150,17 @@ Changes:
 - neither dropdown has a default;
 - 9/9a are still `serv_upsert`.
 
-**Next:** `budget_vs_expense_report` v6 → v7 through Novia, in a fresh session, with run 829's id.
-Four Generation defects in v6:
-- step 5's day-32 upper bound;
-- steps 9/9a as `serv_upsert`, which throws on the empty list either can receive (revert to
-  `serv_insert`);
-- step 2's positional parse with no checks;
-- step 1 as free text — a form with year and month fields removes the parse.
+**Next:**
+1. **Resolve session 1211's pending gate** on `budget_vs_expense_report` (v6 → v7). Approving fixes
+   the step 5 date bounds and brings in the year/month dropdowns.
+2. **Follow up with Novia on the three gaps:**
+   - a year list built at run time (`js_transform` + `options_key`) instead of 2025 and 2026;
+   - default selections for both dropdowns;
+   - steps 9/9a back to `serv_insert` (memory 386 now explains why).
 
-This is also v35's first test. Then Track D and Track E.
+   This is the first session on v36 — watch whether she reads `PGC_StepType` by `step_type`
+   rather than whole, and whether a capped read is re-run narrower.
+3. **Run the report from Slack for a month with recurring expenses** to prove v7 end to end.
+4. **Then Track D** (two thresholds, both still 0.4) **and Track E** (`edit_budget` retest).
+
+Runs 809, 810 and 826 remain at `awaiting_human_gate`.
