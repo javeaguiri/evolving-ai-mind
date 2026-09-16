@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { turnSucceeded } from '../../src/proc/minds-eye.mjs';
+import { turnSucceeded, describeTurnAction } from '../../src/proc/minds-eye.mjs';
 
 const procSrc = readFileSync('src/proc/minds-eye.mjs', 'utf8');
 
@@ -86,5 +86,39 @@ describe('where the progress line is emitted', () => {
     assert.ok(fn.length > 0);
     assert.doesNotMatch(fn, /callLlm/);
     assert.match(fn, /reasoning/);
+  });
+});
+
+// Session 1211: two pages of a stored PGC_StepType query were reported as
+// "`read_session_entry` — Read the human_gate step type contract". Both halves were true, and
+// together they read as a contradiction, because the tool name says nothing about what the
+// entry holds.
+describe('what a progress line names', () => {
+
+  it('names an ordinary tool as itself', () => {
+    assert.equal(describeTurnAction('query_table', { count: 3, rows: [] }), '`query_table`');
+  });
+
+  it('names what a recall page is paging, and where', () => {
+    const label = describeTurnAction('read_session_entry', {
+      sequence: 7, tool: 'query_table', total_chars: 55512, offset: 27000, returned_chars: 12000, remaining: 16512,
+    });
+    assert.equal(label, '`read_session_entry` · saved `query_table` result (entry 7), characters 27,000–39,000 of 55,512');
+  });
+
+  it('names a recalled user message as a message, not a tool result', () => {
+    const label = describeTurnAction('read_session_entry', {
+      sequence: 1, tool: null, total_chars: 296, offset: 0, returned_chars: 296, remaining: 0,
+    });
+    assert.match(label, /saved message \(entry 1\), characters 0–296 of 296/);
+  });
+
+  it('falls back to the tool name when the page shape is not the one it knows', () => {
+    assert.equal(describeTurnAction('read_session_entry', { error: 'No entry' }), '`read_session_entry`');
+  });
+
+  it('the progress line uses the label rather than the bare action', () => {
+    const fn = procSrc.match(/async function notifyTurnProgress[\s\S]*?\n\}/)?.[0] ?? '';
+    assert.match(fn, /describeTurnAction\(action, result\)/);
   });
 });
