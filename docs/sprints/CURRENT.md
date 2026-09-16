@@ -1164,3 +1164,29 @@ Changes:
 4. **Then Track D** (two thresholds, both still 0.4) **and Track E** (`edit_budget` retest).
 
 Runs 809, 810 and 826 remain at `awaiting_human_gate`.
+
+### Session 16 — 2026-09-16 — a gate option that knows when it applies
+
+**The request:** `review_inventory` (359 v6) step 3 always shows Previous Page and Next Page,
+even on the first and last page. Step 4 clamps the offset, so the wrong click just re-renders the
+same page. Harmless, but it looks broken.
+
+**Fault domain: Execution.** A list_selection row could already carry
+`item_action.condition`; a gate option could not. Two existing routes were rejected:
+- **`options: "{{…}}"` built at runtime** — the simulator cannot see its `on_select` edges, so step
+  16 (reached only through the "Exit to Shopping List" button) is flagged `unreachable_step` and
+  Novia's patch would be refused.
+- **An `iterator` option over a list of zero or one items** — it works, but uses a list as a
+  boolean. The contract also describes `iterator` as choice-gate only, and the lookup is flat, not
+  by dot path.
+
+**✅ DONE `9f792c2` (deployed, `human_gate` step type upserted).** Any option except the cancel
+option may carry `condition`, evaluated against `local_state` (merged with the row for an iterator
+option). `resolveGateOptions` filters, so a hidden option is neither drawn nor accepted.
+`evalItemCondition` now delegates to a general `evalCondition`. L1 refuses a condition that does
+not compile (`gate_option_condition_invalid`) and a condition on the cancel option
+(`gate_option_condition_on_cancel`). 1159 → **1167** unit tests.
+
+**Next:** Novia patches `review_inventory` step 3 with a `condition` on Previous and Next
+(`page_state.page_meta.current_page` against `total_pages`), then the user pages through it from
+Slack. The session 15 list still stands: session 1211's gate, then Track D and Track E.
