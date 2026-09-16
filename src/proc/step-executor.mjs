@@ -878,11 +878,16 @@ async function executeServInsert({ step, localState, traceId }) {
 /**
  * describeSilentTruncation — did this read lose rows the step never agreed to lose?
  *
- * A step that stated no limit and filled SERV's default one read a cut of the table
- * without asking for a cut. local_state carries a plain array, so the bound cannot
- * survive into it: every downstream step, gate and count treats the partial list as the
- * whole table, and the only symptom is a record that cannot be found. A step that means
- * "the first N" says so with an explicit limit and is left alone.
+ * A step whose read was cut by a bound it never chose — SERV's default, or SERV's
+ * ceiling on a larger request — read a cut of the table without asking for a cut.
+ * local_state carries a plain array, so the bound cannot survive into it: every
+ * downstream step, gate and count treats the partial list as the whole table, and the
+ * only symptom is a record that cannot be found. A step that means "the first N" or
+ * "the N nearest" says so with a limit and is left alone.
+ *
+ * SERV sets `truncated` only when its count found rows beyond the ones returned, so
+ * `total_matching` is always present here. An iterator's item_step carries no step key
+ * of its own; the iterator names itself when it reports the failure.
  *
  * Pure, and exported so the decision can be tested without standing up SERV.
  *
@@ -890,11 +895,15 @@ async function executeServInsert({ step, localState, traceId }) {
  *                         or its bound was the caller's own choice
  */
 export function describeSilentTruncation(resp, stepKey, tableName) {
-  if (!resp?.truncated || resp.limit_applied !== 'default') return null;
-  return `serv_query step "${stepKey}" read ${resp.count} rows from "${tableName}" but ` +
-    `${resp.total_matching ?? 'more'} match — the step declares no input.limit, so SERV's ` +
-    `default of ${resp.limit} silently cut the result. Set an explicit input.limit if a ` +
-    'partial read is intended, or narrow the query with filters so the whole result fits.';
+  if (!resp?.truncated || resp.limit_applied === 'caller') return null;
+  const subject = stepKey === undefined ? 'serv_query item_step' : `serv_query step "${stepKey}"`;
+  const cause = resp.limit_applied === 'ceiling'
+    ? `SERV returns at most ${resp.limit} rows from one read, so its ceiling cut the result. ` +
+      'Narrow the query with filters so the whole result fits.'
+    : `the step declares no limit, so SERV's default of ${resp.limit} cut the result. Set ` +
+      'input.limit (or vectorSearch.limit on a similarity search) if a partial read is ' +
+      'intended, or narrow the query with filters so the whole result fits.';
+  return `${subject} read ${resp.count} rows from "${tableName}" but ${resp.total_matching} match — ${cause}`;
 }
 
 async function executeServQuery({ step, localState, traceId }) {

@@ -29,7 +29,7 @@ import { ok, err }    from '../shared/lambda-utils.mjs';
 import { getClient }  from './init-brain.mjs';
 import { embedText }  from '../shared/embed-client.mjs';
 import { validateReadOnlySql } from './schema.mjs';
-import { normalizeOrderBy, buildOrderClause } from './query-utils.mjs';
+import { normalizeOrderBy, buildOrderClause, resolveReadLimit } from './query-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // Allowed filter operators — security gate.
@@ -100,17 +100,16 @@ async function getRows(req) {
     tableName,
     filters      = [],
     orderBy,
-    limit        = 100,
     vectorSearch = null,
     columns      = null,
   } = req.body;
 
-  // Whether the caller chose this bound or inherited it. A caller that asked for 10
-  // rows and got 10 is reading exactly what it requested; a caller that asked for
-  // nothing and got the default is reading a cut of unknown size. Only the second is
-  // a silent bound, and only PROC can tell the two apart — so the distinction travels
-  // with the response rather than being re-derived downstream.
-  const limitApplied = req.body.limit === undefined ? 'default' : 'caller';
+  // The bound this read applies, and whether the caller chose it or inherited it. A
+  // caller that asked for 10 rows and got 10 is reading exactly what it requested; a
+  // caller that asked for nothing and got the default is reading a cut of unknown size.
+  // Only the second is a silent bound, and only PROC can tell the two apart — so the
+  // distinction travels with the response rather than being re-derived downstream.
+  const { limit: effectiveLimit, chosenBy: limitApplied } = resolveReadLimit(req.body);
 
   if (!tableName) {
     return err(400, 'tableName is required', req.correlationId);
@@ -168,8 +167,6 @@ async function getRows(req) {
       }
     }
 
-    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 100), 1000);
-
     // --- Column projection ---
     // Built once, above the branch: both the vector and the standard path
     // project through it, and both validate against the same schema.
@@ -187,16 +184,17 @@ async function getRows(req) {
     if (target === 'pgd') await dbClient.connect();
 
     let result;
-    // The bound actually applied to this read — the vector path narrows it further.
-    let effectiveLimit = safeLimit;
+    // Every row the read could have returned is described by one WHERE clause and its
+    // values. Each branch records its own, so the boundary count below asks the same
+    // question the read did — including the similarity threshold on the vector path.
+    let matchWhere;
+    let matchValues;
 
     if (vectorSearch) {
       // --- pgvector cosine similarity search ---
       // Embed the query text in SERV — caller supplies plain text only.
       const queryVec      = await embedText(vectorSearch.queryText, req.correlationId);
       const threshold     = vectorSearch.threshold ?? 0.75;
-      const vsLimit       = Math.min(vectorSearch.limit ?? safeLimit, safeLimit);
-      effectiveLimit      = vsLimit;
       const vsCol         = `"${vectorSearch.column}"`;
 
       // Regular filters fill $1..$n; vector is $n+1; threshold is $n+2.
@@ -214,14 +212,12 @@ async function getRows(req) {
         FROM "${tableName}"
         ${combinedWhere}
         ORDER BY ${vsCol} <=> $${vecIdx}::vector
-        LIMIT ${vsLimit}
+        LIMIT ${effectiveLimit}
       `;
 
-      result = await dbClient.query(sql, [
-        ...filterVals,
-        JSON.stringify(queryVec),
-        threshold,
-      ]);
+      matchWhere  = combinedWhere;
+      matchValues = [...filterVals, JSON.stringify(queryVec), threshold];
+      result = await dbClient.query(sql, matchValues);
 
     } else {
       // --- Standard parameterised SELECT ---
@@ -233,26 +229,30 @@ async function getRows(req) {
         SELECT ${selectList} FROM "${tableName}"
         ${whereClause}
         ${orderClause}
-        LIMIT ${safeLimit}
+        LIMIT ${effectiveLimit}
       `;
 
+      matchWhere  = whereClause;
+      matchValues = values;
       result = await dbClient.query(sql, values);
     }
 
-    // A read that filled its limit exactly may have left rows behind. Saying so — and
-    // saying how many — is what separates a bounded view from a silently truncated one:
-    // nothing downstream can otherwise tell a complete answer from a cut one. The extra
-    // COUNT runs only on that boundary, never on an ordinary read, and it must run while
-    // the connection is still open.
-    const truncated = result.rows.length === effectiveLimit;
+    // A read that filled its limit exactly may have left rows behind — or may have
+    // matched exactly that many. Only a count can say which, so a full read is counted
+    // and `truncated` means rows really were withheld; asserting it on the boundary alone
+    // failed every read whose table held exactly the limit. Saying so — and saying how
+    // many — is what separates a bounded view from a silently truncated one: nothing
+    // downstream can otherwise tell a complete answer from a cut one. The COUNT runs only
+    // on that boundary, never on an ordinary read, and it must run while the connection
+    // is still open.
     let totalMatching;
-    if (truncated && !vectorSearch) {
-      const { whereClause, values } = buildWhereClause(filters);
+    if (result.rows.length === effectiveLimit) {
       const countResult = await dbClient.query(
-        `SELECT COUNT(*)::int AS total FROM "${tableName}" ${whereClause}`, values
+        `SELECT COUNT(*)::int AS total FROM "${tableName}" ${matchWhere}`, matchValues
       );
       totalMatching = countResult.rows[0].total;
     }
+    const truncated = totalMatching > result.rows.length;
 
     if (target === 'pgd') await dbClient.end();
 

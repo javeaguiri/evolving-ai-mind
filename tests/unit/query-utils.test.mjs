@@ -4,12 +4,14 @@
 // tests/unit/query-utils.test.mjs
 //
 // Covers src/serv/query-utils.mjs — the shared orderBy interpretation used by
-// table.mjs getRows and entity.mjs listEntities.
+// table.mjs getRows and entity.mjs listEntities, and getRows's read-limit attribution.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeOrderBy, buildOrderClause } from '../../src/serv/query-utils.mjs';
+import {
+  normalizeOrderBy, buildOrderClause, resolveReadLimit, DEFAULT_READ_LIMIT, MAX_READ_LIMIT,
+} from '../../src/serv/query-utils.mjs';
 
 // ---------------------------------------------------------------------------
 // normalizeOrderBy — the forms callers actually send
@@ -155,4 +157,47 @@ test('round trip: SQL string and array forms produce the same clause', () => {
     { column: 'id',       direction: 'asc'  },
   ]));
   assert.equal(fromString, fromArray);
+});
+
+// ---------------------------------------------------------------------------
+// resolveReadLimit — the bound a read applies, and who chose it
+//
+// A full read is only a silent cut when the caller never chose the bound. Run 815 failed
+// because a similarity search's own vectorSearch.limit was reported as SERV's default, so
+// every top-5 search that found 5 rows was refused as truncated.
+// ---------------------------------------------------------------------------
+
+test('resolveReadLimit: no stated limit takes the default', () => {
+  assert.deepEqual(resolveReadLimit({}), { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
+  assert.deepEqual(resolveReadLimit({ vectorSearch: { column: 'c', queryText: 'q' } }),
+    { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
+});
+
+test('resolveReadLimit: an explicit limit is the caller\'s choice', () => {
+  assert.deepEqual(resolveReadLimit({ limit: 10 }), { limit: 10, chosenBy: 'caller' });
+  assert.deepEqual(resolveReadLimit({ limit: '10' }), { limit: 10, chosenBy: 'caller' });
+});
+
+test('resolveReadLimit: a vectorSearch.limit is the caller\'s choice (run 815)', () => {
+  assert.deepEqual(resolveReadLimit({ vectorSearch: { limit: 5 } }), { limit: 5, chosenBy: 'caller' });
+});
+
+test('resolveReadLimit: a stated vectorSearch.limit above the default is honoured, not capped by it', () => {
+  assert.deepEqual(resolveReadLimit({ vectorSearch: { limit: 500 } }), { limit: 500, chosenBy: 'caller' });
+});
+
+test('resolveReadLimit: where both are stated, the tighter one applies', () => {
+  assert.deepEqual(resolveReadLimit({ limit: 8, vectorSearch: { limit: 5 } }), { limit: 5, chosenBy: 'caller' });
+  assert.deepEqual(resolveReadLimit({ limit: 3, vectorSearch: { limit: 5 } }), { limit: 3, chosenBy: 'caller' });
+});
+
+test('resolveReadLimit: a request above the ceiling is bounded by SERV, not by the caller', () => {
+  assert.deepEqual(resolveReadLimit({ limit: 5000 }), { limit: MAX_READ_LIMIT, chosenBy: 'ceiling' });
+  assert.deepEqual(resolveReadLimit({ limit: MAX_READ_LIMIT }), { limit: MAX_READ_LIMIT, chosenBy: 'caller' });
+});
+
+test('resolveReadLimit: an unusable limit is no statement at all', () => {
+  assert.deepEqual(resolveReadLimit({ limit: 'all' }), { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
+  assert.deepEqual(resolveReadLimit({ limit: 0 }),     { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
+  assert.deepEqual(resolveReadLimit({ limit: null }),  { limit: DEFAULT_READ_LIMIT, chosenBy: 'default' });
 });
