@@ -1232,7 +1232,9 @@ selection. It should be left alone and a fresh run started.
 
 **Backlog (`be945d6`):** a tool for Novia to evaluate one step against a state she chooses.
 
+**✅ Confirmed live by the user, 2026-09-16:** `review_inventory` v8 works from Slack.
+
 **Next:**
-1. The user pages through v8 from a fresh run in Slack.
-2. The two validation checks above.
+1. The two validation checks above.
+2. Correct the v7 entry Novia wrote in session 1216, which says v7 worked.
 3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
