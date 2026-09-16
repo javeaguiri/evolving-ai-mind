@@ -30,9 +30,11 @@ import { describe, it }  from 'node:test';
 import assert            from 'node:assert/strict';
 
 import { describeSilentTruncation } from '../../src/proc/step-executor.mjs';
+import { DEFAULT_READ_LIMIT, MAX_READ_LIMIT } from '../../src/serv/query-utils.mjs';
 
 const tableSrc    = readFileSync('src/serv/table.mjs', 'utf8');
 const executorSrc = readFileSync('src/proc/step-executor.mjs', 'utf8');
+const stepTypes   = JSON.parse(readFileSync('src/serv/templates/pgc/seeds/seed_PGC_StepType.json', 'utf8'));
 
 describe('describeSilentTruncation — only the bound nobody asked for is a failure', () => {
 
@@ -140,5 +142,32 @@ describe('the two ends of the contract stay wired together', () => {
   it('executeServQuery acts on the finding rather than logging it', () => {
     assert.match(executorSrc, /const cut = describeSilentTruncation\(resp, step\.step, tableName\);\s*\n\s*if \(cut\) throw new Error\(cut\);/,
       'a warning nobody reads is the silence this replaces');
+  });
+});
+
+// The serv_query contract is the only description of these bounds the model reads. Session 7
+// changed the engine and not the contract, and the error text — wrong on the vector path —
+// became the only account Novia had, which she wrote into memory. The numbers are parsed out
+// of the contract text so a change on either side fails here.
+describe('the serv_query contract states the bounds the engine applies', () => {
+  const contract = stepTypes.find(r => r.step_type === 'serv_query').input_contract;
+  const limitDoc = contract.find(c => c.field === 'input.limit').description;
+  const vsDoc    = contract.find(c => c.field === 'input.vectorSearch').description;
+
+  it('names the default and the ceiling that resolveReadLimit applies', () => {
+    const def = limitDoc.match(/states no limit returns at most (\d+) rows/);
+    const cap = limitDoc.match(/no read returns more than (\d+)/);
+    assert.ok(def && cap, 'the contract must state both bounds');
+    assert.equal(Number(def[1]), DEFAULT_READ_LIMIT);
+    assert.equal(Number(cap[1]), MAX_READ_LIMIT);
+  });
+
+  it('says a cut by an unchosen bound fails the step, and a stated limit does not', () => {
+    assert.match(limitDoc, /fails the step/);
+    assert.match(limitDoc, /reaching it is not a failure/);
+  });
+
+  it('says vectorSearch.limit is the step\'s own bound', () => {
+    assert.match(vsDoc, /limit is the most rows to return, and is the step's own bound exactly as input\.limit is/);
   });
 });

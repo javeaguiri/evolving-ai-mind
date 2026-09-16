@@ -238,6 +238,11 @@ Four properties, and the first is the reason the tool changed:
   body had no `runSimulation` at all — so a repair could leave a workflow in a state
   `register_workflow` would have refused outright, on an array that is already live.
   `simulateForRegistration` is shared with `register_workflow` rather than reimplemented.
+  Every step of the merged array is validated, not only the patched ones, so a latent issue
+  elsewhere refuses the patch too — and a validator defect does the same. She is told both: an
+  empty-patch simulation shows what already fails, and a refusal that contradicts the
+  `PGC_StepType` contract or a step that has run is reported to the user as a suspected Validation
+  defect, never designed around. She triages the validator; she does not troubleshoot it.
 - **`baseVersion` refuses a write onto a workflow that moved.** She reads at T0 and submits at T1;
   the full-array form overwrote anything that landed between with no trace, and could not have done
   otherwise. Refusing is affordable under a patch because recovery is re-reading the few steps
