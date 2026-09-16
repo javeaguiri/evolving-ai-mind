@@ -1656,6 +1656,15 @@ function arrayOfObjectsShape(value) {
   return null;
 }
 
+// serv_insert's `row` is one row object, or an array of row objects written as a single
+// batch (step-executor.mjs executeServInsert → insertRows) — the contract declares
+// object|array. An empty array is a batch of nothing, which SERV accepts as a no-op.
+// Holding it to plainObjectShape refused every batch insert, and once the repair path
+// validated the merged array, that refusal blocked any patch to a workflow holding one.
+function rowOrRowsShape(value) {
+  return Array.isArray(value) ? arrayOfObjectsShape(value) : plainObjectShape(value);
+}
+
 function arrayShape(value) {
   return Array.isArray(value) ? null : 'must be an array';
 }
@@ -1702,7 +1711,7 @@ const STEP_INPUT_CONTRACTS = {
   serv_query:  { filters: filterArrayShape, vectorSearch: vectorSearchShape },
   serv_update: { filters: filterArrayShape, updates: plainObjectShape },
   serv_delete: { filters: filterArrayShape },
-  serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
+  serv_insert: { row: rowOrRowsShape, rows: arrayOfObjectsShape },
   serv_upsert: { rows: arrayOfObjectsShape, matchColumns: arrayOfStringsShape },
 };
 

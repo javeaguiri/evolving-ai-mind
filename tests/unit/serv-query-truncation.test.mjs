@@ -17,6 +17,12 @@
 // A bounded view must carry its own provenance (architecture.md §1.5). local_state holds
 // a plain array and cannot carry it, so the bound is surfaced by failing the step.
 //
+// Corrected 2026-09-16, after the check itself misreported twice. Run 815: a similarity
+// search's own vectorSearch.limit was reported as SERV's default, so a top-5 search that
+// found 5 rows failed as cut. And a read that matched exactly its limit was reported as
+// truncated with "100 match" beside "read 100" — /help's intent-map read stood at 99.
+// `truncated` now means the count found more, and the vector path is counted too.
+//
 // Running: node --test tests/unit/serv-query-truncation.test.mjs
 
 import { readFileSync }  from 'node:fs';
@@ -55,11 +61,38 @@ describe('describeSilentTruncation — only the bound nobody asked for is a fail
     ), null);
   });
 
-  it('still reports when SERV could not supply an exact total', () => {
+  it('fails a read cut by SERV\'s ceiling, which the step asked past but did not choose', () => {
     const msg = describeSilentTruncation(
-      { count: 100, limit: 100, limit_applied: 'default', truncated: true }, '2', 'PGD_Inventory',
+      { count: 1000, limit: 1000, limit_applied: 'ceiling', truncated: true, total_matching: 1400 },
+      '5', 'PGD_Expenses',
     );
-    assert.match(msg, /more match/, 'an unknown total must not silence the finding');
+    assert.ok(msg, 'a larger limit than SERV will return is not a bound the step chose');
+    assert.match(msg, /at most 1000 rows/);
+    assert.match(msg, /1400 match/);
+    assert.doesNotMatch(msg, /declares no limit/, 'the step did declare one');
+  });
+
+  it('says nothing when a similarity search found the nearest N it asked for (run 815)', () => {
+    // SERV attributes vectorSearch.limit to the caller; see resolveReadLimit.
+    assert.equal(describeSilentTruncation(
+      { count: 5, limit: 5, limit_applied: 'caller', truncated: true, total_matching: 12 }, undefined, 'PGD_InventoryAlias',
+    ), null);
+  });
+
+  it('names an iterator item_step without inventing a key for it', () => {
+    const msg = describeSilentTruncation(
+      { count: 100, limit: 100, limit_applied: 'default', truncated: true, total_matching: 140 },
+      undefined, 'PGD_InventoryAlias',
+    );
+    assert.match(msg, /^serv_query item_step read 100 rows/);
+    assert.doesNotMatch(msg, /undefined/);
+  });
+
+  it('names both remedies for a default-bounded read, since a similarity search has its own limit', () => {
+    const msg = describeSilentTruncation(
+      { count: 100, limit: 100, limit_applied: 'default', truncated: true, total_matching: 101 }, '2', 'T',
+    );
+    assert.match(msg, /input\.limit \(or vectorSearch\.limit on a similarity search\)/);
   });
 
   it('tolerates a response shape it does not recognise rather than throwing on it', () => {
@@ -70,16 +103,31 @@ describe('describeSilentTruncation — only the bound nobody asked for is a fail
 
 describe('the two ends of the contract stay wired together', () => {
 
-  it('SERV reports which side chose the limit', () => {
-    assert.match(tableSrc, /limitApplied\s*=\s*req\.body\.limit === undefined \? 'default' : 'caller'/,
+  it('SERV reports which side chose the limit, from the shared attribution', () => {
+    assert.match(tableSrc, /const \{ limit: effectiveLimit, chosenBy: limitApplied \} = resolveReadLimit\(req\.body\);/,
       'PROC can only tell a chosen bound from an inherited one if SERV says which it was');
     assert.match(tableSrc, /limit_applied:\s*limitApplied/);
+    assert.doesNotMatch(tableSrc, /req\.body\.limit === undefined/,
+      'a second attribution rule beside resolveReadLimit is how vectorSearch.limit was misread');
   });
 
-  it('SERV counts what it withheld, on the boundary case only', () => {
-    assert.match(tableSrc, /const truncated = result\.rows\.length === effectiveLimit;/);
-    assert.match(tableSrc, /SELECT COUNT\(\*\)::int AS total FROM/,
-      'the total is what makes the report actionable rather than merely alarming');
+  it('both read paths apply the one resolved limit', () => {
+    assert.equal((tableSrc.match(/LIMIT \$\{effectiveLimit\}/g) ?? []).length, 2,
+      'the vector and standard SELECTs must both be bounded by the attributed limit');
+  });
+
+  it('SERV counts on the boundary, and truncated means the count found more', () => {
+    assert.match(tableSrc, /if \(result\.rows\.length === effectiveLimit\) \{/);
+    assert.match(tableSrc, /SELECT COUNT\(\*\)::int AS total FROM "\$\{tableName\}" \$\{matchWhere\}`, matchValues/,
+      'the count must ask the question the read asked — including the similarity threshold');
+    assert.match(tableSrc, /const truncated = totalMatching > result\.rows\.length;/,
+      'a read that matched exactly its limit is complete, not cut');
+    assert.doesNotMatch(tableSrc, /truncated && !vectorSearch/,
+      'an uncounted vector read left the failure message asserting rows nobody had counted');
+  });
+
+  it('the vector path records the same WHERE and values it queried with', () => {
+    assert.match(tableSrc, /matchWhere\s*=\s*combinedWhere;\s*\n\s*matchValues = \[\.\.\.filterVals, JSON\.stringify\(queryVec\), threshold\];\s*\n\s*result = await dbClient\.query\(sql, matchValues\);/);
   });
 
   it('the count runs before the connection is closed', () => {

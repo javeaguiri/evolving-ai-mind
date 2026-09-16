@@ -225,6 +225,55 @@ describe('L2b data-flow trace — serv_upsert.rows / matchColumns shape', () => 
   });
 });
 
+// serv_insert's contract declares `row` as object|array, and executeServInsert writes an
+// array as one batch. The trace held `row` to a single object, so every batch insert was
+// refused — dormant while the repair path never simulated, and blocking once it did:
+// budget_vs_expense_report steps 9/9a were rewritten as serv_upsert (session 1210) only to
+// get an unrelated step 5 fix past the refusal.
+describe('L2b data-flow trace — serv_insert.row takes one row or a batch', () => {
+  const insertAfter = (expression) => [
+    { step: '1', type: 'js_transform', expression, on_success: 'next', output_key: 'rows_to_insert' },
+    {
+      step: '2', type: 'serv_insert',
+      input: { tableName: 'PGD_Budgets', row: '{{rows_to_insert}}' },
+      on_success: 'next', on_else: 'cancel',
+      output_key: 'inserted',
+    },
+    { step: 'end', type: 'end' },
+  ];
+  const shapeIssue = (result) => result.smoke_test.issues.find(
+    i => i.failure_class === 'serv_input_shape_mismatch' && i.step === '2'
+  );
+
+  it('does not flag an array of row objects', () => {
+    const result = runSimulation({ steps: insertAfter(`[{ year: 2026, month: 9 }, { year: 2026, month: 10 }]`) });
+    assert.equal(shapeIssue(result), undefined, `a batch insert is valid; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('does not flag an empty batch', () => {
+    const result = runSimulation({ steps: insertAfter(`[]`) });
+    assert.equal(shapeIssue(result), undefined, 'an empty batch is a no-op SERV accepts');
+  });
+
+  it('does not flag a single row object', () => {
+    const result = runSimulation({ steps: insertAfter(`({ year: 2026, month: 9 })`) });
+    assert.equal(shapeIssue(result), undefined);
+  });
+
+  it('still flags a batch holding something other than row objects', () => {
+    const result = runSimulation({ steps: insertAfter(`['Groceries', 'Rent']`) });
+    assert.ok(shapeIssue(result), 'bare values are rejected by SERV and must be refused here');
+    assert.match(shapeIssue(result).detail, /each item must be an object/);
+    assert.equal(result.smoke_test.passed, false);
+  });
+
+  it('still flags a scalar row', () => {
+    const result = runSimulation({ steps: insertAfter(`'Groceries'`) });
+    assert.match(shapeIssue(result).detail, /must be a non-null object/);
+  });
+});
+
 describe('L2b data-flow trace — iterator.items_key is a soft warning', () => {
   it('flags a non-array items_key but does not fail the smoke test', () => {
     const steps = [
