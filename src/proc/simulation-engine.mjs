@@ -1732,13 +1732,22 @@ const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
 // leaf of the object/array it is built from — reads a key whose own computation was
 // inconclusive. A nested token is inherited just as much as a top-level one, and the
 // mock value behind it is a placeholder either way.
-function readsUncertainKey(raw, uncertainKeys) {
+//
+// Run input the simulation was not given is inconclusive for the same reason: the caller
+// supplies it, so its shape is unknown here, and an unresolved token otherwise reaches the
+// shape check as its own literal text. Whether a caller supplies it is checked where a run
+// is started. A key a prior step writes is not exempt — a path that misses there is a
+// defect the check must still report.
+function readsUncertainKey(raw, uncertainKeys, mockState) {
   if (typeof raw === 'string') {
     const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
-    return Boolean(bareMatch) && uncertainKeys.has(bareMatch[1].trim().split('.')[0]);
+    if (!bareMatch) return false;
+    const path = bareMatch[1].trim();
+    const base = path.split('.')[0];
+    return uncertainKeys.has(base) || (base === 'input' && resolvePath(mockState, path) === undefined);
   }
-  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys));
-  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys));
+  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys, mockState));
+  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys, mockState));
   return false;
 }
 
@@ -1759,7 +1768,7 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
       // Same reasoning applies to loop-accumulated state a single forward pass
       // over the step array can only partially reconstruct (flat-loop patterns
       // that iterate many times before a downstream step consumes the result).
-      if (readsUncertainKey(raw, uncertainKeys)) continue;
+      if (readsUncertainKey(raw, uncertainKeys, mockState)) continue;
 
       const resolved = resolveInput(raw, mockState);
       const problem = validate(resolved);
@@ -1838,17 +1847,26 @@ function runJsTransformSmokeTest(steps, traceId, stateFlow = {}) {
           if (typeof mockState[k] !== 'number') mockState[k] = 0;
         }
 
-        // When input_key is set, step-executor binds local_state[input_key] as 'items'.
-        // Mirror that here so expressions using 'items' don't throw spurious ReferenceErrors.
+        // When input_key is set, step-executor binds resolvePath(local_state, input_key) as
+        // 'items'. Mirror that here, dot paths included, so expressions using 'items' see
+        // what the engine would hand them — a flat lookup left every "a.b" input_key
+        // undefined in simulation while the engine resolved it.
         const itemsVal = (s.input_key && typeof s.input_key === 'string')
-          ? mockState[s.input_key]
+          ? resolvePath(mockState, s.input_key)
           : undefined;
 
+        // Compile before running. A SyntaxError can also be THROWN by running code —
+        // JSON.parse on a value the mock state cannot supply is the common case — and that
+        // is a data-dependent runtime failure, not a defect in the expression's text.
+        // Classifying by error name alone refused working expressions as unparseable.
+        let compiled = false;
         try {
+          const script  = new vm.Script(`(${expr})`);
+          compiled      = true;
           const sandbox = { local_state: mockState, items: itemsVal };
-          result = vm.runInNewContext(`(${expr})`, sandbox, { timeout: 500 });
+          result = script.runInNewContext(sandbox, { timeout: 500 });
         } catch (err) {
-          if (err.name === 'SyntaxError') {
+          if (!compiled) {
             threwSyntax = true;
             issues.push({
               check:         'js_transform_syntax_error',

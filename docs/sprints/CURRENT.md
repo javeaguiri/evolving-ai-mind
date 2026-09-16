@@ -1090,10 +1090,27 @@ scope is Generation. What she can do is test a refusal against the contract and 
 with the evidence. Three defects in the validation path reached her in one week (sessions 9, 11, 1210). Note
 that a false **pass** (session 11) can only be caught by reading the run, which is why item 1 matters.
 
-**Not fixed, backlogged:** the simulator still fails `update_entity` and `diagnose_prompt_schema`
-on its own mock input (High — neither can be repaired through Novia); the iterator failure
+**Not fixed, backlogged:** the iterator failure
 message names `item.tableName` for every iterator (Low); `dev_scripts/seed_PGC_StepType.mjs`
 would revert all 19 contracts if run (Low).
+
+**Addendum — the last two simulator failures were simulator bugs too.** Neither workflow was broken:
+`diagnose_prompt_schema` completed as run 481, and `update_entity`'s caller always supplies `input.updates`.
+Three defects, all in how the smoke test reads a workflow compared with how the engine runs it:
+
+1. **A runtime `SyntaxError` was reported as unparseable text.** The expression was compiled and
+   run in one call, and the error was classified by name. `JSON.parse` over a mock placeholder
+   throws `SyntaxError` at run time, so steps 2–7 were refused as syntax errors. It now compiles
+   first, and only a compile failure is a syntax error. Latent since May (`457b9dd`).
+2. **Missing run input was shape-checked as its own literal.** `"{{input.updates}}"` resolved to
+   itself and failed the object check. Input the simulation was not given is now inconclusive,
+   like a failed upstream computation. A missed path into a prior step's computed value still
+   refuses — there is a test for exactly that.
+3. **`items` was bound by flat lookup; the engine uses `resolvePath`.** Every dot-path `input_key`
+   (`create_domain` 11, 14, 22a; `diagnose_prompt_schema` 1) was undefined in simulation.
+
+Five tests, three of which fail without the fix. 1143 → **1148**. **Every registered workflow now
+passes L2**, so none is unrepairable through Novia.
 
 **Next:** `budget_vs_expense_report` v6 → v7 through Novia, in a fresh session, with run 829's id.
 Four Generation defects in v6:

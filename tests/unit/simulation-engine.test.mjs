@@ -274,6 +274,91 @@ describe('L2b data-flow trace — serv_insert.row takes one row or a batch', () 
   });
 });
 
+// Three ways the smoke test read a working workflow differently from the engine, found on the
+// two registered workflows it still refused (2026-09-16). Both run: diagnose_prompt_schema
+// completed as run 481, and update_entity's caller always supplies input.updates.
+describe('L2b smoke test — reads a workflow the way the engine runs it', () => {
+  const failuresOn = (result, step) => result.smoke_test.issues.filter(i => i.step === step);
+
+  it('a SyntaxError thrown while running is a runtime warning, not an unparseable expression', () => {
+    // diagnose_prompt_schema steps 2-7: JSON.parse over a value the mock cannot supply.
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_X' }, on_success: 'next', on_else: 'cancel', output_key: 'state' },
+      { step: '2', type: 'js_transform', expression: `(function(){ return JSON.parse(JSON.stringify(items.schema)); })()`,
+        input_key: 'state', on_success: 'next', output_key: 'copy' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '2');
+    assert.match(issue.detail, /not valid JSON/, 'the test must exercise a thrown SyntaxError');
+    assert.equal(issue.failure_class, 'js_transform_runtime_error');
+    assert.equal(issue.severity, 'warning');
+    assert.equal(issue.hard, false);
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('an expression that does not parse is still a hard syntax error', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `(function(){ return ) })()`, on_success: 'next', output_key: 'x' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '1');
+    assert.equal(issue.failure_class, 'js_transform_syntax_error');
+    assert.equal(issue.hard, true);
+    assert.equal(result.smoke_test.passed, false);
+  });
+
+  it('binds items from a dot-path input_key, as the engine does', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ rows: [{ id: 1 }, { id: 2 }] })`, on_success: 'next', output_key: 'plan' },
+      { step: '2', type: 'js_transform', expression: `items.length`, input_key: 'plan.rows', on_success: 'next', output_key: 'row_count' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    assert.deepEqual(failuresOn(result, '2'), [],
+      `items must resolve through the dot path; got: ${JSON.stringify(result.smoke_test.issues)}`);
+  });
+
+  it('does not shape-check run input the simulation was not given (update_entity step 3)', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_update',
+        input: {
+          tableName: 'PGD_X',
+          filters:   [{ column: 'id', op: 'eq', value: '{{input.id}}' }],
+          updates:   '{{input.updates}}',
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'updated',
+      },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    assert.deepEqual(failuresOn(result, '1'), [], 'the caller supplies input; its shape is unknown here');
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('still refuses a token that misses a key a prior step wrote', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ changes: { name: 'x' } })`, on_success: 'next', output_key: 'plan' },
+      {
+        step: '2', type: 'serv_update',
+        input: {
+          tableName: 'PGD_X',
+          filters:   [{ column: 'id', op: 'eq', value: 1 }],
+          updates:   '{{plan.chnages}}',
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'updated',
+      },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '2');
+    assert.equal(issue?.failure_class, 'serv_input_shape_mismatch', 'a typo against a computed value is a real defect');
+    assert.equal(result.smoke_test.passed, false);
+  });
+});
+
 describe('L2b data-flow trace — iterator.items_key is a soft warning', () => {
   it('flags a non-array items_key but does not fail the smoke test', () => {
     const steps = [
