@@ -651,7 +651,7 @@ async function runReasoningLoop({ session, prefs, systemPrompt, layer1Context, l
       call_id: activeCall.call_id,
       // `seq` is the entry this result was just persisted under — the same number the rebuild
       // reads back off the row, so both renderings of a capped result are byte-identical.
-      output:  capOutput(JSON.stringify(result ?? null), seq),
+      output:  capOutput(JSON.stringify(result ?? null), seq, activeCall.name),
     });
   };
 
@@ -1031,6 +1031,22 @@ export function turnSucceeded(result) {
   return true;
 }
 
+/**
+ * The tool part of a progress line.
+ *
+ * A recall page is labelled with what it pages. `read_session_entry` alone reads as "looking
+ * at the conversation", while the entry is usually a stored tool result — session 1211's
+ * pages of a PGC_StepType query were reported beside reasoning about step type contracts,
+ * which was accurate and read as a contradiction. Pure, and exported for tests.
+ */
+export function describeTurnAction(action, result) {
+  if (action !== 'read_session_entry' || typeof result?.total_chars !== 'number') return `\`${action}\``;
+  const n    = v => Number(v).toLocaleString('en-US');
+  const what = result.tool ? `saved \`${result.tool}\` result` : 'saved message';
+  const end  = result.offset + result.returned_chars;
+  return `\`${action}\` · ${what} (entry ${result.sequence}), characters ${n(result.offset)}–${n(end)} of ${n(result.total_chars)}`;
+}
+
 async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, result }) {
   if (!callback) return;
   if (!turnSucceeded(result)) {
@@ -1039,9 +1055,10 @@ async function notifyTurnProgress({ callback, traceId, turn, action, reasoning, 
   }
 
   const detail = String(reasoning ?? '').trim();
+  const label  = describeTurnAction(action, result);
   const line   = detail
-    ? `_Turn ${turn} · \`${action}\`_ — ${detail}`
-    : `_Turn ${turn} · \`${action}\`_`;
+    ? `_Turn ${turn} · ${label}_ — ${detail}`
+    : `_Turn ${turn} · ${label}_`;
 
   await enqueueCallback(callback, {
     type:    'HUMAN_NOTIFICATION',
@@ -2407,6 +2424,20 @@ const MAX_TOOL_OUTPUT_CHARS = 15000;
 // called to recover, and the model would have no way to tell the two truncations apart.
 const MAX_RECALL_CHARS = 12000;
 
+// How each re-runnable read tool is asked for less — only the arguments its schema accepts.
+// A tool absent here (a simulation, a prompt, a recalled page) has no narrower form.
+const NARROWER_READ = {
+  query_table:          'call query_table again with `columns` naming only the fields you need, or `filters` selecting only the rows you need',
+  query_entity:         'call query_entity again with narrower `filters` or a smaller `limit`',
+  read_memory:          'call read_memory again with narrower `filters` or a smaller `limit`',
+  read_workflow:        'call read_workflow again with `outline: true`, or `steps` naming only the steps you need',
+  run_sql:              'call run_sql again with a SELECT that returns only the columns and rows you need',
+  list_tables:          'call list_tables again with `domain` or `prefix`',
+  list_physical_tables: 'call list_physical_tables again with `prefix`',
+  list_capabilities:    'call list_capabilities again with `category` or `status`',
+  list_schedules:       'call list_schedules again with `workflowName`',
+};
+
 const AWAITING_APPROVAL_OUTPUT = JSON.stringify({ status: 'awaiting_approval' });
 
 // A respond whose round ended without the user typing anything back. The call is real and the
@@ -2429,15 +2460,27 @@ const RESPONSE_DELIVERED_OUTPUT = JSON.stringify({ status: 'delivered_to_user' }
  * forfeiting the round's cache credit. Both paths know the sequence number, so the function
  * stays pure and both renderings stay byte-identical.
  *
- * @param {string} text   The serialised tool result
- * @param {number} [seq]  Sequence number of the entry holding the full result
+ * A read that can be asked for less is pointed at the narrower read first. The source is live
+ * and the stored result is a snapshot, and paging a snapshot to find one record costs far more
+ * than asking for that record: session 1211 paged 24,000 characters of a 55,512-character
+ * step-type dump to reach one contract a `step_type` filter would have returned. Paging stays
+ * the fallback, and the only route for a result that cannot be asked for in part. The tool is
+ * known on both render paths — the in-round call's name and the stored entry's `tool` — so the
+ * two renderings stay byte-identical.
+ *
+ * @param {string} text    The serialised tool result
+ * @param {number} [seq]   Sequence number of the entry holding the full result
+ * @param {string} [tool]  The tool that produced it
  */
-function capOutput(text, seq) {
+export function capOutput(text, seq, tool) {
   if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text;
+  const narrower = NARROWER_READ[tool] ? ` To see only what you need, ${NARROWER_READ[tool]}.` : '';
   const recall = seq === undefined || seq === null
     ? ''
-    : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
-  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${recall}]`;
+    : narrower
+      ? ` The full result is also stored as session entry sequence ${seq}; read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) pages it when a narrower read cannot express what you need.`
+      : ` The full result is session entry sequence ${seq} — call read_session_entry({ sequence: ${seq}, offset: ${MAX_TOOL_OUTPUT_CHARS} }) to read the rest.`;
+  return `${text.slice(0, MAX_TOOL_OUTPUT_CHARS)} ...[truncated: ${MAX_TOOL_OUTPUT_CHARS} of ${text.length} characters shown.${narrower}${recall}]`;
 }
 
 /**
@@ -2577,7 +2620,7 @@ export function toInputItems(workingHistory = []) {
     // The entry a gate resolves into carries the same action as the pending call, so it
     // becomes that call's output rather than a second call.
     if (pending && pending.name === parsed.tool) {
-      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number));
+      closePending(capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool));
       return;
     }
 
@@ -2595,7 +2638,7 @@ export function toInputItems(workingHistory = []) {
     items.push({
       type:    'function_call_output',
       call_id: replayedId ?? callId,
-      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number),
+      output:  capOutput(JSON.stringify(parsed.result ?? null), entry?.sequence_number, parsed.tool),
     });
   });
 

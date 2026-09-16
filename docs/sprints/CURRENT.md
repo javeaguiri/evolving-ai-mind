@@ -1112,6 +1112,44 @@ Three defects, all in how the smoke test reads a workflow compared with how the 
 Five tests, three of which fail without the fix. 1143 → **1148**. **Every registered workflow now
 passes L2**, so none is unrepairable through Novia.
 
+**Addendum — session 1211, and a transcript read that looked like a contract read.** Novia's
+v6 → v7 patch (pending the user's approval) fixes the date bounds properly and replaces the text
+box with a form of two dropdowns. Its progress lines read *"`read_session_entry` — Read the
+human_gate step type contract"*, which the user flagged as a contradiction. **It was accurate.**
+
+How it happened:
+- Her targeted query filtered `PGC_StepType` on `type` (the column is `step_type`) and failed.
+  Failed turns are not reported, so the user never saw it.
+- She fell back to the full-registry query her instructions prescribe: 55,512 characters
+  against the 15,000 cap. human_gate (17.4K) starts near 29,500, entirely past the cut.
+- She paged session entry 7 — the stored query result — twice, and stopped at the contract.
+
+Session 1189 did the same with a 52K copy. The design worked; the instruction did not. The
+user's objection — *sessions are transcripts, not contracts* — pointed at the better fix: a read
+that can be re-run narrower should be, because the source is live and the stored result is a
+snapshot.
+
+Changes:
+- `capOutput` offers a re-runnable read its narrower form first, naming only arguments its
+  schema accepts, and keeps the recall page as the fallback. The tool name is known on both
+  render paths, so in-round and rebuilt output stay byte-identical (tested).
+- The progress line names what a recall page holds: *saved `query_table` result (entry 7),
+  characters 27,000–39,000 of 55,512*.
+- `minds_eye_system_prompt` **v36** and `workflow_convention_bridge` **v4**: the column is
+  `step_type`; the catalog is read with `columns` (~10K) and contracts are filtered by
+  `step_type`. Both queries were probed live.
+- Memory **386** corrected. The `-32` bound never worked; `type` was not silently ignored
+  (`insertRow` rejects unknown columns); and 9/9a became `serv_upsert` only because of the
+  simulator defect, and fail on an empty list.
+
+1148 → **1159** unit tests.
+
+**Her patch has three gaps**, to send as a follow-up after approving:
+- the year options are hard-coded to 2025 and 2026, though the request was *2025 to current
+  year*;
+- neither dropdown has a default;
+- 9/9a are still `serv_upsert`.
+
 **Next:** `budget_vs_expense_report` v6 → v7 through Novia, in a fresh session, with run 829's id.
 Four Generation defects in v6:
 - step 5's day-32 upper bound;

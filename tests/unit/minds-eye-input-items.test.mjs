@@ -13,7 +13,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { toInputItems } from '../../src/proc/minds-eye.mjs';
+import { toInputItems, capOutput } from '../../src/proc/minds-eye.mjs';
 
 const user      = (seq, content) => ({ role: 'user', content, sequence_number: seq });
 const assistant = (seq, message) => ({ role: 'assistant', sequence_number: seq, content: JSON.stringify({ action: 'respond', message, reasoning: 'r', advisory: 'a' }) });
@@ -351,6 +351,51 @@ describe('toInputItems — replayed gateway items', () => {
     const items = toInputItems([tool(42, 'query_table', {}, { rows: 'y'.repeat(40000) })]);
     assert.match(items[1].output, /session entry sequence 42/);
     assert.match(items[1].output, /read_session_entry\(\{ sequence: 42, offset: 15000 \}\)/);
+  });
+
+  // Session 1211 paged 24,000 characters of a 55,512-character PGC_StepType dump to reach one
+  // contract that a step_type filter would have returned whole. A read that can be asked for
+  // less is pointed there first; the stored copy is the fallback.
+  it('points a re-runnable read at its narrower form before the recall page', () => {
+    const items = toInputItems([tool(7, 'query_table', { tableName: 'PGC_StepType' }, { rows: 'y'.repeat(40000) })]);
+    const out   = items[1].output;
+    assert.match(out, /call query_table again with `columns`/);
+    assert.match(out, /read_session_entry\(\{ sequence: 7, offset: 15000 \}\) pages it when a narrower read cannot express what you need/);
+    assert.ok(out.indexOf('call query_table again') < out.indexOf('read_session_entry'), 'narrowing is offered first');
+  });
+
+  it('names each narrowable read by the arguments its schema accepts', () => {
+    const big = 'y'.repeat(40000);
+    assert.match(capOutput(big, 3, 'read_workflow'), /`outline: true`, or `steps`/);
+    assert.match(capOutput(big, 3, 'read_memory'),   /narrower `filters` or a smaller `limit`/);
+    assert.match(capOutput(big, 3, 'run_sql'),       /a SELECT that returns only the columns and rows you need/);
+  });
+
+  it('offers only the recall page for a result that has no narrower form', () => {
+    const out = capOutput('y'.repeat(40000), 9, 'simulate_workflow');
+    assert.doesNotMatch(out, /To see only what you need/);
+    assert.match(out, /session entry sequence 9 — call read_session_entry\(\{ sequence: 9, offset: 15000 \}\) to read the rest/);
+  });
+
+  it('still offers the narrower read when there is no entry to recall', () => {
+    const out = capOutput('y'.repeat(40000), null, 'query_table');
+    assert.match(out, /call query_table again/);
+    assert.doesNotMatch(out, /read_session_entry/);
+  });
+
+  it('renders a capped result identically in-round and on rebuild', () => {
+    // In-round the loop passes the call's name; the rebuild passes the stored entry's tool.
+    const result = { rows: 'q'.repeat(40000) };
+    const inRound = capOutput(JSON.stringify(result), 5, 'query_table');
+    const rebuilt = toInputItems([tool(5, 'query_table', {}, result)])[1].output;
+    assert.equal(rebuilt, inRound);
+  });
+
+  it('passes the tool at every render site', () => {
+    const src   = readFileSync('src/proc/minds-eye.mjs', 'utf8');
+    const calls = src.match(/capOutput\(JSON\.stringify\((?:result|parsed\.result) \?\? null\), [^)]*\)/g) ?? [];
+    assert.equal(calls.length, 3);
+    for (const c of calls) assert.match(c, /, (activeCall\.name|parsed\.tool)\)$/, c);
   });
 
   it('renders the same history to the same bytes every time', () => {
