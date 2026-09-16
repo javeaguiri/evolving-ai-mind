@@ -601,8 +601,8 @@ options that carry `iterator` (tokens resolve at runtime against each item).
 ###### `condition` on options
 
 Any option except the cancel option may carry `condition` — a JavaScript expression
-evaluated against `local_state` (for an `iterator` option, against `{...localState, ...item}`
-per row). The option is kept only while the expression is true. `resolveGateOptions` does
+over `local_state` (for an `iterator` option, `{...localState, ...item}` per row). Keys are in
+scope both bare and as `local_state.<key>`, the spelling a `js_transform` uses. The option is kept only while the expression is true. `resolveGateOptions` does
 the filtering, and both `buildDialog` and `resumeGate` read its list, so a hidden option is
 neither rendered nor accepted as an answer. An expression that throws hides the option.
 L1 refuses a condition that does not compile (`gate_option_condition_invalid`) and a
