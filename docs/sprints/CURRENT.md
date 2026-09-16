@@ -1234,7 +1234,23 @@ selection. It should be left alone and a fresh run started.
 
 **✅ Confirmed live by the user, 2026-09-16:** `review_inventory` v8 works from Slack.
 
-**Next:**
-1. The two validation checks above.
-2. Correct the v7 entry Novia wrote in session 1216, which says v7 worked.
+**Session 16 close — recommendations for next time:**
+1. **The two Validation checks** (Claude). Neither may block until it has been swept across every
+   registered workflow and any false positives are fixed (validator-first rule).
+   - **Writer:** parse the `js_transform` (acorn) and refuse a returned object-literal key that is
+     missing from a comma `output_key`, in every branch. An object built key by key is reported as
+     not checkable, not as a failure.
+   - **Reader:** refuse an expression that reads a `local_state.X` no step writes.
+2. **Correct the v7 entry Novia wrote in session 1216** (it says v7 worked). Decide first who
+   writes it: Novia, or Claude.
+3. **Session 1211's pending gate** on `budget_vs_expense_report` v6 → v7, then its three gaps
+   (a run-time year list, dropdown defaults, 9/9a back to `serv_insert`), then a Slack run for a
+   month with recurring expenses. See session 15.
+4. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
+5. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
+   selection. Keep it until the edit or merge is saved.
+6. **Backlog, feeding AC6:** a tool for Novia to evaluate one step against a state she chooses
+   (`be945d6`). Weigh it when AC6 is decided.
+
+Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
 3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
