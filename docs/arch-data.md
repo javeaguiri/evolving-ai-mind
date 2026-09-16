@@ -1008,7 +1008,7 @@ DML executor gated by `PGC_TableMap`. All four operations live.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended |
+| `/api/v1/serv/table/getRows` | POST | Parameterised SELECT — `filters`, `orderBy`, `limit`, plus an optional `columns` projection and an optional `vectorSearch` descriptor. Both are honoured together: `columns` projects on the vector path as well as the standard one, with `similarity` appended. Every response carries `limit` and `limit_applied` (`caller` when `limit` or `vectorSearch.limit` was stated, `default`, or `ceiling`); a read that fills its limit is counted, returning `total_matching`, and `truncated: true` only when the count exceeds the rows returned (`query-utils.mjs` `resolveReadLimit`) |
 | `/api/v1/serv/table/insertRow` | POST | Single INSERT RETURNING * — gated by `allow_insert` |
 | `/api/v1/serv/table/updateRows` | POST | Parameterised UPDATE RETURNING * — gated by `allow_update` |
 | `/api/v1/serv/table/deleteRows` | POST | Parameterised DELETE — gated by `allow_delete` |

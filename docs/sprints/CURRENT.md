@@ -1039,3 +1039,68 @@ parallel.
 claude.ai Google connectors were removed. Claude Code 2.1.270 is current.
 
 **Next:** unchanged — Track D (two thresholds, both still 0.4) and Track E (`edit_budget` retest).
+
+### Session 15 — 2026-09-16 — two regressions of ours, and the instructions that hid them
+
+**No Track advanced; this was a regression review, requested after session 1210.** The user had
+Novia repair `budget_vs_expense_report` for the silent-cut failure (run 827), after session 1201
+had repaired `process_receipt` for what looked like the same failure (run 815). v6 then failed on
+every input (runs 828–832), including the two runs entered year-first.
+
+**What we broke, all confirmed against live data and older simulator trees:**
+
+| # | Fault domain | Source | Effect |
+|---|---|---|---|
+| 1 | Execution | `c9d0f12` (session 7) | `getRows` attributed the bound from `req.body.limit` only, so a `vectorSearch.limit` read as SERV's default. Every top-k search that found k rows failed — run 815, with a message claiming "SERV's default of 5", "more match" (never counted) and step "undefined" |
+| 2 | Execution | `c9d0f12` | `truncated` was set on the boundary and never compared to the total, so a read matching exactly its limit failed. `/help`'s step 1c read stood at **99** |
+| 3 | Validation | `0de88be` (July), made blocking by `032a4d2` (Track A) | L2 held `serv_insert.row` to a single object; the contract and executor accept a batch. v5 fails under every simulator back to August. Session 1210 rewrote 9/9a as `serv_upsert` only to get an unrelated step-5 fix past it. `create_workflow` step 36 failed the same way |
+
+Run 827 was a **true** cut: step 5 read all 102 expenses with no month filter. The check did its
+job there — but Session 7 named that step at 92 rows and left it.
+
+**Fixed and deployed (`c8ec0c0`).** `resolveReadLimit` in `query-utils.mjs` — pure, shared, and the
+only attribution rule: `caller` for either limit (tighter wins), `default`, or `ceiling` above
+1000. Both read paths count on the boundary with the same WHERE and values, and `truncated` means
+the count found more. The simulator accepts a row object or an array of them. Probed live: top-5
+vector → `caller`; 99 of 99 → not truncated; 102 expenses → cut at 100; 5000 requested → `ceiling`.
+Reconstructed v5 and `create_workflow` now pass L2.
+
+**The instruction layer, and the user was right to ask.** The first review covered engine and
+Generation and skipped Novia's own instructions. Five gaps, all fixed:
+
+1. The repair protocol never told her to read a run. 1210 had *runId 827* and never read it —
+   step 2's output (`report_year: 9, report_month: 2026`) was one query away.
+2. Nothing covered a validator refusal that contradicts the contract. She read `serv_insert`'s
+   contract twice, was refused anyway, and redesigned around it.
+3. Nothing said every step of the merged array is validated, not only hers.
+4. The `serv_query` contract never learned session 7's behaviour — the Sprint 11 corollary
+   (a bound in code needs its instruction twin) missed a second time.
+5. The wrong error text became memory rows **373** and **375**.
+
+`minds_eye_system_prompt` **v35**: read the run when the cause is not already evident (**no fixed
+order**, at the user's direction); every step is validated; a refusal that contradicts
+`PGC_StepType` or a run is reported, never designed around. `sop_fix_authority` **v2**: Validation
+defects escalate. `serv_query` contract: the default, the ceiling, failure on an unchosen cut, and
+`vectorSearch.limit` as the step's own bound — asserted against `resolveReadLimit` by a conformance
+test. Memory 373 and 375 corrected in place. 1123 → **1143** unit tests.
+
+**Decided: Novia triages the validator; she does not troubleshoot it.** The user asked whether she
+should start debugging her own harness. No — she cannot read or change `.mjs`, and her correction
+scope is Generation. What she can do is test a refusal against the contract and the run, and stop
+with the evidence. Three defects in the validation path reached her in one week (sessions 9, 11, 1210). Note
+that a false **pass** (session 11) can only be caught by reading the run, which is why item 1 matters.
+
+**Not fixed, backlogged:** the simulator still fails `update_entity` and `diagnose_prompt_schema`
+on its own mock input (High — neither can be repaired through Novia); the iterator failure
+message names `item.tableName` for every iterator (Low); `dev_scripts/seed_PGC_StepType.mjs`
+would revert all 19 contracts if run (Low).
+
+**Next:** `budget_vs_expense_report` v6 → v7 through Novia, in a fresh session, with run 829's id.
+Four Generation defects in v6:
+- step 5's day-32 upper bound;
+- steps 9/9a as `serv_upsert`, which throws on the empty list either can receive (revert to
+  `serv_insert`);
+- step 2's positional parse with no checks;
+- step 1 as free text — a form with year and month fields removes the parse.
+
+This is also v35's first test. Then Track D and Track E.
