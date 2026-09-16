@@ -1213,9 +1213,26 @@ Both must be run against every registered workflow before either may block.
 Her memory entry from session 1216 (the `write_memory` call) says v7 works. Correct it once v8 is
 proven.
 
+**✅ DONE — v8 (session 1216, continued, from run 839).** She went to the run first (`run_sql` on
+`PGC_WorkflowRunStep`), then fixed step 4 by writing a single `nav_state` object instead of widening
+the comma list. She moved all five of its readers with it (2, 5a, 5b, 5d; 12/12b still read
+`selection_meta`, which 5d writes). Driven through the real sandbox, `resolveOutputWrites` and
+`resolveGateOptions` over 120 items:
+- add on page 1, then add one and remove one on page 2: the header and remove list follow;
+- Previous and Next are right on pages 1, 2 and 3;
+- Edit/Merge takes `[1, 60, 61]` through 5b and 5d as a multi-select;
+- the selection is empty afterwards and the page is kept.
+
+Her memory entry for v8 is accurate; the v7 entry still claims v7 worked.
+
+**Not addressed:** cancelling the edit or merge form still loses the selection (Edit/Merge clears it
+before the form is saved). **Run 839** was started on v7 and is still waiting at a gate. Runs load
+steps by name at every step, so resuming it runs v8 against v7's state and starts from an empty
+selection. It should be left alone and a fresh run started.
+
+**Backlog (`be945d6`):** a tool for Novia to evaluate one step against a state she chooses.
+
 **Next:**
-1. Novia patches step 4's `output_key` to `nav_result,page_offset,merged_selection,selected_ids_int`.
-   Also ask her to keep the selection until the edit or merge is actually saved (today, cancelling
-   that form loses it). Then the user pages through it from Slack.
+1. The user pages through v8 from a fresh run in Slack.
 2. The two validation checks above.
 3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
