@@ -12,6 +12,7 @@
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 import vm from 'vm';
+import * as acorn from 'acorn';
 import { resolveInput, resolvePath } from './template-resolver.mjs';
 import { resolveOutputWrites }       from './state-utils.mjs';
 
@@ -543,6 +544,14 @@ export function runLevel1StaticAnalysis(steps) {
   const writtenByStep = {};   // { [key]: first_step_key_that_wrote_it }
   const allReadsEver  = new Set(); // union of all reads across all steps
 
+  // Expression reads of `local_state.X`, held until the loop ends. Unlike the template
+  // check, which asks whether a key was written by a step ABOVE this one, this one asks
+  // only whether ANY step writes it — a strictly weaker question, and deliberately so.
+  // Workflows loop backwards (a gate routes to an earlier step), so a key written later
+  // in array order is legitimately read earlier at run time. Refusing on position would
+  // fire on correct designs, and a false refusal blocks the repair loop itself.
+  const expressionReads = [];  // [{ stepKey, key, source }]
+
   // Value-shape tracking, for the numeric-index check below. Only two verdicts are
   // worth carrying: a key whose every writer produces a non-array, and everything else.
   //
@@ -1052,6 +1061,35 @@ export function runLevel1StaticAnalysis(steps) {
       }
     }
 
+    // Collect reads made inside expressions. Every expression the engine evaluates
+    // against local_state is covered: a js_transform's and a condition's own
+    // expression, and the `condition` a gate option or an item_action may carry
+    // (both are evaluated by evalCondition against local_state). A hidden option is
+    // the quietest failure of the three — an option whose condition names a key
+    // nothing writes is never drawn and never accepted, on every run.
+    const expressionsOnStep = [];
+    if ((s.type === 'js_transform' || s.type === 'condition') && typeof s.expression === 'string') {
+      expressionsOnStep.push({ expr: s.expression, source: 'expression' });
+    }
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
+      if (typeof opt.condition === 'string') {
+        expressionsOnStep.push({ expr: opt.condition, source: `option "${opt.action ?? opt.value ?? opt.label}" condition` });
+      }
+    }
+    if (typeof s.item_action?.condition === 'string') {
+      expressionsOnStep.push({ expr: s.item_action.condition, source: 'item_action condition' });
+    }
+    for (const { expr, source } of expressionsOnStep) {
+      const { keys, dynamic } = collectExpressionStateReads(expr);
+      if (dynamic) continue;   // the keys reached are not knowable from the text
+      for (const key of keys) {
+        if (key === 'item') continue;   // iterator-scoped binding, not a local_state key
+        stepReads.add(key);
+        allReadsEver.add(key);
+        expressionReads.push({ stepKey, key, source });
+      }
+    }
+
     // Collect writes — step-level output_key.
     // Comma-separated output_key registers each listed key individually.
     // Non-string output_key is a workflow defect — report as error.
@@ -1112,6 +1150,47 @@ export function runLevel1StaticAnalysis(steps) {
     }
 
     stateFlow[stepKey] = { reads: [...stepReads].sort(), writes: [...stepWrites].sort() };
+  }
+
+  // An expression that reads a local_state key no step writes.
+  //
+  // The denominator is every write the engine can make, which is wider than
+  // writtenByStep: an iterator's item_step writes its own output_key into the item's
+  // local_state, and resumeGate merges that state back onto the parent frame
+  // (run-workflow.mjs — the item binding is stripped, the rest survives), so the key
+  // IS readable afterwards. Counting only top-level writes would refuse a workflow
+  // that collects answers through an iterated gate.
+  const writableKeys = new Set(Object.keys(writtenByStep));
+  writableKeys.add('input');   // the root frame is seeded with { input: run.input }
+  for (const s of steps) {
+    const nested = s?.item_step;
+    if (!nested || typeof nested !== 'object') continue;
+    for (const field of ['output_key', 'action_key']) {
+      if (typeof nested[field] !== 'string') continue;
+      for (const raw of nested[field].split(',')) {
+        const base = raw.trim().split('.')[0];
+        if (base) writableKeys.add(base);
+      }
+    }
+  }
+
+  const seenExprReads = new Set();
+  for (const { stepKey, key, source } of expressionReads) {
+    if (writableKeys.has(key)) continue;
+    const dedupe = `${stepKey}::${key}`;
+    if (seenExprReads.has(dedupe)) continue;
+    seenExprReads.add(dedupe);
+    issues.push({
+      check:         'expression_reads_unwritten_key',
+      step:          stepKey,
+      failure_class: 'expression_reads_unwritten_key',
+      detail:        `Step "${stepKey}" ${source} reads "local_state.${key}", but no step writes "${key}". ` +
+                     `It resolves to undefined on every run — silently, because an expression reading a missing key ` +
+                     `does not fail. If the value comes from the run's input it is "local_state.input.${key}"; ` +
+                     `otherwise write "${key}" from the step that produces it, or read the key that step does write. ` +
+                     `Keys available: ${[...writableKeys].sort().join(', ')}`,
+      suggestion:    findClosestKey([...writableKeys], key),
+    });
   }
 
   // Keys written by any step but never referenced in any step's declared inputs.
@@ -1643,6 +1722,66 @@ function inferMockIndexKeys(expr) {
   let m;
   while ((m = re.exec(expr)) !== null) keys.add(m[1]);
   return keys;
+}
+
+// Which local_state keys does an expression READ?
+//
+// The data-flow trace collects reads from {{tokens}}, input_key and items_key. An
+// expression reading `local_state.X` was invisible to it in both directions: the key
+// was not recorded as a read, so nothing could ask whether any step writes it, and
+// `readersOf` could not see the reader when deciding how serious a dropped write was.
+// review_inventory v7 is the specimen — step 4 returned merged_selection against an
+// output_key that did not declare it, steps 5b/5d read `local_state.merged_selection`,
+// and L0/L1/L2 passed the workflow because every reader was an expression reader.
+//
+// Parsed rather than pattern-matched: a regex cannot tell `local_state.foo` from the
+// same text inside a string literal, and a false refusal here blocks the repair loop
+// that would fix it.
+//
+// `dynamic` is the honest verdict when the expression takes hold of `local_state`
+// itself — destructured, passed to a function, or indexed by a computed value. The
+// keys reached that way are not knowable from the text, so the caller reports nothing
+// rather than guessing.
+function collectExpressionStateReads(expr) {
+  const keys = new Set();
+  if (typeof expr !== 'string' || !expr.trim()) return { keys, dynamic: false, parsed: false };
+
+  let ast;
+  try {
+    // Wrapped the same way the smoke test and step-executor compile it.
+    ast = acorn.parse(`(${expr})`, { ecmaVersion: 2022 });
+  } catch {
+    // Unparseable text is js_transform_syntax_error's business, not this check's.
+    return { keys, dynamic: false, parsed: false };
+  }
+
+  let dynamic = false;
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    if (!node.type) return;
+
+    if (node.type === 'MemberExpression' && node.object?.type === 'Identifier' && node.object.name === 'local_state') {
+      if (!node.computed && node.property?.type === 'Identifier')      keys.add(node.property.name);
+      else if (node.computed && node.property?.type === 'Literal')     keys.add(String(node.property.value));
+      else                                                             dynamic = true;
+    }
+    // `local_state` used as a value in its own right — the keys it yields are not
+    // recoverable from the expression text.
+    if (node.type === 'VariableDeclarator' && node.init?.type === 'Identifier' && node.init.name === 'local_state') dynamic = true;
+    if (node.type === 'CallExpression') {
+      for (const a of node.arguments ?? []) if (a?.type === 'Identifier' && a.name === 'local_state') dynamic = true;
+    }
+    if (node.type === 'SpreadElement' && node.argument?.type === 'Identifier' && node.argument.name === 'local_state') dynamic = true;
+
+    for (const k of Object.keys(node)) {
+      if (k === 'type' || k === 'start' || k === 'end') continue;
+      visit(node[k]);
+    }
+  };
+  visit(ast);
+
+  return { keys, dynamic, parsed: true };
 }
 
 // ---------------------------------------------------------------------------

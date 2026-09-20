@@ -99,6 +99,16 @@ describe('L2b data-flow trace — inconclusive upstream data suppresses downstre
     // smoke test cannot meaningfully mock — the expression throws because
     // round_state was never seeded, not because the workflow is broken.
     const steps = [
+      // round_state is seeded by a real step, as it is in the workflow this models —
+      // the accumulator exists, it just does not hold cards_remaining until several real
+      // loop iterations have run, which is what makes step 1 inconclusive rather than
+      // broken. Without a writer the array is refused at L1 and the smoke test never runs.
+      {
+        step: '0', type: 'js_transform',
+        expression: `(function() { return { round: 1 }; })()`,
+        on_success: 'next',
+        output_key: 'round_state',
+      },
       {
         step: '1', type: 'js_transform',
         expression: `local_state.round_state.cards_remaining.map(function(c){ return { id: c.id }; })`,
@@ -1019,7 +1029,11 @@ describe('L2b data-flow trace — serv_query.vectorSearch shape (run 763 reprodu
     const steps = [
       {
         step: '1', type: 'js_transform',
-        expression: `(function() { return local_state.never_written.deep.value; })()`,
+        // Read through `input` — always seeded, so L1 accepts the array — while the
+        // path below it is still absent, so the expression throws and the step stays
+        // inconclusive. A bare unwritten key is refused at L1 now, and L1 short-circuits
+        // the very check this test is about.
+        expression: `(function() { return local_state.input.never_written.deep.value; })()`,
         on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
       },
       brokenSteps[1],
@@ -1432,5 +1446,153 @@ describe('runSimulation — error_summary severity', () => {
       errors.some(l => l.includes('missing_key')),
       `the unresolved template must be the unmarked line:\n${result.error_summary}`
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// expression_reads_unwritten_key
+//
+// The data-flow trace collected reads from {{tokens}}, input_key and items_key only,
+// so an expression reading `local_state.X` was invisible in both directions: nothing
+// could ask whether any step wrote X, and readersOf could not see the reader when
+// grading a dropped write. review_inventory v7 is the specimen — its readers were all
+// expression readers, and L0/L1/L2 passed it.
+// ---------------------------------------------------------------------------
+
+describe('L1 — expression_reads_unwritten_key', () => {
+  const findIssue = (result, step) =>
+    (result.static_analysis?.issues ?? []).find(
+      i => i.failure_class === 'expression_reads_unwritten_key' && (step === undefined || i.step === step),
+    );
+
+  it('refuses a js_transform reading a local_state key no step writes', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [], limit: 5 },
+        output_key: 'rows', on_success: 'next', on_else: 'cancel' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return (local_state.merged_selection || []).length; })()`,
+        output_key: 'count', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = findIssue(result, '2');
+    assert.ok(issue, `expected the unwritten read to be flagged; got ${JSON.stringify(result.static_analysis?.issues)}`);
+    assert.match(issue.detail, /merged_selection/);
+    assert.equal(result.passed, false);
+  });
+
+  it('accepts a key written by a LATER step — workflows loop backwards', () => {
+    // Step 2 reads what step 3 writes. At run time step 3's gate routes back to step 2,
+    // so the key is present. Judging by array position would refuse a correct design.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ page: 1 })`, output_key: 'seed', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return (local_state.picked || []).length; })()`,
+        output_key: 'count', on_success: 'next' },
+      { step: '3', type: 'human_gate', gate_type: 'text_input', message_template: 'pick',
+        output_key: 'picked', on_cancel: 'cancel', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a read through input, which the root frame is always seeded with', () => {
+    const steps = [
+      { step: '1', type: 'js_transform',
+        expression: `(function(){ return { domain: local_state.input.domain || '' }; })()`,
+        output_key: 'ctx', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('reports nothing when the expression takes hold of local_state itself', () => {
+    // Keys reached through a computed index or a function call are not knowable from
+    // the text. Guessing here would refuse working workflows.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ k: 'a' })`, output_key: 'cfg', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ var key = local_state.cfg.k; return local_state[key] || null; })()`,
+        output_key: 'picked', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a key written by an iterator item_step — resumeGate merges it onto the parent', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `([{ question: 'q?' }])`, output_key: 'questions', on_success: 'next' },
+      { step: '2', type: 'iterator', items_key: 'questions', on_complete: 'next',
+        item_step: { type: 'human_gate', gate_type: 'text_input', message_template: '{{item.question}}',
+                     output_key: 'user_preferences', on_cancel: 'cancel', on_success: 'next' } },
+      { step: '3', type: 'js_transform',
+        expression: `(function(){ return local_state.user_preferences || null; })()`,
+        output_key: 'answer', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a key written by a gate action_key', () => {
+    const steps = [
+      { step: '1', type: 'human_gate', gate_type: 'form', message_template: 'go',
+        fields: [{ name: 'note', type: 'text', label: 'Note' }],
+        output_key: 'form_values', action_key: 'main_action', on_cancel: 'cancel',
+        options: [{ action: 'save', value: 'save', label: 'Save', on_select: '2' },
+                  { action: 'cancel', value: 'cancel', label: 'Cancel', on_select: 'cancel' }] },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return local_state.main_action === 'save'; })()`,
+        output_key: 'saved', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('refuses a gate option condition naming a key nothing writes', () => {
+    // The quietest of the three: the option is never drawn and never accepted, on
+    // every run, with nothing in the logs to say so.
+    const steps = [
+      { step: '1', type: 'human_gate', gate_type: 'choice', message_template: 'pick',
+        on_cancel: 'cancel',
+        options: [
+          { action: 'next_page', value: 'next_page', label: 'Next',
+            condition: `local_state.page_meta.is_last_page !== 'yes'`, on_select: 'end' },
+          { action: 'cancel', value: 'cancel', label: 'Cancel', on_select: 'cancel' },
+        ] },
+      { step: 'end', type: 'end' },
+    ];
+
+    const issue = findIssue(runSimulation({ steps, traceId: 't' }), '1');
+    assert.ok(issue, 'a condition on an unwritten key must be refused');
+    assert.match(issue.detail, /page_meta/);
+    assert.match(issue.detail, /option "next_page" condition/);
+  });
+
+  it('leaves an unparseable expression to the syntax check', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: 'if (', output_key: 'x', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('records the expression read in state_flow, so readersOf can see it', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ a: 1 })`, output_key: 'seed', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return local_state.seed.a + 1; })()`,
+        output_key: 'bumped', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const flow = runSimulation({ steps, traceId: 't' }).state_flow;
+    assert.ok(flow['2'].reads.includes('seed'), `expected "seed" among step 2 reads; got ${JSON.stringify(flow['2'])}`);
   });
 });

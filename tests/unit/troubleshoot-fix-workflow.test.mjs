@@ -609,8 +609,12 @@ describe('Level 2b — js_transform smoke test', () => {
     { step: '2', type: 'end' },
   ];
 
+  // Reads through `input`, which the root frame is always seeded with, so the array is
+  // valid to L1 while the read still throws against mock state — the runtime error this
+  // fixture exists to produce. Naming a bare key nothing writes would now be refused at
+  // L1 by expression_reads_unwritten_key, and L1 short-circuits the smoke test.
   const RUNTIME_ERROR_STEPS = [
-    { step: '1', type: 'js_transform', expression: 'local_state.nonexistent.property', output_key: 'x', on_success: 'end' },
+    { step: '1', type: 'js_transform', expression: 'local_state.input.nonexistent.property', output_key: 'x', on_success: 'end' },
     { step: '2', type: 'end' },
   ];
 
