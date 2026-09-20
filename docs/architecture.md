@@ -1015,35 +1015,50 @@ so it is adjustable without a code deploy. This is a low-priority Backlog item.
 
 ## 16. Cost of Ownership
 
-### 16.1 Actual March 2026 Charges (us-east-2, household-scale dev)
+### 16.1 Observed March 2026 charges — a PARTIAL month, not a monthly total
+
+> **Read the Usage column before quoting any figure here.** The instance-hour lines cover
+> **~294 hours — about 12 days, not a month.** These are the charges actually observed, kept
+> as an observation. For what the system costs when it runs continuously, use §16.2, which is
+> the table to quote.
 
 | Service | Usage | Raw Cost | Notes |
 |---|---|---|---|
-| RDS db.t4g.micro | ~294 hours | $4.71 | PostgreSQL 16.6, arm64 |
-| RDS Storage | 20 GB gp2 | $0.91 | PGC + PGD databases |
+| RDS db.t4g.micro | ~294 hours | $4.71 | PostgreSQL 16.6, arm64 — **12 days, not a month** |
+| RDS Storage | 20 GB gp2 | $0.91 | Prorated — a full month of 20 GB is ~$2.30 |
 | VPC Public IPv4 | ~563 hours | $2.82 | $0.005/hr per address — Bastion + RDS |
-| EC2 (Bastion t3.nano) | ~294 hours | $1.78 | SSH access host |
-| Secrets Manager | — | $0.16 | SSM parameters |
+| EC2 (Bastion t3.micro) | ~294 hours | $1.78 | SSH access host — **12 days, not a month** |
 | Lambda | ~1M requests | ~$0.00 | Well within free tier |
 | API Gateway | ~10K requests | ~$0.00 | Well within free tier |
 | SQS | ~50K messages | ~$0.00 | Well within free tier |
-| **Raw total** | | **~$10.38/month** | Before credits |
-| AWS Free Tier / Promotional credits | | ($10.38) | Applied automatically |
-| **Net payable** | | **$0.00** | During credit period |
+| **Observed total** | | **~$10.22** | Partial month, before credits |
+| AWS Free Tier / Promotional credits | | (applied) | Net payable $0.00 during the credit period |
 
-### 16.2 Cost Breakdown by Component
+> **SSM Parameter Store is free here.** An earlier version of this table carried a
+> *"Secrets Manager $0.16"* line. The system uses SSM `String` parameters in the **Standard**
+> tier by final architectural decision — Standard-tier parameters have no per-parameter charge,
+> and Secrets Manager is not used at all.
 
-| Component | Monthly Cost | Scales With |
-|---|---|---|
-| RDS db.t4g.micro (compute) | $4.71 | Instance class only — flat rate |
-| RDS Storage | $0.91 | Data volume — $0.115/GB/month (gp2) |
-| Bastion Host (t3.nano) | $1.78 | Instance running hours |
-| Public IPv4 addresses | $2.82 | Number of attached IPs × hours |
-| Lambda (4 functions) | ~$0.00 | Invocation count + duration |
-| API Gateway | ~$0.00 | Request count |
-| SQS (2 queues + 2 DLQs) | ~$0.00 | Message count |
-| SSM Parameters | $0.16 | Number of SecureString parameters |
-| **Total infrastructure** | **~$10.38** | |
+### 16.2 Steady-state monthly cost — the figures to quote
+
+Full-month rates, us-east-2, **priced 2026-09-20**. Re-check before relying on them for a
+decision: AWS list prices move, and per-region rates differ.
+
+| Component | Rate | Monthly (730h) | Scales With |
+|---|---|---|---|
+| RDS `db.t4g.micro` (compute) | ~$0.016/hr | **~$11.70** | Instance class only — flat rate |
+| RDS Storage (20 GB gp2, provisioned) | $0.115/GB | **~$2.30** | Provisioned size, **not** data used |
+| Bastion `t3.micro` | ~$0.0104/hr | **~$7.60** | Instance running hours |
+| Public IPv4 × 2 (Bastion + RDS) | $0.005/hr each | **~$7.30** | Number of attached addresses × hours |
+| Lambda, API Gateway, SQS | — | ~$0.00 | Within free tier at household scale |
+| SSM Parameter Store (Standard `String`) | — | $0.00 | No per-parameter charge |
+| **Total infrastructure** | | **~$28.90** | |
+| *of which the RDS instance accounts for* | | *~$17.65* | compute + storage + its own IPv4 |
+
+**Storage is billed on what is provisioned, not what is used.** Both databases together are
+**116 MB** (measured 2026-09-20) against 20 GB provisioned — so ~99% of the storage line buys
+nothing. This is the single largest structural inefficiency in the bill and is why a
+usage-billed engine changes the picture more than the headline compute rate suggests.
 
 ### 16.3 Database Size Scenarios
 
@@ -1070,21 +1085,37 @@ LLM is called **only for novel intents** — repeat operations use cached `PGC_W
 
 ### 16.5 Total Cost of Ownership Summary
 
+Steady-state, using §16.2. The AWS figure is dominated by fixed infrastructure, not by data
+volume — which is why every row below lands within a few dollars of the others.
+
 | Scenario | AWS Infrastructure | LLM | Total/Month |
 |---|---|---|---|
-| Small (recipes, golf, 2-3 domains) | ~$10 | $0.50 | ~$10–11/month |
-| Medium (inventory, budgets, stock portfolio) | ~$10–11 | $0.75 | ~$11–12/month |
-| Large (high-frequency time-series, 10+ domains) | ~$11–13 | $1.00 | ~$12–14/month |
+| Small (recipes, golf, 2-3 domains) | ~$29 | $0.50 | ~$29–30/month |
+| Medium (inventory, budgets, stock portfolio) | ~$29 | $0.75 | ~$30/month |
+| Large (high-frequency time-series, 10+ domains) | ~$29–31 | $1.00 | ~$30–32/month |
+
+> The project's stated target is **$8–$13/month** (§1). At the rates in §16.2 the system does
+> not currently meet it, and the gap is almost entirely the RDS instance plus two public IPv4
+> addresses. §16.6 is therefore a live concern, not a someday list.
 
 ### 16.6 Cost Reduction Opportunities
 
 | Action | Monthly Saving | When to Apply |
 |---|---|---|
-| Replace Bastion with AWS SSM Session Manager | ~$1.78 + $0.94 IPv4 | When promotional credits near exhaustion |
-| Switch RDS to Graviton2 Reserved Instance (1yr) | ~30% on compute (~$1.40) | After system stabilises |
-| Stop RDS when not in use (dev only) | Up to $4.71 | Dev/test environments only — not production |
-| Use RDS Aurora Serverless v2 | Variable — cheaper at low use | Backlog — revisit if usage patterns justify it |
+| **Aurora Serverless v2 with a 0-ACU floor (auto-pause)** | **~$11–13** | **Decided 2026-09-20 — see backlog.** Usage-billed storage and compute that pauses when idle |
+| Replace Bastion with AWS SSM Session Manager | ~$7.60 + ~$3.65 IPv4 | Rejected for now — Session Manager cannot serve Blink on iOS (session 4) |
+| Switch RDS to a Graviton Reserved Instance (1yr) | ~30% of compute (~$3.50) | Only if Aurora is not adopted — a 1-year lock on the component being replaced |
+| Stop RDS when not in use | Up to ~$11.70 | Superseded by auto-pause, which does this automatically and resumes far faster |
 
-**Highest impact action today:** Replacing the Bastion with SSM Session Manager
-eliminates the EC2 instance ($1.78) and one public IPv4 address ($0.94) — saving
-~$2.72/month with no loss of functionality. Tracked in tech debt register.
+**Highest impact action today: Aurora Serverless v2 with auto-pause.** Measured 2026-09-20
+across 30 days of live data, the database is genuinely active for **322 minutes in 95 bursts** —
+about 5.4 hours a month. Under a 5-minute auto-pause timeout that is **~13 awake hours**, so
+compute lands near **$1–3** against the RDS instance's flat ~$11.70, and storage bills the
+**116 MB actually used** rather than 20 GB provisioned. The architecture already satisfies
+auto-pause's hardest precondition: `table.mjs` calls `client.end()` after every operation and
+there is no pooling or RDS Proxy, so nothing holds a connection open to prevent a pause.
+
+**The constraint to design around is the 29-second SERV Lambda timeout.** A typical resume is
+~15s, but an instance paused more than 24 hours enters a deeper sleep that takes 30s or more —
+longer than SERV's entire budget and than the API Gateway limit. Full analysis, and the three
+changes that close it, are in `docs/backlog.md`.
