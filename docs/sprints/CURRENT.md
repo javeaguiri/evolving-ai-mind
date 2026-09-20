@@ -1422,3 +1422,32 @@ of reach this sprint.
 4. **Aurora** — schedule the four prerequisites, then the cutover.
 
 Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+
+### Planned next session — `edit_expenses`, built by Novia (user, 2026-09-20)
+
+Add, change and delete expenses. **Check whether the generic CRUD path already does this before
+commissioning a build** — reuse-before-adding, and it could save the whole workflow:
+
+- **`Expense` is already entity-registered**: `PGC_EntitySchema`, domain `budgets_expenses`, root
+  table `PGD_Expenses`. That is the precondition `add_entity` / `update_entity` / `delete_entity`
+  need, and it is already met.
+- **No `PGC_IntentMap` row points at any generic CRUD workflow.** Every one of the 38 rows routes
+  to a named domain workflow (`process_receipt` 10, `edit_budget` 8, `review_inventory` 8,
+  `budget_vs_expense_report` 5, `import_budget_spreadsheet` 5, `flashcard_quiz_session` 2). So the
+  generic workflows are reached only through Pass 2 — domain resolved semantically from
+  `PGC_DomainHelp`, then matched on `PGC_Workflow.intent_keywords` (`add_entity` carries
+  `["add","create","new","insert"]`).
+- **So the test is one Slack command, not a build:** try *"add an expense …"* and see whether it
+  lands on `add_entity` against `PGD_Expenses`. If it does, the same holds for change and delete,
+  and the work becomes routing and phrasing rather than a new workflow.
+- **The risk in that path is `update_entity`.** It is **v1, five steps**, the least-exercised
+  workflow in the system, and its caller always supplies `input.updates` (session 15's addendum).
+  If the generic path is the answer, that is the step to prove first — and it is adjacent to
+  Track E, which is also an untested edit path.
+- If a bespoke workflow is still wanted, it is the **third** Novia-built workflow and the first
+  since the L1 reader check shipped, so it is also a live test of `expression_reads_unwritten_key`
+  against freshly generated `js_transform` steps.
+
+> **Correction worth carrying:** `PGC_IntentMap` has **no `domain` column** — it routes by
+> `workflow_id`. Two queries filtering on `domain` returned `success: false` with a column error,
+> which reads as "no rows" if only `.count` is checked. Check `success` before concluding absence.
