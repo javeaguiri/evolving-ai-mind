@@ -168,6 +168,7 @@ Catches structural errors in the step array itself:
 | Every `human_gate` has at least one option with `action: "cancel"` | Missing cancel path |
 | `output_key` (step-level or option-level) is a string, not another type | Malformed output_key |
 | No `{{key.0}}` positional index on a key whose every writer produces a single value | Numeric index on non-array |
+| Every `local_state.X` an expression reads is a key some step writes | Expression reads unwritten key |
 
 Required-field presence was checked here, from a hand-written map of five step types.
 It is a shape assertion, so it moved to Level 0 where it is composed from the registry
@@ -189,6 +190,26 @@ step is unknown unless every writer is a non-array producer. Since any Level 1 i
 the whole simulation — and so refuses a `register_workflow` write — a false positive here
 costs more than a miss. Only the segment directly after the base key is checked; deeper ones
 sit on values this pass knows nothing about.
+
+**Expression reads are collected, not only template tokens.** The trace built its `reads`
+from `{{tokens}}`, `input_key` and `items_key`, so an expression reading `local_state.X`
+was invisible in both directions: nothing could ask whether any step wrote `X`, and
+`readersOf` could not see the reader when grading a dropped write. Every expression the
+engine evaluates against `local_state` is now parsed — a `js_transform`'s and a
+`condition`'s own expression, and the `condition` a gate option or an `item_action` may
+carry. A hidden option is the quietest of the three: one whose condition names an unwritten
+key is never drawn and never accepted, on every run.
+
+Unlike the template rule above, this one asks whether **any** step writes the key, not
+whether a prior one does. Workflows loop backwards, so a key written later in array order
+is legitimately read earlier at run time; judging by position would refuse a correct design.
+The writes it counts are the trace's own registry — including `action_key`, which every gate
+carrying one writes — plus `input`, and an iterator `item_step`'s `output_key`, which
+`resumeGate` merges back onto the parent frame. It is parsed rather than pattern-matched,
+because a regex cannot distinguish `local_state.foo` from the same text inside a string
+literal, and it reports nothing when the expression takes hold of `local_state` itself:
+destructured, passed to a function, or indexed by a computed value. Unparseable text is left
+to the syntax check.
 
 Level 1 failures are returned immediately — no Level 2 checks run.
 
