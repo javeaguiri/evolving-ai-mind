@@ -1340,3 +1340,41 @@ checked afterwards: at `priority ASC` she now meets **396** (v8, p2) first and t
    selection.
 3. Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
 4. **Track B is still largely unstarted** — it was scoped to go early, and has not.
+
+### AC6 — CLOSED 2026-09-20. Replay declined; step preview adopted.
+
+**The decision, on the record.** Novia is **not** given the replay harness. She **is** to be given
+a **step preview** tool — evaluate one step against a chosen state, headless for her and *rendered*
+for the user. Backlog: *Step preview*.
+
+**Why replay was declined, and it is not the reason the AC assumed.** The AC was written on the
+premise that replay "costs nothing, keeps gates real". The first half is true only of the LLM: the
+seam is `executeLlmCall` and **only** that, so everything else in a replayed run is real.
+`arch-replay.md` §6 states it outright — **"A replayed run performs real SERV writes."** Replaying
+`process_receipt` re-inserts inventory. Handing that to an agent that edits a household's live data
+is the wrong shape, and gating it only moves the judgement to a button whose side effects are not
+visible from the button. Second, independent of safety: `on_miss` **breaks and suspends** on a
+fingerprint miss, and any fix that changes an `llm_call`'s resolved input moves the fingerprint —
+so precisely the repairs most worth testing are the ones that stall at `awaiting_llm_break`, with
+no tool of hers to resolve them and a 240s wall. They would join 809, 810, 826 and 839.
+**Replay is a developer tool and stays one** (user, 2026-09-20). This is consistent with session
+15's decision that she triages the validator rather than troubleshooting it.
+
+**Why the step preview is the right answer.** Every defect she actually hit this sprint was **one
+step against one state** — v7's dropped `output_key`, 16b's placement, step 4's `nav_state`. None
+needed a full run. It writes nothing, calls no LLM, cannot suspend, and returns inside her turn
+budget.
+
+**The user's extension, which is the better half of the idea.** The same mechanism **renders** —
+posting the real Block Kit through `buildDialog` → `dialogToBlocks`, so a gate can be **seen before
+it is built or changed**, by the person who will use it. That inverts today's loop, where a gate is
+built, registered, run, and only then seen. It also covers the one case a headless evaluator would
+have missed: session 7, where a confidently-stated false platform limit became folklore because she
+had no way to *check* instead of assert.
+
+**The pieces exist:** `buildDialog` is exported (`step-executor.mjs:427`), `dialogToBlocks` is
+already the single renderer for every gate type, and `interactive.mjs:113` already branches on a
+button carrying no `workflowRunId`. **The preview must not be a live gate** — inert buttons that
+*say* they are inert, not inert buttons that fail quietly.
+
+**AC6 is met: the decision exists on the record rather than being deferred a third time.**
