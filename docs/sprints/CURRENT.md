@@ -1319,15 +1319,24 @@ write the key.
 
 **1168 → 1177 unit tests.** `docs/arch-simulation-engine.md` updated.
 
-**Not deployed.** `simulation-engine.mjs` changed, so the check is live in the repo and not
-in prod until `sam deploy`. Until then Novia's `simulate_workflow`, `register_workflow` and
-`propose_workflow_fix` still run the old L1.
+**✅ DONE — deployed.** `sam build && sam deploy --no-confirm-changeset`; code only, no seed
+changes in `0022631`. Confirmed live against the deployed `/proc/simulate-workflow`, both
+directions: an expression reading an unwritten key returns `passed: false` with
+`expression_reads_unwritten_key`, and the same read through `input` returns `passed: true`.
+
+**✅ DONE — Novia's v7 memory corrected, by Claude.** Two rows, not one: **393** (the
+mechanical v6→v7 diff, ending *"Outcome: success"*) and **394** (the narrative claiming all
+three fixes worked). 393 keeps its diff — accurate as a record of what changed — with a
+correction appended that separates the two meanings of success: **the write was accepted, the
+workflow was never tested.** 394 leads with the correction and keeps the original beneath it,
+naming which of the three claims failed and why the third was an engine gap (`1cf7ce6`),
+not her error. Corrected in place, as memories 356, 373, 375 and 386 were. Retrieval order
+checked afterwards: at `priority ASC` she now meets **396** (v8, p2) first and the corrected
+**394** (p3) next, so the true account outranks the corrected one.
 
 **Next:**
-1. **`sam deploy`** — no seed changes in `0022631`, so code only.
-2. **Correct the v7 memory entry Novia wrote in session 1216** (it still says v7 worked).
-   Decide first who writes it: Novia, or Claude.
-3. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
-4. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
+1. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
+2. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
    selection.
-5. Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+3. Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
+4. **Track B is still largely unstarted** — it was scoped to go early, and has not.
