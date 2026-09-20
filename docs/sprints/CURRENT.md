@@ -1254,3 +1254,80 @@ selection. It should be left alone and a fresh run started.
 
 Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
 3. The session 15 list still stands: session 1211's gate, then Track D and Track E.
+
+### Session 17 — 2026-09-20 — the reads nobody recorded
+
+**The reader check from session 16's list, built and swept.** The writer check was
+**dropped by decision** mid-session: swept across all 17 registered workflows it compared
+17 branches over 16 comma-`output_key` steps and found **nothing**, which is weak evidence
+for its cost. The reader side had a live specimen before it was written.
+
+**What the gap was.** The data-flow trace built its `reads` from `{{tokens}}`, `input_key`
+and `items_key`. An expression reading `local_state.X` was invisible **in both directions**:
+nothing could ask whether any step wrote `X`, and `readersOf` could not see the reader when
+grading a dropped write. That is why `review_inventory` v7 passed. Replayed as a faithful
+reconstruction against the real functions: `resolveOutputWrites` returns `[]` for the
+offending branch and `runSimulation` still reports `passed: true`, with
+`output_key_not_returned` held at **warning** severity precisely because `readersOf` could
+not see an expression reader. The first reconstruction was *caught* — because it was written
+with a `{{merged_selection}}` reader. v7's readers were expression readers. **That
+distinction is the whole defect.**
+
+**✅ DONE `0022631` — `expression_reads_unwritten_key`, L1, error-grade.** Asks whether
+**any** step writes the key, never whether a prior one does: workflows loop backwards, and
+judging by position would refuse a correct design. Reuses `writtenByStep` rather than
+building a registry beside it — the prototype's parallel registry is exactly what made it
+flag `main_action`, `edit_action` and `form_action`, all written by `action_key`, which the
+simulator has tracked since it shipped. **Three false positives, one cause.** The denominator
+also carries `input` and an iterator `item_step`'s `output_key`, which `resumeGate` merges
+onto the parent frame (`create_domain` 8/9 collect `user_preferences` that way). Parsed with
+acorn, not matched with a regex — a regex cannot tell `local_state.foo` from the same text
+in a string literal. Silent when the expression takes hold of `local_state` itself. Covers
+`js_transform` and `condition` expressions plus a gate option's or `item_action`'s
+`condition`; a hidden option is the quietest failure of the three.
+
+**Swept before it was allowed to block: one hit across 17 workflows, zero false positives.**
+
+**✅ DONE `533e0f9` — the one hit was real, in a core system workflow.** `add_entity` step 2a
+returned `domain: local_state.domain || ''`. Run input is seeded at `local_state.input`
+(`run-workflow.mjs:162`) and never spread, so it was **always undefined** and the `|| ''`
+swallowed it. Step 2c passes `{{ref_data_ctx.domain}}` into `enrich_ref_records`, whose
+opening line is *"A user is adding a new {{entity_name}} to the {{domain}} domain."* Every
+run reaching the reference-enrichment path has asked the LLM to invent reference records for
+a **blank** domain — degraded output, never a failure, which is why nothing surfaced it.
+Confirmed on live data: run 759's input carried `domain: "flashcards"` while its step 2a
+`output_snapshot` ends `"entity_name":"Flashcard","domain":""`. Fault domain **Generation**;
+fixed as an artifact, seed → `upsert-workflow.mjs`, **v23 → v24**.
+
+**A drift hazard was reported and then disproved — recorded because the first read was
+wrong.** `add_entity`'s seed sat at v5 against a live v23, so its steps were synced before
+the fix; upserting the stale seed would have reverted 18 versions. From that I warned that an
+unfiltered `upsert-workflow.mjs` would revert other workflows too. **It would not.** Checked
+against all eleven seeded rows: the fingerprint is `steps + description + model_used` and
+`version` is not part of it, so ten of eleven are content-identical to live and upsert to a
+no-op. `add_entity` was the **only** drifted row. What the seed *versions* do not track is
+cosmetic today and a Track B question: a fresh install inserts `create_domain` at v21 carrying
+v59's content.
+
+**Three existing fixtures had to change, and the reason is structural.** Each deliberately
+reads a never-written key to set up a downstream L2 assertion, and **an L1 failure
+short-circuits the smoke test**, so the test could not reach its subject. Each now reads
+through `input` or is given a writer: the expression still throws against mock state, and
+every test keeps testing what it tested. The `round_state` fixture was an unfaithful
+reduction of `flashcard_quiz_session`, which passes the sweep because the real workflow does
+write the key.
+
+**1168 → 1177 unit tests.** `docs/arch-simulation-engine.md` updated.
+
+**Not deployed.** `simulation-engine.mjs` changed, so the check is live in the repo and not
+in prod until `sam deploy`. Until then Novia's `simulate_workflow`, `register_workflow` and
+`propose_workflow_fix` still run the old L1.
+
+**Next:**
+1. **`sam deploy`** — no seed changes in `0022631`, so code only.
+2. **Correct the v7 memory entry Novia wrote in session 1216** (it still says v7 worked).
+   Decide first who writes it: Novia, or Claude.
+3. **Track D** (two vector thresholds, both still 0.4) and **Track E** (`edit_budget` retest).
+4. **Small, for Novia:** in `review_inventory`, cancelling the edit or merge form loses the
+   selection.
+5. Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
