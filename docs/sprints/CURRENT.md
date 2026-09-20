@@ -173,6 +173,58 @@ twice.
 
 **Acceptance:** AC5.
 
+### Track F — `manage_expenses`, built by Novia
+
+**Opened 2026-09-20 from Novia session 1218.** The user asked for a workflow to see and change
+expenses; Novia proposed `manage_expenses` — a month picker, a reloading main menu, and add /
+delete / edit branches each looping back through the menu. The design was evaluated against the
+live contracts and the live rows before any build.
+
+**Session 17's reuse question is answered, and the answer is no.** The plan was to test the generic
+CRUD path before commissioning a build. There is no sub-workflow step type among the 19 live ones,
+so a workflow cannot invoke `add_entity` / `update_entity` / `delete_entity`. A *see and change*
+workflow must own its writes; generic CRUD stays reachable only as a standalone Slack phrase.
+
+**Verified sound in the proposed design:**
+
+- All three back-edges satisfy the suspension rule — a `human_gate` lies between each loop target
+  and the step that jumps back to it.
+- The menu loop is not idempotency-blocked. `enqueueWorkflow` stamps every `execute_top` with a
+  fresh `stepExecutionId` (`src/shared/sqs-callback.mjs:59`) and the check prefers it over the step
+  key (`src/proc/run-workflow.mjs:241`), so repeat menu passes never reach the 3-hit stuck limit.
+  This was the most likely way the design could have been quietly fatal, and it holds.
+- Editing a title or description re-embeds — `src/serv/table.mjs:619-651` re-computes any vector
+  column whose `embed_source` field appears in the update, merging read-before-write.
+- Gate types, step types and table permissions all check out. July's 49 rows sit under Slack's
+  100-option `list_selection` cap, and the reveal panel chunks (Sprint 11 AC4).
+
+**Four corrections to send back before she builds:**
+
+| # | Defect | Evidence |
+|---|---|---|
+| 1 | The proposed payment-method radio (Cash / Card / Bank Transfer / Other) contradicts the stored vocabulary | Live values are `null` x76, `cash` x9, `debit` x20. `debit` matches no option, and an untouched form field submits the option's own `value` — so opening the edit form on such a row and saving rewrites it |
+| 2 | The add form omits `currency`, which is NOT NULL defaulting to `'USD'` | The table is already split **75 USD / 30 EUR** in a euro-spending household; every manual entry deepens it |
+| 3 | The step 6 menu carries no `cancel` option | The `human_gate` contract requires one in `options` or `special_buttons`. Add / Delete / Edit / Done does not satisfy it — L0/L1 should refuse the array |
+| 4 | Delete and Edit are offered on a month with no expenses | `option.condition` is the idiomatic guard, and it is in the contract she had already read |
+
+**One decision to make rather than default:** `PGD_Expenses.deleted_at` exists and has **never been
+written** — 0 non-null rows across 105. The design hard-deletes via `serv_delete`. That may well be
+right; it should be said out loud rather than chosen by silence.
+
+**Adjacent, pre-existing, not hers:** `category_id` is NOT NULL while its FK to
+`PGD_SpendingCategories` is `ON DELETE SET NULL`. Deleting a spending category fails on that
+contradiction.
+
+**What this track is really testing.** Novia read the contracts thoroughly — convention bridge,
+live step types, a comparable workflow's outline, then the nine full step-type contracts, paging a
+39,495-character capped result through `read_session_entry` twice. Sprint 11's machinery worked as
+designed. What she did not read was the **data** she was designing a form over; one `query_table`
+on `PGD_Expenses` would have produced all four corrections. So the track's second purpose is
+whether a *factual* correction — four facts, no defect report — is enough to move her revision.
+That keeps the correction inside the Generation fault domain, where Novia's scope sits.
+
+**Acceptance:** AC7.
+
 ---
 
 ## Acceptance Criteria
@@ -185,6 +237,7 @@ twice.
 | **AC4** | Both thresholds calibrated against live rows and applied; the three known wrong merges no longer auto-resolve | D | Binary, evidenced by probe output before and after |
 | **AC5** | `edit_budget` runs end-to-end from Slack | E | Binary |
 | **AC6** | **Give Novia the replay harness as a tool — decided, not defaulted** | — | A decision exists on the record |
+| **AC7** | `manage_expenses` is built by Novia, registered, and runs end to end from Slack — add, delete and edit — with the four corrections applied and the delete semantics decided | F | Binary, from Slack |
 
 **AC6 exists for the same reason Sprint 11's did.** She can propose a fix and has no way to test it
 against the failing case: `simulate_workflow` is L0/L1/L2 and executes nothing, and `run_workflow`
