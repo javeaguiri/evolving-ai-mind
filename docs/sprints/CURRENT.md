@@ -1378,3 +1378,47 @@ button carrying no `workflowRunId`. **The preview must not be a live gate** — 
 *say* they are inert, not inert buttons that fail quietly.
 
 **AC6 is met: the decision exists on the record rather than being deferred a third time.**
+
+### Session 17 close — 2026-09-20
+
+**Shipped and deployed:** the L1 reader check (`0022631`), `add_entity` v24 (`533e0f9`), Novia's
+v7 memory corrected (rows 393 and 394). `sam deploy` done and probed live both ways. 1177 tests.
+
+**Decided this session, both on the record:**
+- **Aurora Serverless v2 with a 0-ACU floor replaces RDS.** Self-hosting PostgreSQL on the bastion
+  and the `/wake` command are **dropped**. Settled by measurement, not argument: 30 days of
+  `PGC_WorkflowRun` / `PGC_WorkflowRunStep` / `PGC_SessionEntry` timestamps show **322 active
+  minutes across 95 bursts** — ~13 awake hours a month under a 5-minute pause, against a break-even
+  near 97 ACU-hours. Four prerequisites are separate backlog rows: SERV connection retry, a
+  resume-tolerant timeout (both in `getClient`, one function behind 52 call sites), a heartbeat
+  against the >24h deep sleep that exceeds SERV's 29s Lambda budget, and **encryption at rest**,
+  which is free at the cutover and impossible afterwards — its third deferral, and the migration is
+  its deadline.
+- **AC6 closed** — see the section above. Replay declined as a developer tool; `preview_step`
+  adopted and specified as a **new tool**.
+
+**`architecture.md` §16 corrected.** It presented a ~294-hour partial month as a monthly total,
+costed the bastion as a t3.nano against `template.yaml`'s t3.micro, and billed SSM Standard
+`String` parameters. Steady state is **~$28.90/month** against the **$8–13** target in §1 — so
+§16.6 is a live concern, not a someday list.
+
+**Track B deferred by the user** — a test environment waits for collaborators. AC2 is therefore out
+of reach this sprint.
+
+**Next, in order:**
+1. **Track D** — both thresholds confirmed still `0.4` in workflow 358 steps 8 and 8c. All three
+   wrong aliases are still live and still wrong: **81** `PAN MOLD INT ALTEZ` → 17 *Rustic Sliced
+   Bread*, **60** `PANU BOL MIN SELEX` → 17, **59** `ARANDANOS DESH ALT` → 6 *Blueberries 300g*
+   (fresh). Alias 81 is provably wrong by the system's own standard — 41 and 89, also *integral*,
+   resolve correctly to 36 *Whole Wheat Sandwich Bread*. The table is at **208 aliases** and grows
+   every shop. Probes are free and unattended; Novia applies the patch.
+2. **AC3's remaining verbs.** Deliberately after Track D — the threshold is what *creates* wrong
+   aliases, so correcting them first means doing it again after the next shop. **Note the sprint doc
+   was out of date:** `PGD_Inventory` 25 is already *"Cheap Wine (tinto de verano)"* and item 69 is
+   gone, so rename and merge appear done. **Confirm whether they went through `review_inventory`
+   from Slack** — AC3 requires no raw SQL, and if they did, two of four verbs are evidenced and only
+   need writing down.
+3. **Track E** — `edit_budget` retest from Slack.
+4. **Aurora** — schedule the four prerequisites, then the cutover.
+
+Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
