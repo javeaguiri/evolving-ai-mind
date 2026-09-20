@@ -3046,114 +3046,111 @@
     ],
     "state_strategy": "sequential_with_confirmation",
     "model_used": null,
-    "version": 5,
+    "version": 24,
     "steps": [
       {
         "step": "1",
         "type": "serv_query",
-        "description": "Load all entity schemas registered for this domain.",
         "input": {
-          "tableName": "PGC_EntitySchema",
+          "limit": 50,
           "filters": [
             {
-              "column": "domain",
               "op": "eq",
-              "value": "{{input.domain}}"
+              "value": "{{input.domain}}",
+              "column": "domain"
             }
           ],
-          "limit": 50
+          "tableName": "PGC_EntitySchema"
         },
-        "output_key": "domain_schemas",
+        "on_else": "cancel",
         "on_success": "1a",
-        "on_else": "cancel"
+        "output_key": "domain_schemas",
+        "description": "Load all entity schemas registered for this domain."
       },
       {
         "step": "1a",
         "type": "js_transform",
-        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple.",
+        "on_else": "cancel",
         "expression": "(function(){ var ds=local_state.domain_schemas; var rows=Array.isArray(ds)?ds:(ds&&ds.rows?ds.rows:[]); if(rows.length===0) return {resolved_entity_name:(local_state.input&&local_state.input.entity_name)||null,schema_options:null}; if(rows.length===1) return {resolved_entity_name:rows[0].entity_name,schema_options:null}; var options=rows.map(function(r){return {entity_name:r.entity_name,description:r.description,root_table:r.root_table};}); return {resolved_entity_name:null,schema_options:JSON.stringify(options)}; })()",
-        "output_key": "entity_resolution",
         "on_success": "1b",
-        "on_else": "cancel"
+        "output_key": "entity_resolution",
+        "description": "Resolve entity name directly if one schema exists; prepare options list if multiple."
       },
       {
         "step": "1b",
         "type": "condition",
-        "description": "Skip LLM selection if entity name already resolved.",
+        "on_else": "1c",
         "expression": "local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name!==null&&local_state.entity_resolution.resolved_entity_name!==undefined",
         "on_success": "1d",
-        "on_else": "1c"
+        "description": "Skip LLM selection if entity name already resolved."
       },
       {
         "step": "1c",
         "type": "llm_call",
-        "description": "Lightweight LLM selection of the best matching entity schema from user input.",
         "input": {
           "prompt": "select_entity_schema",
           "userInput": "{{input.userInput}}",
           "schema_options": "{{entity_resolution.schema_options}}"
         },
-        "output_key": "entity_selection",
+        "on_else": "cancel",
         "on_success": "1d",
-        "on_else": "cancel"
+        "output_key": "entity_selection",
+        "description": "Lightweight LLM selection of the best matching entity schema from user input."
       },
       {
         "step": "1d",
         "type": "js_transform",
-        "description": "Write resolved_entity_name from direct resolution or LLM selection.",
+        "on_else": "cancel",
         "expression": "(function(){ var direct=local_state.entity_resolution&&local_state.entity_resolution.resolved_entity_name; if(direct) return direct; var sel=local_state.entity_selection&&local_state.entity_selection.entity_name; return sel||(local_state.input&&local_state.input.entity_name)||null; })()",
-        "output_key": "resolved_entity_name",
         "on_success": "1e",
-        "on_else": "cancel"
+        "output_key": "resolved_entity_name",
+        "description": "Write resolved_entity_name from direct resolution or LLM selection."
       },
       {
         "step": "1e",
         "type": "serv_entity_schema",
-        "description": "Load full entity schema with parent-child hierarchy info.",
         "input": {
           "entityName": "{{resolved_entity_name}}"
         },
-        "output_key": "full_entity_schema",
+        "on_else": "cancel",
         "on_success": "next",
-        "on_else": "cancel"
+        "output_key": "full_entity_schema",
+        "description": "Load full entity schema with parent-child hierarchy info."
       },
       {
         "step": "2",
         "type": "llm_call",
-        "description": "Parse the user natural language description into a structured entity object or array of rows.",
         "input": {
           "prompt": "parse_entity_input",
           "userInput": "{{input.userInput}}",
           "entity_schema": "{{full_entity_schema}}"
         },
-        "output_key": "parsed_entity",
+        "on_else": "cancel",
         "on_success": "2g",
-        "on_else": "cancel"
+        "output_key": "parsed_entity",
+        "description": "Parse the user natural language description into a structured entity object or array of rows."
       },
       {
         "step": "2g",
         "type": "condition",
-        "description": "Branch on bulk (array) vs single entity parse output.",
+        "on_else": "2a",
         "expression": "Array.isArray(local_state.parsed_entity)",
         "on_success": "2h",
-        "on_else": "2a"
+        "description": "Branch on bulk (array) vs single entity parse output."
       },
       {
         "step": "2h",
         "type": "js_transform",
-        "description": "Build bulk preview — count, entity name, and first 3 rows as sample.",
+        "on_else": "cancel",
         "expression": "(function(){ var rows=local_state.parsed_entity; var schema=local_state.full_entity_schema; return {count:rows.length,entity_name:(schema&&schema.entity_name)||local_state.resolved_entity_name||'',root_table:(schema&&schema.root&&schema.root.table)||'',sample:rows.slice(0,3)}; })()",
-        "output_key": "bulk_preview",
         "on_success": "2i",
-        "on_else": "cancel"
+        "output_key": "bulk_preview",
+        "description": "Build bulk preview — count, entity name, and first 3 rows as sample."
       },
       {
         "step": "2i",
         "type": "human_gate",
-        "gate_type": "review_object",
-        "description": "User confirms bulk insert before any DB write.",
-        "message_template": "I parsed {{bulk_preview.count}} {{bulk_preview.entity_name}} records. Here's a sample of the first 3. Confirm to insert all {{bulk_preview.count}} rows.",
-        "context_key": "bulk_preview",
+        "on_else": "cancel",
         "options": [
           {
             "label": "Insert all",
@@ -3166,77 +3163,77 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "review_object",
+        "on_cancel": "cancel",
         "on_success": "2j",
-        "on_else": "cancel",
-        "on_cancel": "cancel"
+        "context_key": "bulk_preview",
+        "description": "User confirms bulk insert before any DB write.",
+        "message_template": "I parsed {{bulk_preview.count}} {{bulk_preview.entity_name}} records. Here's a sample of the first 3. Confirm to insert all {{bulk_preview.count}} rows."
       },
       {
         "step": "2j",
         "type": "serv_insert",
-        "description": "Bulk insert all parsed rows in a single addRows call.",
         "input": {
-          "tableName": "{{bulk_preview.root_table}}",
           "row": "{{parsed_entity}}",
+          "tableName": "{{bulk_preview.root_table}}",
           "ref_fk_columns": "{{full_entity_schema.root.ref_fk_columns}}"
         },
-        "output_key": "bulk_insert_result",
+        "on_else": "cancel",
         "on_success": "2k",
-        "on_else": "cancel"
+        "output_key": "bulk_insert_result",
+        "description": "Bulk insert all parsed rows in a single addRows call."
       },
       {
         "step": "2k",
         "type": "notify",
+        "on_success": "6",
         "description": "Confirm bulk insert complete.",
-        "message_template": "Saved {{bulk_preview.count}} {{bulk_preview.entity_name}} records.",
-        "on_success": "6"
+        "message_template": "Saved {{bulk_preview.count}} {{bulk_preview.entity_name}} records."
       },
       {
         "step": "2a",
         "type": "js_transform",
-        "description": "Collect all ref FK string values from parsed_entity, grouped by ref table, so the LLM can produce complete records for each.",
-        "expression": "(function(){ var schema=local_state.full_entity_schema; var parsed=local_state.parsed_entity; if(!schema||!parsed) return {ref_candidates:[],entity_name:'',domain:''}; var byTable={}; function add(refFks,rows){ (refFks||[]).forEach(function(rf){ if(!byTable[rf.ref_table]) byTable[rf.ref_table]={ref_table:rf.ref_table,lookup_column:rf.lookup_column,create_with:rf.create_with||[rf.lookup_column],allowed_values:rf.allowed_values||{},values:{}}; (Array.isArray(rows)?rows:[rows]).forEach(function(r){ if(r){ var v=r[rf.column]; if(v!==null&&v!==undefined&&typeof v==='string') byTable[rf.ref_table].values[v]=1; } }); }); } add((schema.root||{}).ref_fk_columns||[],[parsed.root||{}]); (schema.children||[]).forEach(function(c){ add(c.ref_fk_columns||[],((parsed.children||{})[c.output_key])||[]); }); var candidates=Object.values(byTable).map(function(e){ var av=e.allowed_values; return {ref_table:e.ref_table,lookup_column:e.lookup_column,create_with:e.create_with,values:Object.keys(e.values),allowed_values:(av&&Object.keys(av).length>0?av:undefined)}; }).filter(function(c){ return c.values.length>0; }); return {ref_candidates:candidates,entity_name:schema.entity_name,domain:local_state.domain||''}; })()",
-        "output_key": "ref_data_ctx",
+        "on_else": "cancel",
+        "expression": "(function(){ var schema=local_state.full_entity_schema; var parsed=local_state.parsed_entity; if(!schema||!parsed) return {ref_candidates:[],entity_name:'',domain:''}; var byTable={}; function add(refFks,rows){ (refFks||[]).forEach(function(rf){ if(!byTable[rf.ref_table]) byTable[rf.ref_table]={ref_table:rf.ref_table,lookup_column:rf.lookup_column,create_with:rf.create_with||[rf.lookup_column],allowed_values:rf.allowed_values||{},values:{}}; (Array.isArray(rows)?rows:[rows]).forEach(function(r){ if(r){ var v=r[rf.column]; if(v!==null&&v!==undefined&&typeof v==='string') byTable[rf.ref_table].values[v]=1; } }); }); } add((schema.root||{}).ref_fk_columns||[],[parsed.root||{}]); (schema.children||[]).forEach(function(c){ add(c.ref_fk_columns||[],((parsed.children||{})[c.output_key])||[]); }); var candidates=Object.values(byTable).map(function(e){ var av=e.allowed_values; return {ref_table:e.ref_table,lookup_column:e.lookup_column,create_with:e.create_with,values:Object.keys(e.values),allowed_values:(av&&Object.keys(av).length>0?av:undefined)}; }).filter(function(c){ return c.values.length>0; }); return {ref_candidates:candidates,entity_name:schema.entity_name,domain:local_state.input.domain||''}; })()",
         "on_success": "2b",
-        "on_else": "cancel"
+        "output_key": "ref_data_ctx",
+        "description": "Collect all ref FK string values from parsed_entity, grouped by ref table, so the LLM can produce complete records for each."
       },
       {
         "step": "2b",
         "type": "condition",
-        "description": "Skip reference data enrichment if no ref FK values were found in the parsed entity.",
+        "on_else": "3",
         "expression": "local_state.ref_data_ctx && local_state.ref_data_ctx.ref_candidates && local_state.ref_data_ctx.ref_candidates.length > 0",
         "on_success": "2c",
-        "on_else": "3"
+        "description": "Skip reference data enrichment if no ref FK values were found in the parsed entity."
       },
       {
         "step": "2c",
         "type": "llm_call",
-        "description": "LLM produces complete, accurate records for each ref table value — proper abbreviations, unit types, etc.",
         "input": {
-          "prompt": "enrich_ref_records",
           "domain": "{{ref_data_ctx.domain}}",
+          "prompt": "enrich_ref_records",
           "entity_name": "{{ref_data_ctx.entity_name}}",
           "ref_candidates": "{{ref_data_ctx.ref_candidates}}"
         },
-        "output_key": "ref_enrichment_result",
+        "on_else": "cancel",
         "on_success": "2c1",
-        "on_else": "cancel"
+        "output_key": "ref_enrichment_result",
+        "description": "LLM produces complete, accurate records for each ref table value — proper abbreviations, unit types, etc."
       },
       {
         "step": "2c1",
         "type": "js_transform",
-        "description": "Reshape proposed ref records into a flat object keyed by ref_table for a readable review_object display.",
-        "output_key": "ref_enrichment_display",
-        "on_success": "2d",
         "on_else": "cancel",
-        "expression": "(function(){ var arr=(local_state.ref_enrichment_result&&local_state.ref_enrichment_result.proposed_ref_records)||[]; var result={}; arr.forEach(function(entry){ result[entry.ref_table]=entry.rows||[]; }); return result; })()"
+        "expression": "(function(){ var arr=(local_state.ref_enrichment_result&&local_state.ref_enrichment_result.proposed_ref_records)||[]; var result={}; arr.forEach(function(entry){ result[entry.ref_table]=entry.rows||[]; }); return result; })()",
+        "on_success": "2d",
+        "output_key": "ref_enrichment_display",
+        "description": "Reshape proposed ref records into a flat object keyed by ref_table for a readable review_object display."
       },
       {
         "step": "2d",
         "type": "human_gate",
-        "gate_type": "review_object",
-        "description": "User confirms the reference records to be created before the entity insert.",
-        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?",
-        "context_key": "ref_enrichment_display",
+        "on_else": "cancel",
         "options": [
           {
             "label": "Looks good",
@@ -3249,48 +3246,48 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "review_object",
+        "on_cancel": "cancel",
         "on_success": "2e",
-        "on_else": "cancel",
-        "on_cancel": "cancel"
+        "context_key": "ref_enrichment_display",
+        "description": "User confirms the reference records to be created before the entity insert.",
+        "message_template": "Before I add your {{ref_data_ctx.entity_name}}, I need to add or re-use the following reference records. Does this look right?"
       },
       {
         "step": "2e",
         "type": "js_transform",
-        "description": "Flatten proposed_ref_records to a row-per-item array for the insert iterator.",
+        "on_else": "cancel",
         "expression": "(function(){ var result=[]; var arr=(local_state.ref_enrichment_result&&local_state.ref_enrichment_result.proposed_ref_records)||[]; arr.forEach(function(entry){ (entry.rows||[]).forEach(function(row){ result.push({ref_table:entry.ref_table,lookup_column:entry.lookup_column,row:row}); }); }); return result; })()",
-        "output_key": "ref_rows_to_insert",
         "on_success": "2f",
-        "on_else": "cancel"
+        "output_key": "ref_rows_to_insert",
+        "description": "Flatten proposed_ref_records to a row-per-item array for the insert iterator."
       },
       {
         "step": "2f",
         "type": "iterator",
-        "description": "Insert each confirmed reference record, skipping rows that already exist.",
-        "items_key": "ref_rows_to_insert",
-        "execution_mode": "sequential",
-        "output_key": "ref_insert_results",
         "on_else": "cancel",
         "item_step": {
           "type": "serv_insert",
-          "description": "Insert ref row if it does not already exist (check_exists_by skips duplicates).",
           "input": {
-            "tableName": "{{item.ref_table}}",
             "row": "{{item.row}}",
+            "tableName": "{{item.ref_table}}",
             "check_exists_by": "{{item.lookup_column}}"
           },
-          "output_key": "inserted_ref_row",
+          "on_else": "next",
           "on_success": "next",
-          "on_else": "next"
+          "output_key": "inserted_ref_row",
+          "description": "Insert ref row if it does not already exist (check_exists_by skips duplicates)."
         },
-        "on_complete": "3"
+        "items_key": "ref_rows_to_insert",
+        "output_key": "ref_insert_results",
+        "description": "Insert each confirmed reference record, skipping rows that already exist.",
+        "on_complete": "3",
+        "execution_mode": "sequential"
       },
       {
         "step": "3",
         "type": "human_gate",
-        "gate_type": "review_object",
-        "description": "User reviews the parsed entity before any DB write.",
-        "message_template": "Here's what I parsed from your description. Does this look right?",
-        "context_key": "parsed_entity",
+        "on_else": "cancel",
         "options": [
           {
             "label": "Looks good",
@@ -3303,21 +3300,24 @@
             "on_select": "cancel"
           }
         ],
+        "gate_type": "review_object",
+        "on_cancel": "cancel",
         "on_success": "next",
-        "on_else": "cancel",
-        "on_cancel": "cancel"
+        "context_key": "parsed_entity",
+        "description": "User reviews the parsed entity before any DB write.",
+        "message_template": "Here's what I parsed from your description. Does this look right?"
       },
       {
         "step": "4",
         "type": "serv_entity_insert",
-        "description": "Insert root and all child rows in topological order with FK threading.",
         "input": {
           "entitySchema": "{{full_entity_schema}}",
           "parsedEntity": "{{parsed_entity}}"
         },
-        "output_key": "insert_result",
+        "on_else": "cancel",
         "on_success": "next",
-        "on_else": "cancel"
+        "output_key": "insert_result",
+        "description": "Insert root and all child rows in topological order with FK threading."
       },
       {
         "step": "5",
