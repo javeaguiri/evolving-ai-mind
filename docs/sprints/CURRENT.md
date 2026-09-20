@@ -1504,3 +1504,66 @@ commissioning a build** — reuse-before-adding, and it could save the whole wor
 > **Correction worth carrying:** `PGC_IntentMap` has **no `domain` column** — it routes by
 > `workflow_id`. Two queries filtering on `domain` returned `success: false` with a column error,
 > which reads as "no rows" if only `.count` is checked. Check `success` before concluding absence.
+
+### Session 18 — 2026-09-20 — the threshold that decides nothing, and a design read against the data
+
+**Track D probed, not changed.** The user asked for the probes, then held off on acting on the
+result. Nothing was edited, no threshold moved, no prompt touched. What the probes found is
+recorded here because it inverts the track's premise and re-deriving it costs a round of LLM calls.
+
+**Steps 8 and 8c are retrieval, not decision.** Both are `serv_query` vector searches that build
+candidate lists. The merge is decided entirely by step 10's `llm_call` under
+`match_inventory_items` v3, whose rules are alias similarity `= 1.0` -> `auto_matched`,
+`0.60-<1.0` -> `llm_resolved`, `<0.60` -> ignore, then name similarity by unquantified judgment.
+**No value of either 0.4 threshold decides a merge**; they only bound what the model may see.
+
+**The specimen the track was written from cannot be fixed by a threshold.** Reconstructed from
+diagnostic session 1167 (run 782), `PAN MOLD INT ALTEZ` -> *Sliced Bread Integral Alteza*:
+inventory **36**, the correct target, never cleared 0.4 on the name path and was **absent from the
+candidate list**; the one pointer to it, alias 41 at **0.4681**, was retrieved and then discarded
+by the prompt's 0.60 floor; item 17 was present at 0.5602 and was the only bread visible. Raising
+the threshold hides more, lowering it admits noise, and the correct answer was only ever reachable
+through the alias the decision rule threw away.
+
+**Four findings behind it:**
+
+1. **The candidate lists lose per-item attribution.** Steps 8b/8d flatten every per-item result set
+   into one pool keyed by row id, keeping the **maximum similarity across all receipt items**. The
+   `similarity` the model reads is closeness to *some* item on the receipt, not to the item being
+   matched. Every rule in the prompt is applied to a number that does not mean what the rule assumes.
+2. **The model reads the pooled number as a per-pair score, and invents one when it has none.**
+   Run 782: *"The alias 'PAN MOLDE RUSTICO' has high similarity (0.557) to inventory item 17"* —
+   0.557 is alias-to-receipt-string, not alias-to-inventory-item. Run 837: *"alias similarity 0.65"*
+   justifying `CREM 100 CAC ALTEZ` -> 55, when nothing near 0.65 in that pool relates to almond
+   cream. The `match_reason` numbers are not evidence.
+3. **Rule 1's exact branch is unreachable, and has been since some point between 19 Aug and 16 Sep.**
+   Exact re-embeds now score **0.9966-0.9987, never 1.0** — verified on rows written 17 Aug and
+   16 Sep, read path deterministic to 16 significant digits across three calls, `embed_source` a
+   single bare column. Run 780 (19 Aug) shows `PEPINO HOLANDES` at exactly **1**. The embedding
+   endpoint's output changed under us and nothing noticed. The model has kept routing exact hits to
+   `auto_matched` **by judgment, ignoring the rule** — working by luck, not by contract. Separately
+   the 0.60 floor sits *above* the same-item raw-string distribution: genuine same-item pairs
+   measure 0.4987 (`CORAZONES COGOLLO` / `COGOLLOS ALTEZA`, both -> 57) and 0.5673
+   (`ARANDANO 225 GR` / `ARANDANO 3006`, both -> 6).
+4. **AC4 can no longer be met by calibration.** Run 837 matched `PAN MOLD INT ALTEZ` -> 17 as
+   `auto_matched` **HIGH** off the wrong alias 81 at 0.9978. The error is self-reinforcing and
+   reaches the gate labelled confident. Also on the record: run 780 held **more than three** wrong
+   merges — `TOMATE CHERRY PERA` -> 50 *Black Tomato Tray* and `LIMONES MALLA 1KG` -> 27
+   *Canned Lemon* — and alias 62 auto-matched again in run 837.
+
+**Fault domains, proposed not agreed:** pooled candidates = **Contract** (wrong data shape handed
+to the LLM), fixed in workflow 358's steps 8/8b/8c/8d as a patch; the dead `= 1.0` rule and the
+0.60 floor = **Instruction**, traced to the creation-time prompt root rather than patched; the
+three wrong alias rows = data, and therefore Track C, not Track D.
+
+**Open for the user:** whether Track D becomes *fix the attribution* rather than *calibrate two
+thresholds* (and AC4's wording with it); whether the `match_inventory_items` prompt gets the trace
+or goes to Novia directly; and whether the embedding endpoint's silent change becomes its own
+backlog item — stored and query vectors now come from different model states across the whole
+table, and `create_domain` has no re-embed path.
+
+**Track F opened** — see the track for the full evaluation of Novia session 1218's
+`manage_expenses` design. Committed `0e9b08e`. Not yet written: the message to paste into `/novia`
+carrying the four corrections.
+
+**Next session:** Track F's correction round with Novia, and the three Track D decisions above.
