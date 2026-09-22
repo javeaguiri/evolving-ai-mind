@@ -143,10 +143,23 @@ workflow rather than four:
    self-reinforcing
 3. **Recategorise** an item, and **aggregate** two `PGD_InventoryCategory` rows meaning the same
    thing
-4. **Fix an alias** — repoint or delete one resolving to the wrong product
+4. **Fix an alias** — repoint or delete one resolving to the wrong product. **Three live
+   specimens, moved here from Track D 2026-09-22** — these are the test data, not invented cases:
+   **81** `PAN MOLD INT ALTEZ` → 17 *Rustic Sliced Bread*, which should be 36 *Whole Wheat
+   Sandwich Bread* (aliases 41 and 89 already resolve there correctly, which is what proves 81
+   wrong by the system's own standard); **60** `PANU BOL MIN SELEX` → 17; **59**
+   `ARANDANOS DESH ALT` (*deshidratados*, dried) → 6 *Blueberries 300g*, which is fresh
 
 **This is containment, not cleanup.** An alias hit is precisely the path that avoids human review,
 so a wrong alias applies itself silently on every future shop.
+
+**Where it has already reached the user — read live 2026-09-22.** Item 17 *Rustic Sliced Bread*
+stands at **2 bags**, item 36 *Whole Wheat Sandwich Bread* at **1**; both are category 15 with
+`consumption_rate_per_day` 0.2. Every shop carrying that bread as `PAN MOLD INT ALTEZ` increments
+the wrong one, and `review_inventory` computes the shopping list from those quantities — **so the
+shopping list has been naming the wrong bread.** Small enough to go unnoticed, which is why it went
+unnoticed rather than why it was not happening. It also compounds: alias 81 now matches at
+**0.9978**, so it wins every future comparison and arrives at the gate labelled HIGH.
 
 **Non-negotiable:** aliases are keyed on the **raw receipt string**, never the English rendering.
 Keying the wine's correction on "Ink Cartridge" would make a real ink purchase increment the wine.
@@ -156,22 +169,32 @@ whether she handles maintenance work as well as greenfield.
 
 **Acceptance:** AC3.
 
-### Track D — The two vector thresholds
+### Track D — CLOSED 2026-09-22, premise inverted and never user-facing
 
-**Carried from Sprint 11 AC3, unstarted.** Both still at the inherited **0.4**, which came from a
-cross-lingual comparison that exists on neither step:
+**Closed without the work, by decision, not by deferral.** The track was *calibrate the two 0.4
+vector thresholds*. Session 18's probes showed steps 8 and 8c are `serv_query` **retrieval** — they
+bound what step 10's `match_inventory_items` prompt may see. **No value of either threshold decides
+a merge.** Changing them changes the candidate list, not the answer.
 
-| Step | Comparison | Column |
+**And the specimens are wrong rows, not a mis-set bound.** Read live 2026-09-22:
+
+| Alias | Raw receipt string | Resolves to |
 |---|---|---|
-| 8 | English → English | `name_embedding` |
-| 8c | raw string → raw string | `alias_name_embedding` |
+| 41 | `PAN M. 100%INT FAM` | **36** Whole Wheat Sandwich Bread ✓ |
+| 89 | `PAN M.100%INT FAM` | **36** Whole Wheat Sandwich Bread ✓ |
+| **81** | `PAN MOLD INT ALTEZ` | **17** Rustic Sliced Bread ✗ |
 
-Three wrong merges are the specimens: `PANU BOL MIN SELEX` → *Rustic Sliced Bread*;
-`ARANDANOS DESH ALT` (dehydrated) → *Blueberries 300g* (fresh); `PAN MOLD INT ALTEZ` → *Rustic
-Sliced Bread*. Probes against live rows are free. The edit is a domain artifact, so it goes through
-`propose_workflow_fix` — a patch, once Track A lands.
+Two aliases for the same product resolve correctly; the third is simply a wrong row. No threshold
+produces that and none repairs it — **only editing alias 81 repairs alias 81.** The alias-fix work
+therefore moves to **Track C**, where the user drives it from Slack, and the two findings that are
+not user-facing move out of the sprint entirely (backlog, and a standing observation below).
 
-**Acceptance:** AC4.
+**The test this failed, and the rule it establishes.** *An evolving artifact is changed when the
+user is affected by it, through a workflow the user drives.* Track D proposed changing a retrieval
+bound nobody would ever see, derived from correctness findings produced by staring at data. The
+findings were accurate; the work was not warranted. **Apply this filter at scoping, not after.**
+
+**AC4 is withdrawn** — absorbed into AC3.
 
 ### Track E — Retest `edit_budget` — MOVED TO SPRINT 13, 2026-09-22
 
@@ -245,7 +268,7 @@ That keeps the correction inside the Generation fault domain, where Novia's scop
 | **AC1** | A single-step repair is submitted, gated and applied without resubmitting the whole array; the merged array passes L0/L1/L2 **before** the write, and a merged array that fails is refused | A | Binary, verified live from `/novia`, including one deliberately failing patch |
 | ~~**AC2**~~ | ~~A change is validated on a test environment before reaching prod, and the README stands the system up from scratch~~ **WITHDRAWN 2026-09-22 — moved to `docs/ops-release-readiness.md`** | ~~B~~ | — |
 | **AC3** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | C | Binary, from Slack, no raw SQL |
-| **AC4** | Both thresholds calibrated against live rows and applied; the three known wrong merges no longer auto-resolve | D | Binary, evidenced by probe output before and after |
+| ~~**AC4**~~ | ~~Both thresholds calibrated against live rows and applied~~ **WITHDRAWN 2026-09-22 — absorbed into AC3.** The premise inverted: the thresholds decide nothing, and the specimens are wrong alias rows | ~~D~~ | — |
 | ~~**AC5**~~ | ~~`edit_budget` runs end-to-end from Slack~~ **MOVED TO SPRINT 13 2026-09-22** — converted to the bulk-edit pattern first, then retested once | ~~E~~ | — |
 | **AC6** | **Give Novia the replay harness as a tool — decided, not defaulted** | — | A decision exists on the record |
 | **AC7** | `manage_expenses` is built by Novia, registered, and runs end to end from Slack — add, delete and edit — with the four corrections applied and the delete semantics decided | F | Binary, from Slack |
@@ -270,6 +293,7 @@ schedule them.**
 |---|---|---|
 | **AC9 (Sprint 10)** | Per-receipt cost falls with use — third < first, same merchant | An ordinary shop produces a MASYMAS receipt whose items overlap the alias table. **Protocol pre-registered** in `sprint-10.md`: per-item step-10 input tokens against the **831** baseline, per-item cost against **$0.0073**, auto-matched count as support. Raw per-receipt cost is explicitly *not* the criterion. **The notify message is not the instrument** — see `receipt-matching-analysis.md` |
 | **AC13 (Sprint 10)** | Novia's home-intelligence proposal convinces the friend | The user shows it to him |
+| **Pooled candidate attribution in workflow 358 (from Track D, 2026-09-22)** | Steps 8b/8d flatten every per-item result set into one pool keyed by row id, keeping the **maximum similarity across all receipt items** — so the `similarity` step 10 reads is closeness to *some* item on the receipt, not to the item being matched, and every rule in the prompt is applied to a number that does not mean what the rule assumes. Run 782 quotes *"high similarity (0.557) to inventory item 17"* for a number that is alias-to-receipt-string. A real **Contract** defect, deliberately not worked: it has not visibly bitten. **Trigger — if wrong merges keep appearing after aliases 81, 60 and 59 are corrected through Track C, this is the cause.** Correct it then, in steps 8/8b/8c/8d as a patch |
 | **Workflow 358 v6/v7 fixes have still never executed** | The 8b/8d max-wins dedupe and the conditional alias write are both live in v8 and unproven — run 788 answered *Skip inventory* and wrote nothing. Resolves on the next grocery receipt that is applied |
 
 ---
