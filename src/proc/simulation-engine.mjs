@@ -12,6 +12,7 @@
 //   runLevel1StaticAnalysis — structural analysis only (used by pre-write guards)
 
 import vm from 'vm';
+import * as acorn from 'acorn';
 import { resolveInput, resolvePath } from './template-resolver.mjs';
 import { resolveOutputWrites }       from './state-utils.mjs';
 
@@ -27,6 +28,19 @@ const ROUTING_TOKEN_RE = /^(next|end|cancel|step:.+|[a-zA-Z0-9][a-zA-Z0-9_]*)$/;
 // design_workflow_process — a form over this size must become a selection gate that
 // picks one record followed by a small form to edit it.
 const MAX_GATE_FIELDS = 40;
+
+// WIDGET_OPTION_LIMIT — the most options each form field type can carry. These are
+// Slack's element ceilings, mirrored here the same way MAX_GATE_FIELDS mirrors a design
+// budget: past them Slack rejects the whole message, so the gate never posts and the run
+// wedges waiting for a click on something that was never rendered. The authority is
+// callback.mjs's constant of the same name; this copy exists because simulation-engine is
+// a pure PROC module and may not import the experience tier to ask.
+const WIDGET_OPTION_LIMIT = {
+  select:       100,
+  multi_select: 100,
+  radio:        10,
+  checkbox:     10,
+};
 
 // ---------------------------------------------------------------------------
 // runSimulation — exported for the HTTP simulate-workflow endpoint.
@@ -75,9 +89,15 @@ const staticSpecialButtons = s => (Array.isArray(s?.special_buttons) ? s.special
 function buildErrorSummary({ shapeIssues = [], staticIssues = [], routingMatrix = null, smokeTest = null }) {
   const lines = [];
 
+  // A warning says so. Every line here used to read the same whether it blocked the write
+  // or not, so a warning sat beside an error looking exactly like a second thing to fix —
+  // session 1196 spent four repair rounds partly on an option-set warning that was never
+  // what refused her patch. The issue objects have carried `severity` all along; only this
+  // rendering dropped it.
   const push = (list, cap, prefix) => {
     list.slice(0, cap).forEach(i => {
-      lines.push(`- ${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
+      const severity = i.severity === 'warning' ? '[warning] ' : '';
+      lines.push(`- ${severity}${prefix}Step ${i.step ?? '?'}: ${i.detail || i.check || 'validation issue'}`);
     });
     if (list.length > cap) lines.push(`- ...and ${list.length - cap} more`);
   };
@@ -357,7 +377,20 @@ export function runSimulation({ steps, mockOutputs, simulationPaths, runInput = 
   const routingMatrix = runRoutingMatrix(steps, traceId);
 
   // ── Level 2b — js_transform smoke test ──────────────────────────────────
-  const smokeTest = runJsTransformSmokeTest(steps, traceId);
+  const smokeTest = runJsTransformSmokeTest(steps, traceId, stateFlow);
+
+  // The trace is the thing a reader trusts to say where a key comes from, and for a
+  // js_transform L1 can only report the declaration — which is the step's intent, not its
+  // effect. The smoke test has just executed the expression under the real output_key rule,
+  // so the executed writes replace the declared ones and the declaration is kept alongside
+  // when they differ. Without this the trace does not merely omit the defect: it asserts
+  // the key exists, and a repair aimed at that assertion is confirmed by the harness.
+  for (const [stepKey, { declared, written }] of Object.entries(smokeTest.resolved_writes ?? {})) {
+    const flow = stateFlow[stepKey];
+    if (!flow) continue;
+    flow.writes = [...written].sort();
+    if (declared.some(k => !written.includes(k))) flow.declared_writes = [...declared].sort();
+  }
 
   const l2Passed = routingMatrix.passed && smokeTest.passed;
 
@@ -500,12 +533,24 @@ export function runLevel1StaticAnalysis(steps) {
   // Build a set of all step keys for dead-target checking
   const stepKeys = new Set(steps.map(s => String(s.step)));
 
+  // Key -> step, so a check that finds the step which WROTE a local_state key can read
+  // that step's own definition. Used by the option-set bound check below.
+  const stepsByKey = new Map(steps.map(s => [String(s.step), s]));
+
   // State flow tracking — per-step reads/writes, and global write registry.
   // 'reads'  = base keys this step references via template tokens or input_key/items_key.
   // 'writes' = base keys this step writes to local_state via output_key (step or option level).
   const stateFlow     = {};   // { [step_key]: { reads: string[], writes: string[] } }
   const writtenByStep = {};   // { [key]: first_step_key_that_wrote_it }
   const allReadsEver  = new Set(); // union of all reads across all steps
+
+  // Expression reads of `local_state.X`, held until the loop ends. Unlike the template
+  // check, which asks whether a key was written by a step ABOVE this one, this one asks
+  // only whether ANY step writes it — a strictly weaker question, and deliberately so.
+  // Workflows loop backwards (a gate routes to an earlier step), so a key written later
+  // in array order is legitimately read earlier at run time. Refusing on position would
+  // fire on correct designs, and a false refusal blocks the repair loop itself.
+  const expressionReads = [];  // [{ stepKey, key, source }]
 
   // Value-shape tracking, for the numeric-index check below. Only two verdicts are
   // worth carrying: a key whose every writer produces a non-array, and everything else.
@@ -621,6 +666,33 @@ export function runLevel1StaticAnalysis(steps) {
         });
       }
 
+      // An option's condition fails closed at runtime — an expression that cannot compile
+      // hides its option on every run, silently. And the cancel option is the one exit a
+      // gate is required to offer, so it may never be conditional.
+      for (const opt of staticOptions(s)) {
+        if (opt?.condition === undefined) continue;
+        if (opt.action === 'cancel' || opt.value === 'cancel') {
+          issues.push({
+            check:         'gate_option_condition_on_cancel',
+            step:          stepKey,
+            failure_class: 'gate_option_condition_on_cancel',
+            detail:        `human_gate step "${stepKey}" puts a condition on its cancel option; the cancel option must always be offered. Remove the condition.`,
+          });
+          continue;
+        }
+        try {
+          if (typeof opt.condition !== 'string') throw new Error('not a string');
+          new vm.Script(`(${opt.condition})`);
+        } catch (e) {
+          issues.push({
+            check:         'gate_option_condition_invalid',
+            step:          stepKey,
+            failure_class: 'gate_option_condition_invalid',
+            detail:        `human_gate step "${stepKey}" option "${opt.action ?? opt.value ?? opt.label}" has a condition that is not a valid JavaScript expression (${e.message}): ${JSON.stringify(opt.condition)}. A condition that cannot be evaluated hides its option on every run.`,
+          });
+        }
+      }
+
       if (!s.on_cancel || !ROUTING_TOKEN_RE.test(s.on_cancel)) {
         issues.push({
           check:         'missing_on_cancel',
@@ -661,6 +733,102 @@ export function runLevel1StaticAnalysis(steps) {
           failure_class: 'gate_too_many_fields',
           detail:        `human_gate step "${stepKey}" declares ${s.fields.length} fields; a single gate can present at most ${MAX_GATE_FIELDS}. Past that the gate cannot be rendered at all and the run stalls waiting for it. Redesign as a selection gate that picks ONE record, followed by a small form to edit that record — or drop fields the user did not ask for.`,
         });
+      }
+
+      // Option-set bounds — a form field's choices must fit the control that carries
+      // them. An inline list is countable here and is refused outright. A list pulled
+      // from local_state via options_key is not countable at design time, so the check
+      // moves to the thing that DOES bound it: the step that wrote the key. A query with
+      // no limit can return the whole table, and a dropdown fed by the whole table is a
+      // gate that stops rendering the day the table outgrows the widget — which is a
+      // silent stall, not a degraded list. Refusing here forces the filter-or-limit
+      // decision into the design, where it can still be made cheaply.
+      if (Array.isArray(s.fields)) {
+        for (const field of s.fields) {
+          if (!field || typeof field !== 'object') continue;
+          const cap = WIDGET_OPTION_LIMIT[field.type];
+          if (cap === undefined) continue;
+
+          if (Array.isArray(field.options) && field.options.length > cap) {
+            issues.push({
+              check:         'gate_too_many_options',
+              step:          stepKey,
+              failure_class: 'gate_too_many_options',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type} with ${field.options.length} inline options; that control accepts at most ${cap}. Past the cap the message is rejected outright and the gate never posts. Use a narrower option set, or split the choice across two gates.`,
+            });
+            continue;
+          }
+
+          if (!field.options_key) continue;
+          const baseKey = String(field.options_key).split('.')[0];
+
+          // EVERY writer of the key, not just the first. writtenByStep records the first
+          // one, which is the wrong question here: a key written by a bounded query at the
+          // top and re-written by an unbounded one inside a loop is unbounded, and checking
+          // only the first would pass it. The gate breaks on whichever write ran last.
+          const producers = steps.filter(p =>
+            String(p.output_key ?? '').split(',').some(k => k.trim().split('.')[0] === baseKey)
+          );
+          const producer = producers[0];
+
+          if (!producer) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              severity:      'warning',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", but no prior step writes "${baseKey}" — the size of that set cannot be checked here. A ${field.type} accepts at most ${cap} options.`,
+            });
+            continue;
+          }
+
+          // Classify each writer, then take the weakest verdict across all of them. Only two
+          // things are knowable from a step definition: a step type that reads rows, and a
+          // literal limit on it. Anything else — a js_transform, a limit that is itself a
+          // {{token}} resolved at runtime — is genuinely unknowable HERE, and the honest
+          // report for unknowable is a warning. Refusal is reserved for the one case that is
+          // certain from the text alone: a read with no bound declared at all.
+          const verdicts = producers.map((p) => {
+            if (!String(p.type).startsWith('serv_')) {
+              return { kind: 'unknowable', step: p.step,
+                why: `is a ${p.type}, whose output length is not stated anywhere in the step` };
+            }
+            const declared = p.input?.limit;
+            if (declared === undefined) {
+              return { kind: 'unbounded', step: p.step, why: 'declares no input.limit' };
+            }
+            const literal = typeof declared === 'number' ? declared
+              : (/^\d+$/.test(String(declared)) ? Number(declared) : null);
+            if (literal === null) {
+              return { kind: 'unknowable', step: p.step,
+                why: `sets input.limit to ${JSON.stringify(declared)}, which resolves at runtime` };
+            }
+            if (literal > cap) {
+              return { kind: 'unbounded', step: p.step, why: `declares input.limit ${literal}` };
+            }
+            return { kind: 'bounded', step: p.step };
+          });
+
+          const unbounded  = verdicts.find(v => v.kind === 'unbounded');
+          const unknowable = verdicts.find(v => v.kind === 'unknowable');
+
+          if (unbounded) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" is a ${field.type}, which accepts at most ${cap} options, but they come from "${field.options_key}" — written by step "${unbounded.step}", which ${unbounded.why} and can return more rows than that. Filter step "${unbounded.step}" down to one category or search term, or set its input.limit to ${cap} or fewer and let the user narrow the list first.`,
+            });
+          } else if (unknowable) {
+            issues.push({
+              check:         'gate_option_set_unbounded',
+              step:          stepKey,
+              failure_class: 'gate_option_set_unbounded',
+              severity:      'warning',
+              detail:        `human_gate step "${stepKey}" field "${field.name}" draws options from "${field.options_key}", written by step "${unknowable.step}", which ${unknowable.why}. Its length cannot be checked here — make sure it cannot exceed the ${cap} options a ${field.type} accepts.`,
+            });
+          }
+        }
       }
 
       // review_object never writes output_key.
@@ -877,6 +1045,51 @@ export function runLevel1StaticAnalysis(steps) {
       }
     }
 
+    // A field's options_key is a read of local_state, and until now the trace did not
+    // model it as one. The gate size checks above already parse the field, so the engine
+    // knew about the key and simply never recorded the dependency: review_inventory's
+    // step 3 read "page_data" and the trace reported its reads as ["page_meta"] alone.
+    // A read nobody records is a read nothing can check.
+    if (Array.isArray(s.fields)) {
+      for (const field of s.fields) {
+        if (!field || typeof field !== 'object' || !field.options_key) continue;
+        const baseKey = String(field.options_key).split('.')[0].replace(/\[.*/, '');
+        if (baseKey && baseKey !== 'item') {
+          stepReads.add(baseKey);
+          allReadsEver.add(baseKey);
+        }
+      }
+    }
+
+    // Collect reads made inside expressions. Every expression the engine evaluates
+    // against local_state is covered: a js_transform's and a condition's own
+    // expression, and the `condition` a gate option or an item_action may carry
+    // (both are evaluated by evalCondition against local_state). A hidden option is
+    // the quietest failure of the three — an option whose condition names a key
+    // nothing writes is never drawn and never accepted, on every run.
+    const expressionsOnStep = [];
+    if ((s.type === 'js_transform' || s.type === 'condition') && typeof s.expression === 'string') {
+      expressionsOnStep.push({ expr: s.expression, source: 'expression' });
+    }
+    for (const opt of [...staticOptions(s), ...staticSpecialButtons(s)]) {
+      if (typeof opt.condition === 'string') {
+        expressionsOnStep.push({ expr: opt.condition, source: `option "${opt.action ?? opt.value ?? opt.label}" condition` });
+      }
+    }
+    if (typeof s.item_action?.condition === 'string') {
+      expressionsOnStep.push({ expr: s.item_action.condition, source: 'item_action condition' });
+    }
+    for (const { expr, source } of expressionsOnStep) {
+      const { keys, dynamic } = collectExpressionStateReads(expr);
+      if (dynamic) continue;   // the keys reached are not knowable from the text
+      for (const key of keys) {
+        if (key === 'item') continue;   // iterator-scoped binding, not a local_state key
+        stepReads.add(key);
+        allReadsEver.add(key);
+        expressionReads.push({ stepKey, key, source });
+      }
+    }
+
     // Collect writes — step-level output_key.
     // Comma-separated output_key registers each listed key individually.
     // Non-string output_key is a workflow defect — report as error.
@@ -937,6 +1150,47 @@ export function runLevel1StaticAnalysis(steps) {
     }
 
     stateFlow[stepKey] = { reads: [...stepReads].sort(), writes: [...stepWrites].sort() };
+  }
+
+  // An expression that reads a local_state key no step writes.
+  //
+  // The denominator is every write the engine can make, which is wider than
+  // writtenByStep: an iterator's item_step writes its own output_key into the item's
+  // local_state, and resumeGate merges that state back onto the parent frame
+  // (run-workflow.mjs — the item binding is stripped, the rest survives), so the key
+  // IS readable afterwards. Counting only top-level writes would refuse a workflow
+  // that collects answers through an iterated gate.
+  const writableKeys = new Set(Object.keys(writtenByStep));
+  writableKeys.add('input');   // the root frame is seeded with { input: run.input }
+  for (const s of steps) {
+    const nested = s?.item_step;
+    if (!nested || typeof nested !== 'object') continue;
+    for (const field of ['output_key', 'action_key']) {
+      if (typeof nested[field] !== 'string') continue;
+      for (const raw of nested[field].split(',')) {
+        const base = raw.trim().split('.')[0];
+        if (base) writableKeys.add(base);
+      }
+    }
+  }
+
+  const seenExprReads = new Set();
+  for (const { stepKey, key, source } of expressionReads) {
+    if (writableKeys.has(key)) continue;
+    const dedupe = `${stepKey}::${key}`;
+    if (seenExprReads.has(dedupe)) continue;
+    seenExprReads.add(dedupe);
+    issues.push({
+      check:         'expression_reads_unwritten_key',
+      step:          stepKey,
+      failure_class: 'expression_reads_unwritten_key',
+      detail:        `Step "${stepKey}" ${source} reads "local_state.${key}", but no step writes "${key}". ` +
+                     `It resolves to undefined on every run — silently, because an expression reading a missing key ` +
+                     `does not fail. If the value comes from the run's input it is "local_state.input.${key}"; ` +
+                     `otherwise write "${key}" from the step that produces it, or read the key that step does write. ` +
+                     `Keys available: ${[...writableKeys].sort().join(', ')}`,
+      suggestion:    findClosestKey([...writableKeys], key),
+    });
   }
 
   // Keys written by any step but never referenced in any step's declared inputs.
@@ -1470,6 +1724,66 @@ function inferMockIndexKeys(expr) {
   return keys;
 }
 
+// Which local_state keys does an expression READ?
+//
+// The data-flow trace collects reads from {{tokens}}, input_key and items_key. An
+// expression reading `local_state.X` was invisible to it in both directions: the key
+// was not recorded as a read, so nothing could ask whether any step writes it, and
+// `readersOf` could not see the reader when deciding how serious a dropped write was.
+// review_inventory v7 is the specimen — step 4 returned merged_selection against an
+// output_key that did not declare it, steps 5b/5d read `local_state.merged_selection`,
+// and L0/L1/L2 passed the workflow because every reader was an expression reader.
+//
+// Parsed rather than pattern-matched: a regex cannot tell `local_state.foo` from the
+// same text inside a string literal, and a false refusal here blocks the repair loop
+// that would fix it.
+//
+// `dynamic` is the honest verdict when the expression takes hold of `local_state`
+// itself — destructured, passed to a function, or indexed by a computed value. The
+// keys reached that way are not knowable from the text, so the caller reports nothing
+// rather than guessing.
+function collectExpressionStateReads(expr) {
+  const keys = new Set();
+  if (typeof expr !== 'string' || !expr.trim()) return { keys, dynamic: false, parsed: false };
+
+  let ast;
+  try {
+    // Wrapped the same way the smoke test and step-executor compile it.
+    ast = acorn.parse(`(${expr})`, { ecmaVersion: 2022 });
+  } catch {
+    // Unparseable text is js_transform_syntax_error's business, not this check's.
+    return { keys, dynamic: false, parsed: false };
+  }
+
+  let dynamic = false;
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    if (!node.type) return;
+
+    if (node.type === 'MemberExpression' && node.object?.type === 'Identifier' && node.object.name === 'local_state') {
+      if (!node.computed && node.property?.type === 'Identifier')      keys.add(node.property.name);
+      else if (node.computed && node.property?.type === 'Literal')     keys.add(String(node.property.value));
+      else                                                             dynamic = true;
+    }
+    // `local_state` used as a value in its own right — the keys it yields are not
+    // recoverable from the expression text.
+    if (node.type === 'VariableDeclarator' && node.init?.type === 'Identifier' && node.init.name === 'local_state') dynamic = true;
+    if (node.type === 'CallExpression') {
+      for (const a of node.arguments ?? []) if (a?.type === 'Identifier' && a.name === 'local_state') dynamic = true;
+    }
+    if (node.type === 'SpreadElement' && node.argument?.type === 'Identifier' && node.argument.name === 'local_state') dynamic = true;
+
+    for (const k of Object.keys(node)) {
+      if (k === 'type' || k === 'start' || k === 'end') continue;
+      visit(node[k]);
+    }
+  };
+  visit(ast);
+
+  return { keys, dynamic, parsed: true };
+}
+
 // ---------------------------------------------------------------------------
 // Step-input contract validation (data-flow trace)
 //
@@ -1506,6 +1820,15 @@ function arrayOfObjectsShape(value) {
     if (!isPlainObject(item)) return 'each item must be an object';
   }
   return null;
+}
+
+// serv_insert's `row` is one row object, or an array of row objects written as a single
+// batch (step-executor.mjs executeServInsert → insertRows) — the contract declares
+// object|array. An empty array is a batch of nothing, which SERV accepts as a no-op.
+// Holding it to plainObjectShape refused every batch insert, and once the repair path
+// validated the merged array, that refusal blocked any patch to a workflow holding one.
+function rowOrRowsShape(value) {
+  return Array.isArray(value) ? arrayOfObjectsShape(value) : plainObjectShape(value);
 }
 
 function arrayShape(value) {
@@ -1554,7 +1877,7 @@ const STEP_INPUT_CONTRACTS = {
   serv_query:  { filters: filterArrayShape, vectorSearch: vectorSearchShape },
   serv_update: { filters: filterArrayShape, updates: plainObjectShape },
   serv_delete: { filters: filterArrayShape },
-  serv_insert: { row: plainObjectShape, rows: arrayOfObjectsShape },
+  serv_insert: { row: rowOrRowsShape, rows: arrayOfObjectsShape },
   serv_upsert: { rows: arrayOfObjectsShape, matchColumns: arrayOfStringsShape },
 };
 
@@ -1575,13 +1898,22 @@ const BARE_TEMPLATE_RE = /^\{\{([^}]+)\}\}$/;
 // leaf of the object/array it is built from — reads a key whose own computation was
 // inconclusive. A nested token is inherited just as much as a top-level one, and the
 // mock value behind it is a placeholder either way.
-function readsUncertainKey(raw, uncertainKeys) {
+//
+// Run input the simulation was not given is inconclusive for the same reason: the caller
+// supplies it, so its shape is unknown here, and an unresolved token otherwise reaches the
+// shape check as its own literal text. Whether a caller supplies it is checked where a run
+// is started. A key a prior step writes is not exempt — a path that misses there is a
+// defect the check must still report.
+function readsUncertainKey(raw, uncertainKeys, mockState) {
   if (typeof raw === 'string') {
     const bareMatch = raw.trim().match(BARE_TEMPLATE_RE);
-    return Boolean(bareMatch) && uncertainKeys.has(bareMatch[1].trim().split('.')[0]);
+    if (!bareMatch) return false;
+    const path = bareMatch[1].trim();
+    const base = path.split('.')[0];
+    return uncertainKeys.has(base) || (base === 'input' && resolvePath(mockState, path) === undefined);
   }
-  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys));
-  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys));
+  if (Array.isArray(raw)) return raw.some(v => readsUncertainKey(v, uncertainKeys, mockState));
+  if (isPlainObject(raw)) return Object.values(raw).some(v => readsUncertainKey(v, uncertainKeys, mockState));
   return false;
 }
 
@@ -1602,7 +1934,7 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
       // Same reasoning applies to loop-accumulated state a single forward pass
       // over the step array can only partially reconstruct (flat-loop patterns
       // that iterate many times before a downstream step consumes the result).
-      if (readsUncertainKey(raw, uncertainKeys)) continue;
+      if (readsUncertainKey(raw, uncertainKeys, mockState)) continue;
 
       const resolved = resolveInput(raw, mockState);
       const problem = validate(resolved);
@@ -1638,13 +1970,24 @@ function checkStepInputContracts(s, mockState, issues, uncertainKeys) {
   }
 }
 
-function runJsTransformSmokeTest(steps, traceId) {
+function runJsTransformSmokeTest(steps, traceId, stateFlow = {}) {
   const issues        = [];
   let stepsTested     = 0;
   const mockState     = { input: {} };
   // Base output_keys whose mockState value is a placeholder fallback rather
   // than a real computed result — see checkStepInputContracts.
   const uncertainKeys = new Set();
+  // What each js_transform's expression actually wrote, keyed by step. The L1 trace can
+  // only model the declaration; this is the executed truth, and runSimulation folds it
+  // back into state_flow so the trace reports what local_state would really hold.
+  const resolvedWrites = {};
+
+  // Every OTHER step whose recorded reads include this base key. Reachability is not
+  // asserted — a key read on any branch is a key the workflow depends on.
+  const readersOf = (baseKey, writerStepKey) =>
+    Object.entries(stateFlow)
+      .filter(([st, flow]) => st !== writerStepKey && (flow?.reads ?? []).includes(baseKey))
+      .map(([st]) => st);
 
   for (const s of steps) {
     const key = String(s.step);
@@ -1670,17 +2013,26 @@ function runJsTransformSmokeTest(steps, traceId) {
           if (typeof mockState[k] !== 'number') mockState[k] = 0;
         }
 
-        // When input_key is set, step-executor binds local_state[input_key] as 'items'.
-        // Mirror that here so expressions using 'items' don't throw spurious ReferenceErrors.
+        // When input_key is set, step-executor binds resolvePath(local_state, input_key) as
+        // 'items'. Mirror that here, dot paths included, so expressions using 'items' see
+        // what the engine would hand them — a flat lookup left every "a.b" input_key
+        // undefined in simulation while the engine resolved it.
         const itemsVal = (s.input_key && typeof s.input_key === 'string')
-          ? mockState[s.input_key]
+          ? resolvePath(mockState, s.input_key)
           : undefined;
 
+        // Compile before running. A SyntaxError can also be THROWN by running code —
+        // JSON.parse on a value the mock state cannot supply is the common case — and that
+        // is a data-dependent runtime failure, not a defect in the expression's text.
+        // Classifying by error name alone refused working expressions as unparseable.
+        let compiled = false;
         try {
+          const script  = new vm.Script(`(${expr})`);
+          compiled      = true;
           const sandbox = { local_state: mockState, items: itemsVal };
-          result = vm.runInNewContext(`(${expr})`, sandbox, { timeout: 500 });
+          result = script.runInNewContext(sandbox, { timeout: 500 });
         } catch (err) {
-          if (err.name === 'SyntaxError') {
+          if (!compiled) {
             threwSyntax = true;
             issues.push({
               check:         'js_transform_syntax_error',
@@ -1751,6 +2103,45 @@ function runJsTransformSmokeTest(steps, traceId) {
               if (isFallback) uncertainKeys.add(baseOut);
             }
           }
+
+          // What the expression returned, against what the step declared. resolveOutputWrites
+          // matches a comma list by NAME: a declared key the object omits is skipped, and a
+          // returned key nothing declares is discarded. Both losses are silent, and the trace
+          // reported the declaration either way — so a step that wrote nothing at all read back
+          // as a step that wrote both its keys.
+          //
+          // A fallback carries no return to compare, and a subset return is legitimate
+          // (create_workflow step 21a writes skeleton_error_summary only when there is one),
+          // so this reports rather than refuses — until a later step reads the dropped key,
+          // which is the point at which a subset stops being a choice and becomes a defect.
+          if (!isFallback) {
+            const declared = s.output_key.split(',').map(k => k.trim().split('.')[0]).filter(Boolean);
+            const written  = writes.map(w => w.key.split('.')[0]);
+            resolvedWrites[key] = { declared, written };
+
+            if (declared.length > 1) {
+              const notReturned = declared.filter(k => !written.includes(k));
+              if (notReturned.length > 0) {
+                const returnedKeys  = (result && typeof result === 'object' && !Array.isArray(result))
+                  ? Object.keys(result) : [];
+                const undeclared    = returnedKeys.filter(k => !declared.includes(k));
+                const consumers     = notReturned.filter(k => readersOf(k, key).length > 0);
+                const spare         = undeclared.length > 0
+                  ? ` The expression returns ${undeclared.map(k => `"${k}"`).join(', ')}, which the step does not declare — that value is discarded.`
+                  : '';
+                const consumed      = consumers.length > 0
+                  ? ` Step${consumers.length > 1 ? 's' : ''} ${[...new Set(consumers.flatMap(k => readersOf(k, key)))].map(st => `"${st}"`).join(', ')} read ${consumers.map(k => `"${k}"`).join(', ')}, and will resolve against nothing.`
+                  : '';
+                issues.push({
+                  check:         'output_key_not_returned',
+                  step:          key,
+                  failure_class: 'output_key_not_returned',
+                  ...(consumers.length > 0 ? {} : { severity: 'warning' }),
+                  detail:        `js_transform step "${key}" declares output_key "${s.output_key}" but its expression returned only ${written.map(k => `"${k}"`).join(', ') || 'nothing'}. A comma-separated output_key is matched by name, so ${notReturned.map(k => `"${k}"`).join(', ')} ${notReturned.length > 1 ? 'are' : 'is'} never written to local_state.${spare}${consumed} Return the declared key from the expression, or declare the key the expression returns — do not point the reader at a path that is never written.`,
+                });
+              }
+            }
+          }
         }
       }
     } else {
@@ -1793,9 +2184,10 @@ function runJsTransformSmokeTest(steps, traceId) {
   const tagged = issues.map(i => ({ ...i, hard: isHardSmokeFailure(i) }));
 
   return {
-    passed:       tagged.every(i => !i.hard),
-    steps_tested: stepsTested,
-    issues:       tagged,
+    passed:         tagged.every(i => !i.hard),
+    steps_tested:   stepsTested,
+    issues:         tagged,
+    resolved_writes: resolvedWrites,
   };
 }
 
@@ -1803,6 +2195,10 @@ function isHardSmokeFailure(issue) {
   return issue.failure_class === 'js_transform_syntax_error' ||
          issue.failure_class === 'js_transform_void_return'  ||
          issue.failure_class === 'output_key_destructure_mismatch' ||
+         // A declared key nothing returns is advisory on its own — a subset return is a
+         // legitimate pattern — and hard once a step reads it, which the issue's own
+         // severity records. Re-deriving that here would put the verdict in two places.
+         (issue.failure_class === 'output_key_not_returned' && issue.severity !== 'warning') ||
          (issue.failure_class === 'serv_input_shape_mismatch' && issue.severity !== 'warning');
 }
 

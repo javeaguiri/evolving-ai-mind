@@ -3,9 +3,10 @@
 <!-- Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). -->
 <!-- See LICENSE file in the project root for full license terms. -->
 
-Version: 3.9
-Status: Active development — Sprint 11 closed early; Sprint 12 upcoming
-Last updated: 2026-08-30 (Sprint 11 close — bounded views carry their own provenance: capOutput names what it withheld and where the rest is; read_session_entry recall tool; read_workflow outline/steps projection; query_table columns; diffStepFields replacing both DIFF_FIELDS allow-lists; explicit limit on both PGC_SessionEntry loads; output_snapshot as a structural summary)
+Version: 4.0
+Status: Active development — Sprint 12 in progress (Track A landed)
+Last updated: 2026-09-07 (Sprint 12 Track A — the repair loop takes a patch: `propose_workflow_fix` and `simulate_workflow` accept a patch of complete steps merged by `step` identifier; deletion explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved; L0/L1/L2 now runs at both ends of the repair path, having run at neither)
+Previously: 3.9 — 2026-08-30 (Sprint 11 close — bounded views carry their own provenance: capOutput names what it withheld and where the rest is; read_session_entry recall tool; read_workflow outline/steps projection; query_table columns; diffStepFields replacing both DIFF_FIELDS allow-lists; explicit limit on both PGC_SessionEntry loads; output_snapshot as a structural summary)
 Previously: 3.8 — 2026-08-06 — Sprint 9 close (Sprint 10 close did not bump this header) — Novia builds workflows: step-type-registry.mjs added; L0 shape check as a `level` selector on runSimulation, replacing the `skeleton` flag; register_workflow gated write tool; option_source on the human_gate contract with static/dynamic render bounds in callback.mjs; L1 numeric-index check and a template walk that descends the whole step input
 Previously: 3.7 — 2026-07-25 — Sprint 8 close — LLM replay harness: fingerprint.mjs + replay-corpus.mjs + proc/replay.mjs + slackbot/replay.mjs; awaiting_llm_break run status; resume_llm/REPLAY/REPLAY_RESUME SQS; /proc/replay endpoints; L1 gate-size check; experience/procedure partition swept clean in callback.mjs via toSlackMrkdwn, zero Slack/mrkdwn references across prompts
 Previously: 3.6 — 2026-06-29 — Sprint 6 close (Sprint 7 close did not bump this header); Track P; Expenses/Recipe domains; reveal/reveals; SHUTDOWN SQS; RecursiveLoop: Allow; listPhysicalTables + dropConstraint
@@ -52,7 +53,7 @@ For authoritative detail follow the section references in each row.
 | `src/proc/replay-corpus.mjs` | PROC | Replay corpus read — looks up a recorded response by `fingerprint_hash` (source-run-first, then global) and classifies drift (hit/soft/hard/miss); `decideReplayAction` maps break policy × lookup status → call/serve/break. SERV reads only. Imported by `llm-harness` (the serve/break decision) and `replay.mjs` (break report). See `docs/arch-replay.md` §3-§8 | Changes affect which recordings a replay serves and when it breaks |
 | `src/proc/replay.mjs` | PROC | Replay harness endpoints — `POST /proc/replay` (start/record, a fourth run-entry point), `GET /proc/replay/{runId}` (status + break report), `POST /proc/replay/{runId}/resume` (write resolution → `resume_llm`). Also the `REPLAY` (start/list) and `REPLAY_RESUME` (payload-free break resolution, A11) SQS handlers. HTTP-dispatched by proxy segments. See `docs/arch-replay.md` §9 | Changes affect how replays are started and resumed |
 | `src/ui/slackbot/replay.mjs` | EXP | `/replay` Slack command → `REPLAY` SQS enqueue (list, replay, or record). Posts the thread the break notifications reply under | Changes affect the Slack entry to the replay harness |
-| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. `register_workflow` (gated) writes `PGC_Workflow` + `PGC_IntentMap`, refusing any step array that fails simulation. Drives the round with **native function calling**: constant parts (system prompt, both context layers, standing instruction) in `instructions`, tool schemas from `PGC_SystemContext.minds_eye_tool_schemas`, and an append-only `input` item array rebuilt once per round by `toInputItems`. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types. Every view it hands the model is bounded and says so: `capOutput` names the withheld characters and the session-entry sequence holding them, `read_session_entry` pages that entry back, and `read_workflow` projects to an outline or named steps rather than truncating. The recall handle is the entry `sequence_number`, never its `id` — in-round history carries only `{ role, content, sequence_number }`, so an id-based marker would render differently on resume and forfeit the round's prefix cache credit | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
+| `src/proc/minds-eye.mjs` | PROC | Novia agentic loop — context assembly (Layer 1/2), reasoning loop with read+write tools, HUMAN_GATE action confirmation, turn and action limit gates. `register_workflow` (gated) writes `PGC_Workflow` + `PGC_IntentMap`, refusing any step array that fails simulation. Drives the round with **native function calling**: constant parts (system prompt, both context layers, standing instruction) in `instructions`, tool schemas from `PGC_SystemContext.minds_eye_tool_schemas`, and an append-only `input` item array rebuilt once per round by `toInputItems`. Handles MINDS_EYE + MINDS_EYE_RESUME SQS types. Every view it hands the model is bounded and says so: `capOutput` names the withheld characters and the session-entry sequence holding them — and, for a read that can be asked for less, the narrower call first, since the source is live and the stored entry a snapshot — `read_session_entry` pages that entry back, and `read_workflow` projects to an outline or named steps rather than truncating. The recall handle is the entry `sequence_number`, never its `id` — in-round history carries only `{ role, content, sequence_number }`, so an id-based marker would render differently on resume and forfeit the round's prefix cache credit. `propose_workflow_fix` takes a **patch of complete steps** merged by `step` identifier (`mergeStepPatch`, pure and exported; `resolveProposedSteps` shared by the pre-gate refusal, the gate text and the write so the three cannot disagree). Absence means unchanged, so deletion is explicit in `removeSteps`; `baseVersion` refuses a write onto a workflow that moved since it was read. **The simulator never sees a patch** — it always receives a complete workflow | Changes affect all `/novia` sessions; gate logic shared with interactive.mjs |
 | `src/proc/review-output.mjs` | PROC | Ajv schema + semantic + routing validation of all LLM output. See Section 6.6 | Changes affect validation of every LLM response system-wide |
 | `src/proc/simulation-engine.mjs` | PROC | Workflow step array validation — pure function, no I/O. L0 shape (composed from `PGC_StepType.input_contract`, never hand-authored) / L1 static / L2 routing + data-flow, selected by `level`. Full detail: `docs/arch-simulation-engine.md` | Changes affect the pre-write workflow validation gate (`create_workflow`, `fix_workflow`, `upsert-workflow.mjs`), the standalone `POST /proc/simulate-workflow` endpoint (Novia's `simulate_workflow` tool, dev testing), and `troubleshoot-workflow.mjs` |
 | `src/proc/step-type-registry.mjs` | PROC | `loadStepTypeContracts` — the single read of `PGC_StepType` on behalf of validation, for L0's four consumers. Deliberately not shared with `llm-harness.mjs`'s own read of the same table, which is column-scoped and ordered because the assembled request is fingerprinted for the replay corpus | Changes affect what L0 enforces everywhere at once; returns null (never `[]`) on a failed read so L0 reports not-run rather than rejecting every step type |
@@ -97,6 +98,28 @@ See CLAUDE.md "Fault Domain Triage" for the five fault domains. This table maps 
 | Wrong workflow triggered by user input | Intent routing | Fix `PGC_IntentMap` pattern or `PGC_DomainHelp` aliases |
 | Step type handler not found at runtime | Execution | Add case to `step-executor.mjs` and register in `PGC_StepType` seed |
 | Template `{{key}}` resolves empty unexpectedly | Contract/Generation | Check `output_key` of prior step — key may be missing or wrong path |
+
+### `gate_type` governs rendering, and nothing else
+
+A `gate_type` names a **distinct rendering** of a human gate. It never names a behaviour, a
+widget, or a use of an existing rendering.
+
+| The need | Where it goes |
+|---|---|
+| A different control inside a gate | A field `type` on a `form` field — `text`, `select`, `date`, … |
+| A different layout of an existing rendering | A widget row in `dialogToBlocks` |
+| Different behaviour behind the same rendering | The calling workflow's own config |
+| A use of an existing rendering that Novia should reach for | The `PGC_StepType` contract, so it is discoverable — never a second `gate_type` |
+| **A genuinely new rendering** | **A new `gate_type`** |
+
+Two gate types that render identically are a distinction with no mechanism behind it: whichever
+one is chosen, nothing downstream differs. **Editing many records at once is the `form` gate with
+a templated `fields` array** — not a gate type of its own (decided 2026-09-22).
+
+**The ceiling is a rendering fact and belongs with the rendering.** Form gates are posted as
+messages, and a Slack message holds **50 blocks**; only `text_input` opens a modal, where the
+limit is 100. One field is one block, so a data-driven form is bounded by *fields per row × rows*.
+`SLACK_BLOCK_LIMIT` in `callback.mjs` is the single definition.
 
 ---
 
@@ -1014,35 +1037,50 @@ so it is adjustable without a code deploy. This is a low-priority Backlog item.
 
 ## 16. Cost of Ownership
 
-### 16.1 Actual March 2026 Charges (us-east-2, household-scale dev)
+### 16.1 Observed March 2026 charges — a PARTIAL month, not a monthly total
+
+> **Read the Usage column before quoting any figure here.** The instance-hour lines cover
+> **~294 hours — about 12 days, not a month.** These are the charges actually observed, kept
+> as an observation. For what the system costs when it runs continuously, use §16.2, which is
+> the table to quote.
 
 | Service | Usage | Raw Cost | Notes |
 |---|---|---|---|
-| RDS db.t4g.micro | ~294 hours | $4.71 | PostgreSQL 16.6, arm64 |
-| RDS Storage | 20 GB gp2 | $0.91 | PGC + PGD databases |
+| RDS db.t4g.micro | ~294 hours | $4.71 | PostgreSQL 16.6, arm64 — **12 days, not a month** |
+| RDS Storage | 20 GB gp2 | $0.91 | Prorated — a full month of 20 GB is ~$2.30 |
 | VPC Public IPv4 | ~563 hours | $2.82 | $0.005/hr per address — Bastion + RDS |
-| EC2 (Bastion t3.nano) | ~294 hours | $1.78 | SSH access host |
-| Secrets Manager | — | $0.16 | SSM parameters |
+| EC2 (Bastion t3.micro) | ~294 hours | $1.78 | SSH access host — **12 days, not a month** |
 | Lambda | ~1M requests | ~$0.00 | Well within free tier |
 | API Gateway | ~10K requests | ~$0.00 | Well within free tier |
 | SQS | ~50K messages | ~$0.00 | Well within free tier |
-| **Raw total** | | **~$10.38/month** | Before credits |
-| AWS Free Tier / Promotional credits | | ($10.38) | Applied automatically |
-| **Net payable** | | **$0.00** | During credit period |
+| **Observed total** | | **~$10.22** | Partial month, before credits |
+| AWS Free Tier / Promotional credits | | (applied) | Net payable $0.00 during the credit period |
 
-### 16.2 Cost Breakdown by Component
+> **SSM Parameter Store is free here.** An earlier version of this table carried a
+> *"Secrets Manager $0.16"* line. The system uses SSM `String` parameters in the **Standard**
+> tier by final architectural decision — Standard-tier parameters have no per-parameter charge,
+> and Secrets Manager is not used at all.
 
-| Component | Monthly Cost | Scales With |
-|---|---|---|
-| RDS db.t4g.micro (compute) | $4.71 | Instance class only — flat rate |
-| RDS Storage | $0.91 | Data volume — $0.115/GB/month (gp2) |
-| Bastion Host (t3.nano) | $1.78 | Instance running hours |
-| Public IPv4 addresses | $2.82 | Number of attached IPs × hours |
-| Lambda (4 functions) | ~$0.00 | Invocation count + duration |
-| API Gateway | ~$0.00 | Request count |
-| SQS (2 queues + 2 DLQs) | ~$0.00 | Message count |
-| SSM Parameters | $0.16 | Number of SecureString parameters |
-| **Total infrastructure** | **~$10.38** | |
+### 16.2 Steady-state monthly cost — the figures to quote
+
+Full-month rates, us-east-2, **priced 2026-09-20**. Re-check before relying on them for a
+decision: AWS list prices move, and per-region rates differ.
+
+| Component | Rate | Monthly (730h) | Scales With |
+|---|---|---|---|
+| RDS `db.t4g.micro` (compute) | ~$0.016/hr | **~$11.70** | Instance class only — flat rate |
+| RDS Storage (20 GB gp2, provisioned) | $0.115/GB | **~$2.30** | Provisioned size, **not** data used |
+| Bastion `t3.micro` | ~$0.0104/hr | **~$7.60** | Instance running hours |
+| Public IPv4 × 2 (Bastion + RDS) | $0.005/hr each | **~$7.30** | Number of attached addresses × hours |
+| Lambda, API Gateway, SQS | — | ~$0.00 | Within free tier at household scale |
+| SSM Parameter Store (Standard `String`) | — | $0.00 | No per-parameter charge |
+| **Total infrastructure** | | **~$28.90** | |
+| *of which the RDS instance accounts for* | | *~$17.65* | compute + storage + its own IPv4 |
+
+**Storage is billed on what is provisioned, not what is used.** Both databases together are
+**116 MB** (measured 2026-09-20) against 20 GB provisioned — so ~99% of the storage line buys
+nothing. This is the single largest structural inefficiency in the bill and is why a
+usage-billed engine changes the picture more than the headline compute rate suggests.
 
 ### 16.3 Database Size Scenarios
 
@@ -1069,21 +1107,38 @@ LLM is called **only for novel intents** — repeat operations use cached `PGC_W
 
 ### 16.5 Total Cost of Ownership Summary
 
+Steady-state, using §16.2. The AWS figure is dominated by fixed infrastructure, not by data
+volume — which is why every row below lands within a few dollars of the others.
+
 | Scenario | AWS Infrastructure | LLM | Total/Month |
 |---|---|---|---|
-| Small (recipes, golf, 2-3 domains) | ~$10 | $0.50 | ~$10–11/month |
-| Medium (inventory, budgets, stock portfolio) | ~$10–11 | $0.75 | ~$11–12/month |
-| Large (high-frequency time-series, 10+ domains) | ~$11–13 | $1.00 | ~$12–14/month |
+| Small (recipes, golf, 2-3 domains) | ~$29 | $0.50 | ~$29–30/month |
+| Medium (inventory, budgets, stock portfolio) | ~$29 | $0.75 | ~$30/month |
+| Large (high-frequency time-series, 10+ domains) | ~$29–31 | $1.00 | ~$30–32/month |
+
+> The project's stated target is **$8–$13/month** (§1). At the rates in §16.2 the system does
+> not currently meet it, and the gap is almost entirely the RDS instance plus two public IPv4
+> addresses. §16.6 is therefore a live concern, not a someday list.
 
 ### 16.6 Cost Reduction Opportunities
 
 | Action | Monthly Saving | When to Apply |
 |---|---|---|
-| Replace Bastion with AWS SSM Session Manager | ~$1.78 + $0.94 IPv4 | When promotional credits near exhaustion |
-| Switch RDS to Graviton2 Reserved Instance (1yr) | ~30% on compute (~$1.40) | After system stabilises |
-| Stop RDS when not in use (dev only) | Up to $4.71 | Dev/test environments only — not production |
-| Use RDS Aurora Serverless v2 | Variable — cheaper at low use | Backlog — revisit if usage patterns justify it |
+| **Aurora Serverless v2 with a 0-ACU floor (auto-pause)** | **~$11–13** | **An option, undecided — see `docs/ops-release-readiness.md` R5.** Usage-billed storage and compute that pauses when idle |
+| Replace Bastion with AWS SSM Session Manager | ~$7.60 + ~$3.65 IPv4 | Rejected for now — Session Manager cannot serve Blink on iOS (session 4) |
+| Switch RDS to a Graviton Reserved Instance (1yr) | ~30% of compute (~$3.50) | Only if Aurora is not adopted — a 1-year lock on the component being replaced |
+| Stop RDS when not in use | Up to ~$11.70 | Superseded by auto-pause, which does this automatically and resumes far faster |
 
-**Highest impact action today:** Replacing the Bastion with SSM Session Manager
-eliminates the EC2 instance ($1.78) and one public IPv4 address ($0.94) — saving
-~$2.72/month with no loss of functionality. Tracked in tech debt register.
+**Highest impact action today: Aurora Serverless v2 with auto-pause.** Measured 2026-09-20
+across 30 days of live data, the database is genuinely active for **322 minutes in 95 bursts** —
+about 5.4 hours a month. Under a 5-minute auto-pause timeout that is **~13 awake hours**, so
+compute lands near **$1–3** against the RDS instance's flat ~$11.70, and storage bills the
+**116 MB actually used** rather than 20 GB provisioned. The architecture already satisfies
+auto-pause's hardest precondition: `table.mjs` calls `client.end()` after every operation and
+there is no pooling or RDS Proxy, so nothing holds a connection open to prevent a pause.
+
+**The constraint to design around is the 29-second SERV Lambda timeout.** A typical resume is
+~15s, but an instance paused more than 24 hours enters a deeper sleep that takes 30s or more —
+longer than SERV's entire budget and than the API Gateway limit. Full analysis, and the three
+changes that close it, are in `docs/backlog.md`. The adoption decision itself is tracked in
+`docs/ops-release-readiness.md` R5.

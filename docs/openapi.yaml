@@ -362,7 +362,11 @@ components:
           minimum: 1
           maximum: 1000
           default: 100
-          description: Maximum number of rows to return, ordered by descending similarity.
+          description: >
+            Maximum number of rows to return, ordered by descending similarity. A
+            stated vectorSearch.limit is the caller's own bound exactly as the
+            top-level limit is (`limit_applied: caller`); where both are given, the
+            smaller applies.
           example: 1
 
     Callback:
@@ -4229,6 +4233,14 @@ paths:
           description: >
             Matching rows returned. When vectorSearch was used, each row includes
             a `similarity` float field (0–1) — absent on standard SELECT.
+
+            Every response states how it was bounded: `limit` is the bound applied,
+            and `limit_applied` says who chose it — `caller` (limit or
+            vectorSearch.limit was stated), `default` (neither was; 100 applied), or
+            `ceiling` (the request exceeded 1000). A read that returns exactly
+            `limit` rows is counted with the same filters and threshold:
+            `total_matching` carries the count, and `truncated: true` is present
+            only when it exceeds `count`.
           content:
             application/json:
               examples:

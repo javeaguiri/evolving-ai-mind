@@ -47,6 +47,7 @@ import {
   resolveTemplate,
   resolveInput,
   evalItemCondition,
+  evalCondition,
 } from './template-resolver.mjs';
 import { runSimulation, runLevel1StaticAnalysis } from './simulation-engine.mjs';
 import { loadStepTypeContracts } from './step-type-registry.mjs';
@@ -281,6 +282,11 @@ async function executeHumanGate({ step, localState, run, traceId }) {
  * these gates, so the bug stayed hidden until a gate needed a real routing decision.
  * One resolver, one list, no divergence.
  *
+ * An option carrying `condition` is dropped when the expression is false, evaluated
+ * against the same state its label resolves against (local_state, merged with the row
+ * for an iterator option). Dropping it here, not in the renderer, is what makes a hidden
+ * option unanswerable as well as invisible: resumeGate matches against this same list.
+ *
  * @param {object} step        human_gate step definition
  * @param {object} localState
  * @returns {Array}            Fully resolved options, iterator entries expanded
@@ -321,12 +327,22 @@ export function resolveGateOptions(step, localState) {
     ...(option.value       !== undefined ? { value:       resolveTemplate(String(option.value), state) }       : {}),
     ...(option.description !== undefined ? { description: resolveTemplate(String(option.description), state) } : {}),
     iterator: undefined,
+    condition: undefined,
   });
 
+  // Both spellings are in scope: bare keys, and `local_state.<key>` as every js_transform
+  // writes it (session 1216 wrote the latter, and was hidden on every page).
+  const shown = (option, state) => evalCondition(option.condition, { ...state, local_state: state });
+
   return resolvedOptions.flatMap(option => {
-    if (!option.iterator) return [resolveOption(option, localState)];
+    if (!option.iterator) {
+      return shown(option, localState) ? [resolveOption(option, localState)] : [];
+    }
     const items = Array.isArray(localState[option.iterator]) ? localState[option.iterator] : [];
-    return items.map(item => resolveOption(option, { ...localState, ...item }));
+    return items
+      .map(item => ({ ...localState, ...item }))
+      .filter(state => shown(option, state))
+      .map(state => resolveOption(option, state));
   });
 }
 
@@ -373,6 +389,30 @@ export function resolveFormFields(step, localState) {
     ? (resolvePath(localState, f.replace(/^\{\{|\}\}$/g, '')) ?? [])
     : (f ?? []);
   return Array.isArray(resolved) ? resolved : [];
+}
+
+/**
+ * optionRowKey — which key on an option row carries its value, or its label.
+ *
+ * `{ value, label }` is the standard option shape: HTML's <option>, Slack's own option
+ * object, and what a js_transform building a picker list naturally emits. `{ id, name }`
+ * is what a raw table read returns. Both reach a form field through the same options_key,
+ * so the row itself settles which it is — a key the field declares wins, then the standard
+ * shape, then the table shape.
+ *
+ * Inferring rather than defaulting is the point. The inline `options` branch has always
+ * read `value`/`label`; the options_key branch defaulted to `id`/`name` alone, so the same
+ * field rendered one shape and silently produced the string "undefined" for the other —
+ * a gate whose every option read `undefined`, with nothing logged.
+ *
+ * @param {object} row       one option row
+ * @param {string} declared  the field's option_value_key / option_label_key, if any
+ * @param {string} standard  the standard-shape key ('value' or 'label')
+ * @param {string} fallback  the table-shape key ('id' or 'name')
+ */
+export function optionRowKey(row, declared, standard, fallback) {
+  if (declared) return declared;
+  return row[standard] !== undefined ? standard : fallback;
 }
 
 /**
@@ -497,11 +537,12 @@ export function buildDialog(step, localState) {
             : { value: String(o), label: String(o) });
         } else if (field.options_key) {
           const rows = resolvePath(localState, field.options_key) ?? [];
-          const valueKey = field.option_value_key ?? 'id';
-          const labelKey = field.option_label_key ?? 'name';
-          options = (Array.isArray(rows) ? rows : []).map(row => (row && typeof row === 'object')
-            ? { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) }
-            : { value: String(row), label: String(row) });
+          options = (Array.isArray(rows) ? rows : []).map(row => {
+            if (!row || typeof row !== 'object') return { value: String(row), label: String(row) };
+            const valueKey = optionRowKey(row, field.option_value_key, 'value', 'id');
+            const labelKey = optionRowKey(row, field.option_label_key, 'label', 'name');
+            return { value: String(row[valueKey]), label: String(row[labelKey] ?? row[valueKey]) };
+          });
         }
 
         fields.push({
@@ -850,6 +891,37 @@ async function executeServInsert({ step, localState, traceId }) {
 // loudly broken only if nobody is relying on the ranking, and lazy name matching is entirely
 // the ranking.
 
+/**
+ * describeSilentTruncation — did this read lose rows the step never agreed to lose?
+ *
+ * A step whose read was cut by a bound it never chose — SERV's default, or SERV's
+ * ceiling on a larger request — read a cut of the table without asking for a cut.
+ * local_state carries a plain array, so the bound cannot survive into it: every
+ * downstream step, gate and count treats the partial list as the whole table, and the
+ * only symptom is a record that cannot be found. A step that means "the first N" or
+ * "the N nearest" says so with a limit and is left alone.
+ *
+ * SERV sets `truncated` only when its count found rows beyond the ones returned, so
+ * `total_matching` is always present here. An iterator's item_step carries no step key
+ * of its own; the iterator names itself when it reports the failure.
+ *
+ * Pure, and exported so the decision can be tested without standing up SERV.
+ *
+ * @returns {string|null}  the failure message, or null when the read was complete
+ *                         or its bound was the caller's own choice
+ */
+export function describeSilentTruncation(resp, stepKey, tableName) {
+  if (!resp?.truncated || resp.limit_applied === 'caller') return null;
+  const subject = stepKey === undefined ? 'serv_query item_step' : `serv_query step "${stepKey}"`;
+  const cause = resp.limit_applied === 'ceiling'
+    ? `SERV returns at most ${resp.limit} rows from one read, so its ceiling cut the result. ` +
+      'Narrow the query with filters so the whole result fits.'
+    : `the step declares no limit, so SERV's default of ${resp.limit} cut the result. Set ` +
+      'input.limit (or vectorSearch.limit on a similarity search) if a partial read is ' +
+      'intended, or narrow the query with filters so the whole result fits.';
+  return `${subject} read ${resp.count} rows from "${tableName}" but ${resp.total_matching} match — ${cause}`;
+}
+
 async function executeServQuery({ step, localState, traceId }) {
   const resolvedInput = resolveInput(step.input ?? {}, localState);
   const { tableName, filters, orderBy, limit, vectorSearch, columns } = resolvedInput;
@@ -869,6 +941,9 @@ async function executeServQuery({ step, localState, traceId }) {
   if (!resp.success) {
     throw new Error(`serv_query failed for "${tableName}": ${resp.error ?? resp.statusCode}`);
   }
+
+  const cut = describeSilentTruncation(resp, step.step, tableName);
+  if (cut) throw new Error(cut);
 
   return {
     outputValue: resp.rows ?? [],

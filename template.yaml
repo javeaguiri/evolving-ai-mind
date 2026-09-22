@@ -157,6 +157,11 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: BastionEC2Role
+      # Break-glass shell access via SSM Session Manager. Port 22 remains the primary
+      # route (Blink on iOS cannot run the Session Manager plugin); this is the path
+      # back in if SSH ever fails, and it needs no inbound rule.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -308,14 +313,33 @@ Resources:
                   - !GetAtt WorkflowQueue.Arn
                   - !GetAtt WorkflowDLQ.Arn
               # EC2 — DescribeKeyPairs required for CloudFormation to validate AWS::EC2::KeyPair::KeyName parameter
+              # DescribeSecurityGroups is required to resolve !GetAtt RDSSecurityGroup.GroupId
+              # whenever EvoMindDB is updated — without it any change to the DB instance fails.
               - Effect: Allow
                 Action:
                   - ec2:DescribeKeyPairs
+                  - ec2:DescribeSecurityGroups
                 Resource: "*"
-              # RDS — DescribeDBInstances required for CloudFormation to resolve !GetAtt EvoMindDB.Endpoint.Address
+              # RDS — DescribeDBInstances resolves !GetAtt EvoMindDB.Endpoint.Address. The rest
+              # serve EvoMindDBParameterGroup: CloudFormation runs as THIS role when deploying
+              # from the bastion, so it needs the parameter-group lifecycle and ModifyDBInstance
+              # to attach one. Discovered by a rollback — DescribeDBParameterGroups was denied.
+              # RebootDBInstance is here because a static parameter (rds.force_ssl) does not take
+              # effect until reboot, and that step otherwise has no route from this host.
               - Effect: Allow
                 Action:
                   - rds:DescribeDBInstances
+                  - rds:ModifyDBInstance
+                  - rds:RebootDBInstance
+                  - rds:CreateDBParameterGroup
+                  - rds:DeleteDBParameterGroup
+                  - rds:ModifyDBParameterGroup
+                  - rds:DescribeDBParameterGroups
+                  - rds:DescribeDBParameters
+                  - rds:DescribeEngineDefaultParameters
+                  - rds:AddTagsToResource
+                  - rds:RemoveTagsFromResource
+                  - rds:ListTagsForResource
                 Resource: "*"
               # IAM — PassRole to Lambda + manage roles/instance profiles defined in template
               - Effect: Allow
@@ -521,6 +545,16 @@ Resources:
       FromPort: 5432
       ToPort: 5432
       CidrIp: 0.0.0.0/0 # Allows the public Lambda to reach the DB
+  EvoMindDBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: evo_mind - force TLS and log connections
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: "1"
+        log_connections: "1"
+        log_disconnections: "1"
+
   # --- DATABASE: PostgreSQL ---
   EvoMindDB:
     Type: AWS::RDS::DBInstance
@@ -537,6 +571,9 @@ Resources:
       VPCSecurityGroups:
         - !GetAtt RDSSecurityGroup.GroupId
       AllocatedStorage: '20'
+      DBParameterGroupName: !Ref EvoMindDBParameterGroup
+      DeletionProtection: true
+      BackupRetentionPeriod: 7
 
   BastionHost:
     Type: AWS::EC2::Instance
@@ -597,7 +634,7 @@ Resources:
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
           SLACK_SIGNING_SECRET: '{{resolve:ssm:/evolving-mind-ai/slack-signing-secret}}'
           PROC_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
-          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         # Catch-all for all slackbot sub-routes.
         # The handler file does lightweight sub-path switching
@@ -641,11 +678,11 @@ Resources:
       RecursiveLoop: Allow            # Workflow engine intentionally chains SQS hops per step
       Environment:
         Variables:
-          LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
+          LLM_API_KEY:          '{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}'
           LLM_AGENT_URL:        'https://api.perplexity.ai/v1/agent'
           SERV_API_URL:         'https://enwwi5aulf.execute-api.us-east-2.amazonaws.com/Prod'
           SLACK_BOT_TOKEN:      '{{resolve:ssm:/evolving-mind-ai/slack-bot-token}}'
-          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          INTERNAL_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         ProcProxy:
           Type: Api
@@ -691,11 +728,11 @@ Resources:
                                         # large-JSONB tables (PGC_WorkflowRun.state/stack) can OOM at 256MB
       Environment:
         Variables:
-          PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url}}'
-          PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url}}'
+          PGC_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgc-database-url:4}}'
+          PGD_DATABASE_URL:      '{{resolve:ssm:/evolving-mind-ai/pgd-database-url:3}}'
           EMBEDDING_API_URL:    'https://api.perplexity.ai/v1/embeddings'
-          EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key}}'
-          INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+          EMBEDDING_API_KEY:     '{{resolve:ssm:/evolving-mind-ai/llm-api-key:5}}'
+          INTERNAL_API_KEY:      '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
       Events:
         ServProxy:
           Type: Api
@@ -761,10 +798,13 @@ Resources:
     Type: AWS::ApiGateway::ApiKey
     DependsOn: ServerlessRestApiProdStage
     Properties:
-      Name: evolving-mind-ai-internal-key
+      # No explicit Name. Changing Value forces resource replacement, and CloudFormation
+      # creates the replacement before deleting the original — a fixed Name collides with
+      # itself and fails the update ("ApiKey ... already exists"). Let CloudFormation
+      # generate the name; UsagePlanKey binds by !Ref, so nothing depends on it.
       Description: 'Internal API key for PROC and SERV endpoints'
       Enabled: true
-      Value: '{{resolve:ssm:/evolving-mind-ai/internal-api-key}}'
+      Value: '{{resolve:ssm:/evolving-mind-ai/internal-api-key:2}}'
 
   InternalApiUsagePlan:
     Type: AWS::ApiGateway::UsagePlan

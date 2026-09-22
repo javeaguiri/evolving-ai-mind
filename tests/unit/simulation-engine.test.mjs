@@ -99,6 +99,16 @@ describe('L2b data-flow trace — inconclusive upstream data suppresses downstre
     // smoke test cannot meaningfully mock — the expression throws because
     // round_state was never seeded, not because the workflow is broken.
     const steps = [
+      // round_state is seeded by a real step, as it is in the workflow this models —
+      // the accumulator exists, it just does not hold cards_remaining until several real
+      // loop iterations have run, which is what makes step 1 inconclusive rather than
+      // broken. Without a writer the array is refused at L1 and the smoke test never runs.
+      {
+        step: '0', type: 'js_transform',
+        expression: `(function() { return { round: 1 }; })()`,
+        on_success: 'next',
+        output_key: 'round_state',
+      },
       {
         step: '1', type: 'js_transform',
         expression: `local_state.round_state.cards_remaining.map(function(c){ return { id: c.id }; })`,
@@ -222,6 +232,140 @@ describe('L2b data-flow trace — serv_upsert.rows / matchColumns shape', () => 
     const result = runSimulation({ steps, mockOutputs: null, simulationPaths: null, runInput: {} });
 
     assert.equal(result.smoke_test.passed, true, `smoke test must pass; issues: ${JSON.stringify(result.smoke_test.issues)}`);
+  });
+});
+
+// serv_insert's contract declares `row` as object|array, and executeServInsert writes an
+// array as one batch. The trace held `row` to a single object, so every batch insert was
+// refused — dormant while the repair path never simulated, and blocking once it did:
+// budget_vs_expense_report steps 9/9a were rewritten as serv_upsert (session 1210) only to
+// get an unrelated step 5 fix past the refusal.
+describe('L2b data-flow trace — serv_insert.row takes one row or a batch', () => {
+  const insertAfter = (expression) => [
+    { step: '1', type: 'js_transform', expression, on_success: 'next', output_key: 'rows_to_insert' },
+    {
+      step: '2', type: 'serv_insert',
+      input: { tableName: 'PGD_Budgets', row: '{{rows_to_insert}}' },
+      on_success: 'next', on_else: 'cancel',
+      output_key: 'inserted',
+    },
+    { step: 'end', type: 'end' },
+  ];
+  const shapeIssue = (result) => result.smoke_test.issues.find(
+    i => i.failure_class === 'serv_input_shape_mismatch' && i.step === '2'
+  );
+
+  it('does not flag an array of row objects', () => {
+    const result = runSimulation({ steps: insertAfter(`[{ year: 2026, month: 9 }, { year: 2026, month: 10 }]`) });
+    assert.equal(shapeIssue(result), undefined, `a batch insert is valid; got: ${JSON.stringify(result.smoke_test.issues)}`);
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('does not flag an empty batch', () => {
+    const result = runSimulation({ steps: insertAfter(`[]`) });
+    assert.equal(shapeIssue(result), undefined, 'an empty batch is a no-op SERV accepts');
+  });
+
+  it('does not flag a single row object', () => {
+    const result = runSimulation({ steps: insertAfter(`({ year: 2026, month: 9 })`) });
+    assert.equal(shapeIssue(result), undefined);
+  });
+
+  it('still flags a batch holding something other than row objects', () => {
+    const result = runSimulation({ steps: insertAfter(`['Groceries', 'Rent']`) });
+    assert.ok(shapeIssue(result), 'bare values are rejected by SERV and must be refused here');
+    assert.match(shapeIssue(result).detail, /each item must be an object/);
+    assert.equal(result.smoke_test.passed, false);
+  });
+
+  it('still flags a scalar row', () => {
+    const result = runSimulation({ steps: insertAfter(`'Groceries'`) });
+    assert.match(shapeIssue(result).detail, /must be a non-null object/);
+  });
+});
+
+// Three ways the smoke test read a working workflow differently from the engine, found on the
+// two registered workflows it still refused (2026-09-16). Both run: diagnose_prompt_schema
+// completed as run 481, and update_entity's caller always supplies input.updates.
+describe('L2b smoke test — reads a workflow the way the engine runs it', () => {
+  const failuresOn = (result, step) => result.smoke_test.issues.filter(i => i.step === step);
+
+  it('a SyntaxError thrown while running is a runtime warning, not an unparseable expression', () => {
+    // diagnose_prompt_schema steps 2-7: JSON.parse over a value the mock cannot supply.
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_X' }, on_success: 'next', on_else: 'cancel', output_key: 'state' },
+      { step: '2', type: 'js_transform', expression: `(function(){ return JSON.parse(JSON.stringify(items.schema)); })()`,
+        input_key: 'state', on_success: 'next', output_key: 'copy' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '2');
+    assert.match(issue.detail, /not valid JSON/, 'the test must exercise a thrown SyntaxError');
+    assert.equal(issue.failure_class, 'js_transform_runtime_error');
+    assert.equal(issue.severity, 'warning');
+    assert.equal(issue.hard, false);
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('an expression that does not parse is still a hard syntax error', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `(function(){ return ) })()`, on_success: 'next', output_key: 'x' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '1');
+    assert.equal(issue.failure_class, 'js_transform_syntax_error');
+    assert.equal(issue.hard, true);
+    assert.equal(result.smoke_test.passed, false);
+  });
+
+  it('binds items from a dot-path input_key, as the engine does', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ rows: [{ id: 1 }, { id: 2 }] })`, on_success: 'next', output_key: 'plan' },
+      { step: '2', type: 'js_transform', expression: `items.length`, input_key: 'plan.rows', on_success: 'next', output_key: 'row_count' },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    assert.deepEqual(failuresOn(result, '2'), [],
+      `items must resolve through the dot path; got: ${JSON.stringify(result.smoke_test.issues)}`);
+  });
+
+  it('does not shape-check run input the simulation was not given (update_entity step 3)', () => {
+    const steps = [
+      {
+        step: '1', type: 'serv_update',
+        input: {
+          tableName: 'PGD_X',
+          filters:   [{ column: 'id', op: 'eq', value: '{{input.id}}' }],
+          updates:   '{{input.updates}}',
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'updated',
+      },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    assert.deepEqual(failuresOn(result, '1'), [], 'the caller supplies input; its shape is unknown here');
+    assert.equal(result.smoke_test.passed, true);
+  });
+
+  it('still refuses a token that misses a key a prior step wrote', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ changes: { name: 'x' } })`, on_success: 'next', output_key: 'plan' },
+      {
+        step: '2', type: 'serv_update',
+        input: {
+          tableName: 'PGD_X',
+          filters:   [{ column: 'id', op: 'eq', value: 1 }],
+          updates:   '{{plan.chnages}}',
+        },
+        on_success: 'next', on_else: 'cancel', output_key: 'updated',
+      },
+      { step: 'end', type: 'end' },
+    ];
+    const result = runSimulation({ steps });
+    const [issue] = failuresOn(result, '2');
+    assert.equal(issue?.failure_class, 'serv_input_shape_mismatch', 'a typo against a computed value is a real defect');
+    assert.equal(result.smoke_test.passed, false);
   });
 });
 
@@ -885,7 +1029,11 @@ describe('L2b data-flow trace — serv_query.vectorSearch shape (run 763 reprodu
     const steps = [
       {
         step: '1', type: 'js_transform',
-        expression: `(function() { return local_state.never_written.deep.value; })()`,
+        // Read through `input` — always seeded, so L1 accepts the array — while the
+        // path below it is still absent, so the expression throws and the step stays
+        // inconclusive. A bare unwritten key is refused at L1 now, and L1 short-circuits
+        // the very check this test is about.
+        expression: `(function() { return local_state.input.never_written.deep.value; })()`,
         on_success: 'next', on_else: 'cancel', output_key: 'domain_request',
       },
       brokenSteps[1],
@@ -1125,5 +1273,326 @@ describe('runLevel0ShapeCheck — one_of satisfies a requirement by group', () =
     const single = [{ step_type: 'end', input_contract: [{ field: 'output_key', required: true, description: 'Key' }] }];
     const r = runLevel0ShapeCheck([{ step: '1', type: 'end' }], { stepTypeContracts: single });
     assert.match(r.issues[0].detail, /missing required field "output_key"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option-set bounds — a dropdown fed by an unbounded query (session 1189)
+//
+// Slack rejects the whole message past a control's option cap, so the gate never
+// posts and the run wedges waiting on a dialog nobody saw. The count is unknowable
+// at design time when options come from options_key, so the check moves to the step
+// that wrote the key: a query with no limit can return the whole table.
+// PGD_Inventory stood at 132 rows against a 100-option dropdown when this was written.
+// ---------------------------------------------------------------------------
+
+describe('L1 option-set bounds — options_key fed by an unbounded query', () => {
+  const pickerWorkflow = (queryInput, field) => [
+    { step: '1', type: 'serv_query', input: queryInput, on_success: 'next', on_else: 'cancel', output_key: 'items' },
+    {
+      step: '2', type: 'human_gate', gate_type: 'form',
+      message_template: 'Pick one',
+      fields: [{ name: 'item', label: 'Item', ...field }],
+      output_key: 'picked',
+      options: [{ label: 'Cancel', action: 'cancel', on_select: 'cancel' }],
+      on_cancel: 'cancel', on_success: 'next',
+    },
+    { step: '3', type: 'end' },
+  ];
+
+  const boundIssue = result => result.static_analysis.issues
+    .find(i => i.failure_class === 'gate_option_set_unbounded');
+
+  it('refuses a select whose options come from a query with no limit', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    const issue = boundIssue(result);
+    assert.ok(issue, 'an unbounded query feeding a 100-option dropdown must be refused');
+    assert.equal(issue.severity, undefined, 'this is a hard refusal, not a warning');
+    assert.match(issue.detail, /declares no input\.limit/);
+    assert.equal(result.passed, false);
+  });
+
+  it('refuses a checkbox whose query limit exceeds the tighter cap that control has', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: 50 }, { type: 'checkbox', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    const issue = boundIssue(result);
+    assert.ok(issue, 'a checkbox accepts 10 options; a limit of 50 can exceed it');
+    assert.match(issue.detail, /at most 10 options/);
+  });
+
+  it('accepts the same design once the query is bounded below the cap', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: 25 }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+
+    assert.equal(boundIssue(result), undefined,
+      `a bounded query must pass; got: ${JSON.stringify(result.static_analysis.issues)}`);
+  });
+
+  it('warns rather than refuses when a js_transform built the set, whose length it cannot know', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Records', limit: 10 }, on_success: 'next', on_else: 'cancel', output_key: 'rows' },
+      { step: '2', type: 'js_transform', input_key: 'rows', expression: 'local_state.rows', on_success: 'next', output_key: 'items' },
+      ...pickerWorkflow({ tableName: 'PGD_Records', limit: 10 }, { type: 'select', options_key: 'items' }).slice(1),
+    ];
+    steps[2] = { ...steps[2], step: '2b' };
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = boundIssue(result);
+
+    assert.ok(issue, 'an unknowable length is still worth saying out loud');
+    assert.equal(issue.severity, 'warning', 'but it must not block a design that may be fine');
+  });
+
+  it('refuses an inline option list longer than the control accepts', () => {
+    const options = Array.from({ length: 14 }, (_, i) => ({ value: String(i), label: `Item ${i}` }));
+    const steps   = pickerWorkflow({ tableName: 'PGD_Records', limit: 5 }, { type: 'radio', options });
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = result.static_analysis.issues.find(i => i.failure_class === 'gate_too_many_options');
+
+    assert.ok(issue, 'an inline list is countable here and must be refused outright');
+    assert.match(issue.detail, /14 inline options/);
+    assert.equal(result.passed, false);
+  });
+
+  it('takes the weakest verdict across EVERY writer of the key, not just the first', () => {
+    // A bounded query at the top and an unbounded re-query inside a loop both write
+    // `items`. The gate breaks on whichever ran last, so checking only the first writer
+    // (which is all writtenByStep records) would pass a workflow that cannot render.
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'PGD_Records', limit: 20 }, on_success: 'next', on_else: 'cancel', output_key: 'items' },
+      ...pickerWorkflow({ tableName: 'PGD_Records', limit: 20 }, { type: 'select', options_key: 'items' }).slice(1),
+      { step: '9', type: 'serv_query', input: { tableName: 'PGD_Records' }, on_success: '2', on_else: 'cancel', output_key: 'items' },
+    ];
+
+    const issue = boundIssue(runSimulation({ steps, traceId: 't' }));
+    assert.ok(issue, 'a second, unbounded write of the same key must still be caught');
+    assert.match(issue.detail, /step "9"/);
+    assert.equal(issue.severity, undefined);
+  });
+
+  it('warns rather than refuses when the limit is a token resolved at runtime', () => {
+    // The refusal must rest on what the step TEXT states. A {{token}} limit may well be
+    // within the cap; refusing it would block a legitimate design on a guess.
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: '{{page_size}}' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+    const issue = boundIssue(result);
+
+    assert.ok(issue);
+    assert.equal(issue.severity, 'warning', 'an unknowable bound is reported, never refused');
+    assert.match(issue.detail, /resolves at runtime/);
+  });
+
+  it('accepts a limit given as a numeric string, as SERV itself does', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records', limit: '25' }, { type: 'select', options_key: 'items' }),
+      traceId: 't',
+    });
+    assert.equal(boundIssue(result), undefined);
+  });
+
+  it('leaves a text field alone — no cap applies to one', () => {
+    const result = runSimulation({
+      steps:   pickerWorkflow({ tableName: 'PGD_Records' }, { type: 'text' }),
+      traceId: 't',
+    });
+    assert.equal(boundIssue(result), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// error_summary severity — a warning that reads like an error is a second thing to fix
+//
+// Session 1196: four repair rounds against a refusal whose two lines were an option-set
+// WARNING and an unresolved-template ERROR, rendered identically. Only the second one
+// refused the write. The issue objects have carried `severity` since the check shipped;
+// this rendering dropped it.
+// ---------------------------------------------------------------------------
+
+describe('runSimulation — error_summary severity', () => {
+
+  it('marks a warning as a warning, and leaves an error unmarked', () => {
+    // A gate whose options come from a js_transform warns (length unknowable); a template
+    // reading a key nothing writes is an error.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: '(function(){ return []; })()', output_key: 'rows', on_success: '2' },
+      { step: '2', type: 'human_gate', gate_type: 'form', message_template: 'pick',
+        fields: [{ name: 'picked', type: 'multi_select', options_key: 'rows' }], on_success: '3' },
+      { step: '3', type: 'notify', message_template: 'total {{missing_key.count}}', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, level: 2, traceId: 'sev-test' });
+    assert.equal(result.passed, false);
+
+    const lines = result.error_summary.split('\n');
+    const warned = lines.filter(l => l.includes('[warning]'));
+    const errors = lines.filter(l => !l.includes('[warning]') && l.trim());
+
+    assert.ok(warned.length >= 1, `expected a marked warning in:\n${result.error_summary}`);
+    assert.ok(errors.length >= 1, `expected an unmarked error in:\n${result.error_summary}`);
+    assert.ok(
+      errors.some(l => l.includes('missing_key')),
+      `the unresolved template must be the unmarked line:\n${result.error_summary}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// expression_reads_unwritten_key
+//
+// The data-flow trace collected reads from {{tokens}}, input_key and items_key only,
+// so an expression reading `local_state.X` was invisible in both directions: nothing
+// could ask whether any step wrote X, and readersOf could not see the reader when
+// grading a dropped write. review_inventory v7 is the specimen — its readers were all
+// expression readers, and L0/L1/L2 passed it.
+// ---------------------------------------------------------------------------
+
+describe('L1 — expression_reads_unwritten_key', () => {
+  const findIssue = (result, step) =>
+    (result.static_analysis?.issues ?? []).find(
+      i => i.failure_class === 'expression_reads_unwritten_key' && (step === undefined || i.step === step),
+    );
+
+  it('refuses a js_transform reading a local_state key no step writes', () => {
+    const steps = [
+      { step: '1', type: 'serv_query', input: { tableName: 'T', filters: [], limit: 5 },
+        output_key: 'rows', on_success: 'next', on_else: 'cancel' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return (local_state.merged_selection || []).length; })()`,
+        output_key: 'count', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const result = runSimulation({ steps, traceId: 't' });
+    const issue  = findIssue(result, '2');
+    assert.ok(issue, `expected the unwritten read to be flagged; got ${JSON.stringify(result.static_analysis?.issues)}`);
+    assert.match(issue.detail, /merged_selection/);
+    assert.equal(result.passed, false);
+  });
+
+  it('accepts a key written by a LATER step — workflows loop backwards', () => {
+    // Step 2 reads what step 3 writes. At run time step 3's gate routes back to step 2,
+    // so the key is present. Judging by array position would refuse a correct design.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ page: 1 })`, output_key: 'seed', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return (local_state.picked || []).length; })()`,
+        output_key: 'count', on_success: 'next' },
+      { step: '3', type: 'human_gate', gate_type: 'text_input', message_template: 'pick',
+        output_key: 'picked', on_cancel: 'cancel', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a read through input, which the root frame is always seeded with', () => {
+    const steps = [
+      { step: '1', type: 'js_transform',
+        expression: `(function(){ return { domain: local_state.input.domain || '' }; })()`,
+        output_key: 'ctx', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('reports nothing when the expression takes hold of local_state itself', () => {
+    // Keys reached through a computed index or a function call are not knowable from
+    // the text. Guessing here would refuse working workflows.
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ k: 'a' })`, output_key: 'cfg', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ var key = local_state.cfg.k; return local_state[key] || null; })()`,
+        output_key: 'picked', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a key written by an iterator item_step — resumeGate merges it onto the parent', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `([{ question: 'q?' }])`, output_key: 'questions', on_success: 'next' },
+      { step: '2', type: 'iterator', items_key: 'questions', on_complete: 'next',
+        item_step: { type: 'human_gate', gate_type: 'text_input', message_template: '{{item.question}}',
+                     output_key: 'user_preferences', on_cancel: 'cancel', on_success: 'next' } },
+      { step: '3', type: 'js_transform',
+        expression: `(function(){ return local_state.user_preferences || null; })()`,
+        output_key: 'answer', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('accepts a key written by a gate action_key', () => {
+    const steps = [
+      { step: '1', type: 'human_gate', gate_type: 'form', message_template: 'go',
+        fields: [{ name: 'note', type: 'text', label: 'Note' }],
+        output_key: 'form_values', action_key: 'main_action', on_cancel: 'cancel',
+        options: [{ action: 'save', value: 'save', label: 'Save', on_select: '2' },
+                  { action: 'cancel', value: 'cancel', label: 'Cancel', on_select: 'cancel' }] },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return local_state.main_action === 'save'; })()`,
+        output_key: 'saved', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('refuses a gate option condition naming a key nothing writes', () => {
+    // The quietest of the three: the option is never drawn and never accepted, on
+    // every run, with nothing in the logs to say so.
+    const steps = [
+      { step: '1', type: 'human_gate', gate_type: 'choice', message_template: 'pick',
+        on_cancel: 'cancel',
+        options: [
+          { action: 'next_page', value: 'next_page', label: 'Next',
+            condition: `local_state.page_meta.is_last_page !== 'yes'`, on_select: 'end' },
+          { action: 'cancel', value: 'cancel', label: 'Cancel', on_select: 'cancel' },
+        ] },
+      { step: 'end', type: 'end' },
+    ];
+
+    const issue = findIssue(runSimulation({ steps, traceId: 't' }), '1');
+    assert.ok(issue, 'a condition on an unwritten key must be refused');
+    assert.match(issue.detail, /page_meta/);
+    assert.match(issue.detail, /option "next_page" condition/);
+  });
+
+  it('leaves an unparseable expression to the syntax check', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: 'if (', output_key: 'x', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    assert.equal(findIssue(runSimulation({ steps, traceId: 't' })), undefined);
+  });
+
+  it('records the expression read in state_flow, so readersOf can see it', () => {
+    const steps = [
+      { step: '1', type: 'js_transform', expression: `({ a: 1 })`, output_key: 'seed', on_success: 'next' },
+      { step: '2', type: 'js_transform',
+        expression: `(function(){ return local_state.seed.a + 1; })()`,
+        output_key: 'bumped', on_success: 'end' },
+      { step: 'end', type: 'end' },
+    ];
+
+    const flow = runSimulation({ steps, traceId: 't' }).state_flow;
+    assert.ok(flow['2'].reads.includes('seed'), `expected "seed" among step 2 reads; got ${JSON.stringify(flow['2'])}`);
   });
 });
