@@ -173,13 +173,16 @@ Sliced Bread*. Probes against live rows are free. The edit is a domain artifact,
 
 **Acceptance:** AC4.
 
-### Track E — Retest `edit_budget`
+### Track E — Retest `edit_budget` — MOVED TO SPRINT 13, 2026-09-22
 
-**Carried from Sprint 11 AC5, unstarted.** Workflow 357 is at v6 and its runtime half has never
-been validated end to end through the Novia path. This is Sprint 9's AC5 second half, carried
-twice.
+**No longer in this sprint.** Retesting v6 now would validate an edit flow that is about to be
+replaced: `edit_budget` is the natural second consumer of the bulk-edit pattern, after
+`manage_expenses`. **Novia converts it to the table-edit mechanism first, then it is retested
+once** — rather than being validated twice, the first time against a design with a known
+successor.
 
-**Acceptance:** AC5.
+**AC5 moves with it.** Carried from Sprint 9 and Sprint 11; this is the third carry, and the
+first one with a stated reason rather than a shortfall.
 
 ### Track F — `manage_expenses`, built by Novia
 
@@ -243,7 +246,7 @@ That keeps the correction inside the Generation fault domain, where Novia's scop
 | ~~**AC2**~~ | ~~A change is validated on a test environment before reaching prod, and the README stands the system up from scratch~~ **WITHDRAWN 2026-09-22 — moved to `docs/ops-release-readiness.md`** | ~~B~~ | — |
 | **AC3** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | C | Binary, from Slack, no raw SQL |
 | **AC4** | Both thresholds calibrated against live rows and applied; the three known wrong merges no longer auto-resolve | D | Binary, evidenced by probe output before and after |
-| **AC5** | `edit_budget` runs end-to-end from Slack | E | Binary |
+| ~~**AC5**~~ | ~~`edit_budget` runs end-to-end from Slack~~ **MOVED TO SPRINT 13 2026-09-22** — converted to the bulk-edit pattern first, then retested once | ~~E~~ | — |
 | **AC6** | **Give Novia the replay harness as a tool — decided, not defaulted** | — | A decision exists on the record |
 | **AC7** | `manage_expenses` is built by Novia, registered, and runs end to end from Slack — add, delete and edit — with the four corrections applied and the delete semantics decided | F | Binary, from Slack |
 
