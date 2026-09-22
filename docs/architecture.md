@@ -1102,7 +1102,7 @@ volume — which is why every row below lands within a few dollars of the others
 
 | Action | Monthly Saving | When to Apply |
 |---|---|---|
-| **Aurora Serverless v2 with a 0-ACU floor (auto-pause)** | **~$11–13** | **Decided 2026-09-20 — see backlog.** Usage-billed storage and compute that pauses when idle |
+| **Aurora Serverless v2 with a 0-ACU floor (auto-pause)** | **~$11–13** | **An option, undecided — see `docs/ops-release-readiness.md` R5.** Usage-billed storage and compute that pauses when idle |
 | Replace Bastion with AWS SSM Session Manager | ~$7.60 + ~$3.65 IPv4 | Rejected for now — Session Manager cannot serve Blink on iOS (session 4) |
 | Switch RDS to a Graviton Reserved Instance (1yr) | ~30% of compute (~$3.50) | Only if Aurora is not adopted — a 1-year lock on the component being replaced |
 | Stop RDS when not in use | Up to ~$11.70 | Superseded by auto-pause, which does this automatically and resumes far faster |
@@ -1118,4 +1118,5 @@ there is no pooling or RDS Proxy, so nothing holds a connection open to prevent 
 **The constraint to design around is the 29-second SERV Lambda timeout.** A typical resume is
 ~15s, but an instance paused more than 24 hours enters a deeper sleep that takes 30s or more —
 longer than SERV's entire budget and than the API Gateway limit. Full analysis, and the three
-changes that close it, are in `docs/backlog.md`.
+changes that close it, are in `docs/backlog.md`. The adoption decision itself is tracked in
+`docs/ops-release-readiness.md` R5.
