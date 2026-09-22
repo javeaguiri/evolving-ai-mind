@@ -110,7 +110,15 @@ she read and can be refused if it moved.
 
 **Acceptance:** AC1.
 
-### Track B — Release readiness
+### Track B — Release readiness — MOVED OUT 2026-09-22
+
+**No longer in this sprint.** Moved to the standing workstream at
+`docs/ops-release-readiness.md` (R2 test environment, R3 README bootstrap, R4 log hygiene, plus
+R1 multi-environment `template.yaml`, which blocks R2). **AC2 is withdrawn, not failed** — the
+work is tracked, not abandoned. Six sprints of deferral ended by moving the work out of the
+container that kept losing it rather than by scoping it again.
+
+The original scope is kept below for the record.
 
 **Carried from Sprint 11's AC6 decision.** Three parts, and they are not equally hard:
 
@@ -232,7 +240,7 @@ That keeps the correction inside the Generation fault domain, where Novia's scop
 | # | Criterion | Track | Threshold |
 |---|---|---|---|
 | **AC1** | A single-step repair is submitted, gated and applied without resubmitting the whole array; the merged array passes L0/L1/L2 **before** the write, and a merged array that fails is refused | A | Binary, verified live from `/novia`, including one deliberately failing patch |
-| **AC2** | A change is validated on a test environment before reaching prod, and the README stands the system up from scratch | B | Binary, demonstrated on one real change |
+| ~~**AC2**~~ | ~~A change is validated on a test environment before reaching prod, and the README stands the system up from scratch~~ **WITHDRAWN 2026-09-22 — moved to `docs/ops-release-readiness.md`** | ~~B~~ | — |
 | **AC3** | One correction workflow performs rename, merge, recategorise and alias-fix; `PGD_Inventory` 25 and the `PAN MOLD INT ALTEZ` alias are both corrected through it | C | Binary, from Slack, no raw SQL |
 | **AC4** | Both thresholds calibrated against live rows and applied; the three known wrong merges no longer auto-resolve | D | Binary, evidenced by probe output before and after |
 | **AC5** | `edit_budget` runs end-to-end from Slack | E | Binary |
