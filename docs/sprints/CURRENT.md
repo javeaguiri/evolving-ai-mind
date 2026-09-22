@@ -177,3 +177,50 @@ corrections must still be sent to Novia before any build starts.
 with use, protocol pre-registered in `sprint-10.md`), AC13 (the friend), workflow 358's v6/v7 fixes
 which have still never executed, and **pooled candidate attribution** — whose trigger is *wrong
 merges persisting after aliases 81, 60 and 59 are corrected*.
+
+---
+
+## Session Notes
+
+### Session 1 — 2026-09-22 — Sprint 12 closed, Sprint 13 opened
+
+**No code. Nothing deployed, nothing upserted** — main still reflects what is running in prod.
+
+**Sprint 12 closed and merged** (`4307657`). 19 sessions, 1044 → **1177** tests. Two ACs met, two
+withdrawn because the work was wrong rather than late, two moved here, one carried. Outcome and
+retro in `docs/sprints/sprint-12.md` — **read its retro before adding anything to this sprint.**
+
+**This sprint was scoped from a research question, not a backlog row.** *Can Slack do a
+spreadsheet-style edit, and if not, can we build our own widget?* Answer: **no to both.** Block Kit
+is the entire vocabulary available to an app — no custom HTML, JS or iframe; the only escape is a
+button opening an external page. The **data table block** (20 May 2026) is a real grid at 201 rows
+× 20 columns but takes only `raw_text` / `raw_number` / `rich_text`, holds **no inputs, selects,
+buttons or checkboxes**, and is unsupported in modals. **Canvases** hold editable markdown tables
+but round-trip as unschema'd markdown with no submit event bound to a record set.
+
+**The finding that set the scope: the mechanism already exists and has never been used.** A bulk
+edit is the `form` gate with a templated `fields` array — `resolveFormFields`
+(`step-executor.mjs:386-392`) takes `step.fields` as a `{{template}}`, `collectFormValues`
+(`form-fields.mjs:58-76`) returns every field on one click. And the live `human_gate` contract
+**already** tells Novia to reach for it, frames it per record, and states the ceiling with the
+fields-by-rows multiplication. **Scope item 2 was written before that was checked and is struck
+through.** The one real gap is item 3: the contract's only remedy past the ceiling is *filter or
+narrow* — it never says **page**, and `nav_state` appears in no seed, though `review_inventory`
+359 v8 proved the pattern works.
+
+**Three decisions taken, all on the record:** no `table_edit` gate type (now an invariant in
+`architecture.md` §1.5); release readiness leaves the sprint container for
+`docs/ops-release-readiness.md`; and `template.yaml` cannot stand up a second environment — R1,
+which blocks R2. **Aurora was reopened as an option** after being written into four places as
+decided by the analyst rather than the decider.
+
+**Process change, from the user:** the AC table is a live status board — status column, a link to
+the delivering scope item, updated when state changes rather than at close. On the lifecycle and
+the enforcement list in `CLAUDE.md`, and merged to main separately (`083f942`) so the retro is
+visible there.
+
+**Next session starts here:** draft the paging remedy for the `human_gate` `PGC_StepType` contract
+(scope item 3 → AC4), since it is the only real gap and it is what makes a Novia session test
+something complete. Then the two `manage_expenses` corrections. **Before AC6, confirm whether
+`PGD_Inventory` 25's rename and 69's merge went through `review_inventory` from Slack** — both are
+already done in the data, and AC6 requires no raw SQL.
