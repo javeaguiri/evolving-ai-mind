@@ -80,7 +80,8 @@ proprietary syntax the harness has to learn.
 | **2** | ~~The `human_gate` contract gains the dynamic-`fields` example~~ **ALREADY DONE — verified live 2026-09-22.** The contract already states that `fields` takes a `{{template}}`, frames it as *one field PER RECORD the workflow just read*, says *reach for it whenever the number of things to edit is known only at runtime*, and gives the ceiling **with the multiplication rule**: *"~40 rows at one field each but only ~13 at three"* |
 | **3** | **The real gap: what to do past the ceiling.** The contract's only remedy today is *filter that query down, or bound it with an explicit limit, and let the user narrow the list first* — it never mentions **paging**, and `nav_state` appears nowhere in any seed. `review_inventory` 359 v8 proved a workflow-local pager (buttons that hide at the ends, selection surviving page turns), so the pattern works and is simply undocumented |
 | **4** | Apply it to `manage_budget` |
-| **5** | Decide whether the >45-cell case pages, narrows, or refuses — and make the refusal say which |
+| **5** | Decide whether the >40-cell case pages, narrows, or refuses — and make the refusal say which |
+| **6** | **`edit_budget` (357 v6), moved from Sprint 12 Track E.** Novia converts its edit flow to the bulk-edit pattern, **then** it is retested end to end from Slack — once, against the design that will survive. Carried from Sprint 9 and Sprint 11 |
 
 ## Out of scope
 
@@ -100,13 +101,15 @@ proprietary syntax the harness has to learn.
 | **AC1** | A single gate edits several records and one click saves them all; only changed rows are written | Binary, from Slack |
 | **AC2** | `manage_budget` uses it | Binary, from Slack |
 | **AC3** | Novia selects the pattern unprompted when a design calls for it | Binary, from a cold `/novia` session |
-| **AC4** | A gate that would exceed 50 blocks fails in a way that names the cause and the remedy | Binary |
+| **AC4** | A gate that would exceed the ceiling fails in a way that names the cause and the remedy | Binary |
+| **AC5** | `edit_budget` uses the pattern and runs end to end from Slack | Binary, from Slack |
 
 ---
 
 ## Carried from Sprint 12
 
 Decided at Sprint 12's close, not here: `manage_expenses` (Sprint 12 AC7, unbuilt), the three
-Track D decisions, and Track E's `edit_budget` retest. `manage_expenses` has a reason to wait —
+Track D decisions. **Track E is no longer carried — it is scope item 6 above.** `manage_expenses`
+has a reason to wait —
 its edit branch is the second consumer of this sprint's pattern, and building it first means
 building it twice.
