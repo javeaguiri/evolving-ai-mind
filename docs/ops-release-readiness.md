@@ -131,6 +131,11 @@ touches one parameter path per environment. Doing it second means doing the endp
 
 ## R2 — R4
 
+**Moved here from Sprint 12's Track B on 2026-09-22**, when it became clear the confirmation this
+was waiting on would not arrive soon. Sprint 12's **AC2 is withdrawn, not failed** — the work is
+tracked here instead.
+
+
 **R2, a test environment parallel to prod.** The interim process — *deploy the branch to prod,
 validate, then merge* — is what this replaces, and main must always reflect what is running. Once
 it exists that flips to *deploy to test → validate → merge → deploy to prod*. **Blocked on R1**: a

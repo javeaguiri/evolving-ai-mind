@@ -77,8 +77,8 @@ proprietary syntax the harness has to learn.
 | # | Item |
 |---|---|
 | **1** | The bulk-edit pattern as a reference workflow: load rows → `js_transform` builds `fields` → `form` gate → `js_transform` diffs → iterator writes only changed rows |
-| **2** | The `human_gate` `PGC_StepType` contract gains the dynamic-`fields` example — a pattern Novia cannot see is a pattern she cannot pick |
-| **3** | A `PGC_SystemContext` row reaching `design_workflow_process`, so the pattern is chosen at design time rather than discovered at repair time. **Verify the `{{token}}` exists in the target prompt before upserting** |
+| **2** | ~~The `human_gate` contract gains the dynamic-`fields` example~~ **ALREADY DONE — verified live 2026-09-22.** The contract already states that `fields` takes a `{{template}}`, frames it as *one field PER RECORD the workflow just read*, says *reach for it whenever the number of things to edit is known only at runtime*, and gives the ceiling **with the multiplication rule**: *"~40 rows at one field each but only ~13 at three"* |
+| **3** | **The real gap: what to do past the ceiling.** The contract's only remedy today is *filter that query down, or bound it with an explicit limit, and let the user narrow the list first* — it never mentions **paging**, and `nav_state` appears nowhere in any seed. `review_inventory` 359 v8 proved a workflow-local pager (buttons that hide at the ends, selection surviving page turns), so the pattern works and is simply undocumented |
 | **4** | Apply it to `manage_budget` |
 | **5** | Decide whether the >45-cell case pages, narrows, or refuses — and make the refusal say which |
 
