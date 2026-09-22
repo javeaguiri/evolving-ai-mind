@@ -1703,6 +1703,16 @@ unrepresented value yields no `initial_option` at all, so the field returns **nu
 is **blanked**. Same severity, different fix, and it was two days from being sent to Novia as fact.
 **A mechanism asserted from behaviour is a hypothesis until the render path is read.**
 
+*The acceptance criteria table showed status only at close, so the sprint's position could not be
+read during it.* Raised by the user 2026-09-22: *"it is hard for me to see where we are in a sprint
+when the Acceptance Criteria table doesn't show the AC is met or not. This table allows me to see
+what is done or needs to be done."* For nineteen sessions the ACs sat as a static list of
+intentions while their real state lived scattered through session notes — so the one table written
+to answer *where are we* was the one place that could not. **The table now carries a status column
+and a link to the scope item or track that delivers it, and is updated when a criterion's state
+changes rather than at close.** Sprint 13 opens with it in that form, and it is on the lifecycle
+in `CLAUDE.md` so it does not depend on remembering.
+
 *Seven ACs was too many, for the second sprint running.* Sprint 11 scoped five and delivered two
 plus an unplanned one; Sprint 12 scoped seven and delivered two plus a great deal that was never
 scoped. The pattern is now two sprints long and is not a scoping accident. **Sprint 13 opens with
