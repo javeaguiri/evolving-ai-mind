@@ -99,6 +99,28 @@ See CLAUDE.md "Fault Domain Triage" for the five fault domains. This table maps 
 | Step type handler not found at runtime | Execution | Add case to `step-executor.mjs` and register in `PGC_StepType` seed |
 | Template `{{key}}` resolves empty unexpectedly | Contract/Generation | Check `output_key` of prior step — key may be missing or wrong path |
 
+### `gate_type` governs rendering, and nothing else
+
+A `gate_type` names a **distinct rendering** of a human gate. It never names a behaviour, a
+widget, or a use of an existing rendering.
+
+| The need | Where it goes |
+|---|---|
+| A different control inside a gate | A field `type` on a `form` field — `text`, `select`, `date`, … |
+| A different layout of an existing rendering | A widget row in `dialogToBlocks` |
+| Different behaviour behind the same rendering | The calling workflow's own config |
+| A use of an existing rendering that Novia should reach for | The `PGC_StepType` contract, so it is discoverable — never a second `gate_type` |
+| **A genuinely new rendering** | **A new `gate_type`** |
+
+Two gate types that render identically are a distinction with no mechanism behind it: whichever
+one is chosen, nothing downstream differs. **Editing many records at once is the `form` gate with
+a templated `fields` array** — not a gate type of its own (decided 2026-09-22).
+
+**The ceiling is a rendering fact and belongs with the rendering.** Form gates are posted as
+messages, and a Slack message holds **50 blocks**; only `text_input` opens a modal, where the
+limit is 100. One field is one block, so a data-driven form is bounded by *fields per row × rows*.
+`SLACK_BLOCK_LIMIT` in `callback.mjs` is the single definition.
+
 ---
 
 ## 2. Stack — Final, Do Not Change
