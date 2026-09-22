@@ -123,7 +123,11 @@ position is read at a glance.
 **Carried from Sprint 11 AC2, unstarted.** Four verbs over the same two tables, designed as **one**
 workflow rather than four:
 
-1. **Rename** an item — `PGD_Inventory` 25 is a red wine recorded as "Ink Cartridge"
+1. **Rename** an item. **The original specimen is already corrected** — `PGD_Inventory` 25 reads
+   *"Cheap Wine (tinto de verano)"* as of 2026-09-13, not *"Ink Cartridge"*, and item 69 is gone.
+   **Confirm whether those went through `review_inventory` from Slack**: AC6 requires no raw SQL,
+   so if they did, two verbs are already evidenced and need only writing down. If they did not,
+   a fresh specimen is needed
 2. **Merge** a duplicate into another item, moving quantities and aliases with it — inventory 69
    *Bread Loaf* duplicates 39 *Baguette*, and alias 86 points at the duplicate, so it is
    self-reinforcing
@@ -157,10 +161,19 @@ whether she handles maintenance work as well as greenfield.
 
 ---
 
-## Carried from Sprint 12
+## What Sprint 12 left, and where it went
 
-`manage_expenses` (Sprint 12 AC7, unbuilt) carries forward. **Track D is closed, not carried** —
-its premise inverted and its alias work now rides with Track C. **Tracks C and E are scope items 7
-and 6 above, not carry-forward.** `manage_expenses` has a reason to wait —
-its edit branch is the second consumer of this sprint's pattern, and building it first means
-building it twice.
+**Nothing is carried loose.** Every inherited item is a scope row above with an AC against it:
+Track C → item 7 / AC6, Track E's `edit_budget` → item 6 / AC5, Track F's `manage_expenses` →
+item 8 / AC7. **Track D is closed, not carried** — its premise inverted and its alias work now
+rides with Track C. **Release readiness is not carried either** — it is a standing workstream at
+`docs/ops-release-readiness.md`, reviewed at this sprint's boundary.
+
+**`manage_expenses` is sequenced last for a reason**: its edit branch is a consumer of this
+sprint's pattern, so building it before the pattern exists means building it twice. Its two
+corrections must still be sent to Novia before any build starts.
+
+**Standing observations — record when they happen, do not schedule:** AC9 (per-receipt cost falls
+with use, protocol pre-registered in `sprint-10.md`), AC13 (the friend), workflow 358's v6/v7 fixes
+which have still never executed, and **pooled candidate attribution** — whose trigger is *wrong
+merges persisting after aliases 81, 60 and 59 are corrected*.
