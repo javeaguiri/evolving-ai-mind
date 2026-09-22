@@ -1438,7 +1438,10 @@ button carrying no `workflowRunId`. **The preview must not be a live gate** — 
 v7 memory corrected (rows 393 and 394). `sam deploy` done and probed live both ways. 1177 tests.
 
 **Decided this session, both on the record:**
-- **Aurora Serverless v2 with a 0-ACU floor replaces RDS.** Self-hosting PostgreSQL on the bastion
+- **Aurora Serverless v2 with a 0-ACU floor was written up here as settled; it is not.**
+  **Reopened as an option 2026-09-22 (user) and moved to `docs/ops-release-readiness.md` R5.**
+  The measurement below stands and does not need redoing — what is open is whether to adopt it.
+  Self-hosting PostgreSQL on the bastion
   and the `/wake` command are **dropped**. Settled by measurement, not argument: 30 days of
   `PGC_WorkflowRun` / `PGC_WorkflowRunStep` / `PGC_SessionEntry` timestamps show **322 active
   minutes across 95 bursts** — ~13 awake hours a month under a 5-minute pause, against a break-even
@@ -1472,7 +1475,8 @@ of reach this sprint.
    from Slack** — AC3 requires no raw SQL, and if they did, two of four verbs are evidenced and only
    need writing down.
 3. **Track E** — `edit_budget` retest from Slack.
-4. **Aurora** — schedule the four prerequisites, then the cutover.
+4. **Aurora** — superseded 2026-09-22: the adoption decision is open and now lives in
+   `docs/ops-release-readiness.md` R5, with its four prerequisites.
 
 Runs 809, 810, 826 and 839 remain at `awaiting_human_gate` (839 is a v7 run; leave it).
 
@@ -1567,3 +1571,57 @@ table, and `create_domain` has no re-embed path.
 carrying the four corrections.
 
 **Next session:** Track F's correction round with Novia, and the three Track D decisions above.
+
+### Session 19 — 2026-09-22 — three decisions, and a record that said "decided" when it wasn't
+
+**Research: Slack has no editable grid, and no way to build one.** Block Kit is the entire UI
+vocabulary available to an app — no custom HTML, JS or iframe surface. The only escape is a button
+opening an external page. Two near-misses: the **data table block** (shipped 20 May 2026) is a real
+grid, up to 201 rows × 20 columns, but cells accept only `raw_text` / `raw_number` / `rich_text`,
+**cannot hold inputs, selects, buttons or checkboxes**, and is supported in messages and Home tabs
+only — **not modals**. **Canvases** hold editable markdown tables, but content round-trips as raw
+markdown with no schema and no submit event bound to a record set.
+
+**The finding that mattered: "edit many, save once" already exists and has never been used.**
+`resolveFormFields` (`step-executor.mjs:386-392`) accepts `step.fields` as a `{{template}}`
+resolving out of `local_state`, and `collectFormValues` (`form-fields.mjs:58-76`) returns every
+rendered field's value on one click. The ceiling is **50 blocks, not 100** — form gates are
+messages via `chat.postMessage`; only `text_input` uses `views.open`. `SLACK_BLOCK_LIMIT = 50` and
+its input-aware guard are already at `callback.mjs:287, 579-600`.
+
+**Decision 1 — no `table_edit` gate type. → Sprint 13 (`docs/sprints/sprint-13.md`, scoped).**
+A bulk edit renders identically to a `form` gate, and `gate_type` governs rendering only. The
+`form` gate's own contract already refuses this: *"Replaces what would otherwise be a new gate_type
+per widget… a widget is a field type, not a gate type."* The real need — Novia knowing the pattern
+exists — is discoverability, and lives in the `human_gate` `PGC_StepType` contract and a
+`PGC_SystemContext` row. A header row or the data table block above the inputs would be a new
+**widget row** or field `input_type`, per `callback.mjs:1235` and `1598` — still never a gate type.
+
+**Decision 2 — release readiness leaves the sprint container. → `docs/ops-release-readiness.md`.**
+Deferred in Sprints 7-11, scoped into 12 as Track B, and still the least-advanced track. The shared
+container is the pattern. Now a standing workstream: branch prefix `ops/<slug>`, reviewed at every
+sprint boundary, with one line added to the sprint close checklist so an item can be held
+deliberately but never silently.
+
+**Decision 3 — `template.yaml` cannot stand up a second environment. → R1.** Four literal
+`FunctionName`s (628/672/723/764), four literal `QueueName`s (375-403), `UsagePlanName` (813) and
+`RoleName: LambdaExecutionRole` are account- or region-global, so a second stack **fails**. Worse:
+all **12** SSM references are hardcoded to `/evolving-mind-ai/...` with pinned versions, so a dev
+stack would come up **green, pointed at prod's database, posting as prod's Slack bot**. The fix
+pattern is already in the file — `${AWS::StackName}` on the scheduler, the roles and every Output.
+Sharing one instance wants a **separate database** (`PGD_DATABASE_URL` only, no code change), not
+separate schemas.
+
+**Correction to this document.** Session 17 recorded Aurora Serverless v2 as **decided**; the user
+states it was not. Reopened as an option and moved to `ops-release-readiness.md` R5 — the
+measurement stands, the adoption does not. `architecture.md` §16.6 and `backlog.md` were corrected
+the same way. **R1 changes its arithmetic**: a permanent second environment is a second 0-ACU
+floor, and the cutover should follow R1 so the endpoint work is done once.
+
+**Also this session:** `manage_expenses` evaluated — of Track F's four corrections, the two that
+destroy data during a troubleshooting session are the `payment_method` vocabulary mismatch (an
+unrepresented stored value renders no `initial_option` and returns **null** on save, blanking 18-20
+`debit` rows — the mechanism recorded in Track F was wrong) and the hard delete. The missing
+`cancel` self-corrects: `missing_cancel_option` is a live L1 check (`simulation-engine.mjs:650`).
+Currency is **not** closed by converting the data — the column defaults to `'USD'` NOT NULL, so
+every new add repeats it.
